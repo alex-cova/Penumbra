@@ -4,18 +4,23 @@ struct IDEStatusBarPanel: View {
     @EnvironmentObject private var workspace: IDEWorkspace
 
     var body: some View {
-        HStack {
+        HStack(spacing: 0) {
             Text(statusSummary)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.white)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
             Spacer()
-            Text("UTF-8  LF  \(workspace.statusRenderer)  Runestone")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.92))
+            Text("UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Runestone")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: IDEAppearance.Spacing.statusBarHeight)
         .background(IDEAppearance.ColorToken.statusBar)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+        }
         .focusable(false)
     }
 
@@ -30,7 +35,7 @@ struct IDEStatusBarPanel: View {
         if workspace.statusSelectionLength > 0 {
             parts.append("\(workspace.statusSelectionLength) selected")
         }
-        return parts.joined(separator: "   ")
+        return parts.joined(separator: "  ·  ")
     }
 }
 

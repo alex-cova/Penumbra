@@ -290,20 +290,36 @@ public final class CommandPaletteController {
     }
 
     private func layoutPalette(in container: NSView) {
-        let width = min(620, max(320, container.bounds.width - 80))
-        let height: CGFloat = min(420, max(160, container.bounds.height - 100))
+        let width = min(640, max(360, container.bounds.width - 80))
+        let height: CGFloat = min(440, max(180, container.bounds.height * 0.55))
         let originX = ((container.bounds.width - width) / 2).rounded()
-        let originY = (container.bounds.height - height - 72).rounded()
+        let originY = (container.bounds.height - height - 28).rounded()
         paletteView.frame = CGRect(x: originX, y: max(originY, 12), width: width, height: height)
         paletteView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
     }
 }
 
-/// Full-bounds backdrop that dismisses the palette on a click outside it. Transparent to the
-/// eye but opaque to the mouse while visible.
+/// Full-bounds backdrop that dismisses the palette on a click outside it. Dims the editor
+/// while the palette is visible.
 private final class PaletteBackdropView: NSView {
     var onClickOutsidePalette: (() -> Void)?
     weak var paletteView: NSView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard !isHidden else { return nil }

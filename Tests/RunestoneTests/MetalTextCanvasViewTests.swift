@@ -43,11 +43,14 @@ final class MetalTextCanvasViewTests: XCTestCase {
             XCTFail("Expected TextInputView")
             return
         }
-        let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
+        let canvas = findMetalCanvas(in: textView)
         XCTAssertEqual(canvas?.isHidden, false)
         XCTAssertEqual((canvas?.layer as? CAMetalLayer)?.isOpaque, false)
         XCTAssertTrue(fragmentViews(in: textInputView).isEmpty, "Metal owns the glyph paint; no fragment views")
-        assertCanvasIsInFrontOfLinesContainer(in: textInputView)
+        XCTAssertTrue(
+            canvas?.superview === textView,
+            "Metal canvas must be a scroll-view overlay; CAMetalLayer inside NSClipView does not composite"
+        )
     }
 
     func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {
@@ -69,7 +72,7 @@ final class MetalTextCanvasViewTests: XCTestCase {
             XCTFail("Expected TextInputView")
             return
         }
-        let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
+        let canvas = findMetalCanvas(in: textView)
         XCTAssertEqual(canvas?.isHidden, true)
         XCTAssertFalse(fragmentViews(in: textInputView).isEmpty)
     }
@@ -83,6 +86,18 @@ private extension MetalTextCanvasViewTests {
         for subview in root.subviews {
             if let textInputView = findTextInputView(in: subview) {
                 return textInputView
+            }
+        }
+        return nil
+    }
+
+    func findMetalCanvas(in root: NSView) -> MetalTextCanvasView? {
+        if let canvas = root as? MetalTextCanvasView {
+            return canvas
+        }
+        for subview in root.subviews {
+            if let canvas = findMetalCanvas(in: subview) {
+                return canvas
             }
         }
         return nil
@@ -114,22 +129,4 @@ private extension MetalTextCanvasViewTests {
         XCTAssertLessThan(canvasIndex, linesIndex, "Metal canvas must sit behind fragment views")
     }
 
-    /// With Metal active the lines container is empty, so identify it by its content-sized frame.
-    func assertCanvasIsInFrontOfLinesContainer(in textInputView: TextInputView) {
-        let subviews = textInputView.subviews
-        guard let canvasIndex = subviews.firstIndex(where: { $0 is MetalTextCanvasView }) else {
-            XCTFail("Expected MetalTextCanvasView in TextInputView")
-            return
-        }
-        guard let linesIndex = subviews.firstIndex(where: { view in
-            type(of: view) == UIView.self
-                && view.frame.origin == .zero
-                && view.frame.width > 0
-                && view.frame.height > 0
-        }) else {
-            XCTFail("Expected the (empty) lines container after layoutIfNeeded")
-            return
-        }
-        XCTAssertGreaterThan(canvasIndex, linesIndex, "Metal canvas must sit in front of the lines container")
-    }
 }

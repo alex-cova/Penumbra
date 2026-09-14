@@ -1,19 +1,27 @@
 import SwiftUI
 
 struct IDEEditorTabsBar: View {
+    let paneID: UUID
+    var leadingInset: CGFloat = 0
     @EnvironmentObject private var workspace: IDEWorkspace
+
+    private var tabs: [IDETabRow] {
+        workspace.tabsByPane[paneID] ?? []
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(workspace.activePaneTabs) { tab in
+            HStack(spacing: 4) {
+                ForEach(tabs) { tab in
                     IDEEditorTabItem(tab: tab) {
-                        workspace.selectTab(tab.id)
+                        workspace.selectTab(tab.id, in: paneID)
                     } onClose: {
-                        workspace.closeTab(tab.id)
+                        workspace.closeTab(tab.id, in: paneID)
                     }
                 }
             }
+            .padding(.leading, leadingInset)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
         }
         .frame(height: IDEAppearance.Spacing.tabHeight)
         .background(IDEAppearance.ColorToken.tabBar)
@@ -24,7 +32,6 @@ struct IDEEditorTabsBar: View {
         }
         .focusable(false)
     }
-
 }
 
 private struct IDEEditorTabItem: View {
@@ -35,38 +42,40 @@ private struct IDEEditorTabItem: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button(tab.title, action: onSelect)
-                .buttonStyle(.plain)
+        HStack(spacing: 6) {
+            Text(tab.title)
                 .foregroundStyle(tab.isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
+                .font(.system(size: 12, weight: tab.isSelected ? .medium : .regular))
 
-            if tab.isDirty {
-                Text("•")
+            if isHovering {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .accessibilityHidden(true)
-            }
-
-            Button("Close Tab", systemImage: "xmark", action: onClose)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 16, height: 16)
-        }
-        .padding(.horizontal, IDEAppearance.Spacing.md)
-        .frame(minWidth: 120, maxHeight: .infinity)
-        .background(backgroundColor)
-        .overlay(alignment: .top) {
-            if tab.isSelected {
-                Rectangle()
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(TapGesture().onEnded { onClose() })
+                    .accessibilityLabel("Close Tab")
+                    .accessibilityAddTraits(.isButton)
+            } else if tab.isDirty {
+                Circle()
                     .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
+                    .frame(width: 6, height: 6)
+                    .accessibilityLabel("Edited")
+            } else {
+                Color.clear.frame(width: 6, height: 6)
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+        .focusable(false)
     }
 
     private var backgroundColor: Color {
@@ -81,12 +90,15 @@ private struct IDEEditorTabItem: View {
 }
 
 #Preview {
-    IDEEditorTabsBar()
+    IDEEditorTabsBar(paneID: UUID())
         .environmentObject({
             let workspace = IDEWorkspace()
-            workspace.activePaneTabs = [
-                IDETabRow(id: UUID(), title: "sample.js", isDirty: true, isSelected: true),
-                IDETabRow(id: UUID(), title: "README.md", isDirty: false, isSelected: false)
+            let paneID = UUID()
+            workspace.tabsByPane = [
+                paneID: [
+                    IDETabRow(id: UUID(), title: "sample.js", isDirty: true, isSelected: true),
+                    IDETabRow(id: UUID(), title: "README.md", isDirty: false, isSelected: false)
+                ]
             ]
             return workspace
         }())

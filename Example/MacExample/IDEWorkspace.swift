@@ -5,30 +5,6 @@ import SwiftUI
 import RunestoneLanguages
 import RunestoneMarkdownLanguage
 
-enum IDEActivityItem: String, CaseIterable, Identifiable {
-    case explorer
-    case search
-    case commands
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .explorer: "Explorer"
-        case .search: "Search"
-        case .commands: "Commands"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .explorer: "sidebar.leading"
-        case .search: "magnifyingglass"
-        case .commands: "command"
-        }
-    }
-}
-
 struct IDEDocumentRow: Identifiable, Equatable {
     let id: UUID
     let title: String
@@ -46,19 +22,19 @@ struct IDETabRow: Identifiable, Equatable {
 
 @MainActor
 final class IDEWorkspace: ObservableObject {
-    let layoutHost = IDEEditorLayoutHostView()
-
     private static let languageCache = TreeSitterLanguageCache<String>()
     private static let languageProvider = BundledLanguageProvider()
 
     private let workbench = EditorWorkbench()
     private let workspaceBridge = RunestoneWorkbenchWorkspaceBridge()
+    private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private var adapter: RunestoneWorkbenchEditorAdapter!
-    private var paneHosts: [UUID: IDEEditorPaneHost] = [:]
+    private var hostedPaneIDs: Set<UUID> = []
 
     @Published var isSidebarVisible = true
-    @Published var selectedActivity: IDEActivityItem = .explorer
     @Published var chromeOpacity = 1.0
+    @Published private(set) var layoutEpoch: UInt64 = 0
+    @Published private(set) var activePaneID = UUID()
 
     @Published var windowTitle = "Runestone"
     @Published var statusLine = 1
@@ -79,7 +55,9 @@ final class IDEWorkspace: ObservableObject {
     }
 
     @Published var sidebarDocuments: [IDEDocumentRow] = []
-    @Published var activePaneTabs: [IDETabRow] = []
+    @Published var tabsByPane: [UUID: [IDETabRow]] = [:]
+
+    var editorLayout: EditorLayout { workbench.layout }
 
     private static let metalRenderingDefaultsKey = "MacExampleMetalRendering"
 
@@ -97,10 +75,15 @@ final class IDEWorkspace: ObservableObject {
         }
     }
 
-    func focusActiveEditor() {
-        if let textView = paneHosts[workbench.activePaneID]?.textView {
-            _ = textView.focusTextInput()
+    func host(for paneID: UUID) -> IDEEditorPaneHost {
+        hostedPaneIDs.insert(paneID)
+        return hostCache.host(for: paneID) {
+            makeHost(paneID: paneID)
         }
+    }
+
+    func focusActiveEditor() {
+        host(for: workbench.activePaneID).textView.focusTextInputWhenReady()
     }
 
     func bootstrap() {
@@ -139,7 +122,7 @@ final class IDEWorkspace: ObservableObject {
     func saveActiveDocument() async {
         let pane = workbench.activePane
         guard let document = pane.selectedDocument else { return }
-        let textView = paneHosts[pane.id]?.textView
+        let textView = host(for: pane.id).textView
         var destination = document.url
         if destination == nil {
             let panel = NSSavePanel()
@@ -162,7 +145,8 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func showCommandPalette() {
-        paneHosts[workbench.activePaneID]?.paletteController.presentFindAction()
+        host(for: workbench.activePaneID).paletteController.presentFindAction()
+        focusActiveEditor()
     }
 
     func splitRight() {
@@ -180,20 +164,17 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func closeActivePane() {
-        let closingID = workbench.activePaneID
-        workbench.closePane(closingID)
-        paneHosts.removeValue(forKey: closingID)
-        rebuildLayoutHosts()
-        activatePane(workbench.activePaneID)
-        Task { await workspaceBridge.syncWorkbench(workbench) }
+        closePane(workbench.activePaneID)
     }
 
     func toggleSidebar() {
         isSidebarVisible.toggle()
+        focusActiveEditor()
     }
 
     func toggleMinimap() {
         adapter.textView?.showMinimap.toggle()
+        focusActiveEditor()
     }
 
     func toggleTypewriterScrolling() {
@@ -202,14 +183,17 @@ final class IDEWorkspace: ObservableObject {
         if textView.isTypewriterScrollingEnabled {
             textView.isAutomaticScrollEnabled = true
         }
+        focusActiveEditor()
     }
 
     func toggleDistractionFreeMode() {
         adapter.textView?.isDistractionFreeModeEnabled.toggle()
+        focusActiveEditor()
     }
 
     func toggleMetalRendering() {
         isMetalRenderingEnabled.toggle()
+        focusActiveEditor()
     }
 
     func undo() {
@@ -220,45 +204,49 @@ final class IDEWorkspace: ObservableObject {
         adapter.textView?.undoManager?.redo()
     }
 
-    func selectActivity(_ item: IDEActivityItem) {
-        selectedActivity = item
-        switch item {
-        case .explorer:
-            if !isSidebarVisible {
-                isSidebarVisible = true
-            }
-        case .search:
-            adapter.textView?.toggleFindPanel()
-        case .commands:
-            showCommandPalette()
-        }
-    }
-
     func selectSidebarDocument(_ id: UUID) {
-        guard let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == id } }),
-              pane.selectedDocumentID != id else {
+        guard let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == id } }) else {
             return
         }
-        workbench.activatePane(pane.id)
-        pane.selectDocument(id)
+        if pane.selectedDocumentID != id {
+            pane.selectDocument(id)
+        }
         activatePane(pane.id)
         focusActiveEditor()
     }
 
-    func selectTab(_ id: UUID) {
-        let pane = workbench.activePane
-        guard pane.selectedDocumentID != id else { return }
-        pane.selectDocument(id)
-        if let host = paneHosts[pane.id] {
-            showDocument(in: pane, host: host)
-            refreshPresentation()
-            focusActiveEditor()
-            Task { await workspaceBridge.syncPane(pane) }
+    func selectTab(_ id: UUID, in paneID: UUID? = nil) {
+        let pane: EditorPane
+        if let paneID, let found = workbench.layout.findPane(id: paneID) {
+            pane = found
+        } else {
+            pane = workbench.activePane
         }
+        if pane.id != workbench.activePaneID {
+            workbench.activatePane(pane.id)
+        }
+        guard pane.selectedDocumentID != id else {
+            activatePane(pane.id)
+            focusActiveEditor()
+            return
+        }
+        pane.selectDocument(id)
+        let host = host(for: pane.id)
+        showDocument(in: pane, host: host)
+        refreshPresentation()
+        activatePane(pane.id)
+        focusActiveEditor()
+        Task { await workspaceBridge.syncPane(pane) }
     }
 
-    func closeTab(_ id: UUID) {
-        closeDocument(id, in: workbench.activePane)
+    func closeTab(_ id: UUID, in paneID: UUID? = nil) {
+        let pane: EditorPane
+        if let paneID, let found = workbench.layout.findPane(id: paneID) {
+            pane = found
+        } else {
+            pane = workbench.activePane
+        }
+        closeDocument(id, in: pane)
     }
 
     // MARK: - Private
@@ -269,7 +257,7 @@ final class IDEWorkspace: ObservableObject {
             text: """
             # Runestone Demo
 
-            Native macOS editor shell inspired by VS Code and Zed.
+            Native macOS editor shell inspired by Zed, Linear, and Raycast.
 
             - ⌘P: Quick Open
             - ⌘⇧P: Command Palette
@@ -322,9 +310,17 @@ final class IDEWorkspace: ObservableObject {
         adapter.onOpenHistoryEntry = { [weak self] entry in
             self?.openHistoryEntry(entry) ?? false
         }
-        layoutHost.onPaneActivated = { [weak self] paneID in
+    }
+
+    private func makeHost(paneID: UUID) -> IDEEditorPaneHost {
+        let pane = workbench.layout.findPane(id: paneID) ?? EditorPane(id: paneID)
+        let host = IDEEditorPaneHost(pane: pane)
+        host.textView.isMetalRenderingEnabled = isMetalRenderingEnabled
+        host.onActivated = { [weak self] in
             self?.activatePane(paneID)
         }
+        configurePalette(host.paletteController)
+        return host
     }
 
     private func openDocument(from url: URL) async {
@@ -349,10 +345,10 @@ final class IDEWorkspace: ObservableObject {
 
     private func openHistoryEntry(_ entry: NavigationEntry) -> Bool {
         guard let documentID = entry.documentID,
-              let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == documentID } }),
-              let host = paneHosts[pane.id] else {
+              let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == documentID } }) else {
             return false
         }
+        let host = host(for: pane.id)
         workbench.activatePane(pane.id)
         pane.selectDocument(documentID)
         showDocument(in: pane, host: host)
@@ -368,44 +364,39 @@ final class IDEWorkspace: ObservableObject {
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
         pane.closeDocument(documentID)
         if pane.documents.isEmpty {
-            closeActivePane()
+            closePane(pane.id)
             return
         }
-        if let host = paneHosts[pane.id] {
-            showDocument(in: pane, host: host)
-        }
+        let host = host(for: pane.id)
+        showDocument(in: pane, host: host)
         refreshPresentation()
+        focusActiveEditor()
         Task { await workspaceBridge.syncPane(pane) }
     }
 
+    private func closePane(_ paneID: UUID) {
+        workbench.closePane(paneID)
+        hostCache.remove(paneID)
+        hostedPaneIDs.remove(paneID)
+        rebuildLayoutHosts()
+        activatePane(workbench.activePaneID)
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
     private func rebuildLayoutHosts() {
-        paneHosts = layoutHost.configure(
-            layout: workbench.layout,
-            existingHosts: paneHosts,
-            makeHost: { pane in
-                let host = IDEEditorPaneHost(pane: pane)
-                host.textView.isMetalRenderingEnabled = self.isMetalRenderingEnabled
-                host.onTabSelected = { [weak self] documentID in
-                    guard let self, pane.id == self.workbench.activePaneID else {
-                        pane.selectDocument(documentID)
-                        self?.showDocument(in: pane, host: host)
-                        self?.refreshPresentation()
-                        return
-                    }
-                    self.selectTab(documentID)
-                }
-                host.onTabClosed = { [weak self] documentID in
-                    self?.closeDocument(documentID, in: pane)
-                }
-                self.configurePalette(host.paletteController)
-                return host
-            }
-        )
-        for pane in workbench.panes {
-            if let host = paneHosts[pane.id], pane.selectedDocument != nil {
+        let panes = workbench.layout.flattenedPanes()
+        let live = Set(panes.map(\.id))
+        for id in hostedPaneIDs.subtracting(live) {
+            hostCache.remove(id)
+        }
+        hostedPaneIDs = live
+        for pane in panes {
+            let host = host(for: pane.id)
+            if pane.selectedDocument != nil {
                 showDocument(in: pane, host: host, reloadOnlyIfNeeded: true)
             }
         }
+        layoutEpoch += 1
         refreshPresentation()
     }
 
@@ -441,52 +432,29 @@ final class IDEWorkspace: ObservableObject {
     }
 
     private func activatePane(_ paneID: UUID) {
-        workbench.activatePane(paneID)
-        guard let host = paneHosts[paneID] else { return }
-        let sameEditor = adapter.textView === host.textView
+        let host = host(for: paneID)
+        let alreadyActive = workbench.activePaneID == paneID && adapter.textView === host.textView
         let sameDocument = host.loadedDocumentID == workbench.activePane.selectedDocumentID
-        if sameEditor && sameDocument {
-            updateActivePaneChrome()
+        if alreadyActive && sameDocument {
             return
         }
+        workbench.activatePane(paneID)
+        activePaneID = workbench.activePaneID
         adapter.textView = host.textView
         host.textView.editorDelegate = adapter
         showDocument(in: workbench.activePane, host: host)
-        updateActivePaneChrome()
         adapter.refreshCachedDocuments()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
     }
 
-    private func updateActivePaneChrome() {
-        for (paneID, host) in paneHosts {
-            host.setActive(paneID == workbench.activePaneID)
-        }
-    }
-
     private func refreshDirtyIndicators() {
-        let selectedID = workbench.activePane.selectedDocumentID
-        sidebarDocuments = workbench.allDocuments().map { document in
-            IDEDocumentRow(
-                id: document.id,
-                title: document.displayName,
-                languageIdentifier: document.languageIdentifier,
-                isDirty: document.isDirty,
-                isSelected: document.id == selectedID
-            )
-        }
-        activePaneTabs = workbench.activePane.documents.map { document in
-            IDETabRow(
-                id: document.id,
-                title: document.displayName,
-                isDirty: document.isDirty,
-                isSelected: document.id == selectedID
-            )
-        }
+        refreshPresentation()
     }
 
     private func refreshPresentation() {
+        activePaneID = workbench.activePaneID
         let selectedID = workbench.activePane.selectedDocumentID
         sidebarDocuments = workbench.allDocuments().map { document in
             IDEDocumentRow(
@@ -497,20 +465,23 @@ final class IDEWorkspace: ObservableObject {
                 isSelected: document.id == selectedID
             )
         }
-        activePaneTabs = workbench.activePane.documents.map { document in
-            IDETabRow(
-                id: document.id,
-                title: document.displayName,
-                isDirty: document.isDirty,
-                isSelected: document.id == selectedID
-            )
+        var tabs: [UUID: [IDETabRow]] = [:]
+        for pane in workbench.panes {
+            tabs[pane.id] = pane.documents.map { document in
+                IDETabRow(
+                    id: document.id,
+                    title: document.displayName,
+                    isDirty: document.isDirty,
+                    isSelected: document.id == pane.selectedDocumentID
+                )
+            }
         }
+        tabsByPane = tabs
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · Runestone"
         } else {
             windowTitle = "Runestone"
         }
-        updateActivePaneChrome()
     }
 
     private func applyLaunchConfiguration() {
@@ -523,8 +494,8 @@ final class IDEWorkspace: ObservableObject {
     }
 
     private func applyMetalRenderingPreference() {
-        for host in paneHosts.values {
-            host.textView.isMetalRenderingEnabled = isMetalRenderingEnabled
+        for pane in workbench.panes {
+            host(for: pane.id).textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         }
         if let textView = adapter?.textView {
             updateStatus(from: textView)
@@ -576,7 +547,7 @@ final class IDEWorkspace: ObservableObject {
         let generation = host.applyGate.bump()
         RunestoneStateBuilder.prepareAndApply(
             text: document.text,
-            theme: DefaultTheme(),
+            theme: IDEEditorTheme.shared,
             language: document.language,
             languageProvider: Self.languageProvider,
             generation: generation,

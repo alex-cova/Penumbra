@@ -286,6 +286,16 @@ final class LayoutManager {
         paintBackend.invalidateGlyphs(forLineIDs: lineIDs)
     }
 
+    /// Appearance change: glyph instance colors were baked at extract time. Drop cache keys so
+    /// the next layout re-extracts against the new `effectiveAppearance`.
+    func invalidateMetalGlyphsForAppearanceChange() {
+        guard isMetalRenderingActive else {
+            return
+        }
+        paintBackend.invalidateGlyphs(forLineIDs: visibleLineIDs)
+        paintBackend.setNeedsDisplay()
+    }
+
     func setNeedsDisplayOnLines() {
         for lineController in lineControllerStorage {
             lineController.setNeedsDisplayOnLineFragmentViews()
@@ -461,6 +471,11 @@ extension LayoutManager {
             layoutLinesInViewport()
             updateLineNumberColors()
             CATransaction.commit()
+            // Present *after* the disableActions transaction. `presentsWithTransaction`
+            // commits the drawable at CATransaction.commit; disableActions swallows that
+            // contents update, which is the blank-editor symptom (offscreen encode still
+            // has glyphs, the on-screen CAMetalLayer stays clear).
+            presentMetalCanvasIfNeeded()
             scheduleMetalRasterRetryIfNeeded()
         }
     }
@@ -721,10 +736,14 @@ extension LayoutManager {
             let contentOffsetAdjustment = CGPoint(x: 0, y: contentOffsetAdjustmentY)
             delegate?.layoutManager(self, didProposeContentOffsetAdjustment: contentOffsetAdjustment)
         }
-        // Present inside this function's caller's `CATransaction` so `presentsWithTransaction`
-        // actually commits the drawable. Relying on `NSView.draw(_:)` misses frames: a
-        // `CAMetalLayer` backing layer often never receives a second `draw` after the empty
-        // first-layout pass, which is the blank-editor symptom.
+        // Present is deferred to `layoutIfNeeded` after this disableActions transaction
+        // commits — see `presentMetalCanvasIfNeeded()`.
+    }
+
+    private func presentMetalCanvasIfNeeded() {
+        guard isMetalRenderingActive else {
+            return
+        }
         metalCanvasView?.presentIfDirty()
     }
 
@@ -757,7 +776,14 @@ extension LayoutManager {
         guard isMetalRenderingActive, let metalCanvasView else {
             return
         }
-        metalCanvasView.frame = viewport
+        // Overlay on the scroll view covers the visible rect and stays put while
+        // `canvasFrame` (content space) tracks the viewport for projection.
+        // Inside the clip view the same layer does not composite.
+        if metalCanvasView.superview === gutterParentView {
+            metalCanvasView.frame = CGRect(origin: .zero, size: viewport.size)
+        } else {
+            metalCanvasView.frame = viewport
+        }
         paintBackend.setViewport(viewport, canvasFrame: viewport, scale: metalCanvasView.effectiveBackingScale)
     }
 
@@ -790,10 +816,7 @@ extension LayoutManager {
                 )
             }
         }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        metalCanvasView?.presentIfDirty()
-        CATransaction.commit()
+        presentMetalCanvasIfNeeded()
     }
 
     /// Whether any invisible-character marker could be visible. Skips the (potentially large)
@@ -897,17 +920,15 @@ extension LayoutManager {
         foldRibbonView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
         // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
-        // views (which paint the glyphs); when Metal is the active backend it sits *in front* of
-        // the now-empty `linesContainerView` and paints the glyphs itself, still behind the
-        // selection overlay and carets (re-fronted in `SelectionOverlayController.updateLayout`).
+        // views (which paint the glyphs). When Metal is active it is a viewport-sized overlay on
+        // the scroll view (`gutterParentView`) — a `CAMetalLayer` inside `NSClipView` does not
+        // composite, which is the blank-editor symptom.
         textInputView?.addSubview(lineSelectionBackgroundView)
         // Behind the glyph canvas (and its selection overlay), in front of the line-selection band.
         textInputView?.addSubview(methodSeparatorView)
         if isMetalRenderingActive {
             textInputView?.addSubview(linesContainerView)
-            if let metalCanvasView {
-                textInputView?.addSubview(metalCanvasView)
-            }
+            addMetalCanvasOverlay()
         } else {
             if let metalCanvasView {
                 textInputView?.addSubview(metalCanvasView)
@@ -919,6 +940,19 @@ extension LayoutManager {
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
         gutterContainerView.addSubview(lineNumbersContainerView)
         gutterContainerView.addSubview(foldRibbonView)
+    }
+
+    private func addMetalCanvasOverlay() {
+        guard let metalCanvasView else {
+            return
+        }
+        if let scrollView = gutterParentView as? UIScrollView {
+            scrollView.addFixedOverlaySubview(metalCanvasView)
+        } else if let gutterParentView {
+            gutterParentView.addSubview(metalCanvasView)
+        } else {
+            textInputView?.addSubview(metalCanvasView)
+        }
     }
 
     private func updateShownViews() {

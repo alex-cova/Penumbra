@@ -82,19 +82,22 @@ public final class CommandPaletteView: NSView {
 
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        applyChromeColors()
     }
 
     private func configure() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 12
+        layer?.masksToBounds = false
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.45
+        layer?.shadowRadius = 24
+        layer?.shadowOffset = .zero
+        applyChromeColors()
 
         queryField.translatesAutoresizingMaskIntoConstraints = false
-        queryField.font = .systemFont(ofSize: 15)
+        queryField.font = .systemFont(ofSize: 17, weight: .regular)
         queryField.isBezeled = false
         queryField.drawsBackground = false
         queryField.focusRingType = .none
@@ -119,30 +122,45 @@ public final class CommandPaletteView: NSView {
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 22
+        tableView.rowHeight = 28
+        tableView.intercellSpacing = NSSize(width: 0, height: 2)
         tableView.delegate = self
         tableView.dataSource = self
         tableView.style = .plain
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
+        tableView.floatsGroupRows = false
+        tableView.usesAlternatingRowBackgroundColors = false
         tableView.target = self
         tableView.action = #selector(tableViewClicked)
         scrollView.documentView = tableView
 
         NSLayoutConstraint.activate([
-            queryField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            queryField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            queryField.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            queryField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            queryField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            queryField.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            queryField.heightAnchor.constraint(equalToConstant: 28),
 
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.topAnchor.constraint(equalTo: queryField.bottomAnchor, constant: 8),
+            separator.topAnchor.constraint(equalTo: queryField.bottomAnchor, constant: 10),
 
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 4),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
+    }
+
+    private func applyChromeColors() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if isDark {
+            layer?.backgroundColor = NSColor(srgbRed: 0.118, green: 0.118, blue: 0.133, alpha: 1).cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        } else {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
     }
 
     @objc private func tableViewClicked() {
@@ -156,7 +174,7 @@ public final class CommandPaletteView: NSView {
         onActivateItemAtIndex?(itemIndex)
     }
 
-    private func attributedTitle(for item: PaletteItem) -> NSAttributedString {
+    private func attributedTitle(for item: PaletteItem, includeSubtitle: Bool) -> NSAttributedString {
         let result = NSMutableAttributedString(
             string: item.title,
             attributes: [
@@ -178,7 +196,7 @@ public final class CommandPaletteView: NSView {
             }
             utf16Offset += length
         }
-        if let subtitle = item.subtitle, !subtitle.isEmpty {
+        if includeSubtitle, let subtitle = item.subtitle, !subtitle.isEmpty {
             result.append(NSAttributedString(
                 string: "   \(subtitle)",
                 attributes: [
@@ -188,6 +206,14 @@ public final class CommandPaletteView: NSView {
             ))
         }
         return result
+    }
+
+    fileprivate static func isKeyboardShortcut(_ subtitle: String) -> Bool {
+        subtitle.contains("⌘")
+            || subtitle.contains("⌃")
+            || subtitle.contains("⌥")
+            || subtitle.contains("⇧")
+            || subtitle.contains("\u{2303}")
     }
 }
 
@@ -206,19 +232,32 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
         return false
     }
 
+    public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        if case .header = rows[row] {
+            let view = NSTableRowView()
+            view.selectionHighlightStyle = .none
+            return view
+        }
+        return PaletteRowView()
+    }
+
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch rows[row] {
         case .header(let title):
             let id = NSUserInterfaceItemIdentifier("headerCell")
             let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
-            cell.textField?.stringValue = title.uppercased()
-            cell.textField?.textColor = .secondaryLabelColor
-            cell.textField?.font = .systemFont(ofSize: 10, weight: .semibold)
+            cell.textField?.stringValue = title
+            cell.textField?.textColor = .tertiaryLabelColor
+            cell.textField?.font = .systemFont(ofSize: 11, weight: .semibold)
             return cell
         case .item(let item):
             let id = NSUserInterfaceItemIdentifier("itemCell")
-            let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
-            cell.textField?.attributedStringValue = attributedTitle(for: item)
+            let cell = tableView.makeView(withIdentifier: id, owner: self) as? PaletteItemCell ?? PaletteItemCell(id: id)
+            let shortcut = item.subtitle.flatMap { Self.isKeyboardShortcut($0) ? $0 : nil }
+            cell.apply(
+                title: attributedTitle(for: item, includeSubtitle: shortcut == nil),
+                shortcut: shortcut
+            )
             return cell
         }
     }
@@ -232,8 +271,8 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
         view.addSubview(textField)
         view.textField = textField
         NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            textField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            textField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
+            textField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             textField.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])
         return view
@@ -264,6 +303,65 @@ private final class PaletteQueryField: NSTextField {
             onCancel?()
         default:
             super.doCommand(by: selector)
+        }
+    }
+}
+
+private final class PaletteRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 6, dy: 1)
+        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        NSColor.clear.setFill()
+        bounds.fill()
+    }
+}
+
+private final class PaletteItemCell: NSTableCellView {
+    private let shortcutField = NSTextField(labelWithString: "")
+
+    init(id: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        identifier = id
+        let textField = NSTextField(labelWithString: "")
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.lineBreakMode = .byTruncatingTail
+        addSubview(textField)
+        self.textField = textField
+
+        shortcutField.translatesAutoresizingMaskIntoConstraints = false
+        shortcutField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        shortcutField.textColor = .tertiaryLabelColor
+        shortcutField.alignment = .right
+        shortcutField.setContentHuggingPriority(.required, for: .horizontal)
+        shortcutField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(shortcutField)
+
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            textField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            shortcutField.leadingAnchor.constraint(greaterThanOrEqualTo: textField.trailingAnchor, constant: 8),
+            shortcutField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            shortcutField.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(title: NSAttributedString, shortcut: String?) {
+        textField?.attributedStringValue = title
+        if let shortcut, !shortcut.isEmpty {
+            shortcutField.stringValue = shortcut
+            shortcutField.isHidden = false
+        } else {
+            shortcutField.stringValue = ""
+            shortcutField.isHidden = true
         }
     }
 }

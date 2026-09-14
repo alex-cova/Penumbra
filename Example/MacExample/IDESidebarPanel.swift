@@ -1,15 +1,22 @@
 import SwiftUI
 
 struct IDESidebarPanel: View {
+    var leadingInset: CGFloat = 0
     @EnvironmentObject private var workspace: IDEWorkspace
 
     var body: some View {
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-            Text("EXPLORER")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(IDEAppearance.ColorToken.sidebarHeading)
-                .padding(.horizontal, IDEAppearance.Spacing.lg)
-                .padding(.top, IDEAppearance.Spacing.md)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Files")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .padding(.leading, leadingInset + IDEAppearance.Spacing.lg)
+                .padding(.trailing, IDEAppearance.Spacing.lg)
+                .frame(height: IDEAppearance.Spacing.tabHeight, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
 
             if workspace.sidebarDocuments.isEmpty {
                 VStack(spacing: IDEAppearance.Spacing.sm) {
@@ -23,44 +30,55 @@ struct IDESidebarPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 1) {
                         ForEach(workspace.sidebarDocuments) { document in
-                            Button {
+                            IDESidebarRow(document: document) {
                                 workspace.selectSidebarDocument(document.id)
-                            } label: {
-                                HStack(spacing: IDEAppearance.Spacing.sm) {
-                                    Image(systemName: iconName(for: document.title))
-                                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                        .frame(width: 16)
-                                    Text(document.title)
-                                        .lineLimit(1)
-                                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                                    Spacer(minLength: 0)
-                                    if document.isDirty {
-                                        Circle()
-                                            .fill(IDEAppearance.ColorToken.foreground)
-                                            .frame(width: 6, height: 6)
-                                            .accessibilityLabel("Edited")
-                                    }
-                                }
-                                .padding(.horizontal, IDEAppearance.Spacing.lg)
-                                .padding(.vertical, IDEAppearance.Spacing.sm)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    document.isSelected
-                                        ? IDEAppearance.ColorToken.selection.opacity(0.45)
-                                        : Color.clear
-                                )
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
             }
         }
-        .frame(width: IDEAppearance.Spacing.sidebarWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.sidebar)
+        .focusable(false)
+    }
+}
+
+private struct IDESidebarRow: View {
+    let document: IDEDocumentRow
+    let onSelect: () -> Void
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: iconName(for: document.title))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 16)
+            Text(document.title)
+                .lineLimit(1)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            Spacer(minLength: 0)
+            if document.isDirty {
+                Circle()
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(width: 6, height: 6)
+                    .accessibilityLabel("Edited")
+            }
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, 6)
+        .background {
+            if document.isSelected {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                    .fill(IDEAppearance.ColorToken.selection)
+            }
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .accessibilityAddTraits(.isButton)
         .focusable(false)
     }
 
@@ -86,6 +104,6 @@ struct IDESidebarPanel: View {
             ]
             return workspace
         }())
-        .frame(height: 420)
+        .frame(width: 220, height: 420)
         .preferredColorScheme(.dark)
 }

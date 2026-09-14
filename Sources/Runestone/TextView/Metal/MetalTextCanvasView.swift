@@ -25,6 +25,8 @@ final class MetalTextCanvasView: UIView {
     var onRenderingFailure: (() -> Void)?
     /// Set by `MetalRenderer` when it becomes the active paint backend; cleared when it steps down.
     weak var glyphEncoder: MetalCanvasGlyphEncoding?
+    /// Non-zero alpha texels in the last on-screen drawable, filled when drawable capture is on.
+    private(set) var debugPresentedAlphaPixels = 0
 
     private var isDisplayDirty = false
     private var drawableRetryCount = 0
@@ -36,8 +38,11 @@ final class MetalTextCanvasView: UIView {
         isUserInteractionEnabled = false
         setAccessibilityElement(false)
         setAccessibilityHidden(true)
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
         wantsLayer = true
+        // AppKit must not try to `draw(_:)` into a `CAMetalLayer` — that path installs a
+        // CG context which clears the presented drawable (blank editor, offscreen encode still
+        // has glyphs). Layout / `updateLayer` present instead.
+        layerContentsRedrawPolicy = .never
         isHidden = true
     }
 
@@ -51,14 +56,25 @@ final class MetalTextCanvasView: UIView {
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = !MetalContext.shared.allowsDrawableCapture
         metalLayer.contentsScale = effectiveBackingScale
+        let scale = metalLayer.contentsScale
         metalLayer.drawableSize = CGSize(
-            width: bounds.width * metalLayer.contentsScale,
-            height: bounds.height * metalLayer.contentsScale
+            width: max(bounds.width * scale, 1),
+            height: max(bounds.height * scale, 1)
         )
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.isOpaque = false
-        metalLayer.presentsWithTransaction = true
+        // `true` requires presenting inside a CA transaction that is *not*
+        // `setDisableActions(true)`. Nested layout transactions swallowed the
+        // drawable, leaving a clear canvas (offscreen encode still had glyphs).
+        // Present immediately; layout already moved the canvas and carets.
+        metalLayer.presentsWithTransaction = false
         return metalLayer
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        presentIfDirty()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -86,8 +102,8 @@ final class MetalTextCanvasView: UIView {
 
     /// Encode + present now if a display is pending. AppKit does not reliably call `draw(_:)` on a
     /// view whose backing layer is `CAMetalLayer` (especially under a layer-backed SwiftUI host),
-    /// so layout must invoke this inside its `CATransaction` — `presentsWithTransaction` presents
-    /// at that commit.
+    /// so layout invokes this *after* its disableActions transaction. `presentsWithTransaction`
+    /// presents at this method's own CA commit.
     func presentIfDirty() {
         guard window != nil, !isHidden, isDisplayDirty else {
             return
@@ -96,7 +112,8 @@ final class MetalTextCanvasView: UIView {
             return
         }
         updateMetalLayerGeometry()
-        guard metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else {
+        guard bounds.width > 0, bounds.height > 0,
+              metalLayer.drawableSize.width > 1, metalLayer.drawableSize.height > 1 else {
             schedulePresentRetry()
             return
         }
@@ -140,7 +157,12 @@ final class MetalTextCanvasView: UIView {
         updateMetalLayerGeometry()
         if !isHidden {
             setNeedsDisplay()
-            presentIfDirty()
+            // Defer until after the hosting layout pass has given the canvas a real
+            // frame. Presenting at drawableSize 1×1 here would commit a clear-only
+            // drawable and (previously) drop `needsInstanceRebuild`.
+            DispatchQueue.main.async { [weak self] in
+                self?.presentIfDirty()
+            }
         }
     }
 
@@ -149,12 +171,10 @@ final class MetalTextCanvasView: UIView {
         updateMetalLayerGeometry()
         if !isHidden {
             setNeedsDisplay()
-            presentIfDirty()
+            DispatchQueue.main.async { [weak self] in
+                self?.presentIfDirty()
+            }
         }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        presentIfDirty()
     }
 
     /// `NSView.cacheDisplay` of this canvas after a display pass. Requires
@@ -261,7 +281,12 @@ private extension MetalTextCanvasView {
         }
         let scale = effectiveBackingScale
         metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let width = max(bounds.width * scale, 1)
+        let height = max(bounds.height * scale, 1)
+        if metalLayer.drawableSize.width != width || metalLayer.drawableSize.height != height {
+            metalLayer.drawableSize = CGSize(width: width, height: height)
+            drawableRetryCount = 0
+        }
     }
 
     @discardableResult
@@ -292,10 +317,44 @@ private extension MetalTextCanvasView {
             onRenderingFailure?()
             return false
         }
+        let captureBuffer: MTLBuffer?
+        let captureBytesPerRow: Int
+        if MetalContext.shared.allowsDrawableCapture {
+            let width = drawable.texture.width
+            let height = drawable.texture.height
+            captureBytesPerRow = width * 4
+            captureBuffer = context.device?.makeBuffer(length: captureBytesPerRow * height, options: .storageModeShared)
+            if let captureBuffer, let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(
+                    from: drawable.texture,
+                    sourceSlice: 0,
+                    sourceLevel: 0,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: width, height: height, depth: 1),
+                    to: captureBuffer,
+                    destinationOffset: 0,
+                    destinationBytesPerRow: captureBytesPerRow,
+                    destinationBytesPerImage: captureBytesPerRow * height
+                )
+                blit.endEncoding()
+            }
+        } else {
+            captureBuffer = nil
+            captureBytesPerRow = 0
+        }
         commandBuffer.present(drawable)
         commandBuffer.commit()
-        // presentsWithTransaction presents at CA commit; the GPU must have the buffer first.
-        commandBuffer.waitUntilScheduled()
+        if let captureBuffer {
+            commandBuffer.waitUntilCompleted()
+            let pixels = captureBuffer.contents().bindMemory(to: UInt8.self, capacity: captureBuffer.length)
+            var painted = 0
+            for index in stride(from: 3, to: captureBuffer.length, by: 4) where pixels[index] != 0 {
+                painted += 1
+            }
+            debugPresentedAlphaPixels = painted
+        } else {
+            commandBuffer.waitUntilScheduled()
+        }
         return true
     }
 }

@@ -35,4 +35,12 @@ public final class EditorHostContainer: NSView {
     override public var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
+
+    /// SwiftUI chrome around a representable must not become first responder or a
+    /// `@Published` caret update will steal typing focus from the mounted `TextView`.
+    override public var acceptsFirstResponder: Bool { false }
+
+    override public func becomeFirstResponder() -> Bool { false }
+
+    override public func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

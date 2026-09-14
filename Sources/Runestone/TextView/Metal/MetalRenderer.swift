@@ -336,6 +336,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {
         let start = DispatchTime.now().uptimeNanoseconds
+        var didDraw = false
         RunestoneSignposts.interval("MetalRenderer.draw") {
             if needsInstanceRebuild {
                 rebuildInstanceBuffers()
@@ -349,10 +350,13 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             drawGlyphBuckets(textPageBuckets, order: textPageOrder, encoder: encoder, uniforms: &uniforms)
             drawSolids(overlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
             drawGlyphBuckets(overlayPageBuckets, order: overlayPageOrder, encoder: encoder, uniforms: &uniforms)
+            didDraw = true
         }
         recordDrawNanos(DispatchTime.now().uptimeNanoseconds &- start)
-        needsInstanceRebuild = false
-        rasterBudget = GlyphRasterBudget()
+        if didDraw {
+            needsInstanceRebuild = false
+            rasterBudget = GlyphRasterBudget()
+        }
     }
 
     func encodeForCapture(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {

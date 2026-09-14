@@ -1548,6 +1548,7 @@ final class TextInputView: UIView, UITextInput {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         invalidateLines()
+        layoutManager.invalidateMetalGlyphsForAppearanceChange()
         layoutManager.setNeedsLayout()
     }
 

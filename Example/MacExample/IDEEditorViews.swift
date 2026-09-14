@@ -1,5 +1,6 @@
 import AppKit
 import Runestone
+import SwiftUI
 
 // MARK: - Pane host
 
@@ -10,49 +11,31 @@ final class IDEEditorPaneHost: NSView {
     let paletteController: CommandPaletteController
     let applyGate = RunestoneStateBuilder.GenerationGate()
     var loadedDocumentID: UUID?
-    var onTabSelected: ((UUID) -> Void)?
-    var onTabClosed: ((UUID) -> Void)?
-    var onPaneActivated: (() -> Void)?
-
-    private let accentBar = NSView()
+    var onActivated: (() -> Void)?
 
     init(pane: EditorPane) {
         self.pane = pane
         textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
-        textView.theme = DefaultTheme()
+        textView.theme = IDEEditorTheme.shared
+        textView.backgroundColor = IDEAppearance.NSToken.editor
         textView.showMinimap = true
         textView.showMethodSeparators = true
         textView.highlightsOccurrencesOfSelection = true
         textView.keymap = .default_
         paletteController = CommandPaletteController(textView: textView)
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1).cgColor
+        layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
 
-        accentBar.wantsLayer = true
-        accentBar.layer?.backgroundColor = NSColor(red: 0, green: 0x7a / 255, blue: 0xcc / 255, alpha: 1).cgColor
-        accentBar.isHidden = true
-        accentBar.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(accentBar)
         addSubview(textView)
-
         NSLayoutConstraint.activate([
-            accentBar.topAnchor.constraint(equalTo: topAnchor),
-            accentBar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            accentBar.widthAnchor.constraint(equalToConstant: 2),
-            accentBar.bottomAnchor.constraint(equalTo: bottomAnchor),
             textView.topAnchor.constraint(equalTo: topAnchor),
             textView.leadingAnchor.constraint(equalTo: leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: trailingAnchor),
             textView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        // Do not delay mouse-down: the default click recognizer would swallow the event
-        // so TextInputView never becomes first responder. Deliver the click to the editor
-        // and only use this recognizer to activate the pane.
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))
         click.delaysPrimaryMouseButtonEvents = false
         addGestureRecognizer(click)
@@ -63,103 +46,218 @@ final class IDEEditorPaneHost: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    @objc private func paneClicked() {
-        onPaneActivated?()
-    }
+    override var acceptsFirstResponder: Bool { false }
 
-    func setActive(_ active: Bool) {
-        accentBar.isHidden = !active
-        layer?.borderWidth = active ? 0 : 1
-        layer?.borderColor = NSColor(red: 0x3c / 255, green: 0x3c / 255, blue: 0x3c / 255, alpha: 1).cgColor
+    @objc private func paneClicked() {
+        onActivated?()
     }
 }
 
-// MARK: - Layout host
+// MARK: - Representable
 
-@MainActor
-final class IDEEditorLayoutHostView: NSView {
-    var onPaneActivated: ((UUID) -> Void)?
+struct IDETextViewRepresentable: NSViewRepresentable {
+    let paneID: UUID
+    let workspace: IDEWorkspace
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1).cgColor
+    func makeNSView(context: Context) -> EditorHostContainer {
+        let container = EditorHostContainer()
+        container.mount(workspace.host(for: paneID))
+        return container
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    func updateNSView(_ container: EditorHostContainer, context: Context) {
+        container.mount(workspace.host(for: paneID))
     }
+}
 
-    func configure(
-        layout: EditorLayout,
-        existingHosts: [UUID: IDEEditorPaneHost],
-        makeHost: (EditorPane) -> IDEEditorPaneHost
-    ) -> [UUID: IDEEditorPaneHost] {
-        subviews.forEach { $0.removeFromSuperview() }
-        var hosts: [UUID: IDEEditorPaneHost] = [:]
+// MARK: - Layout
 
-        func host(for pane: EditorPane) -> IDEEditorPaneHost {
-            if let existing = existingHosts[pane.id] {
-                hosts[pane.id] = existing
-                existing.onPaneActivated = { [weak self] in
-                    self?.onPaneActivated?(pane.id)
-                }
-                return existing
-            }
-            let created = makeHost(pane)
-            created.onPaneActivated = { [weak self] in
-                self?.onPaneActivated?(pane.id)
-            }
-            hosts[pane.id] = created
-            return created
-        }
+struct IDEEditorLayoutNode: View {
+    @EnvironmentObject private var workspace: IDEWorkspace
+    let layout: EditorLayout
+    var isTopLeading: Bool = true
 
-        let built = buildView(for: layout, hostForPane: host)
-        built.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(built)
-        NSLayoutConstraint.activate([
-            built.topAnchor.constraint(equalTo: topAnchor),
-            built.leadingAnchor.constraint(equalTo: leadingAnchor),
-            built.trailingAnchor.constraint(equalTo: trailingAnchor),
-            built.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-        return hosts
-    }
-
-    private func buildView(
-        for layout: EditorLayout,
-        hostForPane: (EditorPane) -> IDEEditorPaneHost
-    ) -> NSView {
+    var body: some View {
         switch layout {
         case .pane(let pane):
-            return hostForPane(pane)
+            IDEEditorPaneView(
+                paneID: pane.id,
+                padTrafficLights: isTopLeading && !workspace.isSidebarVisible
+            )
+            .id(pane.id)
         case .vertical(let data):
-            let split = NSSplitView()
-            split.isVertical = true
-            split.dividerStyle = .thin
-            split.translatesAutoresizingMaskIntoConstraints = false
-            styleSplitView(split)
-            for child in data.children {
-                split.addArrangedSubview(buildView(for: child, hostForPane: hostForPane))
+            IDESplitStack(axis: .horizontal, childCount: data.children.count) { index in
+                IDEEditorLayoutNode(
+                    layout: data.children[index],
+                    isTopLeading: isTopLeading && index == 0
+                )
             }
-            return split
         case .horizontal(let data):
-            let split = NSSplitView()
-            split.isVertical = false
-            split.dividerStyle = .thin
-            split.translatesAutoresizingMaskIntoConstraints = false
-            styleSplitView(split)
-            for child in data.children {
-                split.addArrangedSubview(buildView(for: child, hostForPane: hostForPane))
+            IDESplitStack(axis: .vertical, childCount: data.children.count) { index in
+                IDEEditorLayoutNode(
+                    layout: data.children[index],
+                    isTopLeading: isTopLeading && index == 0
+                )
             }
-            return split
+        }
+    }
+}
+
+struct IDEEditorPaneView: View {
+    @EnvironmentObject private var workspace: IDEWorkspace
+    let paneID: UUID
+    var padTrafficLights: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            IDEEditorTabsBar(
+                paneID: paneID,
+                leadingInset: padTrafficLights ? IDEAppearance.Spacing.trafficLightsInset : 0
+            )
+            .opacity(workspace.chromeOpacity)
+
+            IDETextViewRepresentable(paneID: paneID, workspace: workspace)
+                .overlay {
+                    if workspace.activePaneID != paneID {
+                        Rectangle()
+                            .strokeBorder(IDEAppearance.ColorToken.border, lineWidth: 1)
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Splitter
+
+struct IDESplitStack<Content: View>: View {
+    let axis: Axis
+    let childCount: Int
+    @ViewBuilder var content: (Int) -> Content
+
+    @State private var fractions: [CGFloat] = []
+
+    var body: some View {
+        Group {
+            if childCount <= 1 {
+                content(0)
+            } else {
+                GeometryReader { geometry in
+                    let sizes = splitSizes(in: geometry.size)
+                    stack {
+                        ForEach(0..<childCount, id: \.self) { index in
+                            content(index)
+                                .frame(
+                                    width: axis == .horizontal ? sizes[index] : nil,
+                                    height: axis == .vertical ? sizes[index] : nil
+                                )
+                            if index < childCount - 1 {
+                                IDESplitHandle(axis: axis) { delta in
+                                    resize(index: index, delta: delta, total: axisLength(geometry.size))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear(perform: resetFractions)
+        .onChange(of: childCount) { _ in
+            resetFractions()
         }
     }
 
-    private func styleSplitView(_ splitView: NSSplitView) {
-        splitView.wantsLayer = true
-        splitView.layer?.backgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1).cgColor
+    @ViewBuilder
+    private func stack<Stacked: View>(@ViewBuilder content: () -> Stacked) -> some View {
+        if axis == .horizontal {
+            HStack(spacing: 0, content: content)
+        } else {
+            VStack(spacing: 0, content: content)
+        }
+    }
+
+    private func axisLength(_ size: CGSize) -> CGFloat {
+        axis == .horizontal ? size.width : size.height
+    }
+
+    private func splitSizes(in size: CGSize) -> [CGFloat] {
+        let handleCount = CGFloat(max(childCount - 1, 0))
+        let available = axisLength(size) - handleCount
+        let values = normalizedFractions()
+        var result = values.map { ($0 * available).rounded() }
+        if let last = result.indices.last {
+            result[last] = max(0, available - result.dropLast().reduce(0, +))
+        }
+        return result
+    }
+
+    private func normalizedFractions() -> [CGFloat] {
+        if fractions.count == childCount {
+            return fractions
+        }
+        let share = 1 / CGFloat(max(childCount, 1))
+        return Array(repeating: share, count: childCount)
+    }
+
+    private func resetFractions() {
+        let share = 1 / CGFloat(max(childCount, 1))
+        fractions = Array(repeating: share, count: max(childCount, 1))
+    }
+
+    private func resize(index: Int, delta: CGFloat, total: CGFloat) {
+        guard fractions.indices.contains(index), fractions.indices.contains(index + 1), total > 0 else {
+            return
+        }
+        let minimum: CGFloat = 0.12
+        var next = fractions
+        let change = delta / total
+        next[index] += change
+        next[index + 1] -= change
+        if next[index] < minimum || next[index + 1] < minimum {
+            return
+        }
+        fractions = next
+    }
+}
+
+private struct IDESplitHandle: View {
+    let axis: Axis
+    let onDrag: (CGFloat) -> Void
+
+    @State private var lastTranslation: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            Color.clear
+                .frame(
+                    width: axis == .horizontal ? 6 : nil,
+                    height: axis == .vertical ? 6 : nil
+                )
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(
+                    width: axis == .horizontal ? 1 : nil,
+                    height: axis == .vertical ? 1 : nil
+                )
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let current = axis == .horizontal ? value.translation.width : value.translation.height
+                    onDrag(current - lastTranslation)
+                    lastTranslation = current
+                }
+                .onEnded { _ in
+                    lastTranslation = 0
+                }
+        )
+        .onHover { hovering in
+            if hovering {
+                (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 }

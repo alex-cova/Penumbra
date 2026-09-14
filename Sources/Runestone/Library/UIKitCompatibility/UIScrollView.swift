@@ -45,6 +45,7 @@ open class UIScrollView: UIView {
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        clipView.wantsLayer = true
         clipView.drawsBackground = false
         clipView.documentView = documentContainer
         // Frame-based layout only. Mixing Auto Layout edges with

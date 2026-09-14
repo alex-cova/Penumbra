@@ -1162,6 +1162,12 @@ import EditorIntelligence
         // so viewport-driven line fragments exist for the current offset.
         textInputView.layoutIfNeeded()
         textInputView.ensureViewportSyntaxParse()
+        if let canvas = subviews.compactMap({ $0 as? MetalTextCanvasView }).first,
+           let clip = subviews.first(where: { $0 !== canvas }) {
+            // Above the clip view (opaque document background) so Metal glyphs are visible;
+            // gutter / minimap / find panel are brought in front next.
+            addSubview(canvas, positioned: .above, relativeTo: clip)
+        }
         bringSubviewToFront(textInputView.gutterContainerView)
         if let scrollPocketView {
             bringSubviewToFront(scrollPocketView)

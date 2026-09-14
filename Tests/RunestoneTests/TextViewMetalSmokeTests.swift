@@ -178,6 +178,98 @@ final class TextViewMetalSmokeTests: XCTestCase {
         )
     }
 
+    func testMetalPresentsGlyphsOnScreen() throws {
+        try skipUnlessMetalActivatable()
+        TextView.allowsMetalDrawableCapture = true
+        defer { TextView.allowsMetalDrawableCapture = false }
+
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView = textView
+        window.makeKeyAndOrderFront(nil)
+        textView.setState(TextViewState(text: "func hello() { return 42 }", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        XCTAssertGreaterThan(textView.metalInstanceCount, 0, "layout must have rebuilt glyph instances")
+
+        let canvas = try XCTUnwrap(findMetalCanvas(in: textView), "expected a Metal canvas")
+        XCTAssertFalse(canvas.isHidden)
+        XCTAssertGreaterThan(canvas.bounds.width, 0, "canvas bounds \(canvas.bounds)")
+        XCTAssertGreaterThan(canvas.bounds.height, 0, "canvas bounds \(canvas.bounds)")
+        XCTAssertNotNil(canvas.window)
+        XCTAssertNotNil(canvas.layer as? CAMetalLayer)
+
+        let offscreen = try XCTUnwrap(textView.captureMetalGlyphSnapshot(), "offscreen encode should work")
+        var offscreenPainted = 0
+        if let data = offscreen.bitmapData {
+            let count = offscreen.pixelsWide * offscreen.pixelsHigh * 4
+            for index in stride(from: 3, to: count, by: 4) where data[index] != 0 {
+                offscreenPainted += 1
+            }
+        }
+        XCTAssertGreaterThan(offscreenPainted, 0, "offscreen encode should have glyphs (canvas=\(canvas.bounds))")
+        XCTAssertGreaterThan(
+            canvas.debugPresentedAlphaPixels,
+            0,
+            "on-screen drawable should contain glyph pixels (instances=\(textView.metalInstanceCount) atlas=\(textView.metalGlyphAtlasBytes) canvas=\(canvas.bounds) superview=\(String(describing: type(of: canvas.superview))))"
+        )
+    }
+
+    func testMetalPresentsGlyphsWhenAutoLayoutHostedInDarkAppearance() throws {
+        try skipUnlessMetalActivatable()
+        TextView.allowsMetalDrawableCapture = true
+        defer { TextView.allowsMetalDrawableCapture = false }
+
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: .darkAqua)
+        let parent = NSView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        parent.wantsLayer = true
+        parent.layer?.backgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1).cgColor
+        window.contentView = parent
+
+        let textView = TextView()
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.showMinimap = true
+        parent.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: parent.topAnchor),
+            textView.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
+            textView.bottomAnchor.constraint(equalTo: parent.bottomAnchor)
+        ])
+        window.makeKeyAndOrderFront(nil)
+        textView.setState(TextViewState(text: "func hello() { return 42 }\nlet x = 1", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        window.layoutIfNeeded()
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        textView.layoutIfNeeded()
+
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        let canvas = try XCTUnwrap(findMetalCanvas(in: textView), "expected a Metal canvas")
+        XCTAssertEqual(canvas.superview, textView)
+        XCTAssertGreaterThan(canvas.bounds.width, 0)
+        XCTAssertGreaterThan(canvas.bounds.height, 0)
+        XCTAssertGreaterThan(
+            canvas.debugPresentedAlphaPixels,
+            0,
+            "Auto Layout + dark host must still present glyphs (canvas=\(canvas.bounds) instances=\(textView.metalInstanceCount))"
+        )
+    }
+
     func testCanvasLeavingWindowDoesNotCrash() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "detached")
@@ -191,6 +283,18 @@ final class TextViewMetalSmokeTests: XCTestCase {
 }
 
 private extension TextViewMetalSmokeTests {
+    func findMetalCanvas(in root: NSView) -> MetalTextCanvasView? {
+        if let canvas = root as? MetalTextCanvasView {
+            return canvas
+        }
+        for subview in root.subviews {
+            if let canvas = findMetalCanvas(in: subview) {
+                return canvas
+            }
+        }
+        return nil
+    }
+
     func findTextInputView(in root: NSView) -> TextInputView? {
         if let textInputView = root as? TextInputView {
             return textInputView

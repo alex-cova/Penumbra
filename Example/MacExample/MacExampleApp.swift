@@ -7,9 +7,11 @@ struct MacExampleApp: App {
 
     var body: some Scene {
         WindowGroup {
-            IDEMainViewControllerRepresentable(workspace: workspace)
+            IDERootView()
+                .environmentObject(workspace)
                 .frame(minWidth: 960, minHeight: 640)
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open…", systemImage: "folder", action: workspace.openFile)
