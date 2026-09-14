@@ -160,6 +160,24 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertGreaterThan(painted, 0, "Metal snapshot should contain painted glyph pixels (instances=\(textView.metalInstanceCount))")
     }
 
+    func testLayoutPresentsGlyphInstancesOntoTheCanvas() throws {
+        try skipUnlessMetalActivatable()
+        let textView = makeFocusedTextView(text: "func hello() { return 42 }")
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        // `nextDrawable` can miss on the layout-synchronous present; the canvas retries on the
+        // next turn. One run-loop pass is enough for that retry to land.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        XCTAssertGreaterThan(textView.metalFragmentCount, 0, "layout should have upserted visible fragments")
+        XCTAssertGreaterThan(
+            textView.metalInstanceCount,
+            0,
+            "layout must rebuild instance buffers and present; an empty first drawable is the blank-editor bug (atlasBytes=\(textView.metalGlyphAtlasBytes) drawNs=\(textView.metalDrawNanosP95))"
+        )
+    }
+
     func testCanvasLeavingWindowDoesNotCrash() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "detached")

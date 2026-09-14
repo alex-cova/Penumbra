@@ -721,6 +721,11 @@ extension LayoutManager {
             let contentOffsetAdjustment = CGPoint(x: 0, y: contentOffsetAdjustmentY)
             delegate?.layoutManager(self, didProposeContentOffsetAdjustment: contentOffsetAdjustment)
         }
+        // Present inside this function's caller's `CATransaction` so `presentsWithTransaction`
+        // actually commits the drawable. Relying on `NSView.draw(_:)` misses frames: a
+        // `CAMetalLayer` backing layer often never receives a second `draw` after the empty
+        // first-layout pass, which is the blank-editor symptom.
+        metalCanvasView?.presentIfDirty()
     }
 
     private func layoutLineNumberView(for line: DocumentLineNode) {
@@ -785,6 +790,10 @@ extension LayoutManager {
                 )
             }
         }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalCanvasView?.presentIfDirty()
+        CATransaction.commit()
     }
 
     /// Whether any invisible-character marker could be visible. Skips the (potentially large)

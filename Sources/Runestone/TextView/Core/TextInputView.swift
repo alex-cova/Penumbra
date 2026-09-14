@@ -525,6 +525,14 @@ final class TextInputView: UIView, UITextInput {
         return metalCanvasView.captureSnapshot()
     }
 
+    /// Presented `CAMetalLayer` via `cacheDisplay`. Requires `allowsMetalDrawableCapture` before init.
+    func captureMetalPresentedLayer() -> NSBitmapImageRep? {
+        guard isMetalRenderingActive else {
+            return nil
+        }
+        return metalCanvasView.capturePresentedLayer()
+    }
+
     var pageGuideColumn: Int {
         get {
             pageGuideController.column
@@ -1621,9 +1629,9 @@ private extension TextInputView {
         guard isMetalRenderingActive else {
             return
         }
-        // `LayoutManager.layoutMetalCanvas()` owns the canvas frame + viewport hand-off (it runs
-        // inside `layoutIfNeeded` before this). Just make sure a present is queued for this pass.
-        metalCanvasView.setNeedsDisplay()
+        // `LayoutManager.layoutLinesInViewport` presents inside its CATransaction when layout
+        // ran. If this pass did not layout, still flush a pending dirty present (unhide, scale).
+        metalCanvasView.presentIfDirty()
     }
 
     func refreshMetalActivation() {

@@ -62,24 +62,58 @@ enum MetalCommands {
     @MainActor
     static func snapshotMetal(pathOrSynthetic: String, outputDir: String?) {
         let text = loadText(pathOrSynthetic)
+        // Must be set before `TextView` init so the canvas layer is created with
+        // `framebufferOnly = false` (required for `cacheDisplay` of the presented drawable).
+        TextView.allowsMetalDrawableCapture = true
 
         let (metalWindow, metalView) = makeWindowedTextView(text: text, metal: true)
         Measurement.pumpRunLoop(seconds: 0.6)
         metalView.layoutSubviews()
+        metalView.displayIfNeeded()
         Measurement.pumpRunLoop(seconds: 0.3)
         let metalActive = metalView.isMetalRenderingActive
+        let atlasNonZero = metalView.metalAtlasCoverageNonZeroTexels
+        let atlasTotal = metalView.metalAtlasCoverageTexelCount
+        warn("  layout GlyphInstance size=\(metalView.metalGlyphInstanceSize) stride=\(metalView.metalGlyphInstanceStride) atlasNonZero=\(atlasNonZero)/\(atlasTotal) fragments=\(metalView.metalFragmentCount) instances=\(metalView.metalInstanceCount) metalActive=\(metalActive)")
+
         guard let glyphs = metalView.captureMetalGlyphSnapshot() else {
             warn("snapshot-metal: Metal capture unavailable (metalActive=\(metalActive))")
             metalWindow.close()
             return
         }
-        if let data = glyphs.bitmapData {
-            var nonTransparent = 0
-            let count = glyphs.pixelsWide * glyphs.pixelsHigh * 4
-            for index in stride(from: 3, to: count, by: 4) where data[index] != 0 {
-                nonTransparent += 1
+        let offscreenPainted = nonTransparentCount(glyphs)
+        warn("  offscreen encode \(glyphs.pixelsWide)x\(glyphs.pixelsHigh): \(offscreenPainted) non-transparent px")
+
+        var presentedPainted = -1
+        var presentedRep: NSBitmapImageRep?
+        if let presented = metalView.captureMetalPresentedLayer() {
+            presentedRep = presented
+            presentedPainted = nonTransparentCount(presented)
+            warn("  presented cacheDisplay \(presented.pixelsWide)x\(presented.pixelsHigh): \(presentedPainted) non-transparent px")
+        } else {
+            warn("  presented cacheDisplay: unavailable")
+        }
+
+        var windowPainted = -1
+        var windowShot: Shot?
+        if let shot = captureWindow(metalWindow) {
+            windowShot = shot
+            windowPainted = inkCount(shot.rep)
+            warn("  on-screen window \(shot.rep.pixelsWide)x\(shot.rep.pixelsHigh): \(windowPainted) ink px (vs corner background)")
+        } else {
+            warn("  on-screen window: capture failed")
+        }
+
+        if let outputDir {
+            let dir = URL(fileURLWithPath: outputDir)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? glyphs.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("metal-glyphs.png"))
+            if let presentedRep {
+                try? presentedRep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("presented.png"))
             }
-            warn("  metal glyph snapshot \(glyphs.pixelsWide)x\(glyphs.pixelsHigh): \(nonTransparent) non-transparent px, fragments=\(metalView.metalFragmentCount) instances=\(metalView.metalInstanceCount)")
+            if let windowShot {
+                try? windowShot.png.write(to: dir.appendingPathComponent("window.png"))
+            }
         }
         metalWindow.close()
 
@@ -105,7 +139,7 @@ enum MetalCommands {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try? cgFrame.png.write(to: dir.appendingPathComponent("cg.png"))
             try? glyphs.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("metal-glyphs.png"))
-            warn("  wrote cg.png / metal-glyphs.png to \(outputDir)")
+            warn("  wrote pngs to \(outputDir) (offscreen=\(offscreenPainted) presented=\(presentedPainted) window=\(windowPainted) atlasNonZero=\(atlasNonZero))")
         }
     }
 }
@@ -147,6 +181,64 @@ private extension MetalCommands {
             return nil
         }
         return Shot(rep: rep, png: png)
+    }
+
+    @MainActor
+    static func captureWindow(_ window: NSWindow) -> Shot? {
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        Measurement.pumpRunLoop(seconds: 0.2)
+        let windowID = CGWindowID(window.windowNumber)
+        guard let cgImage = CGWindowListCreateImage(
+            .null,
+            [.optionIncludingWindow],
+            windowID,
+            [.boundsIgnoreFraming, .bestResolution]
+        ) else {
+            return nil
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+        return Shot(rep: rep, png: png)
+    }
+
+    static func nonTransparentCount(_ rep: NSBitmapImageRep) -> Int {
+        guard let data = rep.bitmapData else {
+            return 0
+        }
+        var painted = 0
+        let count = rep.pixelsWide * rep.pixelsHigh * 4
+        for index in stride(from: 3, to: count, by: 4) where data[index] != 0 {
+            painted += 1
+        }
+        return painted
+    }
+
+    /// Pixels whose luma differs from the top-right corner — for opaque window screenshots
+    /// where alpha is 1 everywhere.
+    static func inkCount(_ rep: NSBitmapImageRep) -> Int {
+        let width = rep.pixelsWide
+        let height = rep.pixelsHigh
+        guard width > 4, height > 4 else {
+            return 0
+        }
+        let background = rep.colorAt(x: width - 2, y: 2) ?? .black
+        let backgroundLuma = luma(background)
+        var ink = 0
+        let step = 2
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                guard let color = rep.colorAt(x: x, y: y) else {
+                    continue
+                }
+                if abs(luma(color) - backgroundLuma) > 0.08 {
+                    ink += 1
+                }
+            }
+        }
+        return ink
     }
 
     static func glyphCoverageOverlap(

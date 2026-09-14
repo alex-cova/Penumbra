@@ -362,6 +362,32 @@ final class GlyphAtlas {
         }
     }
 
+    /// First coverage page texel census for PerfHarness / snapshot diagnostics. `nil` when no
+    /// coverage page exists or readback fails.
+    func debugCoverageTexelCensus() -> (nonzero: Int, total: Int, pages: Int)? {
+        guard let page = coveragePages.first else {
+            return (0, 0, 0)
+        }
+        let slot = GlyphAtlasSlot(
+            texture: page.texture,
+            pageID: page.id,
+            x: 0,
+            y: 0,
+            width: page.texture.width,
+            height: page.texture.height,
+            originX: 0,
+            originY: 0
+        )
+        guard let pixels = copyPixels(from: slot) else {
+            return nil
+        }
+        var nonzero = 0
+        for byte in pixels where byte != 0 {
+            nonzero += 1
+        }
+        return (nonzero, pixels.count, coveragePages.count)
+    }
+
     func copyPixels(from slot: GlyphAtlasSlot) -> Data? {
         guard let texture = slot.texture, slot.width > 0, slot.height > 0 else {
             return nil

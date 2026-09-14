@@ -28,6 +28,7 @@ final class MetalTextCanvasView: UIView {
 
     private var isDisplayDirty = false
     private var drawableRetryCount = 0
+    private var presentRetryScheduled = false
     private static let maxDrawableRetries = 3
 
     override init(frame frameRect: NSRect) {
@@ -83,6 +84,46 @@ final class MetalTextCanvasView: UIView {
         super.setNeedsDisplay(invalidRect)
     }
 
+    /// Encode + present now if a display is pending. AppKit does not reliably call `draw(_:)` on a
+    /// view whose backing layer is `CAMetalLayer` (especially under a layer-backed SwiftUI host),
+    /// so layout must invoke this inside its `CATransaction` — `presentsWithTransaction` presents
+    /// at that commit.
+    func presentIfDirty() {
+        guard window != nil, !isHidden, isDisplayDirty else {
+            return
+        }
+        guard let metalLayer = layer as? CAMetalLayer else {
+            return
+        }
+        updateMetalLayerGeometry()
+        guard metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else {
+            schedulePresentRetry()
+            return
+        }
+        guard MetalContext.shared.isAvailable else {
+            onRenderingFailure?()
+            return
+        }
+        if encodePass(on: metalLayer) {
+            isDisplayDirty = false
+            drawableRetryCount = 0
+        } else {
+            schedulePresentRetry()
+        }
+    }
+
+    private func schedulePresentRetry() {
+        guard !presentRetryScheduled, drawableRetryCount < Self.maxDrawableRetries else {
+            return
+        }
+        presentRetryScheduled = true
+        drawableRetryCount += 1
+        DispatchQueue.main.async { [weak self] in
+            self?.presentRetryScheduled = false
+            self?.presentIfDirty()
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         updateMetalLayerGeometry()
@@ -99,6 +140,7 @@ final class MetalTextCanvasView: UIView {
         updateMetalLayerGeometry()
         if !isHidden {
             setNeedsDisplay()
+            presentIfDirty()
         }
     }
 
@@ -107,31 +149,32 @@ final class MetalTextCanvasView: UIView {
         updateMetalLayerGeometry()
         if !isHidden {
             setNeedsDisplay()
+            presentIfDirty()
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard window != nil, !isHidden, isDisplayDirty else {
-            return
+        presentIfDirty()
+    }
+
+    /// `NSView.cacheDisplay` of this canvas after a display pass. Requires
+    /// `MetalContext.allowsDrawableCapture` to have been set **before** the canvas created its
+    /// `CAMetalLayer` (`framebufferOnly = false`). Isolates the presented drawable from the
+    /// offscreen encode path in `captureSnapshot()`.
+    func capturePresentedLayer() -> NSBitmapImageRep? {
+        displayIfNeeded()
+        guard bounds.width > 0, bounds.height > 0,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else {
+            return nil
         }
-        guard let metalLayer = layer as? CAMetalLayer else {
-            return
-        }
-        updateMetalLayerGeometry()
-        guard metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else {
-            return
-        }
-        guard MetalContext.shared.isAvailable else {
-            onRenderingFailure?()
-            return
-        }
-        isDisplayDirty = false
-        encodePass(on: metalLayer)
+        cacheDisplay(in: bounds, to: rep)
+        return rep
     }
 
     /// Renders the current Metal scene into an offscreen BGRA texture and reads it back — the Metal
     /// glyphs/decorations on a transparent ground, at the canvas's backing scale. For snapshot tests
-    /// / PerfHarness only (`CAMetalLayer` content is not captured by `cacheDisplay`).
+    /// / PerfHarness only (`CAMetalLayer` content is not captured by `cacheDisplay` unless
+    /// `allowsDrawableCapture` was set before the layer was created).
     func captureSnapshot() -> NSBitmapImageRep? {
         let context = MetalContext.shared
         guard context.isAvailable,
@@ -221,21 +264,17 @@ private extension MetalTextCanvasView {
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     }
 
-    func encodePass(on metalLayer: CAMetalLayer) {
+    @discardableResult
+    func encodePass(on metalLayer: CAMetalLayer) -> Bool {
         let context = MetalContext.shared
         guard let commandQueue = context.commandQueue, let commandBuffer = commandQueue.makeCommandBuffer() else {
             context.markUnavailable(reason: "Failed to create Metal command buffer")
             onRenderingFailure?()
-            return
+            return false
         }
         guard let drawable = metalLayer.nextDrawable() else {
-            if drawableRetryCount < Self.maxDrawableRetries {
-                drawableRetryCount += 1
-                setNeedsDisplay()
-            }
-            return
+            return false
         }
-        drawableRetryCount = 0
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = drawable.texture
         descriptor.colorAttachments[0].loadAction = .clear
@@ -251,11 +290,12 @@ private extension MetalTextCanvasView {
             commandBuffer.commit()
             commandBuffer.waitUntilScheduled()
             onRenderingFailure?()
-            return
+            return false
         }
         commandBuffer.present(drawable)
         commandBuffer.commit()
         // presentsWithTransaction presents at CA commit; the GPU must have the buffer first.
         commandBuffer.waitUntilScheduled()
+        return true
     }
 }

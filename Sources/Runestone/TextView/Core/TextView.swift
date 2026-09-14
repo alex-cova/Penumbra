@@ -961,6 +961,24 @@ import EditorIntelligence
     public func captureMetalGlyphSnapshot() -> NSBitmapImageRep? {
         textInputView.captureMetalSnapshot()
     }
+    /// Presented Metal canvas via `NSView.cacheDisplay`. Requires ``allowsMetalDrawableCapture`` to
+    /// have been set before this view was created. Snapshot tests / PerfHarness only.
+    public func captureMetalPresentedLayer() -> NSBitmapImageRep? {
+        textInputView.captureMetalPresentedLayer()
+    }
+    /// Swift `GlyphInstance` stride used as the vertex-buffer stride. Snapshot tests / PerfHarness.
+    public var metalGlyphInstanceStride: Int { textInputView.metalDebugStats?.glyphInstanceStride ?? 0 }
+    /// Swift `GlyphInstance` size (may be less than stride due to alignment padding).
+    public var metalGlyphInstanceSize: Int { textInputView.metalDebugStats?.glyphInstanceSize ?? 0 }
+    /// Non-zero R8 texels on the first coverage atlas page, or `-1` if readback failed.
+    public var metalAtlasCoverageNonZeroTexels: Int {
+        guard let stats = textInputView.metalDebugStats else {
+            return 0
+        }
+        return stats.atlasReadbackFailed ? -1 : stats.atlasCoverageNonZeroTexels
+    }
+    /// Total texels on the first coverage atlas page (0 when there is no page).
+    public var metalAtlasCoverageTexelCount: Int { textInputView.metalDebugStats?.atlasCoverageTexelCount ?? 0 }
     /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
     public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
 

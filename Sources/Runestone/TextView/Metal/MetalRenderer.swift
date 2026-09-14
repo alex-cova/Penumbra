@@ -139,19 +139,36 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var coverageAtlasBytes = 0
         var colorAtlasBytes = 0
         var drawNanosP95: Double = 0
+        var glyphInstanceSize = 0
+        var glyphInstanceStride = 0
+        var glyphInstanceAlignment = 0
+        var solidInstanceStride = 0
+        var atlasCoverageNonZeroTexels = 0
+        var atlasCoverageTexelCount = 0
+        var atlasCoveragePages = 0
+        var atlasReadbackFailed = false
     }
 
     private var recentDrawNanos: [UInt64] = []
     private var lastInstanceCounts = (glyphs: 0, solids: 0)
 
     var debugStats: DebugStats {
-        DebugStats(
+        let census = atlas.debugCoverageTexelCensus()
+        return DebugStats(
             fragmentCount: fragments.count,
             glyphInstanceCount: lastInstanceCounts.glyphs,
             solidInstanceCount: lastInstanceCounts.solids,
             coverageAtlasBytes: atlas.coverageBytes,
             colorAtlasBytes: atlas.colorBytes,
-            drawNanosP95: percentile(recentDrawNanos, 0.95)
+            drawNanosP95: percentile(recentDrawNanos, 0.95),
+            glyphInstanceSize: MemoryLayout<GlyphInstance>.size,
+            glyphInstanceStride: MemoryLayout<GlyphInstance>.stride,
+            glyphInstanceAlignment: MemoryLayout<GlyphInstance>.alignment,
+            solidInstanceStride: MemoryLayout<SolidInstance>.stride,
+            atlasCoverageNonZeroTexels: census?.nonzero ?? 0,
+            atlasCoverageTexelCount: census?.total ?? 0,
+            atlasCoveragePages: census?.pages ?? 0,
+            atlasReadbackFailed: census == nil
         )
     }
 
