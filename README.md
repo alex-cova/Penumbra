@@ -377,4 +377,4 @@ swift test
 
 ## License
 
-Runestone is available under the MIT license. See the [LICENSE](LICENSE) file for more information.
+Runestone is available under the Apache License 2.0. See the [LICENSE](LICENSE) file for more information.

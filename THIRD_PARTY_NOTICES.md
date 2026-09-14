@@ -1,6 +1,6 @@
 # Third-party notices
 
-Runestone itself is MIT licensed (see [LICENSE](LICENSE)); it is a macOS port of
+Runestone itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)); it is a macOS port of
 [simonbs/Runestone](https://github.com/simonbs/Runestone).
 
 ## Bundled Tree-sitter grammars
