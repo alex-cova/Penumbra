@@ -66,6 +66,20 @@ final class MetalProjectionTests: XCTestCase {
         XCTAssertEqual(warm.height, canvas.height + 700)
     }
 
+    func testGlyphOriginAlignsToCanvasDevicePixelGrid() {
+        let canvas = CGRect(x: 10.25, y: 20.25, width: 100, height: 50)
+        let aligned = MetalProjection.pixelAligned(
+            SIMD2<Float>(11.13, 21.62),
+            canvasFrame: canvas,
+            scale: 2
+        )
+
+        XCTAssertEqual(aligned.x, 11.25, accuracy: 0.0001)
+        XCTAssertEqual(aligned.y, 21.75, accuracy: 0.0001)
+        XCTAssertEqual((aligned.x - Float(canvas.minX)) * 2, 2, accuracy: 0.0001)
+        XCTAssertEqual((aligned.y - Float(canvas.minY)) * 2, 3, accuracy: 0.0001)
+    }
+
     func testWrappingOffLongLinePanChangesNDCWithoutSubtractingViewportTwice() {
         let gutter: CGFloat = 36
         let glyph = CGPoint(x: gutter + 10, y: 18)

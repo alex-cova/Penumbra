@@ -197,8 +197,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             return nil
         }
         let samplerDescriptor = MTLSamplerDescriptor()
-        samplerDescriptor.minFilter = .linear
-        samplerDescriptor.magFilter = .linear
+        // Atlas texels map 1:1 to device pixels. Linear filtering would blur Core Text's
+        // already-antialiased coverage mask, especially at small editor font sizes.
+        samplerDescriptor.minFilter = .nearest
+        samplerDescriptor.magFilter = .nearest
         samplerDescriptor.sAddressMode = .clampToEdge
         samplerDescriptor.tAddressMode = .clampToEdge
         guard let sampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
@@ -498,7 +500,16 @@ private extension MetalRenderer {
                 continue
             }
             bucket.advance()
-            bucket.current.write(instances)
+            let pixelAlignedInstances = instances.map { instance in
+                var aligned = instance
+                aligned.origin = MetalProjection.pixelAligned(
+                    instance.origin,
+                    canvasFrame: canvasFrame,
+                    scale: scale
+                )
+                return aligned
+            }
+            bucket.current.write(pixelAlignedInstances)
             order.append(pageID)
         }
     }

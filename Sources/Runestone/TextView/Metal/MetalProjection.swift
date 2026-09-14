@@ -34,6 +34,19 @@ enum MetalProjection {
         )
     }
 
+    /// Aligns a content-space glyph-tile origin to the canvas's device-pixel grid.
+    ///
+    /// Glyph atlas tiles are already rasterized at backing scale. Drawing one at a fractional
+    /// device pixel makes the texture sampler filter Core Text's antialiasing a second time,
+    /// visibly softening the glyph.
+    static func pixelAligned(_ point: SIMD2<Float>, canvasFrame: CGRect, scale: CGFloat) -> SIMD2<Float> {
+        let scale = Float(max(scale, 0.001))
+        let canvasOrigin = SIMD2(Float(canvasFrame.minX), Float(canvasFrame.minY))
+        let scaleVector = SIMD2<Float>(repeating: scale)
+        let devicePoint = ((point - canvasOrigin) * scaleVector).rounded(.toNearestOrAwayFromZero)
+        return canvasOrigin + devicePoint / scaleVector
+    }
+
     /// Visible instance cull rect: `canvas.frame` expanded by 2 pt for AA.
     static func emitRect(canvasFrame: CGRect) -> CGRect {
         canvasFrame.insetBy(dx: -2, dy: -2)
