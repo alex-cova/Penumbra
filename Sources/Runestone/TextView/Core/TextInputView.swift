@@ -1609,8 +1609,6 @@ private extension TextInputView {
             unmarkText()
         case .keyboardEscape:
             unmarkText()
-        default:
-            break
         }
     }
 
@@ -3403,17 +3401,7 @@ extension TextInputView {
 // MARK: - TreeSitterLanguageModeDeleage
 extension TextInputView: TreeSitterLanguageModeDelegate {
     nonisolated func treeSitterLanguageMode(_ languageMode: TreeSitterInternalLanguageMode, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
-        guard byteIndex.value >= 0 && byteIndex < stringView.byteCount else {
-            return nil
-        }
-        let targetByteCount: ByteCount = 4 * 1_024
-        let endByte = min(byteIndex + targetByteCount, stringView.byteCount)
-        let byteRange = ByteRange(from: byteIndex, to: endByte)
-        if let result = stringView.bytes(in: byteRange) {
-            return TreeSitterTextProviderResult(bytes: result.bytes, length: UInt32(result.length.value))
-        } else {
-            return nil
-        }
+        languageMode.readBytes(at: byteIndex)
     }
 }
 

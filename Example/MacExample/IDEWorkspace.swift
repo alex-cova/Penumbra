@@ -65,9 +65,27 @@ final class IDEWorkspace: ObservableObject {
     @Published var statusColumn = 1
     @Published var statusLanguage = ""
     @Published var statusSelectionLength = 0
+    @Published var statusRenderer = "Core Graphics"
+
+    /// Host-side Metal preference. Independent of the library `RunestoneMetalRendering` kill switch;
+    /// this sets `TextView.isMetalRenderingEnabled` on every pane. Persisted across launches.
+    /// Override at launch with `--metal` or `--no-metal`.
+    @Published var isMetalRenderingEnabled: Bool = IDEWorkspace.storedMetalRenderingEnabled {
+        didSet {
+            guard oldValue != isMetalRenderingEnabled else { return }
+            UserDefaults.standard.set(isMetalRenderingEnabled, forKey: Self.metalRenderingDefaultsKey)
+            applyMetalRenderingPreference()
+        }
+    }
 
     @Published var sidebarDocuments: [IDEDocumentRow] = []
     @Published var activePaneTabs: [IDETabRow] = []
+
+    private static let metalRenderingDefaultsKey = "MacExampleMetalRendering"
+
+    private static var storedMetalRenderingEnabled: Bool {
+        UserDefaults.standard.object(forKey: metalRenderingDefaultsKey) as? Bool ?? true
+    }
 
     private static func language(forIdentifier identifier: String?) -> TreeSitterLanguage? {
         guard let identifier else { return nil }
@@ -86,6 +104,7 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func bootstrap() {
+        applyLaunchConfiguration()
         seedSampleDocuments()
         wireAdapter()
         rebuildLayoutHosts()
@@ -190,10 +209,7 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func toggleMetalRendering() {
-        let enabled = !(adapter.textView?.isMetalRenderingEnabled ?? true)
-        for host in paneHosts.values {
-            host.textView.isMetalRenderingEnabled = enabled
-        }
+        isMetalRenderingEnabled.toggle()
     }
 
     func undo() {
@@ -368,6 +384,7 @@ final class IDEWorkspace: ObservableObject {
             existingHosts: paneHosts,
             makeHost: { pane in
                 let host = IDEEditorPaneHost(pane: pane)
+                host.textView.isMetalRenderingEnabled = self.isMetalRenderingEnabled
                 host.onTabSelected = { [weak self] documentID in
                     guard let self, pane.id == self.workbench.activePaneID else {
                         pane.selectDocument(documentID)
@@ -417,7 +434,9 @@ final class IDEWorkspace: ObservableObject {
             EditorCommand(id: "demo.toggleMinimap", title: "Toggle Minimap", group: "View",
                           action: { [weak self] in self?.toggleMinimap() }),
             EditorCommand(id: "demo.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
-                          action: { [weak self] in self?.toggleTypewriterScrolling() })
+                          action: { [weak self] in self?.toggleTypewriterScrolling() }),
+            EditorCommand(id: "demo.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
+                          action: { [weak self] in self?.toggleMetalRendering() })
         ])
     }
 
@@ -494,6 +513,24 @@ final class IDEWorkspace: ObservableObject {
         updateActivePaneChrome()
     }
 
+    private func applyLaunchConfiguration() {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--no-metal") {
+            isMetalRenderingEnabled = false
+        } else if arguments.contains("--metal") {
+            isMetalRenderingEnabled = true
+        }
+    }
+
+    private func applyMetalRenderingPreference() {
+        for host in paneHosts.values {
+            host.textView.isMetalRenderingEnabled = isMetalRenderingEnabled
+        }
+        if let textView = adapter?.textView {
+            updateStatus(from: textView)
+        }
+    }
+
     private func updateStatus(from textView: TextView) {
         let range = textView.selectedRange
         if let textLocation = textView.textLocation(at: range.location) {
@@ -505,6 +542,7 @@ final class IDEWorkspace: ObservableObject {
         }
         statusLanguage = workbench.activePane.selectedDocument?.languageIdentifier ?? ""
         statusSelectionLength = range.length
+        statusRenderer = textView.isMetalRenderingActive ? "Metal" : "Core Graphics"
     }
 
     private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument) {

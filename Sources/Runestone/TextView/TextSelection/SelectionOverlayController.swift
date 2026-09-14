@@ -223,7 +223,9 @@ private extension SelectionOverlayController {
         caretView.isHidden = false
         secondaryCaretViews.forEach { $0.isHidden = false }
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) { [weak self] _ in
-            self?.toggleCaretVisibility()
+            MainActor.assumeIsolated {
+                self?.toggleCaretVisibility()
+            }
         }
     }
 

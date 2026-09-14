@@ -399,7 +399,7 @@ extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {
         return readBytes(at: byteIndex)
     }
 
-    private func readBytes(at byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
+    func readBytes(at byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
         guard byteIndex.value >= 0 && byteIndex < stringView.byteCount else {
             return nil
         }

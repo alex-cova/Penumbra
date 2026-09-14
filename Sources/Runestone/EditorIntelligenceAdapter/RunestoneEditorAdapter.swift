@@ -30,6 +30,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
     /// - Parameters:
     ///   - textView: The text view to bridge.
     ///   - context: Editor context; defaults to a new context.
+    @MainActor
     public init(textView: TextView, context: EditorContext = EditorContext()) {
         self.textView = textView
         self.context = context
@@ -122,6 +123,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
     ///   eager and unavoidable for a mutable backing store). Only call this when content has
     ///   actually changed; for selection/cursor-only updates use
     ///   ``makeDocument(with:snapshot:)`` to reuse the previous snapshot instead.
+    @MainActor
     private func makeDocument(with textView: TextView) -> Document {
         let snapshot: TextSnapshot
         if textView.isFileBacked {
@@ -147,6 +149,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
     /// Builds a document reusing an existing content snapshot, only recomputing
     /// selection/cursor/viewport. Used for selection-only changes so they don't pay the cost of
     /// re-bridging the full document text.
+    @MainActor
     private func makeDocument(with textView: TextView, snapshot: TextSnapshot) -> Document {
         let selection = makeSelection(from: textView.selectedRanges, in: textView)
         let cursor = Cursor(position: selection.range.start)
@@ -168,6 +171,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
         )
     }
 
+    @MainActor
     private func makeSelection(from ranges: [NSRange], in textView: TextView) -> Selection {
         guard let primary = ranges.first else {
             let position = makePosition(at: 0, in: textView)
@@ -179,16 +183,19 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
         return Selection(range: primaryRange, additionalRanges: additionalRanges)
     }
 
+    @MainActor
     private func makeTextRange(from range: NSRange, in textView: TextView) -> EditorIntelligence.TextRange {
         let start = makePosition(at: range.location, in: textView)
         let end = makePosition(at: range.location + range.length, in: textView)
         return EditorIntelligence.TextRange(start: start, end: end)
     }
 
+    @MainActor
     private func makeSelection(from range: NSRange, in textView: TextView) -> Selection {
         makeSelection(from: [range], in: textView)
     }
 
+    @MainActor
     private func makePosition(at offset: Int, in textView: TextView) -> TextPosition {
         let textLocation = textView.textLocation(at: offset)
         return TextPosition(
@@ -205,6 +212,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
         }
     }
 
+    @MainActor
     private func makeRangeReader(from textView: TextView) -> TextRangeReader? {
         guard let snapshot = textView.pieceTreeContentSnapshot() else {
             return nil

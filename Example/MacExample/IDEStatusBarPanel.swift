@@ -9,7 +9,7 @@ struct IDEStatusBarPanel: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.white)
             Spacer()
-            Text("UTF-8  LF  Runestone")
+            Text("UTF-8  LF  \(workspace.statusRenderer)  Runestone")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.92))
         }

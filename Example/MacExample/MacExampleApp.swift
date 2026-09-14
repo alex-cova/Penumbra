@@ -36,7 +36,7 @@ struct MacExampleApp: App {
                 Divider()
                 Button("Toggle Typewriter Scrolling", action: workspace.toggleTypewriterScrolling)
                 Button("Toggle Distraction Free", action: workspace.toggleDistractionFreeMode)
-                Button("Toggle Metal Rendering", action: workspace.toggleMetalRendering)
+                Toggle("Use Metal Renderer", isOn: $workspace.isMetalRenderingEnabled)
             }
         }
     }

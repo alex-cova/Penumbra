@@ -177,7 +177,10 @@ final class LineController: @unchecked Sendable {
 
     func setNeedsDisplayOnLineFragmentViews() {
         for (_, lineFragmentController) in lineFragmentControllers {
-            lineFragmentController.lineFragmentView?.setNeedsDisplay()
+            let view = lineFragmentController.lineFragmentView
+            MainActor.assumeIsolated {
+                view?.setNeedsDisplay()
+            }
         }
     }
 

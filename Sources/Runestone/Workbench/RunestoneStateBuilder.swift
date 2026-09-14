@@ -123,12 +123,15 @@ public enum RunestoneStateBuilder {
     ) {
         let isCurrentBox = UncheckedBox(isCurrent)
         let applyBox = UncheckedBox(apply)
+        let themeBox = UncheckedBox(theme)
+        let languageBox = UncheckedBox(language)
+        let languageProviderBox = UncheckedBox(languageProvider)
         DispatchQueue.global(qos: .userInitiated).async {
             let prepared = makeState(
                 text: text,
-                theme: theme,
-                language: language,
-                languageProvider: languageProvider,
+                theme: themeBox.value,
+                language: languageBox.value,
+                languageProvider: languageProviderBox.value,
                 parsePolicy: parsePolicy
             )
             DispatchQueue.main.async {

@@ -383,8 +383,8 @@ private extension FoldingController {
             applyRecomputedFolds([])
             return
         }
-        var start = max(0, rows.lowerBound)
-        var end = min(lineCount - 1, max(start, rows.upperBound))
+        let start = max(0, rows.lowerBound)
+        let end = min(lineCount - 1, max(start, rows.upperBound))
         if end - start + 1 >= min(lineCount / 2, 8_192) && end - start + 1 >= 512 {
             pendingFullRecompute = false
             recomputeFull()

@@ -8,11 +8,17 @@ protocol DistractionFreeScheduling {
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) -> DistractionFreeCancellation
 }
 
+private final class UncheckedClosure: @unchecked Sendable {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+}
+
 private final class TimerCancellation: DistractionFreeCancellation {
     private var timer: Timer?
 
     init(delay: TimeInterval, action: @escaping () -> Void) {
-        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action() }
+        let action = UncheckedClosure(action)
+        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action.run() }
     }
 
     func cancel() {

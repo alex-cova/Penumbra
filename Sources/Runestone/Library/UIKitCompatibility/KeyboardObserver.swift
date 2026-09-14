@@ -18,6 +18,7 @@ public final class KeyboardObserver {
     public struct Animation {
         public let duration: TimeInterval
         public let curve: UIView.AnimationOptions
+        @MainActor
         public func run(animations: @escaping @Sendable () -> Void, completion: (@Sendable (Bool) -> Void)? = nil) {
             UIView.animate(withDuration: duration, delay: 0, options: curve, animations: animations, completion: completion)
         }

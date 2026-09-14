@@ -67,7 +67,7 @@ final class FileMapping: @unchecked Sendable {
         self.size = size
         self.originalSize = status.st_size
         self.pointer = mapped
-        fcntl(fd, F_NOCACHE, 1)
+        _ = fcntl(fd, F_NOCACHE, 1)
     }
 
     var hasBeenTruncated: Bool {

@@ -59,7 +59,7 @@ public final class HighlightProviderCoordinator: VisibleRangeProvider.Delegate {
     }
 
     private func refreshHighlights(in indices: IndexSet) {
-        guard let textView, !indices.isEmpty else {
+        guard textView != nil, !indices.isEmpty else {
             return
         }
         let queryRange = NSRange(location: indices.min() ?? 0, length: (indices.max() ?? 0) - (indices.min() ?? 0) + 1)

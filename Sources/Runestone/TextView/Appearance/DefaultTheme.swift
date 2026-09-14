@@ -98,7 +98,7 @@ public final class DefaultTheme: Runestone.Theme {
             return HighlightedRange(range: foundTextRange, color: Self.searchMatchFoundColor, cornerRadius: 2)
         case .highlighted:
             return HighlightedRange(range: foundTextRange, color: Self.searchMatchHighlightedColor, cornerRadius: 2)
-        case .standard, .normal:
+        case .standard:
             return nil
         @unknown default:
             return nil

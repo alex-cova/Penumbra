@@ -25,6 +25,7 @@ public final class SemanticTokenStorage: @unchecked Sendable {
         }
     }
 
+    @discardableResult
     public func applyDelta(_ delta: LSPSemanticTokensDelta) -> [LSPSemanticToken] {
         lock.withLock {
             resultId = delta.resultId
@@ -49,7 +50,6 @@ public final class SemanticTokenStorage: @unchecked Sendable {
         lock.withLock {
             tokens.filter { token in
                 let start = LSPPosition(line: token.line, character: token.character)
-                let end = LSPPosition(line: token.line, character: token.character + token.length)
                 return start.line < range.end.line
                     || (start.line == range.end.line && start.character < range.end.character)
             }.filter { token in

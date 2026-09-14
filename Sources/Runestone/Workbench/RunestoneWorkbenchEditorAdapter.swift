@@ -34,7 +34,9 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
         self.context = context
         self.id = context.adapterID
         if let textView {
-            textView.editorDelegate = self
+            MainActor.assumeIsolated {
+                textView.editorDelegate = self
+            }
         }
         refreshCachedDocuments(emitEvents: false)
     }
@@ -118,6 +120,7 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
     /// synchronous and immediate — unlike ``scheduleContentRefresh(from:)``, it does not touch
     /// `selected.text`, reusing whatever content snapshot is already cached instead of re-bridging
     /// the whole document. Mirrors the same optimization in ``RunestoneEditorAdapter``.
+    @MainActor
     func refreshLiveDocumentFromTextView(_ textView: TextView) {
         guard let selected = workbench.activePane.selectedDocument else { return }
         selected.selectedRange = textView.selectedRange
@@ -150,6 +153,7 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
         }
     }
 
+    @MainActor
     private func refreshLiveDocumentContent(from textView: TextView, for document: WorkbenchDocument) {
         if let snapshot = textView.pieceTreeContentSnapshot() {
             document.rangeReader = TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in

@@ -21,7 +21,6 @@ final class IDEEditorPaneHost: NSView {
         textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.theme = DefaultTheme()
-        textView.isMetalRenderingEnabled = false
         textView.showMinimap = true
         textView.showMethodSeparators = true
         textView.highlightsOccurrencesOfSelection = true

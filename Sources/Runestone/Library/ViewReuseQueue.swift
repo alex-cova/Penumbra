@@ -10,6 +10,7 @@ extension ReusableView {
     func prepareForReuse() {}
 }
 
+@MainActor
 final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
     private(set) var visibleViews: [Key: View] = [:]
 

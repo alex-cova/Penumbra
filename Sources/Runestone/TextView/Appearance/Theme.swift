@@ -127,7 +127,7 @@ public extension Theme {
             return HighlightedRange(range: foundTextRange, color: .systemYellow.withAlphaComponent(0.2))
         case .highlighted:
             return HighlightedRange(range: foundTextRange, color: .systemYellow)
-        case .standard, .normal:
+        case .standard:
             return nil
         @unknown default:
             return nil
