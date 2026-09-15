@@ -1,19 +1,23 @@
 # Runestone
 
-A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
+**v1.4.0** — A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
 
-Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally for iOS/UIKit), this repository is natively ported and extended for **macOS (AppKit)**. It pairs a high-performance text rendering engine with the **Editor Intelligence Platform (EIP)** for code completion, tree-sitter AST parsing, indexing, navigation, hover documentation, diagnostics, refactoring, and AI/LSP integrations.
+Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally for iOS/UIKit), this repository is natively ported and extended for **macOS (AppKit)**. It pairs a high-performance text rendering engine — including an optional **Metal** glyph pipeline and **piece-tree** storage for large files — with the **Editor Intelligence Platform (EIP)** for code completion, tree-sitter AST parsing, indexing, navigation, hover documentation, diagnostics, refactoring, and AI/LSP integrations.
 
 ---
 
 ## Key Features
 
 ### 🎨 Native Text Editor Engine (`Runestone`)
-* **macOS-Native AppKit Design**: Built with native text input handling (`NSTextInputClient` / `UITextInput`), full IME and accented character support, smooth scrolling, and customizable keybindings (`keyDownHandler`).
+
+* **macOS-Native AppKit Design**: Built with native text input handling (`NSTextInputClient` / `UITextInput`), full IME and accented character support, smooth scrolling, and a configurable keymap layer (`Keymap`) with `.default_` and `.intelliJ` presets.
+* **Metal Rendering (optional)**: GPU-accelerated glyph rasterization and text canvas via `TextView.isMetalRenderingEnabled`. Falls back to Core Graphics automatically when Metal is unavailable. Toggle at launch in MacExample with `--metal` / `--no-metal`.
+* **Large-File Storage**: Untitled buffers over 256 KB and file loads via `TextViewState.load` use a mmap-backed `PieceTree` so multi-megabyte documents stay editable without copying the whole file into memory.
 * **Multi-Cursor & Column Selection**:
   * **Multiple Carets**: Place carets with Option-click, clone carets vertically (⌥⌘↑ / ⌥⌘↓), or undo caret additions (⌘U).
   * **Occurrence Selection**: Select next occurrence (⌘⇧D), skip occurrence (⌘K ⌘D), or select all occurrences (⌘⇧L).
-  * **Column / Block Selection**: Rectangular selection via Option-drag or ⌃⇧-arrow keys.
+  * **Column / Block Selection**: Rectangular selection via Option-drag or ⌃⇧-arrow keys. Sticky column mode (⌘⇧8) keeps the rectangle alive across ordinary arrow-key moves.
+  * **Semantic Selection**: Extend/shrink selection by syntax node (⌥↑ / ⌥↓ in the IntelliJ keymap) via `SemanticSelectionController`.
   * **Multi-Caret Operations**: Synchronized typing, multi-caret copy/cut/paste, line shifting, indent/outdent, and full caret set undo/redo restoration.
 * **Tree-sitter Syntax Highlighting**: Fast, asynchronous incremental syntax highlighting with language layers and injected languages (e.g. JavaScript/CSS in HTML).
 * **Code Folding**: Indentation-based fold ribbons and Tree-sitter AST-based folding (`isLineFoldingEnabled`, `TreeSitterLineFoldProvider`).
@@ -24,14 +28,18 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Editing & Formatting**:
   * **TextFormation Integration**: Auto-closing bracket/character pairs (`CharacterPair`), skip-over closing delimiters, tab expansion, and whitespace cleanup.
   * **Smart Indentation**: Language-aware indent on newline, block indent/unindent (shift left/right), and automatic indentation strategy detection (tabs vs. spaces).
-  * **Line Manipulation**: Select (⌘L), duplicate (⌘D), delete (⌘⌫), and move selected lines up/down (⌥↑ / ⌥↓).
+  * **Line Manipulation**: Select (⌘L), duplicate (⌘D), delete (⌘⌫), move lines (⌥⇧↑ / ⌥⇧↓), join lines (⌃⇧J), insert line above/below, sort lines ascending/descending, and toggle line comments (⌘/).
+  * **Statement Movement**: Syntax-aware move statement up/down (⌘⇧↑ / ⌘⇧↓) via `StatementRangeService`, falling back to line movement without a tree.
+  * **Surround With**: Wrap selections in if/while/for/try-catch/brackets/quotes (`surroundSelection(with:)`, `SurroundTemplate`).
   * **Timed Undo Coalescing**: `TimedUndoManager` groups rapid typing into single undo steps.
 * **Gutter & Display Customization**: Dynamic-width line numbers, line selection highlights, page guide columns, invisible character rendering (spaces, tabs, line breaks), and custom themes (`Theme`, `DefaultTheme`).
 * **Search & Replace**: Programmatic search API (`SearchQuery`) supporting plain text, full-word, and regular expressions with capture groups (`$0`, `$1`), batch replacement, built-in find/replace panel, and system `UIFindInteraction` integration.
 * **Background Preparation**: Use `TextViewState` to parse ASTs, tokenize syntax, and prepare layout off the main thread for instant loading of large files.
 * **Diagnostic Overlays**: Squiggly underline rendering for warnings, errors, and hints (`TextViewDiagnostic`, `DiagnosticEmphasisController`).
+* **Cursor Navigation History**: Bounded back/forward stack (`NavigationHistory`, ⌘[ / ⌘]) for significant cursor moves and programmatic jumps.
 
 ### 🧠 Editor Intelligence Platform (`EditorIntelligence`)
+
 * **Decoupled Architecture**: Completely editor-agnostic platform connected via the `EditorAdapter` protocol and asynchronous event streams (`AsyncStream<EditorEvent>`).
 * **Incremental Tree-sitter Parsing**: Asynchronous AST parsing (`TreeSitterLanguageParser`) with document state tracking.
 * **Symbol Indexing**: Trie-backed incremental `SymbolIndex` and `IndexingService` for fast identifier lookups and workspace symbol search.
@@ -42,7 +50,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
   * Multi-cursor completion application (`replaceAtAllSelections`).
 * **Interactive Snippet Engine**: Full TextMate-style snippet parsing with tab stops, default placeholders, and variable transformations (`SnippetEngine`, `SnippetExpander`).
 * **Hover & Documentation**: Cached `HoverEngine` providing rich markdown tooltips from symbols (`SymbolHoverProvider`), LSP servers (`LSPHoverProvider`), and AI models (`AIHoverProvider`).
-* **Code Navigation**: Go to Definition (`GoToDefinitionProvider`, `JumpToDefinitionController`, ⌘-click), Find References (`FindReferencesProvider`), and breadcrumb navigation.
+* **Code Navigation**: Go to Definition, Go to Implementation, Find References (`GoToDefinitionProvider`, `FindReferencesProvider`, `JumpToDefinitionController`, ⌘-click), and breadcrumb navigation.
 * **Hierarchical Outlines & Breadcrumbs**: `OutlineBuilder` symbol trees and `BreadcrumbBarModel` tracking enclosing symbols at the cursor.
 * **Diagnostics Engine**: Problem reporting and severity tracking with built-in analyzers (e.g. duplicate symbol detection) and LSP diagnostic aggregation.
 * **Refactoring Framework**: AST-guided and LSP-powered symbol rename operations (`RefactoringEngine`, `RenameOperation`).
@@ -50,21 +58,25 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Workspace Management**: `Workspace` actor managing multi-document project state, cross-file search (`WorkspaceSearchEngine`), and file system change monitoring.
 
 ### 🔌 Language Server Protocol (`EditorIntelligenceLSP`)
+
 * **ChimeHQ Integration**: Built on top of `LanguageClient` and `LanguageServerProtocol`.
 * **Document & Workspace Synchronization**: Real-time document lifecycle sync (`LSPDocumentSyncService`) and workspace sync bridge (`LSPWorkspaceSyncBridge`).
-* **LSP Features**: Code completions, hover documentation, Go to Definition, Find References, and symbol rename.
+* **LSP Features**: Code completions, hover documentation, Go to Definition, Go to Implementation, Find References, and symbol rename.
 * **Document & Selection Formatting**: Document and selection formatting (`LSPFormattingProvider`) with multi-caret preservation.
 * **Code Actions**: Quick fixes and refactorings (`LSPCodeActionProvider`, `CodeActionView`).
 * **Signature Help**: Parameter hints auto-triggered on `(` and `,` (`LSPSignatureHelpProvider`, `ParameterHintsView`).
 * **Semantic Token Highlighting**: Semantic token decoding and delta synchronization for enhanced syntax highlighting.
 
 ### 🪟 Multi-Pane Workbench (`Runestone/Workbench`)
+
 * **Split Editor Layouts**: Horizontal and vertical split-pane layouts (`EditorWorkbench`, `EditorLayout`, `EditorPane`).
 * **Tab Management**: Per-pane tab groups with preview (transient) tabs, pinned tabs, and tab navigation history (`EditorTabHistory`, `TabListEngine`).
 * **Session Restoration**: Codable layout and document snapshots for persistent editor sessions (`EditorRestorationState`).
 * **Workspace Integration**: `RunestoneWorkbenchWorkspaceBridge` syncing open workbench documents directly into EIP `Workspace`.
+* **Command Palette**: Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), and Go to File — a debounced `SearchEverywhereEngine` fans out to concurrent providers with fuzzy-ranked results and sigil-scoped queries (`>` actions, `@` symbols, `/` + `#` files).
 
 ### 🖥️ Ready-to-Use AppKit Views (`Runestone/UIBridge`)
+
 * `CompletionPanelView`: Floating code completion panel with keyboard navigation.
 * `HoverWindowView`: Rich markdown hover tooltip popover.
 * `GhostTextView`: Inline ghost text completion preview.
@@ -73,10 +85,12 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * `OutlineSidebarView`: Document symbol outline sidebar.
 * `CodeActionView`: Quick-fix code action menu.
 * `WorkspaceSearchPanelView`: Multi-file workspace search panel.
+* `CommandPaletteView`: Search Everywhere / Find Action overlay.
 * `EditorIntelligenceController`: Unified controller coordinating all intelligence services and UI with `TextView`.
 
 ### 📦 Language Packs
-* **`RunestoneLanguages`**: Ready-to-use `TreeSitterLanguage` factories for CSS, HTML, JavaScript, JSON, Python, TypeScript, YAML, plus TOML, SQL, Swift, Java, Kotlin, Go, and Bash. Re-exports GraphQL from `RunestoneGraphQLLanguage`.
+
+* **`RunestoneLanguages`**: Ready-to-use `TreeSitterLanguage` factories for CSS, HTML, JavaScript, JSON, Python, TypeScript, YAML, plus TOML, SQL, Swift (including SwiftUI captures), Java, Kotlin, Go, Bash, HTTP, and Mermaid. Re-exports GraphQL from `RunestoneGraphQLLanguage`.
 * **`RunestoneGraphQLLanguage`**: Ready-to-use Tree-sitter GraphQL grammar, highlight queries, and indentation scopes.
 * **`RunestoneMarkdownLanguage`**: Ready-to-use Tree-sitter Markdown grammar, highlight queries, and indentation scopes.
 * **`TestTreeSitterLanguages`**: Bundled C grammars for HTML, JavaScript, JSON, Python, and YAML backing `RunestoneLanguages`.
@@ -88,7 +102,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for grammar attributions.
 ## Requirements
 
 * **macOS**: 12.0 (Monterey) or later
-* **Swift**: 5.5+ / Xcode 13+
+* **Swift**: 6.0+ / Xcode 16+ (Swift 6 language mode enabled on all library and test targets)
 * **Dependencies**:
   * [Tree-sitter](https://github.com/tree-sitter/tree-sitter) (v0.26.12, vendored in `Packages/TreeSitter`)
   * [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient) (v0.8.0+)
@@ -104,9 +118,12 @@ Runestone/
 ├── Sources/
 │   ├── Runestone/                  # Core text editor engine, Workbench, and AppKit UI
 │   │   ├── TextView/               # Text layout, gutter, themes, multi-selection, folding, minimap
-│   │   ├── Workbench/              # Multi-pane split layouts, tab groups, and session restoration
-│   │   ├── UIBridge/               # AppKit accessory views (completions, hover, breadcrumbs, outline)
-│   │   ├── EditorIntelligenceAdapter/# Adapter connecting TextView to EditorIntelligence
+│   │   │   ├── Metal/              # Optional GPU glyph atlas and text canvas
+│   │   │   └── Keymap/             # Keymap presets, EditorActionID, chord dispatcher
+│   │   ├── Workbench/              # Multi-pane splits, tab groups, session restoration
+│   │   │   └── CommandPalette/     # Search Everywhere engine and built-in providers
+│   │   ├── UIBridge/               # AppKit accessory views (completions, hover, palette)
+│   │   ├── EditorIntelligenceAdapter/ # Adapter connecting TextView to EditorIntelligence
 │   │   ├── TreeSitter/             # Tree-sitter Swift wrapper and queries
 │   │   └── Library/                # AppKit compatibility shims and utilities
 │   │
@@ -115,21 +132,24 @@ Runestone/
 │   │   ├── Parsing/ & Indexing/    # Tree-sitter parsing & trie symbol index
 │   │   ├── Completion/ & Snippets/ # Multi-provider completion engine, ranking & TextMate snippets
 │   │   ├── Hover/ & Navigation/    # Documentation tooltips, definitions, references, breadcrumbs
-│   │   ├── Diagnostics/ & Refactoring/# Issue tracking & AST symbol rename
+│   │   ├── Diagnostics/ & Refactoring/ # Issue tracking & AST symbol rename
 │   │   ├── AI/ & LSP/              # AI text model protocols & LSP interfaces
 │   │   └── Workspace/              # Multi-document workspace & cross-file search
 │   │
 │   ├── EditorIntelligenceLSP/      # Concrete LSP client backed by ChimeHQ LanguageClient
 │   ├── RunestoneLanguages/         # TreeSitterLanguage factories for the full language set
 │   ├── RunestoneGraphQLLanguage/   # Tree-sitter GraphQL grammar + queries
-│   ├── TreeSitter{TOML,SQL,Swift,Java,Kotlin,Go,Bash}{,Queries,Runestone}/  # migrated grammar trios
+│   ├── RunestoneMarkdownLanguage/  # Tree-sitter Markdown grammar + queries
+│   ├── TreeSitter{TOML,SQL,Swift,Java,Kotlin,Go,Bash,HTTP,Mermaid}{,Queries,Runestone}/
 │   ├── SmokeTest/                  # Minimal runtime executable target
 │   └── TestTreeSitterLanguages/    # Bundled C grammars (HTML, JS, JSON, Python, YAML)
 │
 ├── Example/
-│   └── MacExample/                 # Multi-tab, split-pane macOS demo application
+│   └── MacExample/                 # SwiftUI multi-tab, split-pane macOS demo application
+├── Tools/
+│   └── PerfHarness/                # Scroll/layout/Metal performance benchmarking CLI
 └── Tests/
-    └── RunestoneTests/             # Comprehensive unit and integration test suite
+    └── RunestoneTests/             # 1,050+ unit and integration tests (135 test files)
 ```
 
 ---
@@ -152,8 +172,10 @@ Then add the required products to your target dependencies:
     dependencies: [
         .product(name: "Runestone", package: "Runestone"),
         .product(name: "EditorIntelligence", package: "Runestone"),
-        .product(name: "EditorIntelligenceLSP", package: "Runestone"), // Optional: LSP support
-        .product(name: "RunestoneGraphQLLanguage", package: "Runestone") // Optional: GraphQL support
+        .product(name: "EditorIntelligenceLSP", package: "Runestone"),       // Optional: LSP support
+        .product(name: "RunestoneLanguages", package: "Runestone"),             // Optional: bundled grammars
+        .product(name: "RunestoneGraphQLLanguage", package: "Runestone"),      // Optional: GraphQL
+        .product(name: "RunestoneMarkdownLanguage", package: "Runestone")     // Optional: Markdown
     ]
 )
 ```
@@ -178,6 +200,7 @@ class EditorViewController: NSViewController {
         textView.isLineWrappingEnabled = true
         textView.showMinimap = true
         textView.isLineFoldingEnabled = true
+        textView.isMetalRenderingEnabled = true  // Optional GPU path
         textView.text = """
         // Welcome to Runestone on macOS!
         func greet(name: String) {
@@ -195,9 +218,9 @@ For smooth performance on large files, initialize the editor state on a backgrou
 
 ```swift
 import Runestone
-import TestTreeSitterLanguages
+import RunestoneLanguages
 
-let jsLanguage = TreeSitterLanguage(tree_sitter_javascript())
+let jsLanguage = TreeSitterLanguage.javaScript
 
 DispatchQueue.global(qos: .userInitiated).async {
     let state = TextViewState(
@@ -209,6 +232,17 @@ DispatchQueue.global(qos: .userInitiated).async {
         textView.setState(state)
     }
 }
+```
+
+Load a file from disk (uses mmap-backed piece tree automatically):
+
+```swift
+let state = try await TextViewState.load(
+    contentsOf: fileURL,
+    theme: DefaultTheme(),
+    language: TreeSitterLanguage.swift
+)
+textView.setState(state)
 ```
 
 ### 3. Multi-Cursor & Advanced Selection
@@ -310,6 +344,16 @@ let state = workbench.makeRestorationState()
 workbench.restore(from: state)
 ```
 
+### 6. Running the MacExample Demo
+
+The included demo app is a SwiftUI IDE shell with split panes, LSP wiring, command palette, and a persisted Metal rendering toggle:
+
+```bash
+swift run MacExample              # Core Graphics renderer (default)
+swift run MacExample --metal        # GPU Metal renderer
+./run-metal.sh                      # Convenience wrapper for --metal
+```
+
 ---
 
 ## Keyboard Shortcuts Reference
@@ -335,8 +379,10 @@ also invoke directly with `textView.perform(_:)`.
 | **⌘⌫** | Delete current line(s) |
 | **⌥⇧↑ / ⌥⇧↓** | Move selected line(s) up / down |
 | **⌘F** / **⌥⌘F** | Open Find / Replace panel |
+| **⌘/** | Toggle line comment |
 | **⌃Space** / **Esc** | Trigger / dismiss code completion (with `EditorIntelligence`) |
 | **⌘ + Click** | Go to definition (with `EditorIntelligence`) |
+| **⌘[ / ⌘]** | Navigate back / forward through cursor history |
 
 ### `.intelliJ` keymap (differences from `.default_`)
 
@@ -363,9 +409,23 @@ Palette actions (Search Everywhere, Find Action, Recent Files, Surround With…)
 
 ---
 
+## Development
+
+```bash
+swift build                              # Build all targets
+swift test                               # Run the full test suite (1,050+ tests)
+swift test --filter ClassName            # Run one test class
+swift test --filter ClassName/testMethod  # Run one test method
+swift run PerfHarness --help             # Performance benchmarking CLI
+```
+
+There is no separate lint/format script wired into SPM; SwiftLint config lives at `.swiftlint.yml` (run `swiftlint` directly if installed).
+
+---
+
 ## Testing
 
-The project includes a comprehensive unit and integration test suite covering line management, multi-cursor editing, block selection, syntax highlighting, tree-sitter parsing, completion ranking, hover tooltips, diagnostics, workbench layout, and LSP bridges.
+The project includes 1,050+ unit and integration tests across 135 test files, covering line management, multi-cursor editing, block selection, syntax highlighting, tree-sitter parsing, Metal rendering, completion ranking, hover tooltips, diagnostics, workbench layout, command palette, and LSP bridges.
 
 Run the test suite using Swift Package Manager:
 
