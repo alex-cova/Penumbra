@@ -210,6 +210,152 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertEqual(view.string as String, contiguous.string as String)
     }
 
+    // MARK: - `.add`-buffer `bytes(in:)` offset cursor (TreeSitterParser's reader callback path)
+
+    /// `TreeSitterLanguageLayer.parseUsingReader()` reads a document in ~4KB chunks via
+    /// `StringView.bytes(in:)`, strictly forward, while parsing. For an untitled document above
+    /// `StringView.pieceTreeUntitledThreshold` this lands on a single large `.add`-buffer piece,
+    /// which has no checkpoint table (unlike `.original`/file-mapped pieces) — resolving each
+    /// chunk's UTF-16→UTF-8 offset used to rescan the piece from byte 0 every call. This guards
+    /// the fast-path cursor (`PieceTree.addBufferUTF8Offset`) against returning wrong bytes for
+    /// the sequential access pattern it optimizes.
+    func testAddBufferBytesInSequentialChunksMatchContiguous() throws {
+        let text = makeLargeMixedContent()
+        let pieceTreeView = StringView(string: text)
+        XCTAssertTrue(pieceTreeView.usesPieceTree)
+        let groundTruth = text as NSString
+        var byteIndex = ByteCount(0)
+        let chunkSize = ByteCount(4 * 1_024)
+        var chunkCount = 0
+        while byteIndex < pieceTreeView.byteCount {
+            let end = min(byteIndex + chunkSize, pieceTreeView.byteCount)
+            let range = ByteRange(from: byteIndex, to: end)
+            try assertBytes(pieceTreeView, matches: groundTruth, in: range, chunk: chunkCount)
+            byteIndex = end
+            chunkCount += 1
+        }
+        XCTAssertGreaterThan(chunkCount, 10, "test fixture should require multiple chunks")
+    }
+
+    /// A non-monotonic access order (the cursor's fallback path: a different piece or a backward
+    /// seek) must still resolve correctly, not just the common forward-scanning case.
+    func testAddBufferBytesInReverseOrderMatchContiguous() throws {
+        let text = makeLargeMixedContent()
+        let pieceTreeView = StringView(string: text)
+        let groundTruth = text as NSString
+        let chunkSize = ByteCount(4 * 1_024)
+        var ranges: [ByteRange] = []
+        var byteIndex = ByteCount(0)
+        while byteIndex < pieceTreeView.byteCount {
+            let end = min(byteIndex + chunkSize, pieceTreeView.byteCount)
+            ranges.append(ByteRange(from: byteIndex, to: end))
+            byteIndex = end
+        }
+        for (index, range) in ranges.reversed().enumerated() {
+            try assertBytes(pieceTreeView, matches: groundTruth, in: range, chunk: index)
+        }
+    }
+
+    /// A forward scan populates the resume cursor; an edit afterwards must invalidate it so a
+    /// later scan cannot resume from a position computed against the pre-edit buffer.
+    func testAddBufferBytesAfterEditStillCorrect() throws {
+        let text = makeLargeMixedContent()
+        let pieceTreeView = StringView(string: text)
+        let chunkSize = ByteCount(4 * 1_024)
+        // Warm the forward cursor over the first half of the document.
+        var byteIndex = ByteCount(0)
+        let half = ByteCount(pieceTreeView.byteCount.value / 2)
+        while byteIndex < half {
+            let end = min(byteIndex + chunkSize, half)
+            _ = pieceTreeView.bytes(in: ByteRange(from: byteIndex, to: end))
+            byteIndex = end
+        }
+        pieceTreeView.replaceText(in: NSRange(location: 10, length: 5), with: "EDITED")
+        let groundTruth = pieceTreeView.string
+        byteIndex = ByteCount(0)
+        while byteIndex < pieceTreeView.byteCount {
+            let end = min(byteIndex + chunkSize, pieceTreeView.byteCount)
+            try assertBytes(pieceTreeView, matches: groundTruth, in: ByteRange(from: byteIndex, to: end), chunk: 0)
+            byteIndex = end
+        }
+    }
+
+    /// Chunk boundaries that land mid-scalar (a 2-byte accented character) must still resolve to
+    /// the correct UTF-8 offset, not an off-by-one from the resumed scan.
+    ///
+    /// Deliberately BMP-only (no astral/surrogate-pair scalars, e.g. emoji): `PieceTree` already
+    /// has a separate, pre-existing quirk resolving a UTF-16 offset that lands *inside* a surrogate
+    /// pair (`UTF8DocumentScanner.utf8Position`'s `skip` is discarded by every caller, `.original`
+    /// pieces included) — unrelated to the `.add`-buffer forward-scan cursor this test targets, so
+    /// it's out of scope here.
+    func testAddBufferBytesAcrossMultibyteBoundary() throws {
+        var text = String(repeating: "x", count: 300_000)
+        // Sprinkle a 2-byte-UTF-8 scalar near every likely 4096-byte chunk boundary.
+        for offset in stride(from: 4_000, to: text.count, by: 4_096) {
+            let index = text.index(text.startIndex, offsetBy: min(offset, text.count - 1))
+            text.replaceSubrange(index..<text.index(after: index), with: "é")
+        }
+        let pieceTreeView = StringView(string: text)
+        XCTAssertTrue(pieceTreeView.usesPieceTree)
+        let groundTruth = text as NSString
+        var byteIndex = ByteCount(0)
+        let chunkSize = ByteCount(4 * 1_024)
+        while byteIndex < pieceTreeView.byteCount {
+            let end = min(byteIndex + chunkSize, pieceTreeView.byteCount)
+            try assertBytes(pieceTreeView, matches: groundTruth, in: ByteRange(from: byteIndex, to: end), chunk: 0)
+            byteIndex = end
+        }
+    }
+
+    private func makeLargeMixedContent() -> String {
+        var lines: [String] = []
+        var size = 0
+        var i = 0
+        // JS-shaped content (matches the real reader-callback consumer, TreeSitterParser), plus
+        // occasional BMP multi-byte scalars so UTF-8/UTF-16 offset math is exercised too (see
+        // `testAddBufferBytesAcrossMultibyteBoundary` for why astral/surrogate-pair scalars are
+        // deliberately excluded here).
+        while size < 300_000 {
+            let line = i % 37 == 0
+                ? "function fn\(i)(a, b) { const café = a + b; return café; }\n"
+                : "function fn\(i)(a, b) { const x = a + b * \(i); return x; }\n"
+            lines.append(line)
+            size += line.utf8.count
+            i += 1
+        }
+        return lines.joined()
+    }
+
+    /// Ground truth for a byte range: `NSString.getBytes` directly, independent of `StringView`'s
+    /// piece-tree-vs-contiguous storage threshold (both `text as NSString` and a post-edit
+    /// `StringView.string` are always exactly-`NSString`, never piece-tree-backed).
+    private func assertBytes(_ view: StringView, matches groundTruth: NSString, in range: ByteRange, chunk: Int, file: StaticString = #filePath, line: UInt = #line) throws {
+        guard let actual = view.bytes(in: range) else {
+            return XCTFail("chunk \(chunk): expected bytes, got nil", file: file, line: line)
+        }
+        let nsRange = NSRange(location: range.location.utf16Length, length: range.length.utf16Length)
+        var expectedLength = 0
+        guard let expectedBuffer = groundTruth.getBytes(in: nsRange, encoding: String.preferredUTF16Encoding, usedLength: &expectedLength) else {
+            return XCTFail("chunk \(chunk): expected getBytes to succeed", file: file, line: line)
+        }
+        XCTAssertEqual(actual.length.value, expectedLength, "chunk \(chunk): length mismatch", file: file, line: line)
+        let actualData = Data(bytes: actual.bytes, count: actual.length.value)
+        let expectedData = Data(bytes: expectedBuffer, count: expectedLength)
+        if actualData != expectedData {
+            let actualBytes = Array(actualData)
+            let expectedBytes = Array(expectedData)
+            var firstDiff = min(actualBytes.count, expectedBytes.count)
+            for index in 0..<min(actualBytes.count, expectedBytes.count) where actualBytes[index] != expectedBytes[index] {
+                firstDiff = index
+                break
+            }
+            let lo = max(0, firstDiff - 8)
+            let hi = min(actualBytes.count, firstDiff + 8)
+            FileHandle.standardError.write("[assertBytes] chunk \(chunk) range=\(range) firstDiffAt=\(firstDiff)\n  actual=\(Array(actualBytes[lo..<hi]))\n  expect=\(Array(expectedBytes[lo..<hi]))\n".data(using: .utf8)!)
+        }
+        XCTAssertEqual(actualData, expectedData, "chunk \(chunk): byte content mismatch", file: file, line: line)
+    }
+
     private func writeTemp(_ text: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try text.write(to: url, atomically: true, encoding: .utf8)

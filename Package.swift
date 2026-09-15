@@ -70,7 +70,7 @@ let package = Package(
         .executableTarget(name: "SmokeTest", dependencies: ["Runestone", "RunestoneMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
-            dependencies: ["Runestone", "RunestoneMarkdownLanguage"],
+            dependencies: ["Runestone", "RunestoneMarkdownLanguage", "RunestoneLanguages"],
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),

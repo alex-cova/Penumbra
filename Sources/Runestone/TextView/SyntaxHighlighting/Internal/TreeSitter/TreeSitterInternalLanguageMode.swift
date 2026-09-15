@@ -23,8 +23,14 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private let highlightQueue = OperationQueue()
     private let parseLock = NSLock()
     private var hasCompletedInitialParse = false
-    /// Highlight captures for a byte window, reused by adjacent lines until the tree changes.
-    private var captureWindow: CaptureWindow?
+    /// Highlight captures for recently-queried byte windows, reused by adjacent lines until the
+    /// tree changes. `LayoutManager` schedules one highlight per visible line onto `highlightQueue`
+    /// (up to `TreeSitterPerformanceConstants.highlightQueueConcurrency` running at once), so a
+    /// *single* cached window was measured to thrash under scrolling: each concurrently-running line
+    /// recomputes its own ~32k window and immediately evicts the window a sibling line on another
+    /// thread just cached, even though the two windows usually overlap. Keeping the last few windows
+    /// (most-recently-used order) gives each concurrent lane a slot that survives its siblings' queries.
+    private var captureWindows: [CaptureWindow] = []
     /// True while a background parse is running *outside* `parseLock`. Edits bump `parseEpoch`
     /// instead of waiting for that work to finish.
     private var parseInFlight = false
@@ -41,7 +47,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         operationQueue.maxConcurrentOperationCount = 1
         highlightQueue.name = "TreeSitterSyntaxHighlight"
         highlightQueue.qualityOfService = .userInitiated
-        highlightQueue.maxConcurrentOperationCount = 4
+        highlightQueue.maxConcurrentOperationCount = TreeSitterPerformanceConstants.highlightQueueConcurrency
         parser = TreeSitterParser(encoding: .treeSitterUTF16)
         rootLanguageLayer = TreeSitterLanguageLayer(
             language: language,
@@ -71,7 +77,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             parseEpoch += 1
             hasCompletedInitialParse = false
             parsedUTF16Range = nil
-            captureWindow = nil
+            captureWindows.removeAll()
             if !parseInFlight {
                 rootLanguageLayer.invalidateTree()
             }
@@ -84,7 +90,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
 
     func parseFromBuffer() {
         parseLock.withLock {
-            captureWindow = nil
+            captureWindows.removeAll()
             rootLanguageLayer.parseUsingReader()
             let ready = rootLanguageLayer.tree != nil && !parser.lastParseAborted
             hasCompletedInitialParse = ready
@@ -143,7 +149,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private func parse(_ text: NSString, isCancelled: (() -> Bool)?) {
         guard isCancelled != nil else {
             parseLock.withLock {
-                captureWindow = nil
+                captureWindows.removeAll()
                 rootLanguageLayer.parse(text)
                 hasCompletedInitialParse = true
                 parsedUTF16Range = NSRange(location: 0, length: text.length)
@@ -189,11 +195,11 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             rootLanguageLayer.invalidateTree()
             hasCompletedInitialParse = false
             parsedUTF16Range = nil
-            captureWindow = nil
+            captureWindows.removeAll()
         } else {
             hasCompletedInitialParse = rootLanguageLayer.tree != nil
             parsedUTF16Range = publish()
-            captureWindow = nil
+            captureWindows.removeAll()
         }
         parseLock.unlock()
     }
@@ -217,7 +223,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 // and let the caller reschedule against the edited buffer.
                 parseEpoch += 1
                 hasCompletedInitialParse = false
-                captureWindow = nil
+                captureWindows.removeAll()
                 if rootLanguageLayer.tree == nil {
                     parsedUTF16Range = nil
                 }
@@ -235,7 +241,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 parsedUTF16Range = range
                 rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: stringLength)
             }
-            captureWindow = nil
+            captureWindows.removeAll()
             let editUTF16Length = max(change.byteRange.length.utf16Length, change.bytesAdded.utf16Length)
             if editUTF16Length > TreeSitterPerformanceConstants.maxSyncEditLength {
                 parseEpoch += 1
@@ -258,8 +264,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             parseLock.unlock()
             return []
         }
-        if let window = captureWindow, window.range.contains(range) {
-            let cached = window.captures.filter { $0.byteRange.overlaps(range) }
+        if let cached = cachedCaptures(containing: range) {
             parseLock.unlock()
             return cached
         }
@@ -280,13 +285,36 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
         parseLock.lock()
         if epoch == parseEpoch {
-            captureWindow = CaptureWindow(range: queryRange, captures: captures)
+            storeCaptureWindow(CaptureWindow(range: queryRange, captures: captures))
         }
         parseLock.unlock()
         if queryRange == range {
             return captures
         }
         return captures.filter { $0.byteRange.overlaps(range) }
+    }
+
+    /// Must be called while holding `parseLock`. Moves a hit to the most-recently-used end so a
+    /// window a concurrent lane keeps reusing survives longer than one used only once.
+    private func cachedCaptures(containing range: ByteRange) -> [TreeSitterCapture]? {
+        guard let index = captureWindows.firstIndex(where: { $0.range.contains(range) }) else {
+            return nil
+        }
+        let window = captureWindows[index]
+        if index != captureWindows.count - 1 {
+            captureWindows.remove(at: index)
+            captureWindows.append(window)
+        }
+        return window.captures.filter { $0.byteRange.overlaps(range) }
+    }
+
+    /// Must be called while holding `parseLock`.
+    private func storeCaptureWindow(_ window: CaptureWindow) {
+        captureWindows.append(window)
+        let overflow = captureWindows.count - TreeSitterPerformanceConstants.captureWindowCacheSize
+        if overflow > 0 {
+            captureWindows.removeFirst(overflow)
+        }
     }
 
     func createLineSyntaxHighlighter() -> LineSyntaxHighlighter {

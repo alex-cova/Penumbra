@@ -33,6 +33,17 @@ public enum TreeSitterPerformanceConstants {
     /// tree-sitter query instead of each walking the tree from the root.
     nonisolated(unsafe) public static var highlightQueryWindowUTF16Length = 32_768
 
+    /// Concurrent operations `TreeSitterInternalLanguageMode.highlightQueue` runs at once. Visible
+    /// lines are each highlighted on this queue while scrolling, so this many lines' capture
+    /// windows can be in flight simultaneously — see ``captureWindowCacheSize``.
+    nonisolated(unsafe) public static var highlightQueueConcurrency = 4
+
+    /// Number of recent capture windows `TreeSitterInternalLanguageMode` keeps cached at once.
+    /// Sized above ``highlightQueueConcurrency`` so concurrent lines highlighting nearby-but-distinct
+    /// windows don't evict each other's cache entry before it can be reused — a single shared slot
+    /// was measured to make every concurrent line recompute its own window from scratch.
+    nonisolated(unsafe) public static var captureWindowCacheSize = 6
+
     /// Duration before a long parse is considered noteworthy (seconds).
     nonisolated(unsafe) public static var longParseTimeout: TimeInterval = 0.5
 

@@ -253,6 +253,9 @@ final class PieceTree {
     private(set) var utf16Length = 0
     private var cachedNode: PieceNode?
     private var cachedPieceUTF16Start = 0
+    /// Resume point for the last forward `.add`-buffer UTF-16→UTF-8 offset resolution — see
+    /// ``addBufferUTF8Offset(in:localUTF16:bytes:)``.
+    private var addBufferOffsetCursor: (pieceUTF8Offset: Int, localUTF16: Int, utf8Offset: Int)?
     private(set) var materializeCount = 0
     var addBufferByteCount: Int {
         addBuffer.count
@@ -893,7 +896,7 @@ final class PieceTree {
         }
         if piece.source == .add || originalCheckpoints.isEmpty {
             return withUTF8(of: piece) { bytes in
-                UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16, in: bytes)
+                addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes)
             }
         }
         guard let original, let base = original.baseAddress else {
@@ -912,6 +915,33 @@ final class PieceTree {
         let bytes = UnsafeRawBufferPointer(start: base + startUTF8, count: max(limit - startUTF8, 0))
         let extra = UTF8DocumentScanner.utf8Offset(forUTF16Offset: targetUTF16 - utf16, in: bytes)
         return (startUTF8 + extra) - piece.utf8Offset
+    }
+
+    /// `.add`-buffer pieces carry no ``originalCheckpoints`` (those only exist for the `.original`,
+    /// file-mapped piece), so this used to always resolve `localUTF16` by scanning `bytes` from
+    /// byte 0 — cheap for one call, but `TreeSitterLanguageLayer.parseUsingReader()`'s tree-sitter
+    /// reader requests strictly increasing byte ranges while parsing a whole document, so every one
+    /// of the O(n) chunk reads rescanned from the start: O(n²) total for a single full-document
+    /// parse (measured: ~20s to open a 700 KB file once it crossed `StringView`'s piece-tree
+    /// threshold, vs. ~35ms for the same content just under it). Caching the last forward position
+    /// and resuming from there makes that dominant, monotonically-increasing access pattern
+    /// amortized O(n); a backward seek or a different piece just falls back to scanning from 0.
+    private func addBufferUTF8Offset(in piece: Piece, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
+        if let cursor = addBufferOffsetCursor,
+           cursor.pieceUTF8Offset == piece.utf8Offset,
+           cursor.localUTF16 <= localUTF16,
+           cursor.utf8Offset <= bytes.count {
+            let resumeBytes = UnsafeRawBufferPointer(rebasing: bytes[cursor.utf8Offset...])
+            let extra = UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16 - cursor.localUTF16, in: resumeBytes)
+            let result = cursor.utf8Offset + extra
+            addBufferOffsetCursor = (piece.utf8Offset, localUTF16, result)
+            return result
+        }
+        let result = UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16, in: bytes)
+        if piece.source == .add {
+            addBufferOffsetCursor = (piece.utf8Offset, localUTF16, result)
+        }
+        return result
     }
 
     private func lineFeedCount(in piece: Piece, utf8Length: Int) -> Int {
@@ -1005,5 +1035,6 @@ final class PieceTree {
     private func invalidateCache() {
         cachedNode = nil
         cachedPieceUTF16Start = 0
+        addBufferOffsetCursor = nil
     }
 }

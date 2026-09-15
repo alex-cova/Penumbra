@@ -147,6 +147,52 @@ final class TreeSitterCaptureSnapshotTests: XCTestCase {
         XCTAssertTrue(languageMode.isSyntaxTreeReady)
     }
 
+    /// `captures(in:)` keeps the last few queried byte windows (`captureWindowCacheSize`) instead
+    /// of a single slot, so `LayoutManager`'s 4-way concurrent `highlightQueue` doesn't evict one
+    /// visible line's cached window every time a sibling line highlights a nearby-but-different
+    /// range. Querying more distinct, non-adjacent windows than the cache holds — round-robin, so
+    /// every slot gets evicted and re-populated at least once — must still return the *correct*
+    /// captures for each window, both with the default cache size and with the old single-slot
+    /// size (``TreeSitterPerformanceConstants/captureWindowCacheSize`` = 1).
+    func testCaptureWindowCacheReturnsCorrectResultsAcrossEvictions() {
+        var sections: [String] = []
+        for index in 0..<12 {
+            // Pad each section so windows are byte-distinct and don't share a query range.
+            sections.append("# Heading\(index)\n\n**bold\(index)** " + String(repeating: "word ", count: 400) + "\n")
+        }
+        let text = sections.joined()
+        let languageMode = makeMarkdownLanguageMode(text: text)
+        let nsText = text as NSString
+
+        // One non-overlapping byte range per section, each containing that section's heading.
+        var ranges: [(index: Int, range: ByteRange)] = []
+        for index in 0..<12 {
+            let needle = "# Heading\(index)"
+            let location = nsText.range(of: needle).location
+            XCTAssertNotEqual(location, NSNotFound)
+            let utf16Range = NSRange(location: location, length: (needle as NSString).length)
+            ranges.append((index, ByteRange(utf16Range: utf16Range)))
+        }
+
+        let originalCacheSize = TreeSitterPerformanceConstants.captureWindowCacheSize
+        defer { TreeSitterPerformanceConstants.captureWindowCacheSize = originalCacheSize }
+
+        for cacheSize in [1, 3, originalCacheSize] {
+            TreeSitterPerformanceConstants.captureWindowCacheSize = cacheSize
+            // Visit every range twice, interleaved, so the cache is forced to evict and refill
+            // (cacheSize is well below 12) and every slot is exercised more than once.
+            for pass in 0..<2 {
+                for (index, range) in ranges {
+                    let captures = languageMode.captures(in: range)
+                    XCTAssertTrue(
+                        captures.contains { $0.name.hasPrefix("markup.heading") },
+                        "cacheSize=\(cacheSize) pass=\(pass): expected a heading capture for Heading\(index), got \(captures.map(\.name))"
+                    )
+                }
+            }
+        }
+    }
+
     private func makeMarkdownLanguageMode(text: String) -> TreeSitterInternalLanguageMode {
         let stringView = StringView(string: text)
         let lineManager = LineManager(stringView: stringView)

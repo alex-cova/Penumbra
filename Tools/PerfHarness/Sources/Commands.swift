@@ -1,6 +1,7 @@
 import Foundation
 import Runestone
 import RunestoneMarkdownLanguage
+import RunestoneLanguages
 
 /// Headless benchmarks against the public `Runestone` API, driving `TextView`/`TextViewState` directly
 /// with no `NSWindow`/run loop. See PERFORMANCE_AUDIT.md Phase 5 for what these numbers mean and what
@@ -12,6 +13,10 @@ enum Commands {
         var chunked = false
         var mmap = false
         var viewport = false
+        /// Bundled `RunestoneLanguages` identifier (e.g. "javascript", "json", "html") to use
+        /// instead of markdown when `highlighted` is set. Isolates a language with no injected
+        /// child layers from markdown's per-paragraph `markdown_inline` injection.
+        var language: String?
     }
 
     // MARK: - Shared setup
@@ -37,10 +42,19 @@ enum Commands {
             policy = .eager
         }
         if options.highlighted {
-            return TextViewState(text: text, language: .markdown, parsePolicy: policy)
+            return TextViewState(text: text, language: resolvedLanguage(options), parsePolicy: policy)
         } else {
             return TextViewState(text: text)
         }
+    }
+
+    /// Defaults to markdown (has injected child layers per paragraph); `--lang <id>` selects any
+    /// `RunestoneLanguages`-bundled identifier (e.g. "javascript") to isolate a single-layer parse.
+    private static func resolvedLanguage(_ options: Options) -> TreeSitterLanguage {
+        if let identifier = options.language, let language = TreeSitterLanguage.bundled(forIdentifier: identifier) {
+            return language
+        }
+        return .markdown
     }
 
     private static func loadState(path: String, options: Options) async throws -> (TextViewState, UInt64) {
@@ -57,7 +71,7 @@ enum Commands {
         let state: TextViewState
         let io: DocumentLoadIO = options.mmap ? .memoryMapped : .streamed
         if options.highlighted {
-            state = try await TextViewState.load(contentsOf: url, language: .markdown, parsePolicy: policy, io: io)
+            state = try await TextViewState.load(contentsOf: url, language: resolvedLanguage(options), parsePolicy: policy, io: io)
         } else {
             state = try await TextViewState.load(contentsOf: url, parsePolicy: policy, io: io)
         }
@@ -124,6 +138,11 @@ enum Commands {
             state = stateResult.value
             ingestSeconds = readSeconds + stateResult.seconds
         }
+        // `.eager` promises a complete tree by the time `init` returns (main-thread parse abort
+        // deadlines only apply under `.deferred`/`.viewport`); surface it so a fast-but-aborted
+        // parse can't be mistaken for a fast, successful one.
+        FileHandle.standardError.write("  isSyntaxTreeReady: \(state.isSyntaxTreeReady)\n".data(using: .utf8)!)
+        ResultLog.row("syntax_tree_ready", file: path, sizeBytes: sizeBytes, seconds: 0, extra: "\(state.isSyntaxTreeReady)")
 
         let viewResult = Measurement.time("TextView.setState") {
             makeTextView(state: state)
