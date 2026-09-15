@@ -59,6 +59,51 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertEqual(lineManager.lineCount, 2)
     }
 
+    func testSurrogatePairSubstringRanges() throws {
+        let text = "a😀bc"
+        let tree = PieceTree(string: text)
+        let groundTruth = text as NSString
+        for location in 0..<groundTruth.length {
+            for length in 1...(groundTruth.length - location) {
+                let range = NSRange(location: location, length: length)
+                let expected = groundTruth.substring(with: range)
+                let actual = tree.substring(in: range)
+                XCTAssertEqual(actual, expected, "range \(range)")
+            }
+        }
+    }
+
+    func testFileBackedSurrogatePairSubstringRanges() throws {
+        let text = "prefix😀suffix"
+        let url = try writeTemp(text)
+        let view = try awaitLoad(url)
+        let groundTruth = text as NSString
+        for location in 0..<groundTruth.length {
+            for length in 1...(groundTruth.length - location) {
+                let range = NSRange(location: location, length: length)
+                XCTAssertEqual(view.substring(in: range), groundTruth.substring(with: range), "range \(range)")
+            }
+        }
+    }
+
+    func testAddBufferBytesAcrossSurrogatePairBoundary() throws {
+        var text = String(repeating: "x", count: 300_000)
+        for offset in stride(from: 4_000, to: text.count, by: 4_096) {
+            let index = text.index(text.startIndex, offsetBy: min(offset, text.count - 1))
+            text.replaceSubrange(index..<text.index(after: index), with: "😀")
+        }
+        let pieceTreeView = StringView(string: text)
+        XCTAssertTrue(pieceTreeView.usesPieceTree)
+        let groundTruth = text as NSString
+        var byteIndex = ByteCount(0)
+        let chunkSize = ByteCount(4 * 1_024)
+        while byteIndex < pieceTreeView.byteCount {
+            let end = min(byteIndex + chunkSize, pieceTreeView.byteCount)
+            try assertBytes(pieceTreeView, matches: groundTruth, in: ByteRange(from: byteIndex, to: end), chunk: 0)
+            byteIndex = end
+        }
+    }
+
     func testUTF8ScalarSplitAcrossPieces() throws {
         let original = "café😀xyz"
         let url = try writeTemp(original)
@@ -282,12 +327,6 @@ final class PieceTreeTests: XCTestCase {
 
     /// Chunk boundaries that land mid-scalar (a 2-byte accented character) must still resolve to
     /// the correct UTF-8 offset, not an off-by-one from the resumed scan.
-    ///
-    /// Deliberately BMP-only (no astral/surrogate-pair scalars, e.g. emoji): `PieceTree` already
-    /// has a separate, pre-existing quirk resolving a UTF-16 offset that lands *inside* a surrogate
-    /// pair (`UTF8DocumentScanner.utf8Position`'s `skip` is discarded by every caller, `.original`
-    /// pieces included) — unrelated to the `.add`-buffer forward-scan cursor this test targets, so
-    /// it's out of scope here.
     func testAddBufferBytesAcrossMultibyteBoundary() throws {
         var text = String(repeating: "x", count: 300_000)
         // Sprinkle a 2-byte-UTF-8 scalar near every likely 4096-byte chunk boundary.
@@ -312,9 +351,7 @@ final class PieceTreeTests: XCTestCase {
         var size = 0
         var i = 0
         // JS-shaped content (matches the real reader-callback consumer, TreeSitterParser), plus
-        // occasional BMP multi-byte scalars so UTF-8/UTF-16 offset math is exercised too (see
-        // `testAddBufferBytesAcrossMultibyteBoundary` for why astral/surrogate-pair scalars are
-        // deliberately excluded here).
+        // occasional BMP multi-byte scalars so UTF-8/UTF-16 offset math is exercised too.
         while size < 300_000 {
             let line = i % 37 == 0
                 ? "function fn\(i)(a, b) { const café = a + b; return café; }\n"

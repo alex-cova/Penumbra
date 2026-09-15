@@ -37,6 +37,17 @@ enum UTF8DocumentScanner {
         utf8Position(forUTF16Offset: utf16Offset, in: bytes).utf8Offset
     }
 
+    /// Exclusive UTF-8 end offset for a UTF-16 index. When `utf16Offset` is the low surrogate of a
+    /// 4-byte scalar, returns the byte index after that scalar (unlike ``utf8Offset``).
+    static func utf8EndOffset(forUTF16Offset utf16Offset: Int, in bytes: UnsafeRawBufferPointer) -> Int {
+        let position = utf8Position(forUTF16Offset: utf16Offset, in: bytes)
+        var end = position.utf8Offset
+        if position.skip > 0, end < bytes.count {
+            end += utf8Scalar(at: end, in: bytes).advance
+        }
+        return end
+    }
+
     /// UTF-8 index of the scalar containing `utf16Offset`. `skip` is 1 when that offset is the
     /// low surrogate of a 4-byte scalar, otherwise 0.
     static func utf8Position(forUTF16Offset utf16Offset: Int, in bytes: UnsafeRawBufferPointer) -> (utf8Offset: Int, skip: Int) {
@@ -71,11 +82,7 @@ enum UTF8DocumentScanner {
             return
         }
         let start = utf8Position(forUTF16Offset: utf16Offset, in: bytes)
-        let end = utf8Position(forUTF16Offset: utf16Offset + length, in: bytes)
-        var utf8End = end.utf8Offset
-        if end.skip > 0, utf8End < bytes.count {
-            utf8End += utf8Scalar(at: utf8End, in: bytes).advance
-        }
+        let utf8End = utf8EndOffset(forUTF16Offset: utf16Offset + length, in: bytes)
         guard utf8End > start.utf8Offset else {
             return
         }

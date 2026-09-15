@@ -87,7 +87,7 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
                 if take > 0 {
                     withUTF8(of: piece) { bytes in
                         let utf8Start = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local, bytes: bytes)
-                        let utf8End = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local + take, bytes: bytes)
+                        let utf8End = piece.utf8Offset + utf8EndOffset(in: piece, localUTF16: local + take, bytes: bytes)
                         let count = min(max(utf8End - utf8Start, 0), remainingCap)
                         if count > 0 {
                             original.prefetch(byteOffset: utf8Start, count: count)
@@ -162,6 +162,19 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
     }
 
     private func utf8Offset(in piece: PieceCopy, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
+        resolveUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes, end: false)
+    }
+
+    private func utf8EndOffset(in piece: PieceCopy, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
+        resolveUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes, end: true)
+    }
+
+    private func resolveUTF8Offset(
+        in piece: PieceCopy,
+        localUTF16: Int,
+        bytes: UnsafeRawBufferPointer,
+        end: Bool
+    ) -> Int {
         if localUTF16 <= 0 {
             return 0
         }
@@ -169,6 +182,9 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
             return piece.utf8Length
         }
         if !piece.sourceIsOriginal || originalCheckpoints.isEmpty {
+            if end {
+                return UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: localUTF16, in: bytes)
+            }
             return UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16, in: bytes)
         }
         let targetUTF16 = piece.originalUTF16Start + localUTF16
@@ -185,7 +201,10 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
             start: bytes.baseAddress.map { $0 + (startUTF8 - piece.utf8Offset) },
             count: max(limit - startUTF8, 0)
         )
-        let extra = UTF8DocumentScanner.utf8Offset(forUTF16Offset: targetUTF16 - utf16, in: extraBytes)
+        let relative = targetUTF16 - utf16
+        let extra = end
+            ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: relative, in: extraBytes)
+            : UTF8DocumentScanner.utf8Offset(forUTF16Offset: relative, in: extraBytes)
         return (startUTF8 + extra) - piece.utf8Offset
     }
 
@@ -567,7 +586,7 @@ final class PieceTree {
                 let local = cursor - pieceStart
                 let take = min(end - cursor, piece.utf16Length - local)
                 let utf8Start = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local)
-                let utf8End = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local + take)
+                let utf8End = piece.utf8Offset + utf8EndOffset(in: piece, localUTF16: local + take)
                 let count = min(max(utf8End - utf8Start, 0), remainingCap)
                 if count > 0 {
                     original.prefetch(byteOffset: utf8Start, count: count)
@@ -770,7 +789,13 @@ final class PieceTree {
         }
         let piece = node.data.piece
         let localUTF16 = utf16Offset - pieceStart
-        let localUTF8 = utf8Offset(in: piece, localUTF16: localUTF16)
+        let localUTF8 = withUTF8(of: piece) { bytes in
+            let position = UTF8DocumentScanner.utf8Position(forUTF16Offset: localUTF16, in: bytes)
+            if position.skip > 0 {
+                return UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: localUTF16, in: bytes)
+            }
+            return position.utf8Offset
+        }
         let actualLeftUTF16 = withUTF8(of: piece) { bytes in
             let slice = UnsafeRawBufferPointer(rebasing: bytes[..<min(localUTF8, bytes.count)])
             return UTF8DocumentScanner.utf16Length(ofUTF8: slice)
@@ -871,23 +896,56 @@ final class PieceTree {
             let piece = node.data.piece
             let local = location - pieceStart
             let take = min(remaining, piece.utf16Length - local)
-            withUTF8(of: piece) { bytes in
-                let utf8Start = utf8Offset(in: piece, localUTF16: local)
-                let utf8End = utf8Offset(in: piece, localUTF16: local + take)
-                let slice = UnsafeRawBufferPointer(rebasing: bytes[utf8Start..<utf8End])
-                decodeUTF8(slice, into: &result)
-            }
-            let expected = range.length - remaining + take
-            if result.count > expected {
-                result.removeLast(result.count - expected)
-            }
+            appendUTF16Units(of: piece, localUTF16: local, take: take, into: &result)
             remaining -= take
             location += take
         }
         return result
     }
 
+    private func appendUTF16Units(
+        of piece: Piece,
+        localUTF16: Int,
+        take: Int,
+        into result: inout [unichar]
+    ) {
+        withUTF8(of: piece) { bytes in
+            if piece.source == .add || originalCheckpoints.isEmpty {
+                UTF8DocumentScanner.appendUTF16Units(from: bytes, utf16Offset: localUTF16, length: take, into: &result)
+                return
+            }
+            let targetUTF16 = piece.originalUTF16Start + localUTF16
+            var startUTF8 = piece.utf8Offset
+            var baseUTF16 = piece.originalUTF16Start
+            if let checkpoint = lastCheckpoint(utf16Offset: targetUTF16),
+               checkpoint.utf8Offset >= piece.utf8Offset,
+               checkpoint.utf16Offset <= targetUTF16 {
+                startUTF8 = checkpoint.utf8Offset
+                baseUTF16 = checkpoint.utf16Offset
+            }
+            let limit = piece.utf8Offset + piece.utf8Length
+            let extraBytes = UnsafeRawBufferPointer(
+                start: bytes.baseAddress.map { $0 + (startUTF8 - piece.utf8Offset) },
+                count: max(limit - startUTF8, 0)
+            )
+            UTF8DocumentScanner.appendUTF16Units(
+                from: extraBytes,
+                utf16Offset: targetUTF16 - baseUTF16,
+                length: take,
+                into: &result
+            )
+        }
+    }
+
     private func utf8Offset(in piece: Piece, localUTF16: Int) -> Int {
+        resolveUTF8Offset(in: piece, localUTF16: localUTF16, end: false)
+    }
+
+    private func utf8EndOffset(in piece: Piece, localUTF16: Int) -> Int {
+        resolveUTF8Offset(in: piece, localUTF16: localUTF16, end: true)
+    }
+
+    private func resolveUTF8Offset(in piece: Piece, localUTF16: Int, end: Bool) -> Int {
         if localUTF16 <= 0 {
             return 0
         }
@@ -896,7 +954,10 @@ final class PieceTree {
         }
         if piece.source == .add || originalCheckpoints.isEmpty {
             return withUTF8(of: piece) { bytes in
-                addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes)
+                if end {
+                    return addBufferUTF8EndOffset(in: piece, localUTF16: localUTF16, bytes: bytes)
+                }
+                return addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes)
             }
         }
         guard let original, let base = original.baseAddress else {
@@ -913,7 +974,10 @@ final class PieceTree {
         }
         let limit = piece.utf8Offset + piece.utf8Length
         let bytes = UnsafeRawBufferPointer(start: base + startUTF8, count: max(limit - startUTF8, 0))
-        let extra = UTF8DocumentScanner.utf8Offset(forUTF16Offset: targetUTF16 - utf16, in: bytes)
+        let relative = targetUTF16 - utf16
+        let extra = end
+            ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: relative, in: bytes)
+            : UTF8DocumentScanner.utf8Offset(forUTF16Offset: relative, in: bytes)
         return (startUTF8 + extra) - piece.utf8Offset
     }
 
@@ -927,18 +991,37 @@ final class PieceTree {
     /// and resuming from there makes that dominant, monotonically-increasing access pattern
     /// amortized O(n); a backward seek or a different piece just falls back to scanning from 0.
     private func addBufferUTF8Offset(in piece: Piece, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
+        addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes, end: false)
+    }
+
+    private func addBufferUTF8EndOffset(in piece: Piece, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
+        addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes, end: true)
+    }
+
+    private func addBufferUTF8Offset(
+        in piece: Piece,
+        localUTF16: Int,
+        bytes: UnsafeRawBufferPointer,
+        end: Bool
+    ) -> Int {
         if let cursor = addBufferOffsetCursor,
            cursor.pieceUTF8Offset == piece.utf8Offset,
            cursor.localUTF16 <= localUTF16,
            cursor.utf8Offset <= bytes.count {
             let resumeBytes = UnsafeRawBufferPointer(rebasing: bytes[cursor.utf8Offset...])
-            let extra = UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16 - cursor.localUTF16, in: resumeBytes)
+            let extra = end
+                ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: localUTF16 - cursor.localUTF16, in: resumeBytes)
+                : UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16 - cursor.localUTF16, in: resumeBytes)
             let result = cursor.utf8Offset + extra
-            addBufferOffsetCursor = (piece.utf8Offset, localUTF16, result)
+            if !end {
+                addBufferOffsetCursor = (piece.utf8Offset, localUTF16, result)
+            }
             return result
         }
-        let result = UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16, in: bytes)
-        if piece.source == .add {
+        let result = end
+            ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: localUTF16, in: bytes)
+            : UTF8DocumentScanner.utf8Offset(forUTF16Offset: localUTF16, in: bytes)
+        if piece.source == .add, !end {
             addBufferOffsetCursor = (piece.utf8Offset, localUTF16, result)
         }
         return result
@@ -1023,13 +1106,6 @@ final class PieceTree {
                 return try body(UnsafeRawBufferPointer(start: start, count: piece.utf8Length))
             }
         }
-    }
-
-    private func decodeUTF8(_ bytes: UnsafeRawBufferPointer, into units: inout [unichar]) {
-        guard !bytes.isEmpty, let string = String(bytes: Data(bytes), encoding: .utf8) else {
-            return
-        }
-        units.append(contentsOf: string.utf16)
     }
 
     private func invalidateCache() {
