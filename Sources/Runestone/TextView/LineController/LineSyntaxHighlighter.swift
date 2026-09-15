@@ -26,6 +26,10 @@ protocol LineSyntaxHighlighter: AnyObject {
     var canHighlight: Bool { get }
     /// True while an async highlight submitted by ``syntaxHighlight(_:completion:)`` is still running.
     var isHighlighting: Bool { get }
+    /// Whether this highlighter will ever produce non-default colors for a line (`false` for
+    /// plain text). Used by `LineController.isSyntaxHighlightPending` so Metal can tell "still
+    /// waiting on a highlight" apart from "there is nothing to highlight".
+    var canEventuallyHighlight: Bool { get }
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput)
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback)
     func cancel()
@@ -33,4 +37,5 @@ protocol LineSyntaxHighlighter: AnyObject {
 
 extension LineSyntaxHighlighter {
     var isHighlighting: Bool { false }
+    var canEventuallyHighlight: Bool { true }
 }

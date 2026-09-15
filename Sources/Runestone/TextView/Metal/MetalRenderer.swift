@@ -172,6 +172,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         )
     }
 
+    /// Glyph instance colors currently held for `lineID` (all fragments of that line), or every
+    /// fragment's colors when `lineID` is `nil`. Debug/test only — used to assert the white-flash
+    /// regression directly instead of inferring it from pixel counts.
+    func debugGlyphColors(forLineID lineID: DocumentLineNodeID? = nil) -> [SIMD4<Float>] {
+        fragments.values
+            .filter { lineID == nil || $0.lineID == lineID }
+            .flatMap { $0.glyphs.map(\.color) }
+    }
+
     init?(canvasView: MetalTextCanvasView, context: MetalContext = .shared, atlas: GlyphAtlas? = nil) {
         guard context.isAvailable,
               let device = context.device,
@@ -234,7 +243,14 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         )
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
-        if GlyphExtractCacheKey.shouldRebuild(previous: fragment.cacheKey, line: spec.line, emitRect: emitRect) {
+        if spec.isSyntaxHighlightPending, !fragment.glyphs.isEmpty {
+            // Highlighting has not landed for this typeset yet, so `spec.line` still carries
+            // `theme.textColor`. Keep the last fully-highlighted glyphs on screen instead of
+            // baking that provisional color; clear the cache key so the highlighted typeset
+            // (which arrives under a new `revision`) always re-extracts. A fragment with no
+            // prior glyphs (first paint, a freshly inserted line) still extracts immediately below.
+            fragment.cacheKey = nil
+        } else if GlyphExtractCacheKey.shouldRebuild(previous: fragment.cacheKey, revision: spec.lineRevision, emitRect: emitRect) {
             let request = GlyphExtractRequest(
                 line: spec.line,
                 fragmentFrame: spec.frame,
@@ -258,7 +274,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 fragment.cacheKey = nil
                 pendingRasterRetry = true
             } else {
-                fragment.cacheKey = GlyphExtractCacheKey(line: spec.line, emitRect: emitRect)
+                fragment.cacheKey = GlyphExtractCacheKey(revision: spec.lineRevision, emitRect: emitRect)
             }
         }
         // Decorations rebuild every upsert (display-only invalidation re-upserts a fresh spec).
@@ -288,11 +304,16 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         guard !ids.isEmpty else {
             return
         }
+        // Only drop the cache key, keeping `glyphs` in place. `upsertFragment`'s hold-previous
+        // policy relies on these being the last *fully highlighted* glyphs so the frame between
+        // this invalidation and the next highlighted re-upsert still presents real syntax colors
+        // instead of a blank gap or `theme.textColor` (the white flash).
         for (fragmentID, fragment) in fragments where ids.contains(fragment.lineID) {
             fragments[fragmentID]?.cacheKey = nil
         }
         needsInstanceRebuild = true
-        canvasView?.setNeedsDisplay()
+        // Do not `setNeedsDisplay` here — a deferred present would encode this pass's stale
+        // frame/decorations before layout/upsert rebuilds them.
     }
 
     func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat) {

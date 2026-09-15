@@ -31,6 +31,12 @@ final class MetalTextCanvasView: UIView {
     private var isDisplayDirty = false
     private var drawableRetryCount = 0
     private var presentRetryScheduled = false
+    private var deferredPresentScheduled = false
+    /// Non-zero while `withCoalescedPresent` is running. A layout pass fires several
+    /// `setNeedsDisplay`-triggering calls (`setViewport`, each `upsertFragment`) before its own
+    /// explicit present; suppressing the deferred present while nested keeps a half-updated pass
+    /// from ever being what a stray async present encodes.
+    private var presentCoalescingDepth = 0
     private static let maxDrawableRetries = 3
 
     override init(frame frameRect: NSRect) {
@@ -93,11 +99,13 @@ final class MetalTextCanvasView: UIView {
     override func setNeedsDisplay() {
         isDisplayDirty = true
         super.setNeedsDisplay()
+        scheduleDeferredPresentIfNeeded()
     }
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
         isDisplayDirty = true
         super.setNeedsDisplay(invalidRect)
+        scheduleDeferredPresentIfNeeded()
     }
 
     /// Encode + present now if a display is pending. AppKit does not reliably call `draw(_:)` on a
@@ -138,6 +146,35 @@ final class MetalTextCanvasView: UIView {
         DispatchQueue.main.async { [weak self] in
             self?.presentRetryScheduled = false
             self?.presentIfDirty()
+        }
+    }
+
+    /// `layerContentsRedrawPolicy = .never` does not drive `updateLayer` on its own. Layout
+    /// presents synchronously when it runs; this coalesced retry covers edits where only
+    /// `setNeedsDisplay` fired and no parent layout pass reached `presentIfDirty`.
+    private func scheduleDeferredPresentIfNeeded() {
+        guard presentCoalescingDepth == 0, !deferredPresentScheduled else {
+            return
+        }
+        deferredPresentScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.deferredPresentScheduled = false
+            self.presentIfDirty()
+        }
+    }
+
+    /// Runs `body`, suppressing any deferred present it triggers via `setNeedsDisplay` until it
+    /// returns, then presents once with the pass's final state. Reentrant (a depth counter, not a
+    /// `Bool`) since a layout pass can itself invoke another paint-affecting call.
+    func withCoalescedPresent(_ body: () -> Void) {
+        presentCoalescingDepth += 1
+        body()
+        presentCoalescingDepth -= 1
+        if presentCoalescingDepth == 0 {
+            presentIfDirty()
         }
     }
 

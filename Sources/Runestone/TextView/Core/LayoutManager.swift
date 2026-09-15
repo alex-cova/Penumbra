@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import AppKit
+import simd
 // swiftlint:disable file_length
 
 @MainActor
@@ -162,6 +163,9 @@ final class LayoutManager {
     private(set) var isMetalRenderingActive = false
     private var metalRasterRetryCount = 0
     private static let maxMetalRasterRetries = 40
+    /// Lines touched by the latest edit; layout highlights these synchronously so keystrokes
+    /// keep syntax colours instead of flashing default `theme.textColor` until async work lands.
+    private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     private let linesContainerView = UIView()
@@ -272,6 +276,7 @@ final class LayoutManager {
     }
 
     func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>) {
+        recentlyEditedLineIDs.formUnion(lineIDs)
         for lineID in lineIDs {
             if let lineController = lineControllerStorage[lineID] {
                 lineController.invalidateEverything()
@@ -284,6 +289,22 @@ final class LayoutManager {
             }
         }
         paintBackend.invalidateGlyphs(forLineIDs: lineIDs)
+        if isMetalRenderingActive, let metalCanvasView {
+            metalCanvasView.withCoalescedPresent {
+                for lineID in lineIDs where visibleLineIDs.contains(lineID) {
+                    upsertLineFragmentsForDisplay(lineID: lineID)
+                }
+            }
+        }
+    }
+
+    /// Re-upsert Metal paint specs after async syntax highlighting refreshed `CTLine` colours.
+    func refreshMetalGlyphsAfterSyntaxHighlight(for lineID: DocumentLineNodeID) {
+        guard isMetalRenderingActive, visibleLineIDs.contains(lineID) else {
+            return
+        }
+        upsertLineFragmentsForDisplay(lineID: lineID)
+        presentMetalCanvasIfNeeded()
     }
 
     /// Appearance change: glyph instance colors were baked at extract time. Drop cache keys so
@@ -308,6 +329,15 @@ final class LayoutManager {
         paintBackend.setNeedsDisplay()
     }
 
+    /// Glyph instance colors Metal currently holds for `lineID` (or every fragment when `nil`),
+    /// empty when Metal is not active. Debug/test only.
+    func metalDebugGlyphColors(forLineID lineID: DocumentLineNodeID? = nil) -> [SIMD4<Float>] {
+        guard isMetalRenderingActive else {
+            return []
+        }
+        return metalRenderer?.debugGlyphColors(forLineID: lineID) ?? []
+    }
+
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is not active.
     var metalDebugStats: MetalRenderer.DebugStats? {
         isMetalRenderingActive ? metalRenderer?.debugStats : nil
@@ -326,6 +356,7 @@ final class LayoutManager {
                 metalRenderer?.onAtlasWarmed = { [weak self] in
                     self?.setNeedsLayout()
                     self?.textInputView?.setNeedsLayout()
+                    (self?.textInputView as? TextInputView)?.scheduleDeferredLayoutIfNeeded()
                 }
             }
             guard let metalRenderer else {
@@ -464,18 +495,26 @@ extension LayoutManager {
         if needsLayout {
             needsLayout = false
             foldingController?.recomputeIfNeeded()
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layoutGutter()
-            layoutLineSelection()
-            layoutLinesInViewport()
-            updateLineNumberColors()
-            CATransaction.commit()
-            // Present *after* the disableActions transaction. `presentsWithTransaction`
-            // commits the drawable at CATransaction.commit; disableActions swallows that
-            // contents update, which is the blank-editor symptom (offscreen encode still
-            // has glyphs, the on-screen CAMetalLayer stays clear).
-            presentMetalCanvasIfNeeded()
+            let performLayout = { [self] in
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                layoutGutter()
+                layoutLineSelection()
+                layoutLinesInViewport()
+                updateLineNumberColors()
+                CATransaction.commit()
+            }
+            if isMetalRenderingActive, let metalCanvasView {
+                // Coalesce every `setNeedsDisplay` this pass triggers (`setViewport`, each
+                // `upsertFragment`) into the single present below, run *after* the disableActions
+                // transaction. `presentsWithTransaction` commits the drawable at
+                // `CATransaction.commit`; disableActions swallows that contents update, which is
+                // the blank-editor symptom (offscreen encode still has glyphs, the on-screen
+                // `CAMetalLayer` stays clear).
+                metalCanvasView.withCoalescedPresent(performLayout)
+            } else {
+                performLayout()
+            }
             scheduleMetalRasterRetryIfNeeded()
         }
     }
@@ -661,7 +700,8 @@ extension LayoutManager {
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let oldLineHeight = lineController.lineHeight
             lineController.constrainingWidth = constrainingLineWidth
-            lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: true)
+            let highlightAsynchronously = !recentlyEditedLineIDs.contains(line.id)
+            lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: highlightAsynchronously)
             layoutLineNumberView(for: line)
             // Layout line fragments ("sublines") in the line until we have filled the viewport.
             let lineYPosition = line.yPosition
@@ -736,6 +776,7 @@ extension LayoutManager {
             let contentOffsetAdjustment = CGPoint(x: 0, y: contentOffsetAdjustmentY)
             delegate?.layoutManager(self, didProposeContentOffsetAdjustment: contentOffsetAdjustment)
         }
+        recentlyEditedLineIDs.removeAll()
         // Present is deferred to `layoutIfNeeded` after this disableActions transaction
         // commits — see `presentMetalCanvasIfNeeded()`.
     }
@@ -795,28 +836,32 @@ extension LayoutManager {
         guard isMetalRenderingActive else {
             return
         }
-        let layoutBounds = paddedInsetViewport
         for lineID in visibleLineIDs {
-            guard let lineController = lineControllerStorage[lineID] else {
-                continue
-            }
-            let line = lineController.line
-            let lineYPosition = line.yPosition
-            let controllers = lineController.lineFragmentControllers(in: layoutBounds)
-            for (index, lineFragmentController) in controllers.enumerated() {
-                var frame: CGRect = .zero
-                layoutLineFragmentView(
-                    for: lineFragmentController,
-                    lineID: lineID,
-                    lineLocation: line.location,
-                    lineYPosition: lineYPosition,
-                    isLastLineFragment: index == controllers.count - 1,
-                    lineEndsWithLineBreak: line.data.delimiterLength > 0,
-                    lineFragmentFrame: &frame
-                )
-            }
+            upsertLineFragmentsForDisplay(lineID: lineID)
         }
         presentMetalCanvasIfNeeded()
+    }
+
+    private func upsertLineFragmentsForDisplay(lineID: DocumentLineNodeID) {
+        guard isMetalRenderingActive, let lineController = lineControllerStorage[lineID] else {
+            return
+        }
+        let layoutBounds = paddedInsetViewport
+        let line = lineController.line
+        let lineYPosition = line.yPosition
+        let controllers = lineController.lineFragmentControllers(in: layoutBounds)
+        for (index, lineFragmentController) in controllers.enumerated() {
+            var frame: CGRect = .zero
+            layoutLineFragmentView(
+                for: lineFragmentController,
+                lineID: lineID,
+                lineLocation: line.location,
+                lineYPosition: lineYPosition,
+                isLastLineFragment: index == controllers.count - 1,
+                lineEndsWithLineBreak: line.data.delimiterLength > 0,
+                lineFragmentFrame: &frame
+            )
+        }
     }
 
     /// Whether any invisible-character marker could be visible. Skips the (potentially large)
@@ -884,7 +929,9 @@ extension LayoutManager {
             ),
             fallbackFont: theme.font as CTFont,
             fallbackColor: theme.textColor,
-            appearance: textInputView?.effectiveAppearance
+            appearance: textInputView?.effectiveAppearance,
+            lineRevision: lineFragment.revision,
+            isSyntaxHighlightPending: lineControllerStorage[lineID]?.isSyntaxHighlightPending ?? false
         )
         paintBackend.upsertFragment(spec)
         if let lineFragmentView = cgPaintBackend.lineFragmentView(for: lineFragment.id) {

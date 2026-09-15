@@ -8,6 +8,9 @@ typealias LineFragmentTree = RedBlackTree<LineFragmentNodeID, Int, LineFragmentN
 protocol LineControllerDelegate: AnyObject {
     func lineSyntaxHighlighter(for lineController: LineController) -> LineSyntaxHighlighter?
     func lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(_ lineController: LineController)
+    /// Async syntax highlighting finished and `lineFragment` data was refreshed. Metal must
+    /// re-extract glyph colours; the CG path only needs `setNeedsDisplay`.
+    func lineControllerDidRefreshDisplayedLineFragments(_ lineController: LineController)
 }
 
 final class LineController: @unchecked Sendable {
@@ -132,6 +135,13 @@ final class LineController: @unchecked Sendable {
 
     func cancelSyntaxHighlighting() {
         syntaxHighlighter?.cancel()
+    }
+
+    /// The currently typeset `CTLine`s were built before syntax highlighting completed, so their
+    /// colors are `theme.textColor`. Metal must not bake these over already-highlighted glyphs —
+    /// see `MetalRenderer.upsertFragment`'s hold-previous-glyphs policy.
+    var isSyntaxHighlightPending: Bool {
+        isSyntaxHighlightingInvalid && (syntaxHighlighter?.canEventuallyHighlight ?? false)
     }
 
     func invalidateEverything() {
@@ -286,7 +296,7 @@ private extension LineController {
             return
         }
         guard syntaxHighlighter.canHighlight else {
-            isSyntaxHighlightingInvalid = false
+            // Leave `isSyntaxHighlightingInvalid` true so the next layout retries once the tree exists.
             return
         }
         guard let input = createLineSyntaxHighlightInput() else {
@@ -305,6 +315,7 @@ private extension LineController {
                         self.isSyntaxHighlightingInvalid = false
                         self.isTypesetterInvalid = true
                         self.redisplayLineFragments()
+                        self.delegate?.lineControllerDidRefreshDisplayedLineFragments(self)
                         if abs(self.lineWidth - oldWidth) > CGFloat.ulpOfOne {
                             self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
                         }

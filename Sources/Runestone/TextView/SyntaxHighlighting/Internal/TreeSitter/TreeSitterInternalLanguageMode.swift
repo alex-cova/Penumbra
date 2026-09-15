@@ -7,8 +7,12 @@ protocol TreeSitterLanguageModeDelegate: AnyObject {
 
 final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sendable {
     weak var delegate: TreeSitterLanguageModeDelegate?
+    /// Mirrors the readiness check `captures(in:)` itself makes: a tree existing is not enough —
+    /// while a parse is in flight or the initial parse has not completed, `captures(in:)` returns
+    /// `[]`. Without this, `LineController` would mark a line "highlighted" after a query that
+    /// silently produced zero tokens, leaving it stuck at `theme.textColor` (the Metal white flash).
     var canHighlight: Bool {
-        rootLanguageLayer.canHighlight
+        parseLock.withLock { rootLanguageLayer.canHighlight && !parseInFlight && hasCompletedInitialParse }
     }
 
     private let stringView: StringView

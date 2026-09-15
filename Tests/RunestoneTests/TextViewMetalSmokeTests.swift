@@ -1,5 +1,7 @@
 import AppKit
+import RunestoneLanguages
 import XCTest
+import simd
 @testable import Runestone
 
 /// Runs the same kind of exercises as `TextViewSmokeTests` with the Metal paint backend forced on.
@@ -223,6 +225,52 @@ final class TextViewMetalSmokeTests: XCTestCase {
         )
     }
 
+    func testMetalPresentsGlyphsAfterTypingWithoutExplicitLayout() throws {
+        try skipUnlessMetalActivatable()
+        TextView.allowsMetalDrawableCapture = true
+        defer { TextView.allowsMetalDrawableCapture = false }
+
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let parent = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        window.contentView = parent
+        let textView = TextView()
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        parent.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: parent.topAnchor),
+            textView.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
+            textView.bottomAnchor.constraint(equalTo: parent.bottomAnchor)
+        ])
+        window.makeKeyAndOrderFront(nil)
+        textView.setState(TextViewState(text: "hello", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        window.layoutIfNeeded()
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+
+        let canvas = try XCTUnwrap(findMetalCanvas(in: textView), "expected a Metal canvas")
+        let initialPainted = canvas.debugPresentedAlphaPixels
+        XCTAssertGreaterThan(initialPainted, 0, "initial on-screen glyphs")
+
+        textView.selectedRange = NSRange(location: textView.text.utf16.count, length: 0)
+        textView.insertText(" world")
+        // Do not call layoutIfNeeded — rely on the deferred flush like SwiftUI hosting.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+
+        XCTAssertEqual(textView.text, "hello world")
+        XCTAssertGreaterThan(
+            canvas.debugPresentedAlphaPixels,
+            initialPainted,
+            "typing must layout and present without an explicit layoutIfNeeded (instances=\(textView.metalInstanceCount))"
+        )
+    }
+
     func testMetalPresentsGlyphsWhenAutoLayoutHostedInDarkAppearance() throws {
         try skipUnlessMetalActivatable()
         TextView.allowsMetalDrawableCapture = true
@@ -267,6 +315,86 @@ final class TextViewMetalSmokeTests: XCTestCase {
             canvas.debugPresentedAlphaPixels,
             0,
             "Auto Layout + dark host must still present glyphs (canvas=\(canvas.bounds) instances=\(textView.metalInstanceCount))"
+        )
+    }
+
+    /// The white-flash regression: `redisplayLines` asks for a *synchronous* highlight on the
+    /// edited line, but an edit at/above `maxSyncEditLength` forces `textDidChange` down the
+    /// no-reparse path (`canHighlight` false until the background parse catches up). Before the
+    /// fix this line still got typeset (in `theme.textColor`) and Metal baked that default color
+    /// into the presented frame; now `isSyntaxHighlightPending` makes Metal hold the previously
+    /// extracted, correctly colored glyphs instead.
+    func testMetalHoldsSyntaxColorsInsteadOfDefaultWhenEditOutrunsHighlight() throws {
+        try skipUnlessMetalActivatable()
+        let text = "let value = 42\n"
+        let state = TextViewState(text: text, theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(state)
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        // The first layout's highlight runs asynchronously (the line isn't "recently edited" yet);
+        // let it complete and re-present before taking the "before" snapshot.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        textView.layoutIfNeeded()
+
+        let beforeColors = textView.metalDebugGlyphColors(atLocation: 0)
+        XCTAssertFalse(beforeColors.isEmpty, "expected glyphs once initial highlighting completes")
+        XCTAssertGreaterThan(
+            Set(beforeColors.map(ColorKey.init)).count, 1,
+            "expected distinct token colors (keyword vs. number vs. default) once JavaScript highlighting completes"
+        )
+
+        // An edit at/above `TreeSitterPerformanceConstants.maxSyncEditLength` (1024 UTF-16 units)
+        // skips the synchronous incremental reparse.
+        let hugeInsertion = String(repeating: " ", count: TreeSitterPerformanceConstants.maxSyncEditLength + 1)
+        textView.selectedRange = NSRange(location: text.utf16.count - 1, length: 0)
+        textView.insertText(hugeInsertion)
+
+        // No runloop spin: assert synchronously, immediately after the keystroke/paste, exactly
+        // the frame that used to present `theme.textColor`.
+        let afterColors = textView.metalDebugGlyphColors(atLocation: 0)
+        XCTAssertEqual(
+            afterColors.map(ColorKey.init), beforeColors.map(ColorKey.init),
+            "the caret line must hold its previous syntax colors, not flash theme.textColor, while the reparse is outstanding"
+        )
+
+        // The background parse eventually catches up and colors refresh again.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        textView.layoutIfNeeded()
+        XCTAssertFalse(textView.metalDebugGlyphColors(atLocation: 0).isEmpty)
+    }
+
+    /// A brand-new line (no previously extracted glyphs to hold) must still paint immediately even
+    /// while its highlight is pending — the hold-previous-glyphs policy must not regress into
+    /// "blank until highlighted".
+    func testMetalPaintsNewlyInsertedLineImmediatelyWhileHighlightIsPending() throws {
+        try skipUnlessMetalActivatable()
+        let text = "let value = 42\n"
+        let state = TextViewState(text: text, theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(state)
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        textView.layoutIfNeeded()
+
+        // A huge insertion containing a line break creates a brand-new second line with no prior
+        // Metal glyphs, while also forcing the no-reparse path (`maxSyncEditLength`).
+        let hugeInsertion = "\n" + String(repeating: "x", count: TreeSitterPerformanceConstants.maxSyncEditLength + 1)
+        textView.selectedRange = NSRange(location: text.utf16.count - 1, length: 0)
+        textView.insertText(hugeInsertion)
+        // A brand-new line only enters `visibleLineIDs`/gets a fragment on the layout pass that
+        // follows the edit (`redisplayLines` only re-upserts lines already visible); this is that
+        // one pass — still well before the background reparse (no runloop spin) has any chance
+        // to complete, so the new line's highlight is still pending here.
+        textView.layoutIfNeeded()
+
+        let newLineLocation = text.utf16.count + 1
+        XCTAssertFalse(
+            textView.metalDebugGlyphColors(atLocation: newLineLocation).isEmpty,
+            "a newly inserted line with no prior glyphs must still paint immediately, not wait for highlighting"
         )
     }
 
@@ -316,5 +444,20 @@ private extension TextViewMetalSmokeTests {
             result.append(contentsOf: fragmentViews(in: subview))
         }
         return result
+    }
+}
+
+/// `Equatable`/`Hashable` wrapper for `SIMD4<Float>` glyph colors, compared component-wise.
+private struct ColorKey: Hashable {
+    let r: Float
+    let g: Float
+    let b: Float
+    let a: Float
+
+    init(_ color: SIMD4<Float>) {
+        r = color.x
+        g = color.y
+        b = color.z
+        a = color.w
     }
 }

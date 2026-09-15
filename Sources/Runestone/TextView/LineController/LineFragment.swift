@@ -15,6 +15,24 @@ extension LineFragmentID: CustomDebugStringConvertible {
     }
 }
 
+/// Process-wide monotonic counter for `LineFragment.revision`. `CTLine` identity (`ObjectIdentifier`)
+/// is not safe to cache against: a re-typeset frees the old `CTLine` and CoreFoundation readily
+/// reuses that address for the next allocation, so a brand-new (differently colored) `CTLine` can
+/// alias a just-freed one and defeat a pointer-identity cache key (`GlyphExtractCacheKey`).
+private let lineFragmentRevisionCounter = LineFragmentRevisionCounter()
+
+private final class LineFragmentRevisionCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+
+    func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
+}
+
 final class LineFragment {
     /// ID of the line fragment.
     let id: LineFragmentID
@@ -30,6 +48,9 @@ final class LineFragment {
     let hiddenLength: Int
     /// The underlying line.
     let line: CTLine
+    /// Monotonic identity for `line`, unique per typeset — unlike `ObjectIdentifier(line)`, never
+    /// reused across a `CTLine`'s lifetime. See `lineFragmentRevisionCounter`.
+    let revision: UInt64
     /// The lenth of the descent.
     let descent: CGFloat
     /// The non-scaled height of the line fragment.
@@ -65,6 +86,7 @@ final class LineFragment {
             visibleRange: visibleRange,
             hiddenLength: 0,
             line: line,
+            revision: lineFragmentRevisionCounter.next(),
             descent: descent,
             baseSize: baseSize,
             scaledSize: scaledSize,
@@ -78,6 +100,7 @@ final class LineFragment {
         visibleRange: NSRange,
         hiddenLength: Int,
         line: CTLine,
+        revision: UInt64,
         descent: CGFloat,
         baseSize: CGSize,
         scaledSize: CGSize,
@@ -88,6 +111,7 @@ final class LineFragment {
         self.visibleRange = visibleRange
         self.hiddenLength = hiddenLength
         self.line = line
+        self.revision = revision
         self.descent = descent
         self.baseSize = baseSize
         self.scaledSize = scaledSize
@@ -101,6 +125,7 @@ final class LineFragment {
             visibleRange: visibleRange,
             hiddenLength: hiddenLength,
             line: line,
+            revision: revision,
             descent: descent,
             baseSize: baseSize,
             scaledSize: scaledSize,

@@ -3,6 +3,7 @@ import Foundation
 // swiftlint:disable file_length
 import Combine
 import EditorIntelligence
+import simd
 
 @MainActor
 protocol TextInputViewDelegate: AnyObject {
@@ -510,11 +511,39 @@ final class TextInputView: UIView, UITextInput {
     func handleBackingPropertiesChange() {
         layoutManager.setNeedsLayout()
         setNeedsLayout()
+        scheduleDeferredLayoutIfNeeded()
     }
+
+    /// `UIView.layout` does not recurse into children, and SwiftUI / Auto Layout hosts often
+    /// do not call `layoutIfNeeded` on `TextInputView` after `setNeedsLayout`. Without a
+    /// deferred flush, Metal glyph upserts and `presentIfDirty` wait until a resize forces
+    /// `TextView.layoutSubviews`.
+    func scheduleDeferredLayoutIfNeeded() {
+        guard !deferredLayoutScheduled else {
+            return
+        }
+        deferredLayoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.deferredLayoutScheduled = false
+            self.layoutIfNeeded()
+        }
+    }
+
+    private var deferredLayoutScheduled = false
 
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is inactive.
     var metalDebugStats: MetalRenderer.DebugStats? {
         layoutManager.metalDebugStats
+    }
+
+    /// Glyph instance colors Metal currently holds for the line at `location` (or every fragment
+    /// when `location` is `nil`). Debug/test only.
+    func metalDebugGlyphColors(atLocation location: Int? = nil) -> [SIMD4<Float>] {
+        let lineID = location.flatMap { lineManager.line(containingCharacterAt: $0)?.id }
+        return layoutManager.metalDebugGlyphColors(forLineID: lineID)
     }
 
     /// Offscreen render of the Metal glyph canvas (transparent ground). Snapshot tests / PerfHarness.
@@ -2491,6 +2520,7 @@ extension TextInputView {
         }
         layoutManager.setNeedsLayout()
         setNeedsLayout()
+        scheduleDeferredLayoutIfNeeded()
     }
 
     func shouldChangeText(in range: NSRange, replacementText text: String) -> Bool {
@@ -3428,6 +3458,12 @@ extension TextInputView: @preconcurrency LineControllerDelegate {
     func lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(_ lineController: LineController) {
         setNeedsLayout()
         layoutManager.setNeedsLayout()
+        scheduleDeferredLayoutIfNeeded()
+    }
+
+    func lineControllerDidRefreshDisplayedLineFragments(_ lineController: LineController) {
+        layoutManager.refreshMetalGlyphsAfterSyntaxHighlight(for: lineController.line.id)
+        scheduleDeferredLayoutIfNeeded()
     }
 }
 

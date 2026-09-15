@@ -105,7 +105,7 @@ public final class FindSearchScheduler {
             return
         }
 
-        searchTask = Task { @MainActor in
+        searchTask = Task { @MainActor [weak self] in
             let options = FindSearchOptions(
                 query: snapshot.query,
                 matchCase: snapshot.matchCase,
@@ -130,7 +130,7 @@ public final class FindSearchScheduler {
             }.value
 
             gate.finish()
-            guard generation == self.searchGeneration else { return }
+            guard let self, generation == self.searchGeneration else { return }
             guard !Task.isCancelled else { return }
             guard isCurrent(), session.matchesSnapshot(snapshot) else { return }
 

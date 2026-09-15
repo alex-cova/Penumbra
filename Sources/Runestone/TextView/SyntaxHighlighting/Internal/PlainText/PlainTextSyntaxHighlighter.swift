@@ -7,6 +7,9 @@ final class PlainTextSyntaxHighlighter: LineSyntaxHighlighter {
     var canHighlight: Bool {
         false
     }
+    var canEventuallyHighlight: Bool {
+        false
+    }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput) {}
 

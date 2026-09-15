@@ -6,6 +6,7 @@ import XCTest
 @MainActor
 final class MetalDecorationTests: XCTestCase {
     private let font = CTFontCreateWithName("Menlo" as CFString, 13, nil)
+    private var nextRevision: UInt64 = 1
 
     // MARK: - Highlights
 
@@ -260,7 +261,8 @@ private extension MetalDecorationTests {
         decorations: LineFragmentDecorations? = nil,
         fallbackFont: CTFont? = nil
     ) -> LineFragmentPaintSpec {
-        LineFragmentPaintSpec(
+        defer { nextRevision += 1 }
+        return LineFragmentPaintSpec(
             id: LineFragmentID(lineId: "line", lineFragmentIndex: 0),
             lineID: DocumentLineNodeID(value: 1),
             frame: frame,
@@ -271,7 +273,8 @@ private extension MetalDecorationTests {
             decorations: decorations ?? self.decorations(highlighted: highlighted),
             fallbackFont: fallbackFont ?? font,
             fallbackColor: .labelColor,
-            appearance: nil
+            appearance: nil,
+            lineRevision: nextRevision
         )
     }
 

@@ -3,6 +3,7 @@ import Foundation
 @preconcurrency import AppKit
 import CoreText
 import EditorIntelligence
+import simd
 
 /// A type similiar to UITextView with features commonly found in code editors.
 ///
@@ -949,6 +950,13 @@ import EditorIntelligence
     }
     /// Windowed p95 of `MetalRenderer.encode`, in nanoseconds. Debug/PerfHarness only.
     public var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
+    /// Glyph instance colors Metal currently holds for the line at `location` (or every fragment
+    /// when `location` is `nil`), empty when Metal is inactive. Debug/test only — lets a test
+    /// assert directly that a line's on-screen colors are not `theme.textColor` instead of
+    /// inferring it from painted-pixel counts.
+    public func metalDebugGlyphColors(atLocation location: Int? = nil) -> [SIMD4<Float>] {
+        textInputView.metalDebugGlyphColors(atLocation: location)
+    }
     /// When `true`, the Metal canvas is created with `framebufferOnly = false` so
     /// `NSView.cacheDisplay(in:to:)` can read back the presented drawable. Off in the shipping path;
     /// set it (before creating a `TextView`) only from PerfHarness / snapshot tests.
@@ -2303,6 +2311,7 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidChange(_ view: TextInputView) {
+        setNeedsLayout()
         if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
             let location = newRange.location
             DispatchQueue.main.async { [weak self] in

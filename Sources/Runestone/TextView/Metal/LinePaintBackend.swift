@@ -29,6 +29,13 @@ struct LineFragmentPaintSpec {
     var fallbackColor: UIColor
     /// Appearance to resolve dynamic colors against; the Metal backend needs it off the render pass.
     var appearance: NSAppearance?
+    /// Monotonic identity for `line`, immune to `CTLine` pointer reuse (`LineFragment.revision`).
+    /// Metal keys its glyph-extraction cache on this instead of `ObjectIdentifier(line)`.
+    var lineRevision: UInt64
+    /// `true` when `line` was typeset before syntax highlighting completed, i.e. its colors are
+    /// still `fallbackColor` rather than the eventual syntax colors. Metal holds the previously
+    /// extracted (colored) glyphs instead of baking this provisional state to the screen.
+    var isSyntaxHighlightPending: Bool = false
 }
 
 struct LineFragmentDecorations {

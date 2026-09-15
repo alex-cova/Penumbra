@@ -54,7 +54,7 @@ struct GlyphExtractResult {
 }
 
 struct GlyphRasterBudget {
-    static let perFrameLimit = 8
+    static let perFrameLimit = 32
 
     var remaining: Int
 
@@ -75,18 +75,22 @@ struct GlyphRasterBudget {
     }
 }
 
-/// Instance rebuild key. A pan that moves `canvas.frame` must re-extract even when `CTLine` is unchanged.
+/// Instance rebuild key. A pan that moves `canvas.frame` must re-extract even when the line is
+/// unchanged. Keyed on `LineFragment.revision`, not `ObjectIdentifier(CTLine)`: a re-typeset frees
+/// the old `CTLine` and CoreFoundation readily reuses that address, so a brand-new (differently
+/// colored) `CTLine` could otherwise alias a just-freed one and produce a false cache hit that
+/// keeps stale (e.g. pre-syntax-highlight) colors on screen.
 struct GlyphExtractCacheKey: Equatable {
-    var ctLineID: ObjectIdentifier
+    var revision: UInt64
     var emitRect: CGRect
 
-    init(line: CTLine, emitRect: CGRect) {
-        self.ctLineID = ObjectIdentifier(line)
+    init(revision: UInt64, emitRect: CGRect) {
+        self.revision = revision
         self.emitRect = emitRect
     }
 
-    static func shouldRebuild(previous: GlyphExtractCacheKey?, line: CTLine, emitRect: CGRect) -> Bool {
-        previous != GlyphExtractCacheKey(line: line, emitRect: emitRect)
+    static func shouldRebuild(previous: GlyphExtractCacheKey?, revision: UInt64, emitRect: CGRect) -> Bool {
+        previous != GlyphExtractCacheKey(revision: revision, emitRect: emitRect)
     }
 }
 

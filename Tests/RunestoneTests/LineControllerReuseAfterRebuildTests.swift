@@ -27,6 +27,8 @@ final class LineControllerReuseAfterRebuildTests: XCTestCase, LineControllerStor
 
     func lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(_ lineController: LineController) {}
 
+    func lineControllerDidRefreshDisplayedLineFragments(_ lineController: LineController) {}
+
     private func makeStorage(_ stringView: StringView, _ lineManager: LineManager) -> LineControllerStorage {
         let factory = LineControllerFactory(
             stringView: stringView,

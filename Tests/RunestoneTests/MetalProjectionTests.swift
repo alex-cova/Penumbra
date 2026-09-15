@@ -137,11 +137,11 @@ final class MetalProjectionTests: XCTestCase {
         XCTAssertFalse(first.instances.isEmpty)
         XCTAssertFalse(second.instances.isEmpty)
         XCTAssertNotEqual(first.instances.map(\.origin.x), second.instances.map(\.origin.x))
-        let previous = GlyphExtractCacheKey(line: line, emitRect: MetalProjection.emitRect(canvasFrame: canvasA))
+        let previous = GlyphExtractCacheKey(revision: 1, emitRect: MetalProjection.emitRect(canvasFrame: canvasA))
         XCTAssertTrue(
             GlyphExtractCacheKey.shouldRebuild(
                 previous: previous,
-                line: line,
+                revision: 1,
                 emitRect: MetalProjection.emitRect(canvasFrame: canvasB)
             )
         )
