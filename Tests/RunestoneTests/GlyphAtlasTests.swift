@@ -23,6 +23,15 @@ final class GlyphAtlasTests: XCTestCase {
         XCTAssertFalse(key.isColor)
     }
 
+    func testSubpixelBucketsAreUsedOnlyAtOneX() {
+        XCTAssertEqual(GlyphKey.subpixelBucket(forX: 10.05, scale: 1), 0)
+        XCTAssertEqual(GlyphKey.subpixelBucket(forX: 10.40, scale: 1), 1)
+        XCTAssertEqual(GlyphKey.subpixelBucket(forX: 10.80, scale: 1), 2)
+        XCTAssertEqual(GlyphKey.subpixelBucket(forX: 10.80, scale: 2), 0)
+        XCTAssertEqual(GlyphKey.subpixelOffset(for: 2, scale: 1), 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(GlyphKey.subpixelOffset(for: 2, scale: 2), 0)
+    }
+
     func testMatrixHashDiffersForSyntheticItalic() throws {
         let font = makeMenlo(pointSize: 16)
         let glyph = try XCTUnwrap(GlyphRasterizer.glyph(for: "A", font: font), "Menlo must provide glyph A")

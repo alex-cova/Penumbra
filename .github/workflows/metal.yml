@@ -1,0 +1,57 @@
+name: Metal rendering
+
+on:
+  pull_request:
+    paths:
+      - "Sources/Runestone/TextView/**"
+      - "Tests/RunestoneTests/*Metal*"
+      - "Tests/RunestoneTests/Helpers/MetalPresentedPixelTestHelpers.swift"
+      - "Tools/PerfHarness/**"
+      - ".github/workflows/metal.yml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: metal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presented-frame-tests:
+    runs-on: [self-hosted, macOS, metal]
+    timeout-minutes: 30
+    env:
+      RUNESTONE_REQUIRE_METAL: "1"
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Run Metal presented-frame tests
+        run: swift test --filter TextViewMetalSmokeTests
+      - name: Run Metal geometry and atlas tests
+        run: |
+          swift test --filter MetalTextCanvasViewTests
+          swift test --filter MetalDecorationTests
+          swift test --filter GlyphAtlasTests
+
+  nightly-parity:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macOS, metal]
+    timeout-minutes: 60
+    env:
+      RUNESTONE_REQUIRE_METAL: "1"
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run full suite
+        run: swift test
+      - name: Capture Metal parity artifacts
+        run: swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/runestone-metal-goldens
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metal-parity-${{ github.run_id }}
+          path: /tmp/runestone-metal-goldens
+          if-no-files-found: error

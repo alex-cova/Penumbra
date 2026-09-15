@@ -7,16 +7,24 @@ import QuartzCore
 @MainActor
 protocol MetalCanvasGlyphEncoding: AnyObject {
     /// Called inside `MetalTextCanvasView.draw(_:)` with a live encoder whose color attachment is
-    /// already cleared to transparent. Must not call `endEncoding` / `present` / `commit`.
-    func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
+    /// already cleared to the opaque editor background. Must not call `endEncoding` / `present` / `commit`.
+    func encode(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    )
     /// Like `encode`, but forces an instance-buffer rebuild first — for offscreen capture, which
     /// may run after an on-screen `draw` already consumed the dirty flag.
-    func encodeForCapture(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
+    func encodeForCapture(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    )
     /// The canvas left its window (cached / hidden host): release grown instance buffers.
     func hostDidLeaveWindow()
 }
 
-/// Transparent `CAMetalLayer` host. When Metal is active `MetalRenderer` paints glyphs here and the
+/// Opaque `CAMetalLayer` host. When Metal is active `MetalRenderer` paints editor chrome and glyphs here and the
 /// `LineFragmentView`s are gone; when it is inactive the canvas is hidden and only clears.
 ///
 /// `draw(_:)` is the only place that calls `nextDrawable()`. Layout updates CPU state and
@@ -27,11 +35,14 @@ final class MetalTextCanvasView: UIView {
     weak var glyphEncoder: MetalCanvasGlyphEncoding?
     /// Non-zero alpha texels in the last on-screen drawable, filled when drawable capture is on.
     private(set) var debugPresentedAlphaPixels = 0
+    /// CPU copy of the last drawable submitted for presentation. Populated only in capture mode.
+    private var lastPresentedImage: NSBitmapImageRep?
 
     private var isDisplayDirty = false
     private var drawableRetryCount = 0
     private var presentRetryScheduled = false
     private var deferredPresentScheduled = false
+    private var opaqueClearColor = MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
     /// Non-zero while `withCoalescedPresent` is running. A layout pass fires several
     /// `setNeedsDisplay`-triggering calls (`setViewport`, each `upsertFragment`) before its own
     /// explicit present; suppressing the deferred present while nested keeps a half-updated pass
@@ -56,6 +67,8 @@ final class MetalTextCanvasView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override var isOpaque: Bool { true }
+
     override func makeBackingLayer() -> CALayer {
         let metalLayer = CAMetalLayer()
         metalLayer.device = MetalContext.shared.device
@@ -67,8 +80,8 @@ final class MetalTextCanvasView: UIView {
             width: max(bounds.width * scale, 1),
             height: max(bounds.height * scale, 1)
         )
-        metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-        metalLayer.isOpaque = false
+        metalLayer.colorspace = effectiveColorSpace.cgColorSpace
+        metalLayer.isOpaque = true
         // `true` requires presenting inside a CA transaction that is *not*
         // `setDisableActions(true)`. Nested layout transactions swallowed the
         // drawable, leaving a clear canvas (offscreen encode still had glyphs).
@@ -87,6 +100,32 @@ final class MetalTextCanvasView: UIView {
         nil
     }
 
+    func setOpaqueBackgroundColor(
+        _ color: NSColor,
+        appearance: NSAppearance?,
+        colorSpace: NSColorSpace
+    ) {
+        let premultiplied = MetalColor.premultiplied(
+            color,
+            appearance: appearance,
+            colorSpace: colorSpace
+        )
+        let alpha = max(premultiplied.w, 0.0001)
+        let updated = MTLClearColor(
+            red: Double(premultiplied.x / alpha),
+            green: Double(premultiplied.y / alpha),
+            blue: Double(premultiplied.z / alpha),
+            alpha: 1
+        )
+        guard updated.red != opaqueClearColor.red
+                || updated.green != opaqueClearColor.green
+                || updated.blue != opaqueClearColor.blue else {
+            return
+        }
+        opaqueClearColor = updated
+        setNeedsDisplay()
+    }
+
     /// Backing scale of the window this canvas is on (not `NSScreen.main`, which would be wrong for
     /// a window on a secondary display). `NSScreen.main` is only the detached-view last resort.
     var effectiveBackingScale: CGFloat {
@@ -94,6 +133,13 @@ final class MetalTextCanvasView: UIView {
             ?? window?.screen?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor
             ?? 2
+    }
+
+    var effectiveColorSpace: NSColorSpace {
+        if let windowColorSpace = window?.colorSpace {
+            return windowColorSpace
+        }
+        return window?.screen?.colorSpace ?? .sRGB
     }
 
     override func setNeedsDisplay() {
@@ -130,9 +176,11 @@ final class MetalTextCanvasView: UIView {
             return
         }
         if encodePass(on: metalLayer) {
+            RunestoneSignposts.event("MetalCanvas.presented")
             isDisplayDirty = false
             drawableRetryCount = 0
         } else {
+            RunestoneSignposts.event("MetalCanvas.presentRetry")
             schedulePresentRetry()
         }
     }
@@ -214,24 +262,19 @@ final class MetalTextCanvasView: UIView {
         }
     }
 
-    /// `NSView.cacheDisplay` of this canvas after a display pass. Requires
+    /// CPU copy of the last drawable submitted by `encodePass`. Requires
     /// `MetalContext.allowsDrawableCapture` to have been set **before** the canvas created its
-    /// `CAMetalLayer` (`framebufferOnly = false`). Isolates the presented drawable from the
-    /// offscreen encode path in `captureSnapshot()`.
+    /// `CAMetalLayer` (`framebufferOnly = false`). `NSView.cacheDisplay` does not reliably include
+    /// CAMetalLayer contents, so returning the present command buffer's own readback is the only
+    /// dependable way to observe the frame users were shown.
     func capturePresentedLayer() -> NSBitmapImageRep? {
         displayIfNeeded()
-        guard bounds.width > 0, bounds.height > 0,
-              let rep = bitmapImageRepForCachingDisplay(in: bounds) else {
-            return nil
-        }
-        cacheDisplay(in: bounds, to: rep)
-        return rep
+        presentIfDirty()
+        return lastPresentedImage
     }
 
-    /// Renders the current Metal scene into an offscreen BGRA texture and reads it back — the Metal
-    /// glyphs/decorations on a transparent ground, at the canvas's backing scale. For snapshot tests
-    /// / PerfHarness only (`CAMetalLayer` content is not captured by `cacheDisplay` unless
-    /// `allowsDrawableCapture` was set before the layer was created).
+    /// Renders the current opaque Metal scene into an offscreen BGRA texture and reads it back at
+    /// the canvas's backing scale. For snapshot tests / PerfHarness only.
     func captureSnapshot() -> NSBitmapImageRep? {
         let context = MetalContext.shared
         guard context.isAvailable,
@@ -262,12 +305,16 @@ final class MetalTextCanvasView: UIView {
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        pass.colorAttachments[0].clearColor = opaqueClearColor
         guard let commandBuffer = queue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             return nil
         }
-        glyphEncoder?.encodeForCapture(into: encoder, drawableSize: CGSize(width: width, height: height))
+        glyphEncoder?.encodeForCapture(
+            into: encoder,
+            commandBuffer: commandBuffer,
+            drawableSize: CGSize(width: width, height: height)
+        )
         encoder.endEncoding()
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {
             return nil
@@ -317,6 +364,7 @@ private extension MetalTextCanvasView {
             return
         }
         let scale = effectiveBackingScale
+        metalLayer.colorspace = effectiveColorSpace.cgColorSpace
         metalLayer.contentsScale = scale
         let width = max(bounds.width * scale, 1)
         let height = max(bounds.height * scale, 1)
@@ -328,6 +376,7 @@ private extension MetalTextCanvasView {
 
     @discardableResult
     func encodePass(on metalLayer: CAMetalLayer) -> Bool {
+        RunestoneSignposts.event("MetalCanvas.encodeStarted")
         let context = MetalContext.shared
         guard let commandQueue = context.commandQueue, let commandBuffer = commandQueue.makeCommandBuffer() else {
             context.markUnavailable(reason: "Failed to create Metal command buffer")
@@ -341,9 +390,13 @@ private extension MetalTextCanvasView {
         descriptor.colorAttachments[0].texture = drawable.texture
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].storeAction = .store
-        descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        descriptor.colorAttachments[0].clearColor = opaqueClearColor
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
-            glyphEncoder?.encode(into: encoder, drawableSize: metalLayer.drawableSize)
+            glyphEncoder?.encode(
+                into: encoder,
+                commandBuffer: commandBuffer,
+                drawableSize: metalLayer.drawableSize
+            )
             encoder.endEncoding()
         } else {
             // Still present so CAMetalLayer's drawable pool is released, then fall back.
@@ -389,9 +442,45 @@ private extension MetalTextCanvasView {
                 painted += 1
             }
             debugPresentedAlphaPixels = painted
+            lastPresentedImage = makePresentedImage(
+                pixels: pixels,
+                width: drawable.texture.width,
+                height: drawable.texture.height,
+                bytesPerRow: captureBytesPerRow
+            )
         } else {
             commandBuffer.waitUntilScheduled()
         }
         return true
+    }
+
+    func makePresentedImage(
+        pixels: UnsafePointer<UInt8>,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int
+    ) -> NSBitmapImageRep? {
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: bytesPerRow,
+            bitsPerPixel: 32
+        ), let destination = rep.bitmapData else {
+            return nil
+        }
+        memcpy(destination, pixels, bytesPerRow * height)
+        // The drawable is BGRA while NSBitmapImageRep above exposes RGBA.
+        for index in stride(from: 0, to: bytesPerRow * height, by: 4) {
+            destination.advanced(by: index).pointee ^= destination.advanced(by: index + 2).pointee
+            destination.advanced(by: index + 2).pointee ^= destination.advanced(by: index).pointee
+            destination.advanced(by: index).pointee ^= destination.advanced(by: index + 2).pointee
+        }
+        return rep
     }
 }

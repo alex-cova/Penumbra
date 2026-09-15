@@ -18,11 +18,12 @@ final class MetalContext {
     private(set) var library: MTLLibrary?
     private var didFailPermanently = false
     private var didLogFailure = false
+    private(set) var failureReason: String?
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var _glyphAtlas: GlyphAtlas?
 
     /// When `true`, `MetalTextCanvasView` creates its `CAMetalLayer` with `framebufferOnly = false`
-    /// so `NSView.cacheDisplay(in:to:)` can read back the presented drawable. Off in the shipping
+    /// so the present command buffer can read back the submitted drawable. Off in the shipping
     /// path; PerfHarness / snapshot tests set it before building a `TextView`.
     var allowsDrawableCapture = false
 
@@ -60,6 +61,7 @@ final class MetalContext {
             return
         }
         didFailPermanently = true
+        failureReason = reason
         library = nil
         logFailureOnce(reason)
     }

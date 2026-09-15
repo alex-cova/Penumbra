@@ -156,6 +156,7 @@ final class LayoutManager {
             }
         }
     }
+    weak var pageGuideView: PageGuideView?
     private(set) var paintBackend: LinePaintBackend
     private let cgPaintBackend: CGLinePaintBackend
     private var metalRenderer: MetalRenderer?
@@ -298,6 +299,16 @@ final class LayoutManager {
         }
     }
 
+    /// Return at end-of-line does not change the edited line's glyphs. The new line also has no
+    /// height until it is typeset, so following lines keep their old Y unless a full viewport
+    /// layout runs now — waiting for a deferred pass is what left Metal presenting the pre-Return
+    /// frame.
+    func relayoutVisibleFragmentsAfterLineStructureChange() {
+        paintBackend.invalidateForLineStructureChange()
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+
     /// Re-upsert Metal paint specs after async syntax highlighting refreshed `CTLine` colours.
     ///
     /// Each visible line's highlight completes independently (a separate `Task { @MainActor }`
@@ -346,9 +357,23 @@ final class LayoutManager {
         return metalRenderer?.debugGlyphColors(forLineID: lineID) ?? []
     }
 
+    func metalDebugGlyphOrigins(forLineID lineID: DocumentLineNodeID? = nil) -> [SIMD2<Float>] {
+        guard isMetalRenderingActive else {
+            return []
+        }
+        return metalRenderer?.debugGlyphOrigins(forLineID: lineID) ?? []
+    }
+
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is not active.
     var metalDebugStats: MetalRenderer.DebugStats? {
         isMetalRenderingActive ? metalRenderer?.debugStats : nil
+    }
+
+    var metalAtlasCensus: (nonzero: Int, total: Int, pages: Int)? {
+        guard isMetalRenderingActive else {
+            return nil
+        }
+        return metalRenderer?.atlasCensus()
     }
 
     /// Swap the paint backend between the CG reuse-queue and the Metal renderer. Returns `true` when
@@ -501,6 +526,7 @@ extension LayoutManager {
 
     func layoutIfNeeded() {
         if needsLayout {
+            RunestoneSignposts.event("LayoutManager.layoutStarted")
             needsLayout = false
             foldingController?.recomputeIfNeeded()
             let performLayout = { [self] in
@@ -524,6 +550,7 @@ extension LayoutManager {
                 performLayout()
             }
             scheduleMetalRasterRetryIfNeeded()
+            RunestoneSignposts.event("LayoutManager.layoutCompleted")
         }
     }
 
@@ -565,6 +592,8 @@ extension LayoutManager {
             layoutLineSelection()
             updateLineNumberColors()
             CATransaction.commit()
+            updateMetalCanvasPaintSpec()
+            presentMetalCanvasIfNeeded()
         }
     }
 
@@ -749,14 +778,20 @@ extension LayoutManager {
                 )
                 maxY = lineFragmentFrame.maxY
             }
-            let stoppedGeneratingLineFragments = lineFragmentControllers.isEmpty
+            if lineFragmentControllers.isEmpty {
+                // An empty line (Return at end-of-line) has no fragment controllers, but it still
+                // occupies estimated line height. Advance maxY so the viewport walk continues;
+                // stopping here used to treat every following line as scrolled-out and Metal
+                // dropped their glyphs until a resize.
+                maxY = max(maxY, textContainerInset.top + line.yPosition + lineController.lineHeight)
+            }
             let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
             contentSizeService.setSize(of: lineController.line, to: lineSize)
             let isSizingLineAboveTopEdge = line.yPosition < insetViewport.minY + textContainerInset.top
             if isSizingLineAboveTopEdge && lineController.isFinishedTypesetting {
                 contentOffsetAdjustmentY += lineController.lineHeight - oldLineHeight
             }
-            if !stoppedGeneratingLineFragments && line.index < lineManager.lineCount - 1 {
+            if line.index < lineManager.lineCount - 1 && maxY < layoutBounds.maxY {
                 nextLine = lineManager.line(atRow: line.index + 1)
             } else {
                 nextLine = nil
@@ -834,6 +869,29 @@ extension LayoutManager {
             metalCanvasView.frame = viewport
         }
         paintBackend.setViewport(viewport, canvasFrame: viewport, scale: metalCanvasView.effectiveBackingScale)
+        updateMetalCanvasPaintSpec()
+    }
+
+    private func updateMetalCanvasPaintSpec() {
+        guard isMetalRenderingActive, let metalCanvasView else {
+            return
+        }
+        let visiblePageGuide = pageGuideView.flatMap { view in
+            view.superview == nil || view.isHidden ? nil : view
+        }
+        paintBackend.setCanvasPaintSpec(CanvasPaintSpec(
+            frame: viewport,
+            backgroundColor: textInputView?.backgroundColor ?? .textBackgroundColor,
+            lineSelectionRect: lineSelectionBackgroundView.isHidden ? nil : getLineSelectionRect(),
+            lineSelectionColor: theme.selectedLineBackgroundColor,
+            pageGuideFrame: visiblePageGuide?.frame,
+            pageGuideHairlineWidth: visiblePageGuide?.hairlineWidth ?? 0,
+            pageGuideHairlineColor: visiblePageGuide?.hairlineColor ?? .clear,
+            pageGuideShadingColor: visiblePageGuide?.shadingColor ?? .clear,
+            showsPageGuideShading: visiblePageGuide?.showReformattingGuideShading ?? false,
+            appearance: textInputView?.effectiveAppearance,
+            colorSpace: metalCanvasView.effectiveColorSpace
+        ))
     }
 
     /// Rebuild the paint spec for every visible line fragment without running a full viewport
@@ -938,6 +996,7 @@ extension LayoutManager {
             fallbackFont: theme.font as CTFont,
             fallbackColor: theme.textColor,
             appearance: textInputView?.effectiveAppearance,
+            colorSpace: metalCanvasView?.effectiveColorSpace ?? .sRGB,
             lineRevision: lineFragment.revision,
             isSyntaxHighlightPending: lineControllerStorage[lineID]?.isSyntaxHighlightPending ?? false
         )

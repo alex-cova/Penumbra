@@ -69,6 +69,7 @@ private extension MetalDecorationBuilder {
         let height: CGFloat
         let scale: CGFloat
         let appearance: NSAppearance?
+        let colorSpace: NSColorSpace
         let fragmentRangeUpperBound: Int
         let endsWithLineBreak: Bool
 
@@ -80,6 +81,7 @@ private extension MetalDecorationBuilder {
             height = spec.frame.height
             self.scale = scale
             appearance = spec.appearance
+            colorSpace = spec.colorSpace
             fragmentRangeUpperBound = spec.decorations.fragmentRangeUpperBound
             endsWithLineBreak = spec.decorations.endsWithLineBreak
         }
@@ -93,7 +95,7 @@ private extension MetalDecorationBuilder {
         }
 
         func premultiplied(_ color: UIColor) -> SIMD4<Float> {
-            MetalColor.premultipliedSRGB(color, appearance: appearance)
+            MetalColor.premultiplied(color, appearance: appearance, colorSpace: colorSpace)
         }
     }
 

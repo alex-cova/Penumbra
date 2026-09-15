@@ -8,6 +8,20 @@ Prioritized by user impact first, then performance, then polish. Paths are relat
 
 **Item format:** each item states the user-visible **symptom**, the **evidence** in code, the **fix**, and an **acceptance** check that must fail before the fix and pass after. Code is referenced by symbol name — line numbers rot, so they appear only as a hint. Effort is S (<½ day), M (1–2 days), L (>2 days).
 
+## Completion update — 2026-09-15
+
+The roadmap implementation is now present in the working tree:
+
+- P0: actual presented-drawable capture replaces unreliable `NSView.cacheDisplay` capture; Return + following text, pending-highlight edits, and host reattachment have fixed-window pixel regressions. MacExample was launched through `./run-metal.sh` and exercised with scripted typing/Return input.
+- P1: deterministic fragment/page ordering, exhaustive decoration cache inputs, GPU-free stats, Metal PerfHarness metrics, dirty-page rebuilds, and command-buffer-completion-fenced triple buffers are enabled. The raster budget is 128 after a five-sample highlighted run recorded 62 capped fragments at 64 and 18 at 128. A 500 MB fixture recorded 1.97 ms keystroke p95, 0 raster-cap skips, and 0.447 ms instance rebuild. Synthetic scroll layout p95 was 0.053 ms.
+- P2-1: the Metal pass paints the opaque editor background, selected-line band, and page-guide hairline/shading; AppKit selection/caret overlays remain above it.
+- P2-2: presented-frame/parity metrics use ink rather than alpha for the opaque canvas, and `.github/workflows/metal.yml` targets a required self-hosted macOS Metal runner. Local synthetic parity measured 78.7% of Metal ink on CG ink (MAD 17.51; mismatch fraction 0.239).
+- P2-3: the layer follows the attached window/screen color space and theme/decorative colors are converted directly into sRGB or Display P3 output space, with color-bearing instances invalidated on display changes.
+- P2-4: 1× glyphs use three horizontal coverage phases; Retina remains bucket zero. Whole-run fallback reserves `UInt8.max`.
+- P2-5: fallback reasons reach the host, update MacExample status, and produce a one-time user-visible warning.
+
+Hardware acceptance remains explicit: the workflow needs a registered runner labelled `self-hosted`, `macOS`, and `metal`; visual A/B checks require physical P3 and 1× displays.
+
 ---
 
 ## Already fixed or mitigated (context)
@@ -193,7 +207,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 2. Read stats once per sample via a single `metalDebugStats` snapshot (depends on P1-4).
 3. Record a baseline CSV for the fixtures in `EDITOR_PERFORMANCE_REPORT.md` so before/after numbers for P1-2 and P1-3 are comparable.
 
-**Note:** there is no CI in this repo (no `.github/`), so "restore the deleted CI perf gate" is not a code change — it needs CI to exist first. Track that as a prerequisite of P2-2 rather than pretending it is a harness task.
+**Update:** `.github/workflows/metal.yml` now defines focused and nightly jobs for a self-hosted macOS Metal runner, with required-Metal mode so missing GPU support fails instead of silently skipping.
 
 **Files:** `Tools/PerfHarness/Sources/Commands.swift`, `Tools/PerfHarness/Sources/main.swift`, `Sources/Runestone/TextView/Core/TextView.swift` (debug stats), `EDITOR_PERFORMANCE_REPORT.md` (§benchmark gaps).
 
@@ -205,7 +219,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Symptom:** during fast scroll into unrasterized text (CJK, emoji, an unusual face), a fragment can present partially filled for a frame or two.
 
-**Evidence (corrected):** the per-pass cap is **32** rasters, not 8 — `GlyphRasterBudget.perFrameLimit = 32`. Overflow marks the skip `.rasterCap`, leaves `cacheKey` unset, sets `pendingRasterRetry`, and `LayoutManager` (~534) re-drives layout via `consumePendingRasterRetry()`. The budget resets both in `setViewport` (top of every layout pass) and after a successful `encode`, so it can reset twice per frame — worth confirming that is intended before tuning the number. `prewarm` covers Latin-1 + digits per font/scale off-main, so ASCII should never be the cause.
+**Evidence (updated):** the per-pass cap is **128** rasters — `GlyphRasterBudget.perFrameLimit = 128`; a five-sample highlighted `Package.swift` run recorded 62 capped fragments at 64 and 18 at 128, while the 500 MB plain-text fixture recorded none. Overflow marks the skip `.rasterCap`, leaves `cacheKey` unset, sets `pendingRasterRetry`, and `LayoutManager` re-drives layout via `consumePendingRasterRetry()`. The budget resets both in `setViewport` (top of every layout pass) and after a successful `encode`.
 
 **Fix direction:** measure the actual miss rate first (add a `rasterCap` skip counter to `DebugStats` — cheap, and P1-4 makes stats safe to poll). Only then tune `perFrameLimit`, widen `MetalProjection.atlasWarmRect`, or extend `prewarm` to the ranges the document actually uses. Moving the CPU bitmap build off-main is permitted by the design doc for prewarm and is the real fix if misses are common.
 
@@ -361,7 +375,7 @@ swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/metal-golde
 | Malicious font huge bounds | Med | Per-glyph cap 256×256 px → run-level fallback |
 | Discrete GPU shared-texture sampling (Intel 2019) | Med | `hasUnifiedMemory` chooses Private+blit vs Shared |
 | Live resize + wrapping + drawable churn | Med | `drawableSize` updates on resize; full fragment rebuild |
-| No CI at all | Med | No `.github/`; every claim in this doc is verified by hand or not at all |
+| GPU runner provisioning | Med | Workflow is checked in; a machine labelled `self-hosted`, `macOS`, and `metal` must be registered externally. |
 
 ---
 
@@ -372,7 +386,7 @@ Kept for reviewers who read the earlier draft.
 | Previous claim | Reality |
 |---|---|
 | P2-6: fold placeholder colors may still use renderer defaults | Done — threaded through `LineFragmentDecorations` and used by `MetalDecorationBuilder`. Moved to the fixed table. |
-| "≤8 main-thread rasters per layout pass" | `GlyphRasterBudget.perFrameLimit = 32`. |
+| "≤8 main-thread rasters per layout pass" | `GlyphRasterBudget.perFrameLimit` was 32, then 64; it is now 128 after measured cap pressure. |
 | State-machine coverage lives in `TreeSitterHighlightReadinessTests` | That file does not exist. Coverage is in `LineSyntaxHighlightSchedulingTests` and `TextViewMetalSmokeTests`. |
 | PerfHarness `keystroke` doesn't enable occurrence highlighting | `occurrence-keystroke` and `--highlighted` already exist. The real gap: `Commands.swift` reports no Metal metrics at all. |
 | "Restore the deleted CI perf gate" | There is no CI in the repo; this needs CI to exist first (noted under P2-2). |

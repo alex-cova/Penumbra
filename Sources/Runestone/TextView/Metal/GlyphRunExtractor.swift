@@ -17,6 +17,13 @@ struct GlyphExtractRequest {
     var fallbackFont: CTFont
     var fallbackColor: NSColor
     var appearance: NSAppearance?
+    var colorSpace: NSColorSpace = .sRGB
+    var previousColors: [GlyphColorSample] = []
+}
+
+struct GlyphColorSample {
+    var stringIndex: Int
+    var color: SIMD4<Float>
 }
 
 enum GlyphRunSkipReason: Equatable {
@@ -54,7 +61,10 @@ struct GlyphExtractResult {
 }
 
 struct GlyphRasterBudget {
-    static let perFrameLimit = 32
+    /// Bounded CPU raster work per layout pass. Highlighted Swift with several font traits can
+    /// exceed 64 distinct cold glyphs in an ordinary viewport; 128 avoids multi-frame holes while
+    /// retaining a hard ceiling for CJK/emoji-heavy cold scrolls.
+    static let perFrameLimit = 128
 
     var remaining: Int
 
@@ -83,14 +93,21 @@ struct GlyphRasterBudget {
 struct GlyphExtractCacheKey: Equatable {
     var revision: UInt64
     var emitRect: CGRect
+    var isPending: Bool
 
-    init(revision: UInt64, emitRect: CGRect) {
+    init(revision: UInt64, emitRect: CGRect, isPending: Bool = false) {
         self.revision = revision
         self.emitRect = emitRect
+        self.isPending = isPending
     }
 
-    static func shouldRebuild(previous: GlyphExtractCacheKey?, revision: UInt64, emitRect: CGRect) -> Bool {
-        previous != GlyphExtractCacheKey(revision: revision, emitRect: emitRect)
+    static func shouldRebuild(
+        previous: GlyphExtractCacheKey?,
+        revision: UInt64,
+        emitRect: CGRect,
+        isPending: Bool = false
+    ) -> Bool {
+        previous != GlyphExtractCacheKey(revision: revision, emitRect: emitRect, isPending: isPending)
     }
 }
 
@@ -337,6 +354,9 @@ private extension GlyphRunExtractor {
             }
             var color = runColor
             let stringIndex = Int(stringIndices[index])
+            if let previousColor = previousColor(at: stringIndex, request: request) {
+                color = previousColor
+            }
             if request.unfocusedAlpha < 1, !isFocused(stringIndex, ranges: request.focusedRanges) {
                 color *= Float(request.unfocusedAlpha)
             }
@@ -360,11 +380,16 @@ private extension GlyphRunExtractor {
         atlas: GlyphAtlas,
         budget: inout GlyphRasterBudget
     ) -> ResolveResult {
+        let subpixel = GlyphKey.subpixelBucket(
+            forX: request.fragmentFrame.minX + pending.position.x,
+            scale: request.scale
+        )
         let key = GlyphKey.make(
             font: preparedRun.font,
             glyph: pending.glyph,
             scale: request.scale,
             runMatrix: preparedRun.runMatrix,
+            subpixel: subpixel,
             isColor: preparedRun.isColor
         )
         if !atlas.hasEntry(key) {
@@ -378,6 +403,7 @@ private extension GlyphRunExtractor {
             glyph: pending.glyph,
             scale: request.scale,
             runMatrix: preparedRun.runMatrix,
+            subpixel: subpixel,
             isColor: preparedRun.isColor
         ) {
         case .hit(let lookedUp):
@@ -546,8 +572,8 @@ private extension GlyphRunExtractor {
         ))
     }
 
-    /// Cache key for a whole-run tile. `subpixel: 1` is the run-fallback discriminator (real glyphs
-    /// always use bucket 0), so these never collide with per-glyph `GlyphKey`s.
+    /// Cache key for a whole-run tile. `UInt8.max` is reserved as the run-fallback discriminator,
+    /// so it cannot collide with per-glyph horizontal phase buckets 0...2.
     static func runFallbackKey(_ run: PreparedRun, request: GlyphExtractRequest) -> GlyphKey {
         let pointSize = CTFontGetSize(run.font)
         let pixelSize = UInt16(clamping: Int((pointSize * request.scale * 64).rounded()))
@@ -573,7 +599,7 @@ private extension GlyphRunExtractor {
             pixelSize: pixelSize,
             matrixHash: UInt64(truncatingIfNeeded: hasher.finalize()),
             scale: UInt8(clamping: max(1, Int(request.scale.rounded()))),
-            subpixel: 1,
+            subpixel: .max,
             isColor: true
         )
     }
@@ -635,6 +661,19 @@ private extension GlyphRunExtractor {
 
     static func resolveColor(attributes: [NSAttributedString.Key: Any], request: GlyphExtractRequest) -> SIMD4<Float> {
         let color = (attributes[.foregroundColor] as? NSColor) ?? request.fallbackColor
-        return MetalColor.premultipliedSRGB(color, appearance: request.appearance)
+        return MetalColor.premultiplied(
+            color,
+            appearance: request.appearance,
+            colorSpace: request.colorSpace
+        )
+    }
+
+    static func previousColor(at stringIndex: Int, request: GlyphExtractRequest) -> SIMD4<Float>? {
+        guard !request.previousColors.isEmpty else {
+            return nil
+        }
+        return request.previousColors.min {
+            abs($0.stringIndex - stringIndex) < abs($1.stringIndex - stringIndex)
+        }?.color
     }
 }

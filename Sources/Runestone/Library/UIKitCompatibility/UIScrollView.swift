@@ -83,6 +83,21 @@ open class UIScrollView: UIView {
     /// always routes into the scrolling document container, so this is the only way to add a
     /// viewport-anchored overlay (e.g. a minimap) as a child of a `UIScrollView`.
     open func addFixedOverlaySubview(_ view: NSView) { super.addSubview(view) }
+    /// Reorders a fixed overlay without routing it into the scrolling document container.
+    open func bringFixedOverlaySubviewToFront(_ view: NSView) {
+        insertFixedOverlaySubview(view, positioned: .above, relativeTo: nil)
+    }
+
+    /// Inserts or reorders a fixed overlay relative to another direct child of the scroll view.
+    /// `addSubview(_:positioned:relativeTo:)` must go through this path; the 1-argument
+    /// `addSubview(_:)` override routes into the scrolling document container.
+    open func insertFixedOverlaySubview(
+        _ view: NSView,
+        positioned place: NSWindow.OrderingMode,
+        relativeTo otherView: NSView?
+    ) {
+        super.addSubview(view, positioned: place, relativeTo: otherView)
+    }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
 
     /// Scrolls to `offset`, optionally animating the AppKit clip view with an ease-out curve.

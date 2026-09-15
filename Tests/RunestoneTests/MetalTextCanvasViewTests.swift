@@ -26,7 +26,7 @@ final class MetalTextCanvasViewTests: XCTestCase {
         assertCanvasIsBehindFragmentContainer(in: textInputView)
     }
 
-    func testEnablingMetalShowsTransparentCanvasAndRemovesFragmentViews() throws {
+    func testEnablingMetalShowsOpaqueCanvasAndRemovesFragmentViews() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")
         }
@@ -34,9 +34,20 @@ final class MetalTextCanvasViewTests: XCTestCase {
         guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
             throw XCTSkip("Metal is disabled via UserDefaults kill switch")
         }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
         let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView = textView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
         textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme()))
         textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.focusTextInput())
         textView.layoutIfNeeded()
         XCTAssertTrue(textView.isMetalRenderingActive)
         guard let textInputView = findTextInputView(in: textView) else {
@@ -45,12 +56,33 @@ final class MetalTextCanvasViewTests: XCTestCase {
         }
         let canvas = findMetalCanvas(in: textView)
         XCTAssertEqual(canvas?.isHidden, false)
-        XCTAssertEqual((canvas?.layer as? CAMetalLayer)?.isOpaque, false)
+        XCTAssertEqual((canvas?.layer as? CAMetalLayer)?.isOpaque, true)
+        XCTAssertEqual(canvas?.isOpaque, true)
         XCTAssertTrue(fragmentViews(in: textInputView).isEmpty, "Metal owns the glyph paint; no fragment views")
         XCTAssertTrue(
             canvas?.superview === textView,
             "Metal canvas must be a scroll-view overlay; CAMetalLayer inside NSClipView does not composite"
         )
+        let caret = try XCTUnwrap(findCaret(in: textView))
+        let caretOverlay = try XCTUnwrap(directChild(of: textView, containing: caret))
+        XCTAssertFalse(caretOverlay is NSClipView, "caret chrome must be a scroll-view overlay, not inside the clip view under the opaque canvas")
+        let canvasIndex = try XCTUnwrap(textView.subviews.firstIndex { $0 === canvas })
+        let caretIndex = try XCTUnwrap(textView.subviews.firstIndex { $0 === caretOverlay })
+        XCTAssertGreaterThan(caretIndex, canvasIndex, "opaque Metal canvas must stay below caret/selection chrome")
+        XCTAssertTrue(caretOverlay.wantsLayer, "selection chrome needs its own compositing group above CAMetalLayer")
+        XCTAssertFalse(caret.isHidden)
+        let caretFrame = caret.superview?.convert(caret.frame, to: textView) ?? .zero
+        XCTAssertTrue(caretFrame.intersects(textView.bounds), "caret must remain inside the visible Metal viewport")
+
+        textView.insertText("\n")
+        textView.layoutIfNeeded()
+        let caretAfterEdit = try XCTUnwrap(findCaret(in: textView))
+        let overlayAfterEdit = try XCTUnwrap(directChild(of: textView, containing: caretAfterEdit))
+        let canvasAfterEdit = try XCTUnwrap(findMetalCanvas(in: textView))
+        let canvasIndexAfterEdit = try XCTUnwrap(textView.subviews.firstIndex { $0 === canvasAfterEdit })
+        let caretIndexAfterEdit = try XCTUnwrap(textView.subviews.firstIndex { $0 === overlayAfterEdit })
+        XCTAssertGreaterThan(caretIndexAfterEdit, canvasIndexAfterEdit, "Return must not bury the caret under the Metal canvas")
+        XCTAssertFalse(caretAfterEdit.isHidden)
     }
 
     func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {
@@ -112,6 +144,21 @@ private extension MetalTextCanvasViewTests {
             result.append(contentsOf: fragmentViews(in: subview))
         }
         return result
+    }
+
+    func findCaret(in root: NSView) -> CaretView? {
+        if let caret = root as? CaretView {
+            return caret
+        }
+        return root.subviews.lazy.compactMap(findCaret(in:)).first
+    }
+
+    func directChild(of root: NSView, containing descendant: NSView) -> NSView? {
+        var current: NSView? = descendant
+        while let view = current, view.superview !== root {
+            current = view.superview
+        }
+        return current
     }
 
     func assertCanvasIsBehindFragmentContainer(in textInputView: TextInputView) {

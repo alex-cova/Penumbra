@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AppKit
 import Runestone
 import RunestoneMarkdownLanguage
 import RunestoneLanguages
@@ -13,6 +14,7 @@ enum Commands {
         var chunked = false
         var mmap = false
         var viewport = false
+        var metal = false
         /// Bundled `RunestoneLanguages` identifier (e.g. "javascript", "json", "html") to use
         /// instead of markdown when `highlighted` is set. Isolates a language with no injected
         /// child layers from markdown's per-paragraph `markdown_inline` injection.
@@ -239,7 +241,26 @@ enum Commands {
     static func keystroke(path: String, position: Position, options: Options, samples: Int = 1) throws {
         FileHandle.standardError.write("=== keystroke \(path) at \(position.rawValue) (\(samples) samples) ===\n".data(using: .utf8)!)
         let (state, sizeBytes) = try loadOrReadState(path: path, options: options)
-        let textView = makeTextView(state: state)
+        let metalWindow: NSWindow?
+        let textView: TextView
+        if options.metal {
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            let hostedView = makeTextView(state: state)
+            window.contentView = hostedView
+            window.makeKeyAndOrderFront(nil)
+            hostedView.isMetalRenderingEnabled = true
+            metalWindow = window
+            textView = hostedView
+        } else {
+            metalWindow = nil
+            textView = makeTextView(state: state)
+        }
+        defer { metalWindow?.close() }
         textView.layoutSubviews()
 
         let length = textView.documentLength
@@ -264,11 +285,19 @@ enum Commands {
 
         var times: [Double] = []
         times.reserveCapacity(sampleCount)
+        var metalSamples: [MetalPerformanceStats] = []
         for _ in 0..<sampleCount {
             let editResult = Measurement.time {
                 textView.replace(NSRange(location: location, length: 0), withText: "x")
             }
             times.append(editResult.seconds)
+            if options.metal {
+                textView.layoutSubviews()
+                Measurement.pumpRunLoop(seconds: 0.01)
+                if let stats = textView.metalPerformanceStats {
+                    metalSamples.append(stats)
+                }
+            }
             location += 1
         }
 
@@ -277,6 +306,7 @@ enum Commands {
         ResultLog.row("keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: times.last ?? 0)
         ResultLog.row("keystroke_\(position.rawValue)_p50", file: path, sizeBytes: sizeBytes, seconds: p50)
         ResultLog.row("keystroke_\(position.rawValue)_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
+        emitMetalMetrics("keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, samples: metalSamples)
         FileHandle.standardError.write(
             "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
         )
@@ -291,7 +321,26 @@ enum Commands {
     static func occurrenceKeystroke(path: String, position: Position, options: Options, samples: Int = 1) throws {
         FileHandle.standardError.write("=== occurrence-keystroke \(path) at \(position.rawValue) (\(samples) samples) ===\n".data(using: .utf8)!)
         let (state, sizeBytes) = try loadOrReadState(path: path, options: options)
-        let textView = makeTextView(state: state)
+        let metalWindow: NSWindow?
+        let textView: TextView
+        if options.metal {
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            let hostedView = makeTextView(state: state)
+            window.contentView = hostedView
+            window.makeKeyAndOrderFront(nil)
+            hostedView.isMetalRenderingEnabled = true
+            metalWindow = window
+            textView = hostedView
+        } else {
+            metalWindow = nil
+            textView = makeTextView(state: state)
+        }
+        defer { metalWindow?.close() }
         textView.layoutSubviews()
         textView.highlightsOccurrencesOfSelection = true
         textView.languageConfigurationOverride = LanguageConfiguration(
@@ -323,11 +372,19 @@ enum Commands {
 
         var times: [Double] = []
         times.reserveCapacity(sampleCount)
+        var metalSamples: [MetalPerformanceStats] = []
         for _ in 0..<sampleCount {
             let editResult = Measurement.time {
                 textView.replace(NSRange(location: location, length: 0), withText: "x")
             }
             times.append(editResult.seconds)
+            if options.metal {
+                textView.layoutSubviews()
+                Measurement.pumpRunLoop(seconds: 0.01)
+                if let stats = textView.metalPerformanceStats {
+                    metalSamples.append(stats)
+                }
+            }
             location += 1
         }
 
@@ -336,9 +393,31 @@ enum Commands {
         ResultLog.row("occurrence_keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: times.last ?? 0)
         ResultLog.row("occurrence_keystroke_\(position.rawValue)_p50", file: path, sizeBytes: sizeBytes, seconds: p50)
         ResultLog.row("occurrence_keystroke_\(position.rawValue)_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
+        emitMetalMetrics("occurrence_keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, samples: metalSamples)
         FileHandle.standardError.write(
             "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
         )
+    }
+
+    private static func emitMetalMetrics(
+        _ name: String,
+        file: String,
+        sizeBytes: UInt64,
+        samples: [MetalPerformanceStats]
+    ) {
+        guard !samples.isEmpty else { return }
+        let drawP95 = Measurement.percentile(samples.map(\.drawNanosP95), 0.95)
+        let instances = samples.last?.glyphInstanceCount ?? 0
+        let fragments = samples.last?.fragmentCount ?? 0
+        let atlasBytes = (samples.last?.coverageAtlasBytes ?? 0) + (samples.last?.colorAtlasBytes ?? 0)
+        let rasterCaps = samples.last?.rasterCapSkipCount ?? 0
+        let rebuildNanos = samples.last?.instanceRebuildNanos ?? 0
+        ResultLog.row("\(name)_metal_draw_nanos_p95", file: file, sizeBytes: sizeBytes, seconds: drawP95 / 1_000_000_000)
+        ResultLog.row("\(name)_metal_instances", file: file, sizeBytes: sizeBytes, seconds: 0, extra: "\(instances)")
+        ResultLog.row("\(name)_metal_fragments", file: file, sizeBytes: sizeBytes, seconds: 0, extra: "\(fragments)")
+        ResultLog.row("\(name)_metal_atlas_bytes", file: file, sizeBytes: sizeBytes, seconds: 0, extra: "\(atlasBytes)")
+        ResultLog.row("\(name)_metal_raster_cap_skips", file: file, sizeBytes: sizeBytes, seconds: 0, extra: "\(rasterCaps)")
+        ResultLog.row("\(name)_metal_instance_rebuild_nanos", file: file, sizeBytes: sizeBytes, seconds: Double(rebuildNanos) / 1_000_000_000, extra: "\(rebuildNanos) ns")
     }
 
     // MARK: - goto

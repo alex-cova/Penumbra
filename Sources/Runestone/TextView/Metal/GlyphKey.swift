@@ -19,6 +19,7 @@ struct GlyphKey: Hashable, Sendable {
         glyph: CGGlyph,
         scale: CGFloat,
         runMatrix: CGAffineTransform = .identity,
+        subpixel: UInt8 = 0,
         isColor: Bool
     ) -> GlyphKey {
         let pointSize = CTFontGetSize(font)
@@ -30,9 +31,25 @@ struct GlyphKey: Hashable, Sendable {
             pixelSize: pixelSize,
             matrixHash: matrixHash(fontMatrix: CTFontGetMatrix(font), runMatrix: runMatrix),
             scale: scaleBucket,
-            subpixel: 0,
+            subpixel: subpixel,
             isColor: isColor
         )
+    }
+
+    /// Three horizontal coverage phases on 1× displays; Retina keeps a single atlas entry.
+    static func subpixelBucket(forX x: CGFloat, scale: CGFloat) -> UInt8 {
+        guard scale < 1.5 else {
+            return 0
+        }
+        let fraction = x - floor(x)
+        return UInt8(min(max(Int(fraction * 3), 0), 2))
+    }
+
+    static func subpixelOffset(for bucket: UInt8, scale: CGFloat) -> CGFloat {
+        guard scale < 1.5, bucket < 3 else {
+            return 0
+        }
+        return CGFloat(bucket) / 3
     }
 
     /// Stable identity for `font`'s underlying `CGFont`, matching the `fontID` `make(...)` stores.

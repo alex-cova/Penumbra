@@ -30,6 +30,7 @@ final class IDEWorkspace: ObservableObject {
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private var adapter: RunestoneWorkbenchEditorAdapter!
     private var hostedPaneIDs: Set<UUID> = []
+    private var hasPresentedMetalFailure = false
 
     @Published var isSidebarVisible = true
     @Published var chromeOpacity = 1.0
@@ -316,6 +317,11 @@ final class IDEWorkspace: ObservableObject {
         let pane = workbench.layout.findPane(id: paneID) ?? EditorPane(id: paneID)
         let host = IDEEditorPaneHost(pane: pane)
         host.textView.isMetalRenderingEnabled = isMetalRenderingEnabled
+        host.textView.onMetalRenderingFailure = { [weak self] reason in
+            self?.statusRenderer = "Core Graphics (Metal unavailable)"
+            NSLog("Runestone MacExample: Metal disabled: %@", reason)
+            self?.presentMetalFailureOnce(reason: reason)
+        }
         host.onActivated = { [weak self] in
             self?.activatePane(paneID)
         }
@@ -580,6 +586,23 @@ final class IDEWorkspace: ObservableObject {
 
     private func presentError(_ error: Error) {
         NSAlert(error: error).runModal()
+    }
+
+    private func presentMetalFailureOnce(reason: String) {
+        guard !hasPresentedMetalFailure else {
+            return
+        }
+        hasPresentedMetalFailure = true
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Metal rendering was disabled"
+        alert.informativeText = "\(reason)\n\nThe editor has switched to Core Graphics."
+        alert.addButton(withTitle: "OK")
+        if let window = NSApp.mainWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
     }
 }
 

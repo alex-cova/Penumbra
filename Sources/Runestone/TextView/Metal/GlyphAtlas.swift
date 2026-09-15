@@ -202,10 +202,18 @@ final class GlyphAtlas {
         glyph: CGGlyph,
         scale: CGFloat,
         runMatrix: CGAffineTransform = .identity,
+        subpixel: UInt8 = 0,
         isColor: Bool? = nil
     ) -> GlyphAtlasResult {
         let color = isColor ?? GlyphRasterizer.isColorFont(font)
-        let key = GlyphKey.make(font: font, glyph: glyph, scale: scale, runMatrix: runMatrix, isColor: color)
+        let key = GlyphKey.make(
+            font: font,
+            glyph: glyph,
+            scale: scale,
+            runMatrix: runMatrix,
+            subpixel: subpixel,
+            isColor: color
+        )
         if let entry = cache[key] {
             switch entry {
             case .slot(let slot):
@@ -223,6 +231,7 @@ final class GlyphAtlas {
             glyph: glyph,
             scale: scale,
             runMatrix: runMatrix,
+            subpixel: subpixel,
             isColor: color,
             maxExtent: configuration.maxGlyphExtent
         ) {

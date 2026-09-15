@@ -5,6 +5,21 @@ import CoreText
 import EditorIntelligence
 import simd
 
+/// A single, non-blocking snapshot of Metal renderer counters.
+public struct MetalPerformanceStats: Sendable {
+    public let fragmentCount: Int
+    public let glyphInstanceCount: Int
+    public let solidInstanceCount: Int
+    public let coverageAtlasBytes: Int
+    public let colorAtlasBytes: Int
+    public let drawNanosP95: Double
+    public let rasterCapSkipCount: Int
+    public let instanceRebuildNanos: Int
+    public let decorationBuildCount: Int
+    public let glyphBufferRebuildCount: Int
+    public let solidBufferRebuildCount: Int
+}
+
 /// A type similiar to UITextView with features commonly found in code editors.
 ///
 /// `TextView` is a performant implementation of a text view with features such as showing line numbers, searching for text and replacing results, syntax highlighting, showing invisible characters and more.
@@ -938,6 +953,11 @@ import simd
     public var isMetalRenderingActive: Bool {
         textInputView.isMetalRenderingActive
     }
+    /// Called when Metal permanently falls back to Core Graphics after a device or pipeline failure.
+    public var onMetalRenderingFailure: ((String) -> Void)? {
+        get { textInputView.onMetalRenderingFailure }
+        set { textInputView.onMetalRenderingFailure = newValue }
+    }
     /// Resident coverage (R8) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
     public var metalGlyphAtlasBytes: Int { textInputView.metalDebugStats?.coverageAtlasBytes ?? 0 }
     /// Resident color (BGRA) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
@@ -950,6 +970,25 @@ import simd
     }
     /// Windowed p95 of `MetalRenderer.encode`, in nanoseconds. Debug/PerfHarness only.
     public var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
+    /// One non-blocking snapshot for benchmark/HUD callers that need several Metal counters.
+    public var metalPerformanceStats: MetalPerformanceStats? {
+        guard let stats = textInputView.metalDebugStats else {
+            return nil
+        }
+        return MetalPerformanceStats(
+            fragmentCount: stats.fragmentCount,
+            glyphInstanceCount: stats.glyphInstanceCount,
+            solidInstanceCount: stats.solidInstanceCount,
+            coverageAtlasBytes: stats.coverageAtlasBytes,
+            colorAtlasBytes: stats.colorAtlasBytes,
+            drawNanosP95: stats.drawNanosP95,
+            rasterCapSkipCount: stats.rasterCapSkipCount,
+            instanceRebuildNanos: stats.instanceRebuildNanos,
+            decorationBuildCount: stats.decorationBuildCount,
+            glyphBufferRebuildCount: stats.glyphBufferRebuildCount,
+            solidBufferRebuildCount: stats.solidBufferRebuildCount
+        )
+    }
     /// Glyph instance colors Metal currently holds for the line at `location` (or every fragment
     /// when `location` is `nil`), empty when Metal is inactive. Debug/test only — lets a test
     /// assert directly that a line's on-screen colors are not `theme.textColor` instead of
@@ -957,19 +996,23 @@ import simd
     public func metalDebugGlyphColors(atLocation location: Int? = nil) -> [SIMD4<Float>] {
         textInputView.metalDebugGlyphColors(atLocation: location)
     }
+    /// Glyph instance origins Metal currently holds for the line at `location`. Debug/test only.
+    public func metalDebugGlyphOrigins(atLocation location: Int? = nil) -> [SIMD2<Float>] {
+        textInputView.metalDebugGlyphOrigins(atLocation: location)
+    }
     /// When `true`, the Metal canvas is created with `framebufferOnly = false` so
-    /// `NSView.cacheDisplay(in:to:)` can read back the presented drawable. Off in the shipping path;
+    /// the present command buffer can read back the submitted drawable. Off in the shipping path;
     /// set it (before creating a `TextView`) only from PerfHarness / snapshot tests.
     public static var allowsMetalDrawableCapture: Bool {
         get { MetalContext.shared.allowsDrawableCapture }
         set { MetalContext.shared.allowsDrawableCapture = newValue }
     }
-    /// Offscreen render of the Metal glyph canvas (glyphs + decorations on a transparent ground) at
+    /// Offscreen render of the opaque Metal glyph canvas (chrome + glyphs + decorations) at
     /// the backing scale, or `nil` when Metal is not active. Snapshot tests / PerfHarness only.
     public func captureMetalGlyphSnapshot() -> NSBitmapImageRep? {
         textInputView.captureMetalSnapshot()
     }
-    /// Presented Metal canvas via `NSView.cacheDisplay`. Requires ``allowsMetalDrawableCapture`` to
+    /// Presented Metal canvas via drawable readback. Requires ``allowsMetalDrawableCapture`` to
     /// have been set before this view was created. Snapshot tests / PerfHarness only.
     public func captureMetalPresentedLayer() -> NSBitmapImageRep? {
         textInputView.captureMetalPresentedLayer()
@@ -978,15 +1021,11 @@ import simd
     public var metalGlyphInstanceStride: Int { textInputView.metalDebugStats?.glyphInstanceStride ?? 0 }
     /// Swift `GlyphInstance` size (may be less than stride due to alignment padding).
     public var metalGlyphInstanceSize: Int { textInputView.metalDebugStats?.glyphInstanceSize ?? 0 }
-    /// Non-zero R8 texels on the first coverage atlas page, or `-1` if readback failed.
-    public var metalAtlasCoverageNonZeroTexels: Int {
-        guard let stats = textInputView.metalDebugStats else {
-            return 0
-        }
-        return stats.atlasReadbackFailed ? -1 : stats.atlasCoverageNonZeroTexels
+    /// Explicitly performs the expensive GPU readback used by atlas diagnostics.
+    /// Returns non-zero texels, total texels, and coverage-page count.
+    public func metalAtlasCensus() -> (nonzero: Int, total: Int, pages: Int)? {
+        textInputView.metalAtlasCensus
     }
-    /// Total texels on the first coverage atlas page (0 when there is no page).
-    public var metalAtlasCoverageTexelCount: Int { textInputView.metalDebugStats?.atlasCoverageTexelCount ?? 0 }
     /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
     public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
 
@@ -1032,6 +1071,7 @@ import simd
         }
     }
     private var hasPendingContentSizeUpdate = false
+    private var deferredInputLayoutFlushScheduled = false
     private var lastLaidOutSize: CGSize = .zero
     private var configuredTextContainerInset: UIEdgeInsets = .zero
     private var isInputAccessoryViewEnabled = false
@@ -1171,11 +1211,12 @@ import simd
         textInputView.layoutIfNeeded()
         textInputView.ensureViewportSyntaxParse()
         if let canvas = subviews.compactMap({ $0 as? MetalTextCanvasView }).first,
-           let clip = subviews.first(where: { $0 !== canvas }) {
-            // Above the clip view (opaque document background) so Metal glyphs are visible;
-            // gutter / minimap / find panel are brought in front next.
-            addSubview(canvas, positioned: .above, relativeTo: clip)
+           let clipView = subviews.first(where: { $0 is NSClipView }) {
+            // Pin the canvas just above the clip view — never relative to "the first non-canvas
+            // sibling", which is often the caret overlay and would hide the insertion point.
+            insertFixedOverlaySubview(canvas, positioned: .above, relativeTo: clipView)
         }
+        textInputView.placeSelectionChromeAboveMetalCanvas()
         bringSubviewToFront(textInputView.gutterContainerView)
         if let scrollPocketView {
             bringSubviewToFront(scrollPocketView)
@@ -2381,6 +2422,31 @@ extension TextView: TextInputViewDelegate {
         if contentSize != view.contentSize {
             hasPendingContentSizeUpdate = true
             setNeedsLayout()
+        }
+    }
+
+    func textInputViewDidRequestLayoutFlush(_ view: TextInputView) {
+        guard !deferredInputLayoutFlushScheduled else {
+            return
+        }
+        deferredInputLayoutFlushScheduled = true
+        DispatchQueue.main.async { [weak self, weak view] in
+            guard let self, let view else {
+                return
+            }
+            self.deferredInputLayoutFlushScheduled = false
+
+            // SwiftUI/AppKit can mark only the document view dirty after an edit. Drive the outer
+            // scroll view first so its viewport and document frame are current, then synchronously
+            // apply the content-size result produced by that pass and lay out once more. Presenting
+            // before this outer pass is the Return/new-line bug: renderer state advances while the
+            // fixed Metal overlay remains on the previous scroll geometry until a resize.
+            self.setNeedsLayout()
+            self.layoutSubtreeIfNeeded()
+            self.syncContentSizeIfNeeded()
+            self.setNeedsLayout()
+            self.layoutSubtreeIfNeeded()
+            view.performDeferredLayoutFlush()
         }
     }
 

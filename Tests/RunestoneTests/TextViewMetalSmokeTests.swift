@@ -1,5 +1,6 @@
 import AppKit
 import RunestoneLanguages
+import SwiftUI
 import XCTest
 import simd
 @testable import Runestone
@@ -12,11 +13,26 @@ import simd
 @MainActor
 final class TextViewMetalSmokeTests: XCTestCase {
     private func skipUnlessMetalActivatable() throws {
+        let requiresMetal = ProcessInfo.processInfo.environment["RUNESTONE_REQUIRE_METAL"] == "1"
         guard MetalContext.isAvailable else {
+            if requiresMetal {
+                throw NSError(
+                    domain: "RunestoneTests.RequiredMetal",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Metal is required on this runner but no device is available"]
+                )
+            }
             throw XCTSkip("Metal is not available")
         }
         let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
         guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            if requiresMetal {
+                throw NSError(
+                    domain: "RunestoneTests.RequiredMetal",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Metal is required but disabled by the kill switch"]
+                )
+            }
             throw XCTSkip("Metal is disabled via the UserDefaults kill switch")
         }
     }
@@ -255,8 +271,9 @@ final class TextViewMetalSmokeTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.15))
 
         let canvas = try XCTUnwrap(findMetalCanvas(in: textView), "expected a Metal canvas")
-        let initialPainted = canvas.debugPresentedAlphaPixels
-        XCTAssertGreaterThan(initialPainted, 0, "initial on-screen glyphs")
+        let initialFrame = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        let initialInk = inkPixelCount(in: initialFrame)
+        XCTAssertGreaterThan(initialInk, 0, "initial on-screen glyphs")
 
         textView.selectedRange = NSRange(location: textView.text.utf16.count, length: 0)
         textView.insertText(" world")
@@ -264,11 +281,14 @@ final class TextViewMetalSmokeTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.15))
 
         XCTAssertEqual(textView.text, "hello world")
+        let updatedFrame = try XCTUnwrap(textView.captureMetalPresentedLayer())
         XCTAssertGreaterThan(
-            canvas.debugPresentedAlphaPixels,
-            initialPainted,
+            inkPixelCount(in: updatedFrame),
+            initialInk,
             "typing must layout and present without an explicit layoutIfNeeded (instances=\(textView.metalInstanceCount))"
         )
+        XCTAssertGreaterThan(differingPixelCount(initialFrame, updatedFrame), 20)
+        XCTAssertGreaterThan(canvas.debugPresentedAlphaPixels, 0)
     }
 
     func testMetalPresentsGlyphsWhenAutoLayoutHostedInDarkAppearance() throws {
@@ -318,6 +338,35 @@ final class TextViewMetalSmokeTests: XCTestCase {
         )
     }
 
+    func testOpaqueMetalCanvasPresentsLineSelectionAndPageGuide() throws {
+        try skipUnlessMetalActivatable()
+        let host = try makeCapturingMetalTextView(text: "selected line\nsecond line")
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+
+        textView.lineSelectionDisplayType = .line
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.pageGuideColumn = 10
+        textView.showReformattingGuideShading = true
+        textView.showPageGuide = true
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            differingPixelCount(before, after),
+            1_000,
+            "Metal must paint the current-line band and page-guide shading before becoming opaque"
+        )
+        let canvas = try XCTUnwrap(findMetalCanvas(in: textView))
+        XCTAssertTrue(canvas.isOpaque)
+        XCTAssertEqual((canvas.layer as? CAMetalLayer)?.isOpaque, true)
+    }
+
     /// The white-flash regression: `redisplayLines` asks for a *synchronous* highlight on the
     /// edited line, but an edit at/above `maxSyncEditLength` forces `textDidChange` down the
     /// no-reparse path (`canHighlight` false until the background parse catches up). Before the
@@ -346,7 +395,7 @@ final class TextViewMetalSmokeTests: XCTestCase {
 
         // An edit at/above `TreeSitterPerformanceConstants.maxSyncEditLength` (1024 UTF-16 units)
         // skips the synchronous incremental reparse.
-        let hugeInsertion = String(repeating: " ", count: TreeSitterPerformanceConstants.maxSyncEditLength + 1)
+        let hugeInsertion = "XYZ" + String(repeating: " ", count: TreeSitterPerformanceConstants.maxSyncEditLength + 1)
         textView.selectedRange = NSRange(location: text.utf16.count - 1, length: 0)
         textView.insertText(hugeInsertion)
 
@@ -354,8 +403,14 @@ final class TextViewMetalSmokeTests: XCTestCase {
         // the frame that used to present `theme.textColor`.
         let afterColors = textView.metalDebugGlyphColors(atLocation: 0)
         XCTAssertEqual(
-            afterColors.map(ColorKey.init), beforeColors.map(ColorKey.init),
-            "the caret line must hold its previous syntax colors, not flash theme.textColor, while the reparse is outstanding"
+            Array(afterColors.prefix(beforeColors.count)).map(ColorKey.init),
+            beforeColors.map(ColorKey.init),
+            "the pending frame must retain the previous syntax colors instead of flashing theme.textColor"
+        )
+        XCTAssertGreaterThan(
+            afterColors.count,
+            beforeColors.count,
+            "the pending frame must contain glyphs for newly inserted characters, not the stale pre-edit glyph set"
         )
 
         // The background parse eventually catches up and colors refresh again.
@@ -398,6 +453,50 @@ final class TextViewMetalSmokeTests: XCTestCase {
         )
     }
 
+    func testMetalPresentsEditedExistingLineWhileHighlightIsPending() throws {
+        try skipUnlessMetalActivatable()
+        let text = "let value = 42\n"
+        let host = try makeCapturingMetalTextView(text: text)
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        textView.setState(TextViewState(
+            text: text,
+            theme: DefaultTheme(),
+            language: .javaScript,
+            parsePolicy: .eager
+        ))
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        textView.layoutIfNeeded()
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        let beforeColors = textView.metalDebugGlyphColors(atLocation: 0)
+        XCTAssertFalse(beforeColors.isEmpty)
+
+        let insertion = "XYZ" + String(
+            repeating: " ",
+            count: TreeSitterPerformanceConstants.maxSyncEditLength + 1
+        )
+        textView.selectedRange = NSRange(location: 4, length: 0)
+        textView.insertText(insertion)
+        // Force only the edit frame. Do not let the background parse complete first.
+        textView.layoutIfNeeded()
+
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            differingPixelCount(before, after),
+            20,
+            "the pending-highlight edit must reach the presented drawable"
+        )
+        XCTAssertGreaterThan(
+            textView.metalDebugGlyphColors(atLocation: 0).count,
+            beforeColors.count,
+            "newly inserted glyphs must coexist with retained syntax colors"
+        )
+    }
+
     func testCanvasLeavingWindowDoesNotCrash() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "detached")
@@ -408,6 +507,233 @@ final class TextViewMetalSmokeTests: XCTestCase {
         textView.layoutIfNeeded()
         XCTAssertTrue(textView.isMetalRenderingActive)
     }
+
+    func testMetalRepaintsGlyphsAfterHostReturnsToWindow() throws {
+        try skipUnlessMetalActivatable()
+        let host = try makeCapturingMetalTextView(text: "reattached text")
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(paintedPixelCount(in: before), 0)
+
+        let window = host.window
+        window.contentView = NSView(frame: window.contentView?.bounds ?? .zero)
+        textView.layoutIfNeeded()
+
+        window.contentView = textView
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+
+        XCTAssertGreaterThan(textView.metalInstanceCount, 0, "reattaching must rebuild compacted Metal buffers")
+        let presented = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            paintedPixelCount(in: presented),
+            0,
+            "reattached presented drawable must contain painted glyph pixels"
+        )
+    }
+
+    func testMetalSkipsUnchangedDecorationBuilds() throws {
+        try skipUnlessMetalActivatable()
+        let textView = makeFocusedTextView(text: "unchanged decorations")
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        let firstBuildCount = try XCTUnwrap(textView.metalPerformanceStats?.decorationBuildCount)
+
+        textView.layoutIfNeeded()
+        let secondBuildCount = try XCTUnwrap(textView.metalPerformanceStats?.decorationBuildCount)
+
+        XCTAssertEqual(
+            secondBuildCount,
+            firstBuildCount,
+            "a layout pass with unchanged decoration inputs must not rebuild Metal decoration geometry"
+        )
+    }
+
+    func testMetalMovesHeldGlyphsWhenFragmentFrameChangesWhileHighlightPending() throws {
+        try skipUnlessMetalActivatable()
+        let text = "let value = 42\n"
+        let textView = TextView(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        textView.setState(TextViewState(
+            text: text,
+            theme: DefaultTheme(),
+            language: .javaScript,
+            parsePolicy: .eager
+        ))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        textView.layoutIfNeeded()
+
+        let before = try XCTUnwrap(
+            textView.metalDebugGlyphOrigins(atLocation: 0).map(\.y).min(),
+            "expected initially highlighted glyphs"
+        )
+        let insertedPrefix = "\n" + String(repeating: " ", count: TreeSitterPerformanceConstants.maxSyncEditLength + 1)
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.insertText(insertedPrefix)
+        textView.layoutIfNeeded()
+
+        let oldLineLocation = insertedPrefix.utf16.count
+        let after = try XCTUnwrap(
+            textView.metalDebugGlyphOrigins(atLocation: oldLineLocation).map(\.y).min(),
+            "expected held glyphs for the moved line"
+        )
+        XCTAssertGreaterThan(after, before, "held glyphs must follow their fragment after it moves")
+    }
+
+    func testMetalRepaintsAfterReturnInsertsLineBreak() throws {
+        try skipUnlessMetalActivatable()
+        let host = try makeCapturingMetalTextView(text: "one")
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        let fixedBounds = textView.bounds
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        let beforeInk = inkPixelCount(in: before)
+        XCTAssertGreaterThan(beforeInk, 0, "initial drawable must contain the first line")
+
+        textView.selectedRange = NSRange(location: 3, length: 0)
+        textView.insertText("\n")
+        textView.insertText("second_line_probe")
+        // Match the SwiftUI-hosted app: no explicit layout and no resize after the edit.
+        pumpMainRunLoop()
+
+        XCTAssertEqual(textView.text, "one\nsecond_line_probe")
+        XCTAssertEqual(textView.bounds, fixedBounds, "the repaint must not depend on resizing")
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            inkPixelCount(in: after),
+            beforeInk,
+            "the presented drawable must contain the newly typed second line"
+        )
+        XCTAssertGreaterThan(
+            differingPixelCount(before, after),
+            40,
+            "Return and following text must visibly change the presented drawable"
+        )
+        XCTAssertFalse(
+            textView.metalDebugGlyphOrigins(atLocation: 4).isEmpty,
+            "renderer state should agree with the presented frame"
+        )
+    }
+
+    func testMetalShiftsFollowingLineWhenReturnInsertsEmptyLine() throws {
+        try skipUnlessMetalActivatable()
+        let host = try makeCapturingMetalTextView(text: "aaa\nbbb")
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        XCTAssertTrue(textView.focusTextInput())
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+        let beforeY = try XCTUnwrap(
+            textView.metalDebugGlyphOrigins(atLocation: 4).map(\.y).min(),
+            "expected glyphs for the second line"
+        )
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+
+        textView.selectedRange = NSRange(location: 3, length: 0)
+        textView.insertText("\n")
+        pumpMainRunLoop()
+
+        XCTAssertEqual(textView.text, "aaa\n\nbbb")
+        let afterY = try XCTUnwrap(
+            textView.metalDebugGlyphOrigins(atLocation: 5).map(\.y).min(),
+            "following line must still have glyphs after an empty-line Return"
+        )
+        XCTAssertGreaterThan(afterY, beforeY, "Return at end of line must move following glyphs down without extra typing")
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            differingPixelCount(before, after),
+            20,
+            "shifting the following line must change the presented drawable"
+        )
+    }
+
+    func testMetalMovesCaretWhenReturnAppendsEmptyLineAtEndOfDocument() throws {
+        try skipUnlessMetalActivatable()
+        let host = try makeCapturingMetalTextView(text: "hello")
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        XCTAssertTrue(textView.focusTextInput())
+        textView.layoutIfNeeded()
+        textView.selectedRange = NSRange(location: 5, length: 0)
+        textView.layoutIfNeeded()
+        let beforeCaret = textView.caretRect(for: textView.endOfDocument)
+
+        textView.insertText("\n")
+        pumpMainRunLoop()
+
+        XCTAssertEqual(textView.text, "hello\n")
+        let afterCaret = textView.caretRect(for: textView.endOfDocument)
+        XCTAssertGreaterThan(
+            afterCaret.minY,
+            beforeCaret.minY,
+            "Return at end of document must move the caret onto the new line without extra typing"
+        )
+    }
+
+    func testSwiftUIHostedMetalPresentsRepeatedReturnsWithoutResize() throws {
+        try skipUnlessMetalActivatable()
+        TextView.allowsMetalDrawableCapture = true
+        defer { TextView.allowsMetalDrawableCapture = false }
+
+        let size = CGSize(width: 720, height: 480)
+        let textView = TextView()
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.setState(TextViewState(text: "root", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        let paneHost = NSView(frame: CGRect(origin: .zero, size: size))
+        paneHost.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: paneHost.topAnchor),
+            textView.leadingAnchor.constraint(equalTo: paneHost.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: paneHost.trailingAnchor),
+            textView.bottomAnchor.constraint(equalTo: paneHost.bottomAnchor)
+        ])
+        let hostingView = NSHostingView(rootView: MetalHostRepresentable(host: paneHost))
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        let fixedBounds = textView.bounds
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+
+        textView.selectedRange = NSRange(location: textView.text.utf16.count, length: 0)
+        for index in 1...8 {
+            textView.insertText("\nline_\(index)")
+            pumpMainRunLoop(for: 0.03)
+        }
+
+        XCTAssertEqual(textView.bounds, fixedBounds)
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(differingPixelCount(before, after), 200)
+        let finalLine = textView.text.utf16.count - "line_8".utf16.count
+        XCTAssertFalse(textView.metalDebugGlyphOrigins(atLocation: finalLine).isEmpty)
+        window.orderOut(nil)
+    }
+
 }
 
 private extension TextViewMetalSmokeTests {
@@ -459,5 +785,19 @@ private struct ColorKey: Hashable {
         g = color.y
         b = color.z
         a = color.w
+    }
+}
+
+private struct MetalHostRepresentable: NSViewRepresentable {
+    let host: NSView
+
+    func makeNSView(context: Context) -> EditorHostContainer {
+        let container = EditorHostContainer()
+        container.mount(host)
+        return container
+    }
+
+    func updateNSView(_ container: EditorHostContainer, context: Context) {
+        container.mount(host)
     }
 }

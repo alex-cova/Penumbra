@@ -8,6 +8,7 @@ final class SelectionOverlayController {
     private let selectionRectService: SelectionRectService
     private let caretView = CaretView()
     private var secondaryCaretViews: [CaretView] = []
+    private let overlayHostView = SelectionChromeHostView()
     private let selectionOverlayView = SelectionOverlayView()
     private let startHandle = SelectionHandleView(kind: .start)
     private let endHandle = SelectionHandleView(kind: .end)
@@ -38,11 +39,54 @@ final class SelectionOverlayController {
     }
 
     func install() {
-        textInputView.addSubview(selectionOverlayView)
-        textInputView.addSubview(caretView)
-        textInputView.addSubview(startHandle)
-        textInputView.addSubview(endHandle)
+        textInputView.addSubview(overlayHostView)
+        overlayHostView.addSubview(selectionOverlayView)
+        overlayHostView.addSubview(caretView)
+        overlayHostView.addSubview(startHandle)
+        overlayHostView.addSubview(endHandle)
         updateColors()
+    }
+
+    /// The Metal canvas is a fixed overlay above the clip view. Move selection/caret chrome into a
+    /// second fixed overlay so an opaque canvas cannot cover it; a viewport-origin `bounds` keeps
+    /// the existing content-space caret and selection frames valid while scrolling.
+    func setPresentationHost(_ parent: UIView?, viewport: CGRect) {
+        if let parent {
+            if overlayHostView.superview !== parent {
+                overlayHostView.removeFromSuperview()
+                if let scrollView = parent as? UIScrollView {
+                    scrollView.addFixedOverlaySubview(overlayHostView)
+                } else {
+                    parent.addSubview(overlayHostView)
+                }
+            }
+            placeAboveMetalCanvas()
+            overlayHostView.frame = CGRect(origin: .zero, size: viewport.size)
+            overlayHostView.bounds = viewport
+        } else {
+            if overlayHostView.superview !== textInputView {
+                overlayHostView.removeFromSuperview()
+                textInputView.addSubview(overlayHostView)
+            }
+            overlayHostView.frame = textInputView.bounds
+            overlayHostView.bounds = CGRect(origin: .zero, size: textInputView.bounds.size)
+        }
+    }
+
+    /// The opaque Metal canvas is a sibling overlay. Keep caret/selection chrome immediately above
+    /// it — never absolute-front, so gutter/minimap/find stay clickable, and never below it.
+    func placeAboveMetalCanvas() {
+        guard let parent = overlayHostView.superview else {
+            return
+        }
+        guard let canvas = parent.subviews.first(where: { $0 is MetalTextCanvasView }) else {
+            return
+        }
+        if let scrollView = parent as? UIScrollView {
+            scrollView.insertFixedOverlaySubview(overlayHostView, positioned: .above, relativeTo: canvas)
+        } else {
+            parent.addSubview(overlayHostView, positioned: .above, relativeTo: canvas)
+        }
     }
 
     func updateLayout() {
@@ -172,8 +216,8 @@ private extension SelectionOverlayController {
         endHandle.frame = endHandle.frame(anchoredTo: endCaretRect)
         startHandle.isHidden = false
         endHandle.isHidden = false
-        textInputView.bringSubviewToFront(startHandle)
-        textInputView.bringSubviewToFront(endHandle)
+        overlayHostView.bringSubviewToFront(startHandle)
+        overlayHostView.bringSubviewToFront(endHandle)
     }
 
     private func updateCarets() {
@@ -186,7 +230,7 @@ private extension SelectionOverlayController {
         while secondaryCaretViews.count < max(ranges.count - 1, 0) {
             let caretView = CaretView()
             caretView.isUserInteractionEnabled = false
-            textInputView.addSubview(caretView)
+            overlayHostView.addSubview(caretView)
             secondaryCaretViews.append(caretView)
         }
         for (index, range) in ranges.enumerated() {
@@ -194,7 +238,7 @@ private extension SelectionOverlayController {
             let view = index == 0 ? caretView : secondaryCaretViews[index - 1]
             view.frame = caretRect
             view.isHidden = !isCaretVisible
-            textInputView.bringSubviewToFront(view)
+            overlayHostView.bringSubviewToFront(view)
         }
         if ranges.count - 1 < secondaryCaretViews.count {
             for index in (ranges.count - 1)..<secondaryCaretViews.count {
@@ -276,5 +320,26 @@ private extension SelectionOverlayController {
         isAdjustingSelection = false
         textInputView.selectionAnchor = textInputView.selection?.location
         updateLayout()
+    }
+}
+
+/// Layer-backed host so caret/selection chrome composite above `CAMetalLayer`. Empty space must
+/// not eat hits — the Metal canvas already returns `nil` from `hitTest`, and text input lives
+/// under the clip view.
+private final class SelectionChromeHostView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.isOpaque = false
+        isUserInteractionEnabled = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 }

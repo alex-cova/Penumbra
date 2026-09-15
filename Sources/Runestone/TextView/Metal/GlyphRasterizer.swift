@@ -58,10 +58,18 @@ enum GlyphRasterizer {
         glyph: CGGlyph,
         scale: CGFloat,
         runMatrix: CGAffineTransform = .identity,
+        subpixel: UInt8 = 0,
         isColor: Bool,
         maxExtent: Int = maxGlyphExtentPixels
     ) -> GlyphRasterResult {
-        let key = GlyphKey.make(font: font, glyph: glyph, scale: scale, runMatrix: runMatrix, isColor: isColor)
+        let key = GlyphKey.make(
+            font: font,
+            glyph: glyph,
+            scale: scale,
+            runMatrix: runMatrix,
+            subpixel: subpixel,
+            isColor: isColor
+        )
         var glyphRef = glyph
         var fontBounds = CGRect.zero
         CTFontGetBoundingRectsForGlyphs(font, .default, &glyphRef, &fontBounds, 1)
@@ -99,7 +107,8 @@ enum GlyphRasterizer {
                 bytesPerRow: bytesPerRow,
                 pixels: base,
                 pixelMinX: pixelMinX,
-                pixelMinY: pixelMinY
+                pixelMinY: pixelMinY,
+                subpixelOffset: GlyphKey.subpixelOffset(for: subpixel, scale: scale)
             )
         }
         guard drawn else {
@@ -112,7 +121,10 @@ enum GlyphRasterizer {
             height: height,
             bytesPerRow: bytesPerRow,
             data: data,
-            originX: Float(pixelMinX - CGFloat(padPixels)),
+            originX: Float(
+                pixelMinX - CGFloat(padPixels)
+                    - GlyphKey.subpixelOffset(for: subpixel, scale: scale) * scale
+            ),
             originY: Float(pixelMinY - CGFloat(padPixels)),
             isColor: isColor
         ))
@@ -287,7 +299,8 @@ private func drawGlyph(
     bytesPerRow: Int,
     pixels: UnsafeMutableRawPointer,
     pixelMinX: CGFloat,
-    pixelMinY: CGFloat
+    pixelMinY: CGFloat,
+    subpixelOffset: CGFloat
 ) -> Bool {
     let context: CGContext?
     if isColor {
@@ -333,7 +346,7 @@ private func drawGlyph(
     var glyphRef = glyph
     // Padded origin is in post-transform AABB space; the CTM already concatenates runMatrix.
     var position = CGPoint(
-        x: (pad - pixelMinX) / scale,
+        x: (pad - pixelMinX) / scale + subpixelOffset,
         y: (pad - pixelMinY) / scale
     )
     if !runMatrix.isIdentity {

@@ -366,3 +366,47 @@ file size (see Fix 2's verification).
   verification" sections (catastrophic regex with no timeout, `pendingContentChanges` being
   adapter-global, `FileMapping.remapPages` double-failure, overlapping multi-cursor completion,
   invalid-UTF-8-on-disk host behavior) — unchanged by this pass, see those documents for detail.
+
+## Metal roadmap completion — 2026-09-15
+
+The follow-up Metal pass completed the outstanding renderer roadmap:
+
+- `captureMetalPresentedLayer()` now returns the readback from the actual drawable command buffer;
+  AppKit `cacheDisplay` had returned a zeroed image for `CAMetalLayer`, so it could not prove that
+  an internally correct renderer state reached the screen.
+- Fixed-window regressions now cover Return plus following text with no explicit layout/resize,
+  pending-highlight edits to an existing line, and host detach/reattach. All compare presented
+  pixels; renderer origins/colors remain supplementary diagnostics.
+- Dirty atlas pages are rebuilt independently. Triple-buffer slots are not reused until every
+  command buffer reading the slot completes.
+- The canvas is opaque and Metal paints the editor background, current-line band, and page-guide
+  hairline/shading. AppKit keeps caret and selection overlays above the canvas.
+- The layer follows its window/screen color space; theme and decoration colors resolve directly to
+  sRGB or Display P3. At 1×, coverage glyphs use three horizontal subpixel phases; 2× remains a
+  single atlas entry.
+- `.github/workflows/metal.yml` adds required-Metal focused tests plus nightly parity artifacts for
+  a self-hosted macOS runner labelled `metal`. Runner registration remains an external operation.
+
+### Measurements
+
+| Probe | Result |
+|---|---:|
+| Highlighted `Package.swift`, 5 keystrokes, 64-raster budget | 5.12 ms p95; 62 cumulative cap skips |
+| Highlighted `Package.swift`, 5 keystrokes, 128-raster budget | 5.82 ms p95; 18 cumulative cap skips |
+| 500 MB short-line fixture, middle keystroke | 1.97 ms p95; 0 cap skips; 0.447 ms instance rebuild |
+| Synthetic scroll, 240 frames | 0.053 ms layout p95; 0.599 ms Metal draw p95 |
+| Synthetic Metal/CG snapshot | 78.7% Metal ink on CG ink; MAD 17.51; mismatch fraction 0.239 |
+
+The highlighted wall-clock difference is within run-to-run noise; the raster-cap reduction is the
+actionable signal. The 128 ceiling remains bounded for cold CJK/emoji scrolls.
+
+### MacExample smoke
+
+`./run-metal.sh` is executable and launches the Metal configuration. The live SwiftUI-hosted app
+accepted scripted ordinary typing and repeated Return/new-line input. Automated presented-drawable
+tests cover the same fixed-size path plus split views and tab-host reattachment. OS screen capture
+permission was unavailable to the command-line smoke session, so visual evidence comes from the
+drawable readback tests rather than a desktop screenshot.
+
+Physical Display P3 and 1× A/B checks, and execution on the registered self-hosted CI runner, remain
+hardware acceptance steps; code paths and deterministic unit/pixel coverage are present locally.

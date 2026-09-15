@@ -7,8 +7,16 @@ import simd
 /// in this package blends with (`sourceRGBBlendFactor = .one`).
 enum MetalColor {
     static func premultipliedSRGB(_ color: UIColor, appearance: NSAppearance?) -> SIMD4<Float> {
+        premultiplied(color, appearance: appearance, colorSpace: .sRGB)
+    }
+
+    static func premultiplied(
+        _ color: UIColor,
+        appearance: NSAppearance?,
+        colorSpace: NSColorSpace
+    ) -> SIMD4<Float> {
         func convert(_ color: UIColor) -> SIMD4<Float> {
-            guard let rgb = color.usingColorSpace(.sRGB) else {
+            guard let rgb = color.usingColorSpace(colorSpace) else {
                 return SIMD4(0, 0, 0, 1)
             }
             var red: CGFloat = 0

@@ -15,6 +15,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewDidChangeSelection(_ view: TextInputView)
     func textInputView(_ view: TextInputView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool
     func textInputViewDidInvalidateContentSize(_ view: TextInputView)
+    func textInputViewDidRequestLayoutFlush(_ view: TextInputView)
     func textInputView(_ view: TextInputView, didProposeContentOffsetAdjustment contentOffsetAdjustment: CGPoint)
     func textInputViewDidChangeGutterWidth(_ view: TextInputView)
     func textInputViewDidBeginFloatingCursor(_ view: TextInputView)
@@ -240,6 +241,9 @@ final class TextInputView: UIView, UITextInput {
         }
         set {
             layoutManager.lineSelectionDisplayType = newValue
+            layoutManager.setNeedsLayout()
+            setNeedsLayout()
+            scheduleDeferredLayoutIfNeeded()
         }
     }
     var showTabs: Bool {
@@ -489,6 +493,8 @@ final class TextInputView: UIView, UITextInput {
                     pageGuideController.guideView.removeFromSuperview()
                     setNeedsLayout()
                 }
+                layoutManager.setNeedsLayout()
+                scheduleDeferredLayoutIfNeeded()
             }
         }
     }
@@ -504,6 +510,7 @@ final class TextInputView: UIView, UITextInput {
     }
     /// `true` when this instance is currently presenting the Metal canvas.
     private(set) var isMetalRenderingActive = false
+    var onMetalRenderingFailure: ((String) -> Void)?
     let metalCanvasView = MetalTextCanvasView(frame: .zero)
 
     /// Backing-scale change: the glyph atlas keys embed the scale, so trigger a relayout that
@@ -522,21 +529,42 @@ final class TextInputView: UIView, UITextInput {
         guard !deferredLayoutScheduled else {
             return
         }
+        RunestoneSignposts.event("TextInputView.deferredLayoutScheduled")
         deferredLayoutScheduled = true
+        if let delegate {
+            delegate.textInputViewDidRequestLayoutFlush(self)
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            guard let self else {
-                return
-            }
-            self.deferredLayoutScheduled = false
-            self.layoutIfNeeded()
+            self?.performDeferredLayoutFlush()
         }
     }
 
     private var deferredLayoutScheduled = false
 
+    func performDeferredLayoutFlush() {
+        guard deferredLayoutScheduled else {
+            return
+        }
+        RunestoneSignposts.event("TextInputView.deferredLayoutFlushed")
+        deferredLayoutScheduled = false
+        setNeedsLayout()
+        layoutSubtreeIfNeeded()
+        layoutIfNeeded()
+        metalCanvasView.presentIfDirty()
+    }
+
+    func placeSelectionChromeAboveMetalCanvas() {
+        selectionOverlayController.placeAboveMetalCanvas()
+    }
+
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is inactive.
     var metalDebugStats: MetalRenderer.DebugStats? {
         layoutManager.metalDebugStats
+    }
+
+    var metalAtlasCensus: (nonzero: Int, total: Int, pages: Int)? {
+        layoutManager.metalAtlasCensus
     }
 
     /// Glyph instance colors Metal currently holds for the line at `location` (or every fragment
@@ -546,7 +574,12 @@ final class TextInputView: UIView, UITextInput {
         return layoutManager.metalDebugGlyphColors(forLineID: lineID)
     }
 
-    /// Offscreen render of the Metal glyph canvas (transparent ground). Snapshot tests / PerfHarness.
+    func metalDebugGlyphOrigins(atLocation location: Int? = nil) -> [SIMD2<Float>] {
+        let lineID = location.flatMap { lineManager.line(containingCharacterAt: $0)?.id }
+        return layoutManager.metalDebugGlyphOrigins(forLineID: lineID)
+    }
+
+    /// Offscreen render of the opaque Metal glyph canvas. Snapshot tests / PerfHarness.
     func captureMetalSnapshot() -> NSBitmapImageRep? {
         guard isMetalRenderingActive else {
             return nil
@@ -554,7 +587,7 @@ final class TextInputView: UIView, UITextInput {
         return metalCanvasView.captureSnapshot()
     }
 
-    /// Presented `CAMetalLayer` via `cacheDisplay`. Requires `allowsMetalDrawableCapture` before init.
+    /// Presented drawable readback. Requires `allowsMetalDrawableCapture` before init.
     func captureMetalPresentedLayer() -> NSBitmapImageRep? {
         guard isMetalRenderingActive else {
             return nil
@@ -569,7 +602,9 @@ final class TextInputView: UIView, UITextInput {
         set {
             if newValue != pageGuideController.column {
                 pageGuideController.column = newValue
+                layoutManager.setNeedsLayout()
                 setNeedsLayout()
+                scheduleDeferredLayoutIfNeeded()
             }
         }
     }
@@ -579,7 +614,9 @@ final class TextInputView: UIView, UITextInput {
         }
         set {
             pageGuideController.guideView.showReformattingGuideShading = newValue
+            layoutManager.setNeedsLayout()
             setNeedsLayout()
+            scheduleDeferredLayoutIfNeeded()
         }
     }
     private var estimatedLineHeight: CGFloat {
@@ -759,6 +796,7 @@ final class TextInputView: UIView, UITextInput {
         }
         set {
             layoutManager.gutterParentView = newValue
+            updateSelectionOverlayPresentationHost()
         }
     }
     var scrollViewSafeAreaInsets: UIEdgeInsets = .zero {
@@ -1049,6 +1087,7 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.delegate = self
         layoutManager.textInputView = self
         layoutManager.metalCanvasView = metalCanvasView
+        layoutManager.pageGuideView = pageGuideController.guideView
         metalCanvasView.onRenderingFailure = { [weak self] in
             self?.handleMetalRenderingFailure()
         }
@@ -1105,10 +1144,12 @@ final class TextInputView: UIView, UITextInput {
     override func layoutSubviews() {
         super.layoutSubviews()
         hasDeletedTextWithPendingLayoutSubviews = false
+        // Metal consumes the page-guide geometry during the viewport layout below.
+        layoutPageGuideIfNeeded()
         layoutManager.layoutIfNeeded()
         layoutManager.layoutLineSelectionIfNeeded()
-        layoutPageGuideIfNeeded()
         layoutMetalCanvasIfNeeded()
+        updateSelectionOverlayPresentationHost()
         selectionOverlayController.updateLayout()
         // Defer selection notifications out of layout — hosts (SwiftUI) writing state
         // from these callbacks during AppKit layout abort with Update Constraints in Window.
@@ -1689,6 +1730,7 @@ private extension TextInputView {
 
     private func handleMetalRenderingFailure() {
         MetalContext.shared.markUnavailable()
+        onMetalRenderingFailure?(MetalContext.shared.failureReason ?? "Metal rendering failed")
         applyMetalActivation(false)
     }
 
@@ -1701,9 +1743,20 @@ private extension TextInputView {
         if resolvedActive {
             metalCanvasView.setNeedsDisplay()
         }
+        updateSelectionOverlayPresentationHost()
         if didChange {
             layoutManager.setNeedsLayout()
             setNeedsLayout()
+        }
+    }
+
+    func updateSelectionOverlayPresentationHost() {
+        selectionOverlayController.setPresentationHost(
+            isMetalRenderingActive ? gutterParentView : nil,
+            viewport: viewport
+        )
+        if isMetalRenderingActive {
+            selectionOverlayController.placeAboveMetalCanvas()
         }
     }
 
@@ -2498,6 +2551,11 @@ extension TextInputView {
 
     private func applyLineChangesToLayoutManager(_ lineChangeSet: LineChangeSet) {
         let didAddOrRemoveLines = !lineChangeSet.insertedLines.isEmpty || !lineChangeSet.removedLines.isEmpty
+        RunestoneSignposts.event(
+            didAddOrRemoveLines
+                ? "TextInputView.lineStructureChanged"
+                : "TextInputView.lineContentChanged"
+        )
         if didAddOrRemoveLines {
             contentSizeService.invalidateContentSize()
             for removedLine in lineChangeSet.removedLines {
@@ -2509,6 +2567,8 @@ extension TextInputView {
         layoutManager.redisplayLines(withIDs: editedLineIDs)
         if didAddOrRemoveLines {
             gutterWidthService.invalidateLineNumberWidth()
+            layoutManager.relayoutVisibleFragmentsAfterLineStructureChange()
+            selectionOverlayController.updateLayout()
         }
         if foldingController.isEnabled {
             let previousLineCount = lineManager.lineCount - lineChangeSet.insertedLines.count + lineChangeSet.removedLines.count

@@ -21,18 +21,37 @@ import simd
 /// text + invisibles, then warning borders / fold chips / fold text on top.
 @MainActor
 final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
+    static func deterministicPageOrder(_ pageIDs: [UInt32]) -> [UInt32] {
+        pageIDs.sorted()
+    }
+
     private struct GPUFragment {
         var frame: CGRect
         var lineID: DocumentLineNodeID
         var cacheKey: GlyphExtractCacheKey?
         var glyphs: [GlyphInstance]
+        var alignedGlyphs: [GlyphInstance]?
+        var colorSamples: [GlyphColorSample]
         var decorations: MetalDecorationGeometry
+        var decorationKey: DecorationBuildKey?
+        var decorationNeedsRetry = false
+    }
+
+    private struct DecorationBuildKey: Equatable {
+        var frame: CGRect
+        var lineRevision: UInt64
+        var decorations: LineFragmentDecorations
+        var scale: CGFloat
+        var appearanceName: NSAppearance.Name?
+        var usesDisplayP3: Bool
     }
 
     /// Triple-buffered per-atlas-page glyph instances.
-    private final class PageBucket {
+    private final class PageBucket: @unchecked Sendable {
         var buffers: [GlyphInstanceBuffer]
         var cursor = 0
+        private let slotCondition = NSCondition()
+        private var inFlightCounts = [0, 0, 0]
 
         init(buffers: [GlyphInstanceBuffer]) {
             self.buffers = buffers
@@ -42,18 +61,44 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             buffers[cursor]
         }
 
-        func advance() {
-            cursor = (cursor + 1) % buffers.count
+        func advanceForWrite() {
+            slotCondition.lock()
+            defer { slotCondition.unlock() }
+            while true {
+                for offset in 1...buffers.count {
+                    let candidate = (cursor + offset) % buffers.count
+                    if inFlightCounts[candidate] == 0 {
+                        cursor = candidate
+                        return
+                    }
+                }
+                slotCondition.wait()
+            }
+        }
+
+        func markCurrentInFlight(on commandBuffer: MTLCommandBuffer) {
+            let slot = cursor
+            slotCondition.lock()
+            inFlightCounts[slot] += 1
+            slotCondition.unlock()
+            commandBuffer.addCompletedHandler { [slotCondition] _ in
+                slotCondition.lock()
+                self.inFlightCounts[slot] -= 1
+                slotCondition.broadcast()
+                slotCondition.unlock()
+            }
         }
     }
 
     /// Triple-buffered raw struct array (`SolidInstance` or `DecorationVertex`).
-    private final class DecorationBuffer {
+    private final class DecorationBuffer: @unchecked Sendable {
         private let device: MTLDevice
         private let stride: Int
         private var buffers: [MTLBuffer?] = [nil, nil, nil]
         private var capacities = [0, 0, 0]
         private var cursor = 0
+        private let slotCondition = NSCondition()
+        private var inFlightCounts = [0, 0, 0]
         private(set) var count = 0
 
         init(device: MTLDevice, stride: Int) {
@@ -66,7 +111,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         }
 
         func write<T>(_ items: [T]) {
-            cursor = (cursor + 1) % buffers.count
+            advanceForWrite()
             count = items.count
             guard !items.isEmpty else {
                 return
@@ -98,6 +143,37 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             capacities = [0, 0, 0]
             count = 0
         }
+
+        func markCurrentInFlight(on commandBuffer: MTLCommandBuffer) {
+            guard count > 0, current != nil else {
+                return
+            }
+            let slot = cursor
+            slotCondition.lock()
+            inFlightCounts[slot] += 1
+            slotCondition.unlock()
+            commandBuffer.addCompletedHandler { [slotCondition] _ in
+                slotCondition.lock()
+                self.inFlightCounts[slot] -= 1
+                slotCondition.broadcast()
+                slotCondition.unlock()
+            }
+        }
+
+        private func advanceForWrite() {
+            slotCondition.lock()
+            defer { slotCondition.unlock() }
+            while true {
+                for offset in 1...buffers.count {
+                    let candidate = (cursor + offset) % buffers.count
+                    if inFlightCounts[candidate] == 0 {
+                        cursor = candidate
+                        return
+                    }
+                }
+                slotCondition.wait()
+            }
+        }
     }
 
     private weak var canvasView: MetalTextCanvasView?
@@ -117,7 +193,17 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private lazy var underlaySolidBuffer = DecorationBuffer(device: device, stride: MemoryLayout<SolidInstance>.stride)
     private lazy var overlaySolidBuffer = DecorationBuffer(device: device, stride: MemoryLayout<SolidInstance>.stride)
     private lazy var underlayLineBuffer = DecorationBuffer(device: device, stride: MemoryLayout<DecorationVertex>.stride)
-    private var needsInstanceRebuild = false
+    private var needsGlyphBufferRebuild = false
+    private var needsDecorationBufferRebuild = false
+    /// Fragment IDs whose contribution changed since the last encode. This is the boundary used
+    /// by the partial-update path; keeping it explicit avoids turning every invalidation into an
+    /// implicit whole-viewport dirty state.
+    private var dirtyFragmentIDs = Set<LineFragmentID>()
+    private var dirtyPageIDs = Set<UInt32>()
+    private var textPageContributions: [UInt32: [LineFragmentID: [GlyphInstance]]] = [:]
+    private var overlayPageContributions: [UInt32: [LineFragmentID: [GlyphInstance]]] = [:]
+    private var canvasUnderlaySolids: [SolidInstance] = []
+    private var needsFullGlyphRebuild = false
     private var rasterBudget = GlyphRasterBudget()
     /// `true` when the last extract hit the per-pass raster cap — some emit-band glyphs are not yet
     /// on screen. `LayoutManager` re-drives layout (bounded) so they fill in over a few passes.
@@ -130,6 +216,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private var viewport: CGRect = .zero
     private var canvasFrame: CGRect = .zero
     private var scale: CGFloat = 2
+    private var renderColorSpace: NSColorSpace = .sRGB
 
     /// Debug/PerfHarness snapshot (see `TextView.metal*` accessors and Observability in the design).
     struct DebugStats {
@@ -143,6 +230,11 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var glyphInstanceStride = 0
         var glyphInstanceAlignment = 0
         var solidInstanceStride = 0
+        var rasterCapSkipCount = 0
+        var instanceRebuildNanos = 0
+        var decorationBuildCount = 0
+        var glyphBufferRebuildCount = 0
+        var solidBufferRebuildCount = 0
         var atlasCoverageNonZeroTexels = 0
         var atlasCoverageTexelCount = 0
         var atlasCoveragePages = 0
@@ -151,9 +243,13 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     private var recentDrawNanos: [UInt64] = []
     private var lastInstanceCounts = (glyphs: 0, solids: 0)
+    private var rasterCapSkipCount = 0
+    private var lastInstanceRebuildNanos = 0
+    private var decorationBuildCount = 0
+    private var glyphBufferRebuildCount = 0
+    private var solidBufferRebuildCount = 0
 
     var debugStats: DebugStats {
-        let census = atlas.debugCoverageTexelCensus()
         return DebugStats(
             fragmentCount: fragments.count,
             glyphInstanceCount: lastInstanceCounts.glyphs,
@@ -165,11 +261,18 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             glyphInstanceStride: MemoryLayout<GlyphInstance>.stride,
             glyphInstanceAlignment: MemoryLayout<GlyphInstance>.alignment,
             solidInstanceStride: MemoryLayout<SolidInstance>.stride,
-            atlasCoverageNonZeroTexels: census?.nonzero ?? 0,
-            atlasCoverageTexelCount: census?.total ?? 0,
-            atlasCoveragePages: census?.pages ?? 0,
-            atlasReadbackFailed: census == nil
+            rasterCapSkipCount: rasterCapSkipCount,
+            instanceRebuildNanos: lastInstanceRebuildNanos,
+            decorationBuildCount: decorationBuildCount,
+            glyphBufferRebuildCount: glyphBufferRebuildCount,
+            solidBufferRebuildCount: solidBufferRebuildCount
         )
+    }
+
+    /// Explicitly performs the expensive GPU readback used by atlas diagnostics. This is kept out
+    /// of `debugStats` because every individual metric accessor may request that snapshot.
+    func atlasCensus() -> (nonzero: Int, total: Int, pages: Int)? {
+        atlas.debugCoverageTexelCensus()
     }
 
     /// Glyph instance colors currently held for `lineID` (all fragments of that line), or every
@@ -179,6 +282,12 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         fragments.values
             .filter { lineID == nil || $0.lineID == lineID }
             .flatMap { $0.glyphs.map(\.color) }
+    }
+
+    func debugGlyphOrigins(forLineID lineID: DocumentLineNodeID? = nil) -> [SIMD2<Float>] {
+        fragments.values
+            .filter { lineID == nil || $0.lineID == lineID }
+            .flatMap { $0.glyphs.map(\.origin) }
     }
 
     init?(canvasView: MetalTextCanvasView, context: MetalContext = .shared, atlas: GlyphAtlas? = nil) {
@@ -239,7 +348,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             lineID: spec.lineID,
             cacheKey: nil,
             glyphs: [],
-            decorations: MetalDecorationGeometry()
+            alignedGlyphs: nil,
+            colorSamples: [],
+            decorations: MetalDecorationGeometry(),
+            decorationKey: nil
         )
         // `LayoutManager` re-upserts every visible fragment on every layout pass (it's how
         // display-only invalidation — marked text, invisibles — gets a fresh spec; see the design
@@ -249,16 +361,17 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         // glyphs or decorations actually differ — not merely because it was touched again.
         let previousGlyphs = fragment.glyphs
         let previousDecorations = fragment.decorations
+        let previousFrame = fragment.frame
+        let frameChanged = previousFrame != spec.frame
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
-        if spec.isSyntaxHighlightPending, !fragment.glyphs.isEmpty {
-            // Highlighting has not landed for this typeset yet, so `spec.line` still carries
-            // `theme.textColor`. Keep the last fully-highlighted glyphs on screen instead of
-            // baking that provisional color; clear the cache key so the highlighted typeset
-            // (which arrives under a new `revision`) always re-extracts. A fragment with no
-            // prior glyphs (first paint, a freshly inserted line) still extracts immediately below.
-            fragment.cacheKey = nil
-        } else if GlyphExtractCacheKey.shouldRebuild(previous: fragment.cacheKey, revision: spec.lineRevision, emitRect: emitRect) {
+        let shouldExtract = GlyphExtractCacheKey.shouldRebuild(
+            previous: fragment.cacheKey,
+            revision: spec.lineRevision,
+            emitRect: emitRect,
+            isPending: spec.isSyntaxHighlightPending
+        ) || (spec.isSyntaxHighlightPending && previousFrame != spec.frame)
+        if shouldExtract {
             let request = GlyphExtractRequest(
                 line: spec.line,
                 fragmentFrame: spec.frame,
@@ -272,30 +385,95 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 atlasWarmRect: MetalProjection.atlasWarmRect(canvasFrame: canvasFrame),
                 fallbackFont: spec.fallbackFont,
                 fallbackColor: spec.fallbackColor,
-                appearance: spec.appearance
+                appearance: spec.appearance,
+                colorSpace: spec.colorSpace,
+                previousColors: spec.isSyntaxHighlightPending ? fragment.colorSamples : []
             )
             let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &rasterBudget)
             fragment.glyphs = result.instances
             if result.skips.contains(where: { $0.reason == .rasterCap }) {
+                rasterCapSkipCount += 1
                 // Budget ran out mid-fragment; leave the cache key unset so the next layout pass
                 // re-extracts with a fresh budget and fills in the rest.
                 fragment.cacheKey = nil
                 pendingRasterRetry = true
             } else {
-                fragment.cacheKey = GlyphExtractCacheKey(revision: spec.lineRevision, emitRect: emitRect)
+                fragment.cacheKey = GlyphExtractCacheKey(
+                    revision: spec.lineRevision,
+                    emitRect: emitRect,
+                    isPending: spec.isSyntaxHighlightPending
+                )
+            }
+            if !spec.isSyntaxHighlightPending {
+                fragment.colorSamples = result.glyphs.map {
+                    GlyphColorSample(stringIndex: $0.stringIndex, color: $0.instance.color)
+                }
+            }
+        } else if frameChanged, previousFrame != .zero {
+            // Return at end-of-line does not change the following line's CTLine, so extract is
+            // skipped. Origins were baked with the old fragmentFrame and must move with it.
+            let delta = SIMD2(
+                Float(spec.frame.minX - previousFrame.minX),
+                Float(spec.frame.minY - previousFrame.minY)
+            )
+            if delta != .zero {
+                fragment.glyphs = fragment.glyphs.map { instance in
+                    var moved = instance
+                    moved.origin += delta
+                    return moved
+                }
             }
         }
-        // Decorations rebuild every upsert (display-only invalidation re-upserts a fresh spec).
-        fragment.decorations = MetalDecorationBuilder.build(
-            spec: spec,
-            atlas: atlas,
+        if fragment.alignedGlyphs == nil
+            || fragment.glyphs != previousGlyphs
+            || previousFrame != spec.frame {
+            fragment.alignedGlyphs = fragment.glyphs.map { instance in
+                var aligned = instance
+                aligned.origin = MetalProjection.pixelAligned(
+                    instance.origin,
+                    canvasFrame: canvasFrame,
+                    scale: scale
+                )
+                return aligned
+            }
+        }
+        let decorationKey = DecorationBuildKey(
+            frame: spec.frame,
+            lineRevision: spec.lineRevision,
+            decorations: spec.decorations,
             scale: scale,
-            budget: &rasterBudget
+            appearanceName: spec.appearance?.name,
+            usesDisplayP3: spec.colorSpace == .displayP3
         )
-        fragments[spec.id] = fragment
-        if fragment.glyphs != previousGlyphs || fragment.decorations != previousDecorations {
-            needsInstanceRebuild = true
+        if fragment.decorationKey != decorationKey
+            || (fragment.decorationNeedsRetry && rasterBudget.hasRemaining) {
+            decorationBuildCount += 1
+            fragment.decorations = MetalDecorationBuilder.build(
+                spec: spec,
+                atlas: atlas,
+                scale: scale,
+                budget: &rasterBudget
+            )
+            fragment.decorationKey = decorationKey
+            fragment.decorationNeedsRetry = rasterBudget.remaining == 0
+        }
+        let glyphsChanged = fragment.glyphs != previousGlyphs
+        let decorationsChanged = fragment.decorations != previousDecorations
+        let glyphPageContributionChanged = glyphsChanged || frameChanged
+        if glyphPageContributionChanged || decorationsChanged {
+            needsGlyphBufferRebuild = true
+            dirtyFragmentIDs.insert(spec.id)
+        }
+        if decorationsChanged {
+            needsDecorationBufferRebuild = true
             canvasView?.setNeedsDisplay()
+        }
+        if glyphPageContributionChanged {
+            canvasView?.setNeedsDisplay()
+        }
+        fragments[spec.id] = fragment
+        if glyphPageContributionChanged || decorationsChanged {
+            updatePageContributions(for: spec.id, fragment: fragment)
         }
     }
 
@@ -305,8 +483,11 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         }
         for id in ids {
             fragments.removeValue(forKey: id)
+            dirtyFragmentIDs.insert(id)
+            removePageContributions(for: id)
         }
-        needsInstanceRebuild = true
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
         canvasView?.setNeedsDisplay()
     }
 
@@ -321,7 +502,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         for (fragmentID, fragment) in fragments where ids.contains(fragment.lineID) {
             fragments[fragmentID]?.cacheKey = nil
         }
-        needsInstanceRebuild = true
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
         // Do not `setNeedsDisplay` here — a deferred present would encode this pass's stale
         // frame/decorations before layout/upsert rebuilds them.
     }
@@ -341,13 +523,89 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             // Never `removeAll()` here — other `TextView`s may still need those pages.
             for id in fragments.keys {
                 fragments[id]?.cacheKey = nil
+                fragments[id]?.alignedGlyphs = nil
             }
-            needsInstanceRebuild = true
+        needsFullGlyphRebuild = true
+            needsGlyphBufferRebuild = true
+            needsDecorationBufferRebuild = true
+            dirtyFragmentIDs.formUnion(fragments.keys)
         }
         canvasView?.setNeedsDisplay()
     }
 
+    func setCanvasPaintSpec(_ spec: CanvasPaintSpec) {
+        let colorSpaceChanged = renderColorSpace != spec.colorSpace
+        renderColorSpace = spec.colorSpace
+        if colorSpaceChanged {
+            for id in fragments.keys {
+                fragments[id]?.cacheKey = nil
+                fragments[id]?.decorationKey = nil
+            }
+            needsFullGlyphRebuild = true
+            needsGlyphBufferRebuild = true
+            needsDecorationBufferRebuild = true
+        }
+        canvasView?.setOpaqueBackgroundColor(
+            spec.backgroundColor,
+            appearance: spec.appearance,
+            colorSpace: spec.colorSpace
+        )
+        func solid(_ rect: CGRect, _ color: UIColor) -> SolidInstance {
+            SolidInstance(
+                origin: SIMD2(Float(rect.minX), Float(rect.minY)),
+                size: SIMD2(Float(rect.width), Float(rect.height)),
+                fillColor: MetalColor.premultiplied(
+                    color,
+                    appearance: spec.appearance,
+                    colorSpace: spec.colorSpace
+                ),
+                strokeColor: SolidInstance.noColor,
+                cornerRadius: 0,
+                strokeWidth: 0,
+                roundedCornersMask: 0
+            )
+        }
+        var updated = [solid(spec.frame, spec.backgroundColor)]
+        if let frame = spec.pageGuideFrame {
+            let hairlineWidth = min(max(spec.pageGuideHairlineWidth, 0), frame.width)
+            if spec.showsPageGuideShading, frame.width > hairlineWidth {
+                updated.append(solid(
+                    CGRect(
+                        x: frame.minX + hairlineWidth,
+                        y: frame.minY,
+                        width: frame.width - hairlineWidth,
+                        height: frame.height
+                    ),
+                    spec.pageGuideShadingColor
+                ))
+            }
+            if hairlineWidth > 0 {
+                updated.append(solid(
+                    CGRect(x: frame.minX, y: frame.minY, width: hairlineWidth, height: frame.height),
+                    spec.pageGuideHairlineColor
+                ))
+            }
+        }
+        if let lineSelectionRect = spec.lineSelectionRect {
+            updated.append(solid(lineSelectionRect, spec.lineSelectionColor))
+        }
+        guard updated != canvasUnderlaySolids else {
+            return
+        }
+        canvasUnderlaySolids = updated
+        needsDecorationBufferRebuild = true
+        canvasView?.setNeedsDisplay()
+    }
+
     func setNeedsDisplay() {
+        canvasView?.setNeedsDisplay()
+    }
+
+    func invalidateForLineStructureChange() {
+        needsFullGlyphRebuild = true
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
+        dirtyFragmentIDs.formUnion(fragments.keys)
         canvasView?.setNeedsDisplay()
     }
 
@@ -361,38 +619,71 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         underlaySolidBuffer.compact()
         overlaySolidBuffer.compact()
         underlayLineBuffer.compact()
+        needsFullGlyphRebuild = true
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
     }
 
     // MARK: - MetalCanvasGlyphEncoding
 
-    func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {
+    func encode(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    ) {
         let start = DispatchTime.now().uptimeNanoseconds
         var didDraw = false
         RunestoneSignposts.interval("MetalRenderer.draw") {
-            if needsInstanceRebuild {
-                rebuildInstanceBuffers()
+            if needsGlyphBufferRebuild || needsDecorationBufferRebuild {
+                let rebuildStart = DispatchTime.now().uptimeNanoseconds
+                rebuildInstanceBuffers(
+                    rebuildGlyphs: needsGlyphBufferRebuild,
+                    rebuildSolids: needsDecorationBufferRebuild
+                )
+                lastInstanceRebuildNanos = Int(DispatchTime.now().uptimeNanoseconds &- rebuildStart)
             }
             guard canvasFrame.width > 0, canvasFrame.height > 0 else {
                 return
             }
             var uniforms = MetalProjection.uniforms(canvasFrame: canvasFrame, scale: scale)
-            drawSolids(underlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
-            drawLines(underlayLineBuffer, encoder: encoder, uniforms: &uniforms)
-            drawGlyphBuckets(textPageBuckets, order: textPageOrder, encoder: encoder, uniforms: &uniforms)
-            drawSolids(overlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
-            drawGlyphBuckets(overlayPageBuckets, order: overlayPageOrder, encoder: encoder, uniforms: &uniforms)
+            drawSolids(underlaySolidBuffer, encoder: encoder, commandBuffer: commandBuffer, uniforms: &uniforms)
+            drawLines(underlayLineBuffer, encoder: encoder, commandBuffer: commandBuffer, uniforms: &uniforms)
+            drawGlyphBuckets(
+                textPageBuckets,
+                order: textPageOrder,
+                encoder: encoder,
+                commandBuffer: commandBuffer,
+                uniforms: &uniforms
+            )
+            drawSolids(overlaySolidBuffer, encoder: encoder, commandBuffer: commandBuffer, uniforms: &uniforms)
+            drawGlyphBuckets(
+                overlayPageBuckets,
+                order: overlayPageOrder,
+                encoder: encoder,
+                commandBuffer: commandBuffer,
+                uniforms: &uniforms
+            )
             didDraw = true
         }
         recordDrawNanos(DispatchTime.now().uptimeNanoseconds &- start)
         if didDraw {
-            needsInstanceRebuild = false
+            needsGlyphBufferRebuild = false
+            needsDecorationBufferRebuild = false
+            dirtyFragmentIDs.removeAll(keepingCapacity: true)
+            dirtyPageIDs.removeAll(keepingCapacity: true)
+            needsFullGlyphRebuild = false
             rasterBudget = GlyphRasterBudget()
         }
     }
 
-    func encodeForCapture(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {
-        needsInstanceRebuild = true
-        encode(into: encoder, drawableSize: drawableSize)
+    func encodeForCapture(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    ) {
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
+        encode(into: encoder, commandBuffer: commandBuffer, drawableSize: drawableSize)
     }
 
     /// `true` (once) when the last extract capped and needs another layout pass to finish.
@@ -429,12 +720,106 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         for id in fragments.keys {
             fragments[id]?.cacheKey = nil
         }
-        needsInstanceRebuild = true
+        needsFullGlyphRebuild = true
+        needsGlyphBufferRebuild = true
+        needsDecorationBufferRebuild = true
         canvasView?.setNeedsDisplay()
     }
 }
 
 private extension MetalRenderer {
+    private func updatePageContributions(for id: LineFragmentID, fragment: GPUFragment) {
+        removePageContributions(for: id)
+        var text: [UInt32: [GlyphInstance]] = [:]
+        for instance in (fragment.alignedGlyphs ?? fragment.glyphs) where instance.atlasPage != 0 {
+            text[instance.atlasPage, default: []].append(instance)
+        }
+        for instance in fragment.decorations.symbolGlyphs where instance.atlasPage != 0 {
+            let aligned = pixelAligned(instance)
+            text[aligned.atlasPage, default: []].append(aligned)
+        }
+        for (page, instances) in text {
+            textPageContributions[page, default: [:]][id] = instances
+            dirtyPageIDs.insert(page)
+        }
+        var overlay: [UInt32: [GlyphInstance]] = [:]
+        for instance in fragment.decorations.overlayGlyphs where instance.atlasPage != 0 {
+            let aligned = pixelAligned(instance)
+            overlay[aligned.atlasPage, default: []].append(aligned)
+        }
+        for (page, instances) in overlay {
+            overlayPageContributions[page, default: [:]][id] = instances
+            dirtyPageIDs.insert(page)
+        }
+    }
+
+    private func removePageContributions(for id: LineFragmentID) {
+        for page in textPageContributions.keys {
+            if textPageContributions[page]?.removeValue(forKey: id) != nil {
+                dirtyPageIDs.insert(page)
+            }
+        }
+        for page in overlayPageContributions.keys {
+            if overlayPageContributions[page]?.removeValue(forKey: id) != nil {
+                dirtyPageIDs.insert(page)
+            }
+        }
+    }
+
+    private func rebuildDirtyGlyphPages() {
+        for pageID in dirtyPageIDs {
+            let textInstances = sortedPageInstances(textPageContributions[pageID])
+            let overlayInstances = sortedPageInstances(overlayPageContributions[pageID])
+            writeGlyphPage(pageID, instances: textInstances, buckets: &textPageBuckets, order: &textPageOrder)
+            writeGlyphPage(pageID, instances: overlayInstances, buckets: &overlayPageBuckets, order: &overlayPageOrder)
+        }
+        textPageOrder = textPageContributions.keys.sorted()
+        overlayPageOrder = overlayPageContributions.keys.sorted()
+        lastInstanceCounts.glyphs = textPageContributions.values.reduce(0) { pageTotal, contributions in
+            pageTotal + contributions.values.reduce(0) { $0 + $1.count }
+        } + overlayPageContributions.values.reduce(0) { pageTotal, contributions in
+            pageTotal + contributions.values.reduce(0) { $0 + $1.count }
+        }
+    }
+
+    private func sortedPageInstances(
+        _ contributions: [LineFragmentID: [GlyphInstance]]?
+    ) -> [GlyphInstance] {
+        (contributions ?? [:])
+            .sorted { lhs, rhs in lhs.key.id < rhs.key.id }
+            .flatMap(\.value)
+    }
+
+    private func writeGlyphPage(
+        _ pageID: UInt32,
+        instances: [GlyphInstance],
+        buckets: inout [UInt32: PageBucket],
+        order: inout [UInt32]
+    ) {
+        guard let texture = atlas.pageTexture(id: pageID) else {
+            buckets.removeValue(forKey: pageID)
+            return
+        }
+        let bucket: PageBucket
+        if let existing = buckets[pageID] {
+            bucket = existing
+        } else if let created = makeBucket() {
+            buckets[pageID] = created
+            bucket = created
+        } else {
+            return
+        }
+        bucket.advanceForWrite()
+        bucket.current.write(instances)
+        _ = texture
+        if instances.isEmpty {
+            order.removeAll { $0 == pageID }
+        } else if !order.contains(pageID) {
+            order.append(pageID)
+            order.sort()
+        }
+    }
+
     static func makePipeline(
         device: MTLDevice,
         library: MTLLibrary,
@@ -461,33 +846,62 @@ private extension MetalRenderer {
         return try? device.makeRenderPipelineState(descriptor: descriptor)
     }
 
-    private func rebuildInstanceBuffers() {
+    private func rebuildInstanceBuffers(rebuildGlyphs: Bool, rebuildSolids: Bool) {
+        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty {
+            rebuildDirtyGlyphPages()
+            if !rebuildSolids {
+                return
+            }
+        }
         var textByPage: [UInt32: [GlyphInstance]] = [:]
         var overlayByPage: [UInt32: [GlyphInstance]] = [:]
-        var underlaySolids: [SolidInstance] = []
+        var underlaySolids = canvasUnderlaySolids
         var overlaySolids: [SolidInstance] = []
         var underlayLines: [DecorationVertex] = []
-        for fragment in fragments.values {
-            for instance in fragment.glyphs where instance.atlasPage != 0 {
-                textByPage[instance.atlasPage, default: []].append(instance)
+        let orderedFragments = fragments.sorted {
+            if $0.value.frame.minY != $1.value.frame.minY {
+                return $0.value.frame.minY < $1.value.frame.minY
             }
-            for instance in fragment.decorations.symbolGlyphs where instance.atlasPage != 0 {
-                textByPage[instance.atlasPage, default: []].append(instance)
+            if $0.value.frame.minX != $1.value.frame.minX {
+                return $0.value.frame.minX < $1.value.frame.minX
             }
-            for instance in fragment.decorations.overlayGlyphs where instance.atlasPage != 0 {
-                overlayByPage[instance.atlasPage, default: []].append(instance)
+            return $0.key.id < $1.key.id
+        }.map(\.value)
+        for fragment in orderedFragments {
+            if rebuildGlyphs {
+                for instance in (fragment.alignedGlyphs ?? fragment.glyphs) where instance.atlasPage != 0 {
+                    textByPage[instance.atlasPage, default: []].append(instance)
+                }
+                for instance in fragment.decorations.symbolGlyphs where instance.atlasPage != 0 {
+                    let aligned = pixelAligned(instance)
+                    textByPage[aligned.atlasPage, default: []].append(aligned)
+                }
+                for instance in fragment.decorations.overlayGlyphs where instance.atlasPage != 0 {
+                    let aligned = pixelAligned(instance)
+                    overlayByPage[aligned.atlasPage, default: []].append(aligned)
+                }
             }
-            underlaySolids.append(contentsOf: fragment.decorations.underlaySolids)
-            overlaySolids.append(contentsOf: fragment.decorations.overlaySolids)
-            underlayLines.append(contentsOf: fragment.decorations.underlayTriangles)
+            if rebuildSolids {
+                underlaySolids.append(contentsOf: fragment.decorations.underlaySolids)
+                overlaySolids.append(contentsOf: fragment.decorations.overlaySolids)
+                underlayLines.append(contentsOf: fragment.decorations.underlayTriangles)
+            }
         }
-        rebuildGlyphBuckets(from: textByPage, buckets: &textPageBuckets, order: &textPageOrder)
-        rebuildGlyphBuckets(from: overlayByPage, buckets: &overlayPageBuckets, order: &overlayPageOrder)
-        underlaySolidBuffer.write(underlaySolids)
-        overlaySolidBuffer.write(overlaySolids)
-        underlayLineBuffer.write(underlayLines)
-        let glyphCount = textByPage.values.reduce(0) { $0 + $1.count } + overlayByPage.values.reduce(0) { $0 + $1.count }
-        lastInstanceCounts = (glyphs: glyphCount, solids: underlaySolids.count + overlaySolids.count)
+        if rebuildGlyphs {
+            glyphBufferRebuildCount += 1
+            rebuildGlyphBuckets(from: textByPage, buckets: &textPageBuckets, order: &textPageOrder)
+            rebuildGlyphBuckets(from: overlayByPage, buckets: &overlayPageBuckets, order: &overlayPageOrder)
+            let glyphCount = textByPage.values.reduce(0) { $0 + $1.count }
+                + overlayByPage.values.reduce(0) { $0 + $1.count }
+            lastInstanceCounts.glyphs = glyphCount
+        }
+        if rebuildSolids {
+            solidBufferRebuildCount += 1
+            underlaySolidBuffer.write(underlaySolids)
+            overlaySolidBuffer.write(overlaySolids)
+            underlayLineBuffer.write(underlayLines)
+            lastInstanceCounts.solids = underlaySolids.count + overlaySolids.count
+        }
         RunestoneSignposts.event("MetalRenderer.instanceCount")
     }
 
@@ -519,12 +933,15 @@ private extension MetalRenderer {
             if atlas.pageTexture(id: pageID) == nil {
                 buckets.removeValue(forKey: pageID)
             } else if instancesByPage[pageID] == nil {
-                bucket.advance()
+                bucket.advanceForWrite()
                 bucket.current.write([])
             }
         }
         order = []
-        for (pageID, instances) in instancesByPage {
+        for pageID in Self.deterministicPageOrder(Array(instancesByPage.keys)) {
+            guard let instances = instancesByPage[pageID] else {
+                continue
+            }
             let bucket: PageBucket
             if let existing = buckets[pageID] {
                 bucket = existing
@@ -534,25 +951,27 @@ private extension MetalRenderer {
             } else {
                 continue
             }
-            bucket.advance()
-            let pixelAlignedInstances = instances.map { instance in
-                var aligned = instance
-                aligned.origin = MetalProjection.pixelAligned(
-                    instance.origin,
-                    canvasFrame: canvasFrame,
-                    scale: scale
-                )
-                return aligned
-            }
-            bucket.current.write(pixelAlignedInstances)
+            bucket.advanceForWrite()
+            bucket.current.write(instances)
             order.append(pageID)
         }
+    }
+
+    private func pixelAligned(_ instance: GlyphInstance) -> GlyphInstance {
+        var aligned = instance
+        aligned.origin = MetalProjection.pixelAligned(
+            instance.origin,
+            canvasFrame: canvasFrame,
+            scale: scale
+        )
+        return aligned
     }
 
     private func drawGlyphBuckets(
         _ buckets: [UInt32: PageBucket],
         order: [UInt32],
         encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
         uniforms: inout MetalProjectionUniforms
     ) {
         let stride = MemoryLayout<GlyphInstance>.stride
@@ -564,6 +983,7 @@ private extension MetalRenderer {
             guard buffer.primaryCount > 0 || !buffer.overflowBuffers.isEmpty else {
                 continue
             }
+            bucket.markCurrentInFlight(on: commandBuffer)
             encoder.setRenderPipelineState(atlas.isColorPage(id: pageID) ? colorPipeline : coveragePipeline)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
             encoder.setFragmentTexture(texture, index: 0)
@@ -586,11 +1006,13 @@ private extension MetalRenderer {
     private func drawSolids(
         _ buffer: DecorationBuffer,
         encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
         uniforms: inout MetalProjectionUniforms
     ) {
         guard buffer.count > 0, let mtlBuffer = buffer.current else {
             return
         }
+        buffer.markCurrentInFlight(on: commandBuffer)
         encoder.setRenderPipelineState(solidPipeline)
         encoder.setVertexBuffer(mtlBuffer, offset: 0, index: 0)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
@@ -600,11 +1022,13 @@ private extension MetalRenderer {
     private func drawLines(
         _ buffer: DecorationBuffer,
         encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
         uniforms: inout MetalProjectionUniforms
     ) {
         guard buffer.count > 0, let mtlBuffer = buffer.current else {
             return
         }
+        buffer.markCurrentInFlight(on: commandBuffer)
         encoder.setRenderPipelineState(linePipeline)
         encoder.setVertexBuffer(mtlBuffer, offset: 0, index: 0)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)

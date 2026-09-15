@@ -8,6 +8,13 @@ final class MetalDecorationTests: XCTestCase {
     private let font = CTFontCreateWithName("Menlo" as CFString, 13, nil)
     private var nextRevision: UInt64 = 1
 
+    func testInstancePageOrderIsDeterministic() {
+        XCTAssertEqual(
+            MetalRenderer.deterministicPageOrder([7, 2, 11, 2]),
+            [2, 2, 7, 11]
+        )
+    }
+
     // MARK: - Highlights
 
     func testStandardHighlightSpansCTLineOffsets() throws {

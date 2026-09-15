@@ -72,8 +72,9 @@ enum MetalCommands {
         metalView.displayIfNeeded()
         Measurement.pumpRunLoop(seconds: 0.3)
         let metalActive = metalView.isMetalRenderingActive
-        let atlasNonZero = metalView.metalAtlasCoverageNonZeroTexels
-        let atlasTotal = metalView.metalAtlasCoverageTexelCount
+        let atlasCensus = metalView.metalAtlasCensus()
+        let atlasNonZero = atlasCensus?.nonzero ?? 0
+        let atlasTotal = atlasCensus?.total ?? 0
         warn("  layout GlyphInstance size=\(metalView.metalGlyphInstanceSize) stride=\(metalView.metalGlyphInstanceStride) atlasNonZero=\(atlasNonZero)/\(atlasTotal) fragments=\(metalView.metalFragmentCount) instances=\(metalView.metalInstanceCount) metalActive=\(metalActive)")
 
         guard let glyphs = metalView.captureMetalGlyphSnapshot() else {
@@ -126,11 +127,12 @@ enum MetalCommands {
         }
         cgWindow.close()
 
-        // Coverage overlap: of the pixels the Metal pass painted (alpha), how many land on a CG
-        // "ink" pixel (materially brighter than the editor background). ~1.0 means Metal and CG
-        // agree on where the glyphs are; a low value means misplacement / a flip / missing glyphs.
-        let overlap = glyphCoverageOverlap(metalGlyphs: glyphs, cgFrame: cgFrame.rep)
-        let extra = "metalCoverage=\(fmt(overlap.metalCoverageFraction)) onCGInk=\(fmt(overlap.overlapFraction)) metalActive=\(metalActive)"
+        // The canvas is opaque, so identify ink relative to each backend's own corner background
+        // instead of treating every alpha pixel as glyph coverage.
+        let metalFrame = presentedRep ?? glyphs
+        let overlap = glyphCoverageOverlap(metalGlyphs: metalFrame, cgFrame: cgFrame.rep)
+        let difference = meanAbsoluteDifference(metalFrame, cgFrame.rep)
+        let extra = "metalCoverage=\(fmt(overlap.metalCoverageFraction)) onCGInk=\(fmt(overlap.overlapFraction)) mad=\(fmt(difference.mean)) mismatch=\(fmt(difference.mismatchFraction)) metalActive=\(metalActive)"
         ResultLog.row("snapshot_metal_coverage", file: pathOrSynthetic, sizeBytes: UInt64(text.utf8.count), seconds: 0, extra: extra)
         warn("snapshot-metal: \(extra)")
 
@@ -250,9 +252,11 @@ private extension MetalCommands {
         guard width > 0, height > 0 else {
             return (0, 0)
         }
-        // Editor background ≈ the frame's top-right corner (past the text on the first line).
-        let background = cgFrame.colorAt(x: width - 2, y: 2) ?? .black
-        let backgroundLuma = luma(background)
+        // Editor backgrounds ≈ each frame's top-right corner (past first-line text).
+        let metalBackground = metalGlyphs.colorAt(x: width - 2, y: 2) ?? .black
+        let cgBackground = cgFrame.colorAt(x: width - 2, y: 2) ?? .black
+        let metalBackgroundLuma = luma(metalBackground)
+        let cgBackgroundLuma = luma(cgBackground)
         var painted = 0
         var onInk = 0
         var total = 0
@@ -260,11 +264,12 @@ private extension MetalCommands {
         for y in stride(from: 0, to: height, by: step) {
             for x in stride(from: 0, to: width, by: step) {
                 total += 1
-                guard let metal = metalGlyphs.colorAt(x: x, y: y), metal.alphaComponent > 0.06 else {
+                guard let metal = metalGlyphs.colorAt(x: x, y: y),
+                      abs(luma(metal) - metalBackgroundLuma) > 0.08 else {
                     continue
                 }
                 painted += 1
-                if let cg = cgFrame.colorAt(x: x, y: y), abs(luma(cg) - backgroundLuma) > 0.12 {
+                if let cg = cgFrame.colorAt(x: x, y: y), abs(luma(cg) - cgBackgroundLuma) > 0.08 {
                     onInk += 1
                 }
             }

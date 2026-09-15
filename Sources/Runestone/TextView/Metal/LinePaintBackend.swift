@@ -10,8 +10,26 @@ protocol LinePaintBackend: AnyObject {
     func removeFragments(ids: Set<LineFragmentID>)
     func invalidateGlyphs(forLineIDs ids: Set<DocumentLineNodeID>)
     func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat)
+    func setCanvasPaintSpec(_ spec: CanvasPaintSpec)
     func setNeedsDisplay()
     func compactInstanceBuffers()
+    /// Line insertion/deletion shifts every following fragment. Metal must rebuild from the
+    /// updated frames even when the edited line's glyphs did not change.
+    func invalidateForLineStructureChange()
+}
+
+struct CanvasPaintSpec {
+    var frame: CGRect
+    var backgroundColor: UIColor
+    var lineSelectionRect: CGRect?
+    var lineSelectionColor: UIColor
+    var pageGuideFrame: CGRect?
+    var pageGuideHairlineWidth: CGFloat
+    var pageGuideHairlineColor: UIColor
+    var pageGuideShadingColor: UIColor
+    var showsPageGuideShading: Bool
+    var appearance: NSAppearance?
+    var colorSpace: NSColorSpace
 }
 
 struct LineFragmentPaintSpec {
@@ -29,6 +47,8 @@ struct LineFragmentPaintSpec {
     var fallbackColor: UIColor
     /// Appearance to resolve dynamic colors against; the Metal backend needs it off the render pass.
     var appearance: NSAppearance?
+    /// Output color space selected from the attached window/screen.
+    var colorSpace: NSColorSpace = .sRGB
     /// Monotonic identity for `line`, immune to `CTLine` pointer reuse (`LineFragment.revision`).
     /// Metal keys its glyph-extraction cache on this instead of `ObjectIdentifier(line)`.
     var lineRevision: UInt64
@@ -58,6 +78,41 @@ struct LineFragmentDecorations {
     var invisibleFont: UIFont = .systemFont(ofSize: 12)
     var invisibleTextColor: UIColor = .label
     var invisibleWarningColor: UIColor = .systemRed
+}
+
+extension InvisibleCharacterLayout: Equatable {
+    static func == (lhs: InvisibleCharacterLayout, rhs: InvisibleCharacterLayout) -> Bool {
+        guard lhs.warnings == rhs.warnings, lhs.symbols.count == rhs.symbols.count else {
+            return false
+        }
+        return zip(lhs.symbols, rhs.symbols).allSatisfy { left, right in
+            left.string == right.string
+                && left.x == right.x
+                && left.isEndOfLine == right.isEndOfLine
+                && ((left.color?.isEqual(right.color) == true)
+                    || (left.color == nil && right.color == nil))
+        }
+    }
+}
+
+extension LineFragmentDecorations: Equatable {
+    static func == (lhs: LineFragmentDecorations, rhs: LineFragmentDecorations) -> Bool {
+        lhs.highlighted == rhs.highlighted
+            && lhs.markedRange == rhs.markedRange
+            && lhs.markedColor.isEqual(rhs.markedColor)
+            && lhs.markedRadius == rhs.markedRadius
+            && lhs.unfocusedAlpha == rhs.unfocusedAlpha
+            && lhs.focusedRanges == rhs.focusedRanges
+            && lhs.foldPlaceholder == rhs.foldPlaceholder
+            && lhs.foldPlaceholderColor.isEqual(rhs.foldPlaceholderColor)
+            && lhs.foldPlaceholderBackgroundColor.isEqual(rhs.foldPlaceholderBackgroundColor)
+            && lhs.fragmentRangeUpperBound == rhs.fragmentRangeUpperBound
+            && lhs.endsWithLineBreak == rhs.endsWithLineBreak
+            && lhs.invisibles == rhs.invisibles
+            && lhs.invisibleFont == rhs.invisibleFont
+            && lhs.invisibleTextColor.isEqual(rhs.invisibleTextColor)
+            && lhs.invisibleWarningColor.isEqual(rhs.invisibleWarningColor)
+    }
 }
 
 /// CG path: today's `ViewReuseQueue` + `LineFragmentView` drawing.
@@ -103,6 +158,8 @@ final class CGLinePaintBackend: LinePaintBackend {
 
     func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat) {}
 
+    func setCanvasPaintSpec(_ spec: CanvasPaintSpec) {}
+
     func setNeedsDisplay() {
         for view in reuseQueue.visibleViews.values {
             view.setNeedsDisplay()
@@ -110,4 +167,6 @@ final class CGLinePaintBackend: LinePaintBackend {
     }
 
     func compactInstanceBuffers() {}
+
+    func invalidateForLineStructureChange() {}
 }

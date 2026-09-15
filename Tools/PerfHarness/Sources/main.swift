@@ -27,8 +27,8 @@ func printUsageAndExit() -> Never {
     Commands:
       open <path> [--highlighted] [--deferred] [--viewport] [--chunked] [--mmap]
       scroll <path> [--frames N] [--highlighted] [--deferred]
-      keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred]
-      occurrence-keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred]
+      keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred] [--metal]
+      occurrence-keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred] [--metal]
       goto <path> --percent N [--highlighted] [--deferred]
       search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
       save <path> [--highlighted] [--deferred]
@@ -64,6 +64,7 @@ let options = Commands.Options(
     chunked: hasFlag("--chunked", in: rest),
     mmap: hasFlag("--mmap", in: rest),
     viewport: hasFlag("--viewport", in: rest),
+    metal: hasFlag("--metal", in: rest),
     language: flagValue("--lang", in: rest)
 )
 
