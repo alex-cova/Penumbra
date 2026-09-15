@@ -76,6 +76,10 @@ public extension Keymap {
         // Space is always a key-code chord (`KeyChord(event:)` never matches it as `" "`), so
         // Control-Space must be bound by 0x31 — the VS Code / Xcode / IntelliJ complete shortcut.
         map.bind(KeyStroke(KeyChord(code: 0x31, .control)), to: .triggerCompletion)
+        map.bind(KeyStroke(KeyChord("/", .command)), to: .toggleComment)
+        // Return is always a key-code chord, like Space above — 0x24 is kVK_Return.
+        map.bind(KeyStroke(KeyChord(code: 0x24, .command)), to: .insertLineBelow)
+        map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .shift])), to: .insertLineAbove)
         return map
     }()
 

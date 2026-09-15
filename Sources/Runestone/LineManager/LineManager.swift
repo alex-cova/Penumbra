@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-struct LineMetric {
+struct LineMetric: Equatable {
     var totalLength: Int
     var delimiterLength: Int
 }
@@ -132,6 +132,14 @@ final class LineManager {
 
     func rebuild() {
         RunestoneSignposts.interval("LineManager.rebuild") {
+            // Piece-tree storage can report line metrics straight from its UTF-8 bytes. The
+            // `rangeOfNextNewLine` walk below reads one UTF-16 unit at a time, which on a piece
+            // tree costs an array allocation plus a byte walk from the nearest checkpoint for
+            // *every* unit in the document.
+            if let metrics = stringView.lineMetrics() {
+                rebuild(fromLineMetrics: metrics)
+                return
+            }
             var metrics: [LineMetric] = []
             var lastDelimiterEnd = 0
             var workingNewLineRange = stringView.rangeOfNextNewLine(startingAt: 0)

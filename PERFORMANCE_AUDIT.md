@@ -204,6 +204,17 @@ this package to actual Swift 6 language mode today, with zero other changes, wou
 (`EditorIntelligence`/`EditorIntelligenceLSP` were not included in this pass; given their actor-first
 design they are likely far closer to compliant, but that is a hypothesis, not measured here.)
 
+**2026-09-15 correction — this section is now stale, verified by re-reading, not assumed.**
+`Package.swift` today declares `// swift-tools-version: 6.0` with a shared `swift6: [SwiftSetting] =
+[.swiftLanguageMode(.v6)]` applied to every library, test, harness, and example target. The package
+*is* in Swift 6 language mode, and has been building clean under it throughout this session
+(`swift build`, `swift build --build-tests`: 0 errors). The migration this section describes as
+future work (resolving the 8,292 diagnostics) has evidently already happened in an intervening pass
+not otherwise called out in this document. The rest of Phase 1 §10 and Phase 3's per-topic
+concurrency notes (actor topology, `@unchecked Sendable` sites, `Span`/`RawSpan` availability) were
+spot-checked during this pass and still read as accurate descriptions of the current code; only the
+"does it build in Swift 6 mode" conclusion itself needed correcting.
+
 ---
 
 ## Phase 2 — Bottlenecks ranked by impact on the 500 MB–2 GB goal
@@ -452,14 +463,15 @@ AppKit port; between notifications the dictionary can still grow for the duratio
   (Phase 2 #2) and the shipping find panel's `SearchController` scan (Phase 2 #5) are **still not**
   cancellable — once started, both run to completion even if the user closes the file or clears the
   search field; neither has been touched yet.
-- **Does it build in Swift 6 language mode today?** No — measured, not assumed (Phase 1 §10: 0 errors
-  under Swift 5 mode + `-strict-concurrency=complete`, but 8,292 of those diagnostics are explicitly
-  marked as becoming hard errors under actual Swift 6 language mode). **This means "make it Swift 6
-  compliant" and "make it fast at 2 GB" are two separate, largely orthogonal bodies of work.** The
-  concurrency cleanup (isolating `LineManager`/`StringView`/etc. properly, resolving 8k+ diagnostics)
-  should not be scheduled as if it were part of the performance work, and performance work should not be
-  blocked on it — the worst bottlenecks found here (full-document copy per keystroke, eager full parse,
-  single-buffer memmove) are equally severe in Swift 5 mode today.
+- **Does it build in Swift 6 language mode today?** **Yes as of 2026-09-15** (see the correction
+  note at the end of Phase 1 §10) — this was "No" when originally measured (0 errors under Swift 5
+  mode + `-strict-concurrency=complete`, with 8,292 of those diagnostics marked as becoming hard
+  errors under actual Swift 6 language mode); the migration has since landed. The historical framing
+  below is kept for context: at the time, the point stood that "make it Swift 6 compliant" and "make
+  it fast at 2 GB" were two separate, largely orthogonal bodies of work, and neither should block the
+  other — the worst bottlenecks found here (full-document copy per keystroke, eager full parse,
+  single-buffer memmove) were equally severe regardless of language mode. That separation-of-concerns
+  reasoning remains valid even though the underlying premise (not-yet-Swift-6) no longer holds.
 
 ---
 
@@ -706,6 +718,203 @@ Instruments templates and what each is for:
   `IndexingService`/`Workspace`/LSP actors queue up redundant full-document jobs during rapid typing
   before the debounce fix (migration step 1), and confirm the queue collapses to single in-flight jobs
   after it.
+
+---
+
+## 2026-09-15 finding, since fixed — `TextViewState(text:)` / `PieceTree(string:)` in-memory
+construction was ~1,000x slower per byte than the mmap `.load()` path, for any document ≥256 KiB
+
+**Status: CONFIRMED, root-caused, and now \*\*fixed\*\*** (2026-09-15, in a later pass dedicated to it —
+see "As fixed" at the end of this section for what the fix actually turned out to be, which is not
+what the original "suggested fix direction" below predicted). The finding as originally written is
+kept intact below, because the remeasurement history matters: part of it had already been addressed
+by add-buffer checkpoints landing in between, which changed the numbers by two orders of magnitude
+before this pass started.
+
+**Symptom:** constructing a `TextViewState` from an in-memory `String` ≥256 KiB (`StringView`'s
+piece-tree threshold — see Phase 1 §1) is dramatically slower than loading an equivalent file via
+`TextViewState.load(contentsOf:)`. Measured directly, three clean data points, `PerfHarness keystroke`
+end-to-end wall time (`/usr/bin/time -p`, same machine, consecutive runs, `-c release`):
+
+| Document size | Wall time | Effective throughput |
+|---|---|---|
+| 1 MB (short lines) | 41.83s | ~24 KB/s |
+| 4 MB (short lines) | 154.67s | ~26 KB/s |
+| 10 MB (short lines, `Tools/PerfHarness/Fixtures/short_lines_10mb.txt`) | 492.34s (**8m 12s**) | ~20 KB/s |
+
+The keystroke itself, once state is built, is fast (p50 0.001–0.003s in the same runs) — this is
+**entirely construction-time cost**, and it dwarfs everything else PerfHarness measures. For
+comparison, Phase 5 §2's own numbers for the mmap `.load()` path on the same 10 MB short-lines
+fixture: **37ms** load — roughly **13,000x** faster for the same size document. Scaling across the
+three points above is roughly linear-with-a-huge-constant (×4 size → ×3.7 time; ×10 size → ×11.8
+time), not quadratic — see root cause below for why it isn't O(n²) despite looking like it should be.
+
+**Root cause, read directly in `PieceTree.swift`:**
+
+1. `PieceTree.init(string:)` (`PieceTree.swift:319`, used by `TextViewState(text:)` for any in-memory
+   string) sets `originalCheckpoints = []` unconditionally (inherited from `init()`,
+   `PieceTree.swift:303-305`) and inserts the whole string into the **add buffer** via
+   `replaceText`/`insert(_:atUTF16:)`. Checkpoints (the 64 KiB UTF-16↔UTF-8 index Phase 4's "Decoding"
+   section describes) are built **only** by the other constructor, `init(mapping:scan:)`
+   (`PieceTree.swift:327-339`), used exclusively by the file-backed/mmap load path.
+2. `insert(_:atUTF16:)` (`PieceTree.swift:664-686`) does chunk a large insert into pieces of at most
+   `UTF8DocumentScanner.checkpointStride` (**64 × 1024 = 65536 bytes**, `UTF8DocumentScanner.swift:149`)
+   — this is what keeps the overall cost linear rather than quadratic, not a deliberate optimization
+   for this path.
+3. `appendUTF16Units(of:localUTF16:take:into:)` (`PieceTree.swift:906-938`) branches on
+   `piece.source == .add || originalCheckpoints.isEmpty` (`:913`) — **always true** for every piece in
+   an in-memory-constructed document, since (1) means there are no checkpoints and every piece is an
+   add-buffer piece. That branch calls `UTF8DocumentScanner.appendUTF16Units(from: bytes, utf16Offset:
+   localUTF16, ...)` where `bytes` is that **whole piece's** byte span (up to 64 KiB per point 2), and
+   `utf8Position(forUTF16Offset:in:)` (`UTF8DocumentScanner.swift:53-71`) **linearly scans from byte 0
+   of that span every single call** — there is no bounded/checkpointed fast path for add-buffer content
+   at all.
+4. `LineManager.rebuild()` (`LineManager.swift:133-145`) calls `stringView.rangeOfNextNewLine(startingAt:)`
+   **once per line** to build the initial line-metrics table — so a short-lines document pays a
+   from-piece-start rescan (bounded by the ~64 KiB piece it falls in, not the whole document — hence
+   linear, not quadratic overall) on **every single line**, redundantly re-decoding the same UTF-8
+   bytes it already decoded for the previous line in the same piece. For ~40-byte lines in a 64 KiB
+   piece, that's roughly 1,600 lines each redundantly rescanning up to 64 KiB — the source of the
+   ~1,000x constant-factor blowup relative to the properly-checkpointed mmap path.
+
+**Who's affected:** any caller of the public `TextViewState(text:theme:)` / `TextViewState(text:theme:
+language:...)` initializers with a string ≥256 KiB — i.e., **any host app opening/pasting/constructing
+a multi-hundred-KB-or-larger in-memory document without going through `.load(contentsOf:)`**. Untitled
+buffers, paste-heavy workflows, and any programmatic `TextView.text = bigString` assignment are all
+exposed. This session's own `StringMaterializationRegressionTests.swift` (added the same day this was
+found) hit exactly this path — its fixtures had to be kept just over the 256 KiB threshold rather than
+realistically sized specifically because of this cost, which in hindsight was this bug, not incidental
+test-environment slowness.
+
+**Suggested fix direction (superseded — see "As fixed" below):** build `originalCheckpoints` for
+add-buffer pieces too — either (a) have `insert(_:atUTF16:)`'s chunking loop compute and record a
+checkpoint per ~64 KiB chunk it already creates (cheap, since it's already iterating the bytes), so
+`appendUTF16Units` can take the bounded-scan branch for add-buffer pieces exactly as it does for
+original/mmap pieces, or (b) run the same `UTF8DocumentScanner.scan(_:)` used by `init(mapping:scan:)`
+over the input string in `init(string:)` and seed `originalCheckpoints` from it before inserting. Not
+attempted here — this is real piece-tree/storage-layer surgery, the exact area explicitly out of scope
+for the pass that found it; needs its own review and benchmark-driven verification (the fixtures and
+`PerfHarness` methodology in Phase 5 already exist and are directly reusable for that).
+
+### As fixed (2026-09-15)
+
+**Direction (a) above had already landed** by the time this was picked up: add-buffer pieces carry
+their own 4 KiB-stride `Piece.checkpoints`, and `split(atUTF16:)` recomputes them for both halves.
+That alone took the 10 MB case from the 492s recorded above to **26.1s** — a 19x improvement that
+made the original numbers in this section obsolete, and is why the fix pass re-baselined from
+scratch instead of trusting them.
+
+**What was still slow was not checkpoint coverage but the read granularity.** Point 4 above was the
+real remaining cost, and more specifically: `LineManager.rebuild()` walks
+`stringView.rangeOfNextNewLine(startingAt:)`, which on piece-tree storage reads **one UTF-16 unit at
+a time** via `utf16Unit(at:)` → `utf16Units(in: NSRange(length: 1))`. Every single-unit read
+heap-allocates a one-element `[unichar]`, then a `Data`, a `String`, and another `Array` inside
+`UTF8DocumentScanner.appendUTF16Units`, and resolves its offset by stepping bytes from the nearest
+4 KiB checkpoint (~2 KiB on average). Checkpoints bounded that walk; they could not make it go away.
+For a 10 MB ASCII document that is ~10.5M iterations of four allocations plus a ~2 KiB byte walk.
+
+Note this also means the cost was **never specific to `TextViewState(text:)`**. Two other entry
+points reached the identical `rebuild()` path and were equally affected: the `TextInputView.text`
+setter (`TextView.text = bigString`) and `StringSyntaxHighlighter.syntaxHighlight(_:)`. Fixing
+`TextViewState`'s initializer alone — which is where the original finding pointed — would have left
+both of those slow.
+
+**The fix, therefore, is in `rebuild()` rather than in any one caller:**
+
+1. `UTF8DocumentScanner.LineScanState` + `scanLines(_:state:onLine:)` / `finishLineScan(state:onLine:)`
+   — a resumable form of the existing single-pass `scan`. The single-pass version cannot be applied
+   per piece because it looks ahead inside its own buffer (`bytes[index + 1] == 0x0A`) and always
+   emits a trailing delimiter-less line. The carry state holds the in-progress line's UTF-16 length,
+   a pending CR, and the leading bytes of a scalar whose continuation bytes land in the next buffer.
+2. `PieceTree.lineMetrics()` walks pieces in tree order via the existing `withUTF8(of:)`, threading
+   that state across boundaries. It previously returned `[LineMetric(0, 0)]` for any tree without a
+   file mapping, so it was unusable for in-memory documents, and it rescanned the whole original
+   mapping rather than the tree — meaning it was also stale after any edit. It had no callers.
+3. `StringView.lineMetrics()` exposes that for piece-tree storage and returns `nil` for contiguous
+   storage, which is already well served by `NSString.getLineStart` (`NewLineFinder`).
+4. `LineManager.rebuild()` prefers it, falling back to the `rangeOfNextNewLine` walk. After this
+   change that fallback only ever runs on contiguous storage, so the expensive combination
+   (piece tree + per-unit reads) no longer exists on this path.
+
+Separately, `PieceTree.init(string:)` now seeds the add buffer from the string's UTF-8 in one pass
+(`String.withUTF8`), and `StringView` gained a `String`-typed `makeStorage` so a large document skips
+the `NSMutableString` round trip. Ingest previously made five full passes over the text: an
+`NSMutableString` copy, the `NSString`→`String` bridge, `Array(string.utf8)`, then a fresh `String`
+and a second `Array(string.utf8)` for every 64 KiB chunk. Piece sizes and boundary placement are
+unchanged, so later edits split and extend exactly as before.
+
+**Measured, same machine, `-c release`, `PerfHarness open`, ASCII short-lines fixtures.** These are
+`state_init` (the `TextViewState` initializer alone), not the end-to-end `keystroke` wall times the
+table above reports, so they are not directly comparable to the 492s figure — the 26.1s "before"
+column is the re-baselined equivalent:
+
+| Size | Storage | Before (re-baselined) | After stage 1 | After ingest fix | Total |
+|---|---|---|---|---|---|
+| 256 KiB | contiguous | 0.0098s | 0.0057s | 0.0055s | 1.8x |
+| 1 MiB | piece tree | 2.647s | 0.0085s | 0.0070s | **378x** |
+| 4 MiB | piece tree | 11.493s | 0.0184s | 0.0175s | **657x** |
+| 10 MiB | piece tree | 26.130s | 0.0449s | 0.0337s | **775x** |
+
+Throughput is now near-linear (2.5x the bytes from 4→10 MiB costs 1.9x the time) at roughly
+3.4 ms/MiB, against ~2.6 **s**/MiB before. The 256 KiB row barely moves because it sits just under
+the piece-tree threshold and was already on the fast contiguous path — the cliff was always exactly
+at that boundary, which is itself the clearest confirmation of the root cause.
+
+For reference, `.load(contentsOf:)` with `--mmap` on the same 10 MiB file measures 0.036s in the same
+run. **In-memory construction is now at parity with the mmap path** (0.034s vs 0.036s) rather than
+~700x behind it.
+
+With the line index no longer dominant, the tree-sitter parse is what `state_init` now consists of.
+The new `line_index` row in `PerfHarness open` separates the two (it times a plain-text
+`TextViewState` over the same text, which runs ingest + line index + line-ending detection and no
+parse):
+
+| Case | `state_init` | of which `line_index` | parse share |
+|---|---|---|---|
+| 1 MiB, highlighted, `.eager` | 0.0689s | 0.0030s | 96% |
+| 4 MiB, highlighted, `.eager` | 0.0745s | 0.0108s | 86% |
+| 10 MiB, highlighted, `.viewport` | 0.0371s | 0.0290s | 22% |
+
+**Policy asymmetry, deliberately left in place:** `TextViewState(text:)` still defaults to
+`SyntaxParsePolicy.eager` while `TextViewState.load(contentsOf:)` defaults to `.viewport`. Changing
+it would break the documented contract that `detectedIndentStrategy` is populated once `init`
+returns. `.eager` is consequently where any remaining superlinearity at 10 MiB+ will live, and a
+host that cares should pass `.viewport` explicitly — as the `.viewport` row above shows, that keeps
+a 10 MiB highlighted open under 40 ms.
+
+**Not done, by measurement rather than by omission:** the plan for this pass also contemplated
+making `utf16Unit(at:)` / `utf16Units(in:)` cheap in general (a forward-read cursor for add pieces,
+plus decoding UTF-8 → UTF-16 directly instead of the `Data`/`String`/`Array` round trip), gated on
+whether they were still hot afterwards. They are not: after the change, keystroke p95 on the 10 MiB
+fixture is 44 µs, the worst scroll frame is 0.73 ms, and construction is at mmap parity. The
+optimization was skipped rather than implemented speculatively. Those two functions are still
+allocation-heavy per call, so this remains available if a future profile points at them.
+
+**Test coverage:** `Tests/RunestoneTests/DocumentLineScanTests.swift` (18 tests). The risk the
+resumable scanner introduces is entirely about buffer boundaries, so the bulk of it is equivalence
+testing: every fixture scanned at every single split point, at every *pair* of split points, and
+with every byte in its own buffer, each compared against the single-pass `scan`. Fixtures cover
+LF/CR/CRLF/NEL/LS/PS, multi-byte scalars, surrogate pairs, both trailing-newline cases, and empty.
+Beyond that: a differential check that the piece-tree line index matches the contiguous
+`NewLineFinder` index line-for-line (count, location, `totalLength`, `delimiterLength`); the same
+differential under a forced tiny `UTF8DocumentScanner.checkpointStride`, which is now a
+`nonisolated(unsafe) static var` for exactly this reason (following `DocumentLoader.chunkByteCount`'s
+precedent) so boundary cases don't need megabyte fixtures; correctness after edits that make
+`split(atUTF16:)` cut a piece **between a CR and its LF**, which the seed and insert paths
+deliberately avoid but an edit can still produce; and all three `rebuild()` entry points
+(`TextViewState(text:)`, `TextView.text =`, `StringSyntaxHighlighter`) agreeing on a document over
+the 256 KiB threshold. Full suite: 1038 tests, 0 failures.
+
+Two mutation checks were run to confirm the suite actually constrains the implementation. Removing
+the continuation-byte alignment from `seed` fails `testSeededPieceTreeRoundTripsContentAndLength`
+immediately (a halved `😀` measures 4 UTF-16 units instead of 2, and content is corrupted). Removing
+the CRLF guard from `seed` fails **nothing** — which is correct and worth recording: that guard only
+keeps per-piece `lineFeedCount` honest, and `lineFeedCount` is read solely by the
+`lineFeedCount == 0` whole-piece skip in `rangeOfNextNewLine`, where over-counting merely disables
+an optimization. `lineMetrics()` carries the pending CR across pieces and is right either way. The
+guard is kept for consistency with `insert(_:atUTF16:)` and is documented in-code as accuracy rather
+than correctness, instead of being pinned by a test that would have to expose piece internals to
+assert a performance hint.
 
 ---
 

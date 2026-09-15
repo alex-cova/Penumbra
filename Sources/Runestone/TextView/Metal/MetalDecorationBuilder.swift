@@ -15,7 +15,7 @@ import simd
 ///
 /// Draw order (matching Core Graphics): `underlaySolids` + `underlayTriangles` paint *below* the
 /// glyphs, `overlaySolids` + `overlayGlyphs` paint *above* them. `symbolGlyphs` sit with the text.
-struct MetalDecorationGeometry {
+struct MetalDecorationGeometry: Equatable {
     var underlaySolids: [SolidInstance] = []
     var underlayTriangles: [DecorationVertex] = []
     var symbolGlyphs: [GlyphInstance] = []

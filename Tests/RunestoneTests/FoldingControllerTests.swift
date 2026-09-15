@@ -351,7 +351,7 @@ private extension FoldingControllerTests {
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         let provider = TreeSitterLineFoldProvider()
         provider.languageMode = languageMode
         foldingController.foldProvider = provider

@@ -93,13 +93,17 @@ private extension OccurrenceHighlightController {
     }
 
     func term(for selectedRange: NSRange?, minimumLength: Int) -> Term? {
-        let string = stringView.string
-        guard let selectedRange, selectedRange.location <= string.length else {
+        // Bounded: only `stringView.length` (O(1)) plus a windowed `substring(in:)` around the
+        // caret/selection. Must not touch `stringView.string` — this runs synchronously on every
+        // keystroke (before the debounce below), so a full materialization here would make typing
+        // O(document size) on a file-backed document whenever occurrence highlighting is enabled.
+        let documentLength = stringView.length
+        guard let selectedRange, selectedRange.location <= documentLength else {
             return nil
         }
         if selectedRange.length == 0 {
             guard let tokenizer,
-                  let wordRange = SelectNextOccurrence.wordRange(at: selectedRange.location, in: string, tokenizer: tokenizer),
+                  let wordRange = SelectNextOccurrence.wordRange(at: selectedRange.location, documentLength: documentLength, tokenizer: tokenizer),
                   wordRange.length >= minimumLength,
                   let word = stringView.substring(in: wordRange),
                   isHighlightable(word) else {
@@ -108,7 +112,7 @@ private extension OccurrenceHighlightController {
             return Term(text: word, currentRange: wordRange, wholeWord: true)
         }
         guard selectedRange.length >= minimumLength,
-              NSMaxRange(selectedRange) <= string.length,
+              NSMaxRange(selectedRange) <= documentLength,
               let text = stringView.substring(in: selectedRange),
               isHighlightable(text) else {
             return nil
@@ -126,18 +130,23 @@ private extension OccurrenceHighlightController {
 
     func runSearch(term: Term, generation: Int) {
         guard generation == self.generation else { return }
-        let string = stringView.string
-        if string.length < Self.offMainThreshold {
-            let matches = matchRanges(for: term, in: string)
+        let documentLength = stringView.length
+        if documentLength < Self.offMainThreshold {
+            let matches = matchRanges(for: term, in: stringView.string)
             apply(matches: matches, current: term.currentRange, generation: generation)
             return
         }
-        let text = string as String
+        // Large document: avoid materializing UTF-16 on the main thread. A piece-tree buffer
+        // hands `FindSearchEngine` a `Sendable`, non-materializing snapshot — the same source
+        // `TextView.makeFindTextSource()` uses for Find. Only contiguous storage (bounded to
+        // `StringView.pieceTreeUntitledThreshold`, i.e. small/untitled buffers) falls back to a
+        // materialized source, matching `makeFindTextSource()`'s own fallback.
+        let source: any FindTextSource = stringView.contentSnapshot() ?? StringFindTextSource(stringView.string as String)
         let options = FindSearchOptions(query: term.text, matchCase: true, wholeWord: term.wholeWord, useRegex: false)
         let cap = Self.maxMatches
         let anchor = term.currentRange.location
         searchTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome = FindSearchEngine.search(options: options, in: text, anchorLocation: anchor, maxHighlights: cap)
+            let outcome = FindSearchEngine.search(options: options, in: source, anchorLocation: anchor, maxHighlights: cap)
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, generation == self.generation else { return }

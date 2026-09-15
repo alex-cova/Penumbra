@@ -457,6 +457,21 @@ extension TextInputView {
         case .outdentLines:
             guard isEditable else { return true }
             shiftLeft()
+        case .toggleComment:
+            guard isEditable else { return true }
+            toggleComment()
+        case .insertLineAbove:
+            guard isEditable else { return true }
+            insertLine(above: true)
+        case .insertLineBelow:
+            guard isEditable else { return true }
+            insertLine(above: false)
+        case .sortLinesAscending:
+            guard isEditable else { return true }
+            sortSelectedLines(descending: false)
+        case .sortLinesDescending:
+            guard isEditable else { return true }
+            sortSelectedLines(descending: true)
         default:
             // Not a core action (palette, navigation, formatting, surround-with…).
             return false

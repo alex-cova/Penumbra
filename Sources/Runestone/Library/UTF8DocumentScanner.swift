@@ -146,7 +146,12 @@ enum UTF8DocumentScanner {
         var isValid: Bool
     }
 
-    static let checkpointStride = 64 * 1024
+    /// Spacing of ``Checkpoint``s, and the byte bound on a single add-buffer piece.
+    ///
+    /// Overridable in tests so piece boundaries — a split scalar, a halved CRLF — can be forced
+    /// without multi-megabyte fixtures, the same way ``DocumentLoader/chunkByteCount`` is. Nothing
+    /// in production changes it.
+    nonisolated(unsafe) static var checkpointStride = 64 * 1024
 
     static func scan(_ bytes: UnsafeRawBufferPointer) -> Scan {
         var lines: [LineMetric] = []
@@ -161,7 +166,8 @@ enum UTF8DocumentScanner {
     static func scan(
         _ bytes: UnsafeRawBufferPointer,
         onLine: ((LineMetric) -> Void)?,
-        onProgress: ((Int) -> Void)?
+        onProgress: ((Int) -> Void)?,
+        checkpointStride: Int = UTF8DocumentScanner.checkpointStride
     ) -> Scan {
         var checkpoints: [Checkpoint] = [Checkpoint(utf8Offset: 0, utf16Offset: 0, lineCount: 0)]
         var currentUTF16 = 0
@@ -277,6 +283,220 @@ enum UTF8DocumentScanner {
     /// Line metrics matching ``LineBreakAccumulator`` / `NSString.getLineStart` (LF, CR, CRLF, NEL, LS, PS).
     static func lineMetrics(in bytes: UnsafeRawBufferPointer) -> [LineMetric] {
         scan(bytes).lineMetrics
+    }
+
+    // MARK: - Resumable line scan
+
+    /// Carry state for scanning one document that arrives in several buffers, e.g. ``PieceTree``
+    /// pieces.
+    ///
+    /// ``scan(_:onLine:onProgress:checkpointStride:)`` cannot be applied per buffer because it
+    /// looks ahead within its own buffer (`bytes[index + 1] == 0x0A`) and always emits a trailing
+    /// delimiter-less line. This holds everything a buffer boundary can interrupt so
+    /// ``scanLines(_:state:onLine:)`` can be called once per buffer instead.
+    struct LineScanState {
+        /// UTF-16 units of the line currently in progress. It has not been emitted yet.
+        fileprivate var currentUTF16 = 0
+        /// A CR ended the previous buffer. It pairs into a CRLF only if the next buffer opens with LF.
+        fileprivate var pendingCR = false
+        /// Leading bytes of a multi-byte scalar whose continuation bytes fall in a later buffer.
+        ///
+        /// `PieceTree` boundaries are scalar-aligned today (`insert` skips continuation bytes and
+        /// `split(atUTF16:)` resolves to scalar starts), but carrying the partial sequence keeps
+        /// the scanner correct for an arbitrary split, including a NEL/LS/PS delimiter cut in half.
+        fileprivate var partialScalar: [UInt8] = []
+        fileprivate var sawInvalidByte = false
+
+        /// Whether every sequence seen so far was well-formed UTF-8.
+        var isValid: Bool {
+            !sawInvalidByte
+        }
+
+        init() {}
+    }
+
+    /// Scans one buffer of a larger document, emitting every line that *completes* inside it.
+    ///
+    /// The in-progress line stays in `state` rather than being emitted, so consecutive buffers can
+    /// be fed in order. Call ``finishLineScan(state:onLine:)`` once after the last buffer to emit
+    /// the document's final, delimiter-less line.
+    ///
+    /// An empty buffer is a no-op: finalizing a pending CR here would break a CRLF whose LF is in a
+    /// later piece.
+    static func scanLines(
+        _ bytes: UnsafeRawBufferPointer,
+        state: inout LineScanState,
+        onLine: (LineMetric) -> Void
+    ) {
+        let count = bytes.count
+        guard count > 0 else {
+            return
+        }
+        var index = 0
+        if state.pendingCR {
+            state.pendingCR = false
+            if bytes[0] == 0x0A {
+                emitLine(&state, delimiterUTF16: 2, delimiterLength: 2, onLine)
+                index = 1
+            } else {
+                emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+            }
+        }
+        if !state.partialScalar.isEmpty {
+            index = completePartialScalar(bytes, from: index, state: &state, onLine: onLine)
+        }
+        while index < count {
+            let byte = bytes[index]
+            if byte == 0x0A {
+                emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+                index += 1
+            } else if byte == 0x0D {
+                if index + 1 < count {
+                    if bytes[index + 1] == 0x0A {
+                        emitLine(&state, delimiterUTF16: 2, delimiterLength: 2, onLine)
+                        index += 2
+                    } else {
+                        emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+                        index += 1
+                    }
+                } else {
+                    // Last byte of this buffer. The LF that would pair with it may open the next one.
+                    state.pendingCR = true
+                    index += 1
+                }
+            } else if let shape = sequenceShape(lead: byte) {
+                if shape.length == 1 {
+                    state.currentUTF16 += 1
+                    index += 1
+                    continue
+                }
+                if index + shape.length > count {
+                    state.partialScalar.removeAll(keepingCapacity: true)
+                    for offset in index..<count {
+                        state.partialScalar.append(bytes[offset])
+                    }
+                    return
+                }
+                let second = bytes[index + 1]
+                let third = shape.length > 2 ? bytes[index + 2] : 0
+                for offset in (index + 1)..<(index + shape.length) where bytes[offset] & 0xC0 != 0x80 {
+                    state.sawInvalidByte = true
+                }
+                if isDelimiterSequence(length: shape.length, byte, second, third) {
+                    emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+                } else {
+                    state.currentUTF16 += shape.units
+                }
+                index += shape.length
+            } else {
+                // Unexpected continuation byte or 0xF8+. Counts as one UTF-16 unit, as `scan` does.
+                state.sawInvalidByte = true
+                state.currentUTF16 += 1
+                index += 1
+            }
+        }
+    }
+
+    /// Emits the document's final line, which by definition has no delimiter. Call once, after the
+    /// last ``scanLines(_:state:onLine:)`` call.
+    static func finishLineScan(
+        state: inout LineScanState,
+        onLine: (LineMetric) -> Void
+    ) {
+        if !state.partialScalar.isEmpty {
+            // Truncated sequence at end of document. `scan` counts the lead byte's units and flags
+            // the document invalid; match that rather than dropping the partial scalar.
+            state.currentUTF16 += sequenceShape(lead: state.partialScalar[0])?.units ?? 1
+            state.partialScalar.removeAll(keepingCapacity: false)
+            state.sawInvalidByte = true
+        }
+        if state.pendingCR {
+            state.pendingCR = false
+            emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+        }
+        onLine(LineMetric(totalLength: state.currentUTF16, delimiterLength: 0))
+        state.currentUTF16 = 0
+    }
+
+    /// Consumes the continuation bytes of a scalar carried over from the previous buffer and
+    /// returns the index to resume plain scanning from.
+    private static func completePartialScalar(
+        _ bytes: UnsafeRawBufferPointer,
+        from start: Int,
+        state: inout LineScanState,
+        onLine: (LineMetric) -> Void
+    ) -> Int {
+        guard let shape = sequenceShape(lead: state.partialScalar[0]) else {
+            state.partialScalar.removeAll(keepingCapacity: true)
+            state.sawInvalidByte = true
+            return start
+        }
+        var index = start
+        while state.partialScalar.count < shape.length, index < bytes.count {
+            let byte = bytes[index]
+            if byte & 0xC0 != 0x80 {
+                state.sawInvalidByte = true
+            }
+            state.partialScalar.append(byte)
+            index += 1
+        }
+        guard state.partialScalar.count == shape.length else {
+            // This buffer did not finish the sequence either. Keep waiting.
+            return index
+        }
+        let sequence = state.partialScalar
+        state.partialScalar.removeAll(keepingCapacity: true)
+        let third = sequence.count > 2 ? sequence[2] : 0
+        if isDelimiterSequence(length: shape.length, sequence[0], sequence[1], third) {
+            emitLine(&state, delimiterUTF16: 1, delimiterLength: 1, onLine)
+        } else {
+            state.currentUTF16 += shape.units
+        }
+        return index
+    }
+
+    private static func emitLine(
+        _ state: inout LineScanState,
+        delimiterUTF16: Int,
+        delimiterLength: Int,
+        _ onLine: (LineMetric) -> Void
+    ) {
+        onLine(LineMetric(totalLength: state.currentUTF16 + delimiterUTF16, delimiterLength: delimiterLength))
+        state.currentUTF16 = 0
+    }
+
+    /// Bytes a sequence with this lead byte occupies, and the UTF-16 units it contributes.
+    /// `nil` for a byte that cannot start a sequence.
+    private static func sequenceShape(lead: UInt8) -> (length: Int, units: Int)? {
+        if lead < 0x80 {
+            return (1, 1)
+        }
+        if lead < 0xC0 {
+            return nil
+        }
+        if lead < 0xE0 {
+            return (2, 1)
+        }
+        if lead < 0xF0 {
+            return (3, 1)
+        }
+        if lead < 0xF8 {
+            return (4, 2)
+        }
+        return nil
+    }
+
+    /// Whether a sequence is NEL (U+0085), LS (U+2028), or PS (U+2029) — the non-ASCII line
+    /// delimiters `NSString.getLineStart` recognizes. Bytes are passed positionally so the hot path
+    /// stays allocation-free.
+    private static func isDelimiterSequence(length: Int, _ first: UInt8, _ second: UInt8, _ third: UInt8) -> Bool {
+        if length == 2 {
+            return first == 0xC2 && second == 0x85
+        }
+        if length == 3 {
+            return first == 0xE2 && second == 0x80 && (third == 0xA8 || third == 0xA9)
+        }
+        return false
     }
 
     static func isValidUTF8(_ bytes: UnsafeRawBufferPointer) -> Bool {

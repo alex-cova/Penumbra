@@ -9,7 +9,7 @@ public extension TreeSitterLanguage {
             TreeSitterSwiftQueries.Query.highlightsFileURL,
             TreeSitterSwiftQueries.Query.highlightsSwiftUIFileURL
         ])
-        return TreeSitterLanguage(tree_sitter_swift(), highlightsQuery: highlightsQuery, injectionsQuery: nil, indentationScopes: .swift)
+        return TreeSitterLanguage(tree_sitter_swift(), highlightsQuery: highlightsQuery, injectionsQuery: nil, indentationScopes: .swift, lineCommentPrefix: "//")
     }
 
     private static func combinedQuery(fromFilesAt fileURLs: [URL]) -> TreeSitterLanguage.Query? {

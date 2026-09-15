@@ -9,7 +9,8 @@ public extension TreeSitterLanguage {
             tree_sitter_kotlin(),
             highlightsQuery: highlightsQuery,
             injectionsQuery: nil,
-            indentationScopes: .kotlin
+            indentationScopes: .kotlin,
+            lineCommentPrefix: "//"
         )
     }
 }

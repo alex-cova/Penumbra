@@ -16,10 +16,12 @@ public extension TreeSitterLanguage {
             tree_sitter_javascript(),
             highlightsQuery: highlightsQuery,
             injectionsQuery: injectionsQuery,
-            indentationScopes: .javaScript
+            indentationScopes: .javaScript,
+            lineCommentPrefix: "//"
         )
     }
 
+    // JSON has no comment syntax — `lineCommentPrefix` stays `nil`.
     static var json: TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_json(),
@@ -32,7 +34,8 @@ public extension TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_python(),
             highlightsQuery: QueryResources.query(named: "highlights", in: "Python"),
-            indentationScopes: .python
+            indentationScopes: .python,
+            lineCommentPrefix: "#"
         )
     }
 
@@ -40,12 +43,14 @@ public extension TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_yaml(),
             highlightsQuery: QueryResources.query(named: "highlights", in: "YAML"),
-            indentationScopes: .yaml
+            indentationScopes: .yaml,
+            lineCommentPrefix: "#"
         )
     }
 
     /// HTML. Supply ``BundledLanguageProvider`` (or ``HTMLLanguageProvider``) so `<script>` / `<style>`
-    /// inject JavaScript and CSS.
+    /// inject JavaScript and CSS. HTML has no line-comment syntax (only `<!-- -->`), so
+    /// `lineCommentPrefix` stays `nil` — ⌘/ is a no-op here, matching every other editor's HTML mode.
     static var html: TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_html(),
@@ -55,6 +60,7 @@ public extension TreeSitterLanguage {
         )
     }
 
+    // CSS has no line-comment syntax (only `/* */`), so `lineCommentPrefix` stays `nil`.
     static var css: TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_css(),
@@ -72,7 +78,8 @@ public extension TreeSitterLanguage {
         return TreeSitterLanguage(
             tree_sitter_typescript(),
             highlightsQuery: highlightsQuery,
-            indentationScopes: .javaScript
+            indentationScopes: .javaScript,
+            lineCommentPrefix: "//"
         )
     }
 

@@ -33,7 +33,7 @@ final class GraphQLLanguageTests: XCTestCase {
             languageProvider: nil,
             stringView: stringView,
             lineManager: lineManager)
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         let byteRange = ByteRange(from: 0, to: text.byteCount)
         let captures = languageMode.captures(in: byteRange)
         let names = Set(captures.map { $0.name })
@@ -67,7 +67,7 @@ final class GraphQLLanguageTests: XCTestCase {
             languageProvider: nil,
             stringView: stringView,
             lineManager: lineManager)
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         return languageMode
     }
 }

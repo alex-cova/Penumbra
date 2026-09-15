@@ -9,6 +9,7 @@ public extension TreeSitterLanguage {
         return TreeSitterLanguage(tree_sitter_graphql(),
                                   highlightsQuery: highlightsQuery,
                                   injectionsQuery: nil,
-                                  indentationScopes: .graphQL)
+                                  indentationScopes: .graphQL,
+                                  lineCommentPrefix: "#")
     }
 }

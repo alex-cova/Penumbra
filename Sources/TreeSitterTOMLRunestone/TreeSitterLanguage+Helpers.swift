@@ -5,6 +5,6 @@ import TreeSitterTOMLQueries
 public extension TreeSitterLanguage {
     static var toml: TreeSitterLanguage {
         let highlightsQuery = TreeSitterLanguage.Query(contentsOf: TreeSitterTOMLQueries.Query.highlightsFileURL)
-        return TreeSitterLanguage(tree_sitter_toml(), highlightsQuery: highlightsQuery)
+        return TreeSitterLanguage(tree_sitter_toml(), highlightsQuery: highlightsQuery, lineCommentPrefix: "#")
     }
 }

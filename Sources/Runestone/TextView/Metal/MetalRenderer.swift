@@ -241,6 +241,14 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             glyphs: [],
             decorations: MetalDecorationGeometry()
         )
+        // `LayoutManager` re-upserts every visible fragment on every layout pass (it's how
+        // display-only invalidation — marked text, invisibles — gets a fresh spec; see the design
+        // notes on "no ID-only decoration invalidate"), so most calls here are for fragments whose
+        // rendered output hasn't actually changed. Compare before/after and only pay for a full
+        // viewport instance-buffer rebuild (`rebuildInstanceBuffers`, below) when this fragment's
+        // glyphs or decorations actually differ — not merely because it was touched again.
+        let previousGlyphs = fragment.glyphs
+        let previousDecorations = fragment.decorations
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
         if spec.isSyntaxHighlightPending, !fragment.glyphs.isEmpty {
@@ -285,8 +293,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             budget: &rasterBudget
         )
         fragments[spec.id] = fragment
-        needsInstanceRebuild = true
-        canvasView?.setNeedsDisplay()
+        if fragment.glyphs != previousGlyphs || fragment.decorations != previousDecorations {
+            needsInstanceRebuild = true
+            canvasView?.setNeedsDisplay()
+        }
     }
 
     func removeFragments(ids: Set<LineFragmentID>) {

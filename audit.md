@@ -9,6 +9,44 @@ Text lives in `StringView` (contiguous `NSMutableString` or file-backed `PieceTr
 
 ---
 
+## 2026-09-15 re-verification
+
+Read-only pass re-checking every finding below against the current code (not against this
+document's own prior "fixed" annotations). Result: **19 of 20 P0–P2 findings confirmed fixed by
+direct citation; 1 partially fixed.**
+
+- All 4 P0s: **fixed.** (File-backed input materialization, preview-tab reuse, regex-replace crash
+  on an unmatched optional capture, IME-undo stale marked range.)
+- P1s: **13 of 14 fixed**, 1 partial. The partial is **"LSP `utf16Offset` filled with the
+  column"**: the *consumers* (`RunestoneEditorAdapter.applyEdit`/`focusRange`, diagnostics via
+  `TextViewDiagnostic.init(_:in:)`, go-to-definition) were fixed to resolve line/column through the
+  text view instead of trusting the raw offset, but the root conversion itself
+  (`LSPConversion.swift:15`) still stores `utf16Offset: position.character`, and
+  `LSPWorkspaceSyncBridge.swift` still computes `rangeLength` from those columns. This is
+  `EditorIntelligenceLSP` adapter scope, not the text engine — out of scope for this pass. A
+  related item, **"LSP never `didOpen`s file-backed documents,"** is also partial: the
+  open/change/edit inconsistency is fixed, but `Document.text` still returns `""` for an elided
+  (file-backed) snapshot, so a host's `didOpen` handler sending `document.text` still opens an
+  empty document with the LSP server.
+- P2s: **3 of 3 fixed.**
+- Of the 9 "Needs verification" items below: 4 have since been resolved (debounce-vs-tab-switch,
+  host save path, Cmd-click using the click not the caret, stale-tree epoch guarding) — see the
+  inline status added to each. 5 are still genuinely open, unchanged.
+- Of the 3 "Test gaps": 2 are now covered (preview-tab reuse, and the fold/multi-caret-undo/regex-
+  group/line-range items) — see inline status. IME-undo and the file-backed-input-never-materializes
+  invariant are still uncovered by a dedicated test (this pass adds the latter, for a different but
+  related invariant — see `StringMaterializationRegressionTests.swift`).
+
+Separately, this pass found and fixed a **new regression not in this document's original scope**:
+`MetalRenderer.upsertFragment`'s hold-previous-glyphs fix for the old "white flash on typing" bug
+(commit `665f59b`) made `canEventuallyHighlight` effectively always `true` for Tree-sitter, so (a)
+every keystroke landing while a parse is in flight showed **stale pre-edit text** instead of a
+flash, and (b) a language with no highlights query got stuck holding stale glyphs **forever**. Fixed
+by threading `highlightsQueryAvailable` from `TreeSitterLanguageLayer` through to
+`TreeSitterSyntaxHighlighter.canEventuallyHighlight`. See `EDITOR_PERFORMANCE_REPORT.md`.
+
+---
+
 ### [P0] File-backed documents materialize the entire buffer on ordinary input-system queries
 
 Status: CONFIRMED  
@@ -531,28 +569,28 @@ Risk if unfixed: wrong navigation from workspace search.
 
 ## Needs verification
 
-1. **Workbench adapter debounce vs tab switch (single reused `TextView`).** `scheduleContentRefresh` captures `WorkbenchDocument` at edit time and reads `textView` 200 ms later (`RunestoneWorkbenchEditorAdapter.swift:131-137`). `setState` does not fire `textViewDidChange` (`TextInputView.swift:1085-1134`). If a host reuses one `TextView` across tabs, document A can be overwritten with B's text. `EditorHostCache` exists to avoid that; confirm whether MacExample / host apps swap views or call `setState` on one view. Experiment: two files, type in A, switch to B within 200 ms, inspect `A.text` / `A.rangeReader`.
+1. **Workbench adapter debounce vs tab switch (single reused `TextView`).** ~~`scheduleContentRefresh` captures `WorkbenchDocument` at edit time and reads `textView` 200 ms later~~ **Resolved (2026-09-15):** the document is now captured at schedule time and threaded through explicitly (`RunestoneWorkbenchEditorAdapter.swift:147-157`), not re-read from `textView` after the debounce.
 
-2. **`pendingContentChanges` is adapter-global** (`RunestoneWorkbenchEditorAdapter.swift:19, 194-196`). Multi-pane, one adapter: incremental LSP edits from pane 1 can be attributed to pane 2's document on the next refresh. Experiment: two panes, type in each before the 200 ms debounce fires; inspect `.documentEdited` payloads.
+2. **`pendingContentChanges` is adapter-global** (`RunestoneWorkbenchEditorAdapter.swift:19, 194-196`). Multi-pane, one adapter: incremental LSP edits from pane 1 can be attributed to pane 2's document on the next refresh. **Still present (2026-09-15):** one unkeyed array drained into whichever document refreshes next. Experiment: two panes, type in each before the 200 ms debounce fires; inspect `.documentEdited` payloads.
 
-3. **Host save of `WorkbenchDocument.text`.** There is no library save. File-backed docs keep `text == ""`. Any host that writes `document.text` to `url` truncates the file. Experiment: load, type, save via that field, reopen.
+3. **Host save of `WorkbenchDocument.text`.** ~~There is no library save. File-backed docs keep `text == ""`.~~ **Resolved (2026-09-15):** a real save path now exists — `Sources/Runestone/Library/DocumentWriter.swift`, `WorkbenchDocument.swift:141-157`, tested by `DocumentWriterTests.swift` / `WorkbenchSaveTests.swift`.
 
-4. **Invalid UTF-8 on disk.** `DocumentLoader` throws `invalidEncoding` if `UTF8DocumentScanner` sets `isValid = false`. Confirm the example app surfaces that vs. showing an empty view.
+4. **Invalid UTF-8 on disk.** `DocumentLoader` throws `invalidEncoding` if `UTF8DocumentScanner` sets `isValid = false`. **Still unverified (2026-09-15):** the library behavior is unchanged (`DocumentLoader.swift:118`); whether a host app surfaces that vs. showing an empty view remains host-specific and untested here.
 
-5. **Catastrophic regex.** User-supplied patterns go to `NSRegularExpression` with no timeout (`SearchQuery.swift:72-75`, `FindSearchEngine`). Experiment: `(a+)+$` on a long string of `a`s in the find panel.
+5. **Catastrophic regex.** User-supplied patterns go to `NSRegularExpression` with no timeout (`SearchQuery.swift:72-75`, `FindSearchEngine`). **Still present (2026-09-15):** `NSRegularExpression(pattern:options:)` has no budget (`FindSearchEngine.swift:1337`, `SearchQuery.swift:74`); the `Task.isCancelled` checks added elsewhere only help *between* matches, not inside one catastrophic match. Experiment: `(a+)+$` on a long string of `a`s in the find panel.
 
-6. **Cmd-click go-to-definition uses the caret, not the click.** `JumpToDefinitionController.handleClick` (`JumpToDefinitionController.swift:74-79`) ignores `gesture.location(in:)` and reads `document.cursor.position`. If the click does not move the caret first (gesture on `TextView` vs `TextInputView.mouseDown` order), Cmd-click looks up the wrong symbol. Experiment: caret on line 1, Cmd-click a symbol on line 40.
+6. **Cmd-click go-to-definition uses the caret, not the click.** ~~`JumpToDefinitionController.handleClick` ignores `gesture.location(in:)` and reads `document.cursor.position`.~~ **Resolved (2026-09-15):** now resolves the actual click location — `gesture.location(in: textView)` → `characterIndex(at:)` (`JumpToDefinitionController.swift:108-116`).
 
-7. **Tree-sitter `startRow ... endRow` on a stale tree.** `textDidChange` skips `apply(edit)` while a parse is in flight (`TreeSitterInternalLanguageMode.swift:199-208`) while the byte callback reads `stringView` without that lock (`TextInputView.swift:2973-2985`). A later apply can feed `startRow > endRow` (trap) or a huge `endPoint.row` (hang) into `TreeSitterLanguageLayer.swift:127-132`. Experiment: type rapidly during a viewport parse of a large highlighted file.
+7. **Tree-sitter `startRow ... endRow` on a stale tree.** `textDidChange` skips `apply(edit)` while a parse is in flight while the byte callback reads `stringView` without that lock. **Mitigated (2026-09-15):** an in-flight parse now bumps `parseEpoch` so its result is discarded rather than applied, and the shifted range is intersected with the live document length (`TreeSitterInternalLanguageMode.swift:220-240`). Not the same fix as the original finding described, but addresses the same stale-tree hazard; re-verify under load if this area changes again.
 
-8. **`FileMapping.remapPages` after failed `mmap`.** Both `MAP_FIXED` attempts can fail (`FileMapping.swift:145-149`); the scan keeps using a pointer over a hole. Experiment: force `mmap` failure (ulimit) while loading a file larger than the remap stride.
+8. **`FileMapping.remapPages` after failed `mmap`.** Both `MAP_FIXED` attempts can fail (`FileMapping.swift:145-149`); the scan keeps using a pointer over a hole. **Still present (2026-09-15):** the retry is byte-identical to the first call and its result is discarded with `_ =`. Experiment: force `mmap` failure (ulimit) while loading a file larger than the remap stride.
 
-9. **Overlapping multi-cursor completion.** `replaceAtAllSelections` does not skip overlaps (`TextInputView.swift:1757-1768`). Experiment: two carets in the same identifier, accept a completion whose range is the whole word.
+9. **Overlapping multi-cursor completion.** `replaceAtAllSelections` does not skip overlaps. **Still present (2026-09-15):** `replaceAtAllSelections` clamps but does not merge, and `insertTextAtAllSelections` only sorts descending, never dedupes `explicitRanges` (`TextInputView.swift:1996-2001, 2583`). Experiment: two carets in the same identifier, accept a completion whose range is the whole word.
 
 ## Test gaps
 
-1. **File-backed input path never hits `stringView.string`.** Existing `PieceTreeTests` / `DocumentLoaderTests` cover load and substring, not `endOfDocument`, Delete, Find, or `selectAll` after `TextViewState.load`. That is the P0 hang.
+1. **File-backed input path never hits `stringView.string`.** Existing `PieceTreeTests` / `DocumentLoaderTests` cover load and substring, not `endOfDocument`, Delete, Find, or `selectAll` after `TextViewState.load`. That is the P0 hang. **Still a gap for that specific set of methods (2026-09-15)**, though `FindPanelControllerTests`/`WorkbenchSaveTests`/`WorkbenchTests.swift:204` now assert it for find/save. This pass adds `StringMaterializationRegressionTests.swift`, covering the same invariant for two different call paths found during this session (occurrence highlighting, restarted syntax parse) — still not the original `endOfDocument`/Delete/`selectAll` trio.
 
-2. **Preview-tab reuse with `WorkbenchDocument.load` and with a dirty buffer.** `testTemporaryTabReusesCleanSlot` uses in-memory `"a"`/`"b"` and never sets `isDirty`. No test that `pendingState` survives reuse, or that an edited preview is pinned.
+2. **Preview-tab reuse with `WorkbenchDocument.load` and with a dirty buffer.** ~~`testTemporaryTabReusesCleanSlot` uses in-memory `"a"`/`"b"` and never sets `isDirty`.~~ **Resolved (2026-09-15):** `WorkbenchTests.swift:25` and `:37` now cover `pendingState`/`isFileBacked`/`rangeReader` surviving reuse and `isDirty` gating it.
 
-3. **IME undo, nested folds, multi-caret undo grouping, unmatched regex groups, exclusive-end line ranges.** No test that Undo during marked text clears `imeMarkedRange` (the P0 crash). `FoldingControllerTests` never collapse-inner-then-outer-then-expand-outer. Multi-caret tests do not type a character, add a caret within 1 s, type, and Undo. `ParsedReplacementStringTests` misses `{NSNotFound, 0}`. `LineManagerTests` never asserts `lines(in: {0,4})` on `"foo\nbar"`.
+3. **IME undo, nested folds, multi-caret undo grouping, unmatched regex groups, exclusive-end line ranges.** **Partially resolved (2026-09-15):** `FoldingControllerTests.swift:70` now covers collapse-inner-then-outer-then-expand-outer, `MultiSelectionEditingTests.swift:206`/`:224` cover multi-caret undo grouping, `ParsedReplacementStringTests.swift:42` covers the unmatched-capture case, and `LineManagerTests.swift:51` covers the line-range fix. **Still no test** that Undo during marked text clears `imeMarkedRange` (the only `setMarkedText` call in the whole test suite is `TextViewMetalSmokeTests.swift:67`, and it doesn't undo afterward) — that remains the one real gap in this item.

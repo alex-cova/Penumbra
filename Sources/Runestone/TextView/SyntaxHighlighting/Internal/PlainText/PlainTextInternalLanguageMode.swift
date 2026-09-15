@@ -1,11 +1,11 @@
 import Foundation
 
 final class PlainTextInternalLanguageMode: InternalLanguageMode {
-    func parse(_ text: NSString) {}
+    func parse() {}
 
     func parseFromBuffer() {}
 
-    func parse(_ text: NSString, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+    func parse(completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         Task { @MainActor in
             completion(true)
         }

@@ -124,7 +124,7 @@ final class MarkdownLanguageTests: XCTestCase {
             languageProvider: languageProvider,
             stringView: stringView,
             lineManager: lineManager)
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         return languageMode
     }
 }

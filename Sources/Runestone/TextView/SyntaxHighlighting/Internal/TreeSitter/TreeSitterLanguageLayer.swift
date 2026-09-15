@@ -8,6 +8,12 @@ final class TreeSitterLanguageLayer {
     var canHighlight: Bool {
         parser.language != nil && tree != nil
     }
+    /// `false` when neither this layer nor any injected child layer has a highlights query, i.e.
+    /// no query will ever produce a non-default color here. Used to tell "will highlight once the
+    /// parse lands" apart from "will never highlight" (see `LineController.isSyntaxHighlightPending`).
+    var highlightsQueryAvailable: Bool {
+        language.highlightsQuery != nil || childLanguageLayerStore.allLayers.contains { $0.highlightsQueryAvailable }
+    }
 
     private let lineManager: LineManager
     private let parser: TreeSitterParser
@@ -41,11 +47,6 @@ final class TreeSitterLanguageLayer {
 
 // MARK: - Parsing
 extension TreeSitterLanguageLayer {
-    func parse(_ text: NSString) {
-        let ranges = [tree?.rootNode.textRange].compactMap { $0 }
-        parse(ranges, from: text)
-    }
-
     /// Callback-based parse used after the language mode is attached to a ``TextInputView``.
     /// Honors ``rootIncludedRanges`` so a viewport window does not copy or walk the whole buffer.
     func parseUsingReader() {
@@ -208,28 +209,6 @@ extension TreeSitterLanguageLayer {
             parser.setIncludedRanges(rootIncludedRanges)
         } else {
             parser.removeAllIncludedRanges()
-        }
-    }
-
-    private func parse(_ ranges: [TreeSitterTextRange], from text: NSString) {
-        prepareParser(toParse: ranges)
-        if let parsed = parser.parse(text) {
-            tree = parsed
-        } else if parser.lastParseAborted {
-            return
-        }
-        childLanguageLayerStore.removeAll()
-        guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
-            return
-        }
-        let queryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
-        queryCursor.execute()
-        let captures = queryCursor.validCaptures(in: stringView)
-        let injectedLanguages = injectedLanguages(from: captures)
-        for injectedLanguage in injectedLanguages {
-            if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
-                childLanguageLayer.parse([injectedLanguage.textRange], from: text)
-            }
         }
     }
 }

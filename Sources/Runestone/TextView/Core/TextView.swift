@@ -1679,6 +1679,38 @@ import simd
         textInputView.deleteSelectedLines()
     }
 
+    /// Toggles the active language's line comment over every row touched by the current
+    /// selection(s) (⌘/). Comments if any touched non-blank row lacks the prefix; otherwise
+    /// uncomments. Multi-caret aware, one undo step. No-op when the language mode has no
+    /// ``TreeSitterLanguage/lineCommentPrefix``.
+    public func toggleComment() {
+        textInputView.toggleComment()
+    }
+
+    /// Inserts a new, indent-matched blank line above every row touched by the current
+    /// selection(s) (⌘⏎), one undo step, caret left on the new line(s).
+    public func insertLineAbove() {
+        textInputView.insertLine(above: true)
+    }
+
+    /// Inserts a new, indent-matched blank line below every row touched by the current
+    /// selection(s) (⌘⇧⏎), one undo step, caret left on the new line(s).
+    public func insertLineBelow() {
+        textInputView.insertLine(above: false)
+    }
+
+    /// Sorts every contiguous block of rows touched by the current selection(s), ascending,
+    /// case-sensitive, one undo step. A single-row block is left alone.
+    public func sortSelectedLinesAscending() {
+        textInputView.sortSelectedLines(descending: false)
+    }
+
+    /// Sorts every contiguous block of rows touched by the current selection(s), descending,
+    /// case-sensitive, one undo step. A single-row block is left alone.
+    public func sortSelectedLinesDescending() {
+        textInputView.sortSelectedLines(descending: true)
+    }
+
     /// Attempts to detect the indent strategy used in the document. This may return an unknown strategy even
     /// when the document contains indentation.
     public func detectIndentStrategy() -> DetectedIndentStrategy {

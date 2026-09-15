@@ -261,6 +261,9 @@ final class PieceTree {
         /// UTF-16 offset of this piece's first unit in the original mapping. 0 for add-buffer pieces.
         var originalUTF16Start: Int
         var lineFeedCount: Int
+        /// Checkpoints are local to an add-buffer piece. Original pieces use
+        /// ``PieceTree.originalCheckpoints`` instead.
+        var checkpoints: [UTF8DocumentScanner.Checkpoint]
     }
 
     static let prefetchByteCap = 256 * 1024
@@ -309,18 +312,87 @@ final class PieceTree {
             utf8Length: 0,
             utf16Length: 0,
             originalUTF16Start: 0,
-            lineFeedCount: 0
+            lineFeedCount: 0,
+            checkpoints: []
         )
         tree = PieceNodeTree(minimumValue: 0, rootValue: 0, rootData: PieceNodeData(empty))
         tree.childrenUpdater = PieceChildrenUpdater()
     }
 
     /// In-memory document: all text lives in the add buffer (no file mapping).
+    ///
+    /// Seeds the add buffer from `string`'s UTF-8 in a single pass. Routing this through
+    /// ``replaceText(in:with:)`` instead would copy the text four more times before any line
+    /// indexing: a `[UInt8]` of the whole document, then a fresh `String` and a second `[UInt8]`
+    /// for every 64 KiB chunk.
     convenience init(string: String) {
         self.init()
-        if !string.isEmpty {
-            replaceText(in: NSRange(location: 0, length: 0), with: string)
+        guard !string.isEmpty else {
+            return
         }
+        var text = string
+        text.withUTF8 { utf8 in
+            seed(utf8: UnsafeRawBufferPointer(utf8))
+        }
+    }
+
+    /// Appends `utf8` to the add buffer as one block, then covers it with bounded pieces.
+    ///
+    /// Piece sizes match what ``insert(_:atUTF16:)`` produces, so later edits split and extend
+    /// exactly as they would have, and boundaries are placed the same way:
+    ///
+    /// - Never inside a scalar. Each piece's `utf16Length` comes from scanning its own bytes, so a
+    ///   stranded continuation byte would be counted as a whole unit and the tree's offsets would
+    ///   drift (a halved `😀` measures 4 units instead of 2).
+    /// - Never inside a CRLF, which keeps per-piece `lineFeedCount` honest — each half would
+    ///   otherwise count its own feed. Only the `lineFeedCount == 0` skip in
+    ///   ``rangeOfNextNewLine(startingAt:)`` reads that, and over-counting merely disables the
+    ///   skip, so this one is accuracy rather than correctness: ``lineMetrics()`` carries a pending
+    ///   CR across buffers and is right either way.
+    private func seed(utf8: UnsafeRawBufferPointer) {
+        guard let base = utf8.baseAddress, !utf8.isEmpty else {
+            return
+        }
+        let addBase = addBuffer.count
+        addBuffer.append(base.assumingMemoryBound(to: UInt8.self), count: utf8.count)
+        var offset = 0
+        while offset < utf8.count {
+            var end = min(offset + UTF8DocumentScanner.checkpointStride, utf8.count)
+            while end < utf8.count, utf8[end] & 0xC0 == 0x80 {
+                end += 1
+            }
+            if end < utf8.count, end > offset, utf8[end - 1] == 0x0D, utf8[end] == 0x0A {
+                end += 1
+            }
+            let slice = UnsafeRawBufferPointer(rebasing: utf8[offset..<end])
+            let scanned = UTF8DocumentScanner.scan(
+                slice,
+                onLine: nil,
+                onProgress: nil,
+                checkpointStride: Self.addCheckpointStride
+            )
+            let piece = Piece(
+                source: .add,
+                utf8Offset: addBase + offset,
+                utf8Length: end - offset,
+                utf16Length: scanned.utf16Length,
+                originalUTF16Start: 0,
+                lineFeedCount: scanned.lineFeedCount,
+                checkpoints: scanned.checkpoints
+            )
+            if utf16Length == 0 {
+                replaceRoot(with: piece)
+            } else {
+                _ = tree.insertNode(
+                    value: piece.utf16Length,
+                    data: PieceNodeData(piece),
+                    after: tree.root.rightMost
+                )
+            }
+            utf16Length += piece.utf16Length
+            offset = end
+        }
+        invalidateCache()
     }
 
     /// One original piece covering `mapping` after an optional UTF-8 BOM.
@@ -343,7 +415,8 @@ final class PieceTree {
             utf8Length: 0,
             utf16Length: 0,
             originalUTF16Start: 0,
-            lineFeedCount: 0
+            lineFeedCount: 0,
+            checkpoints: []
         )
         tree = PieceNodeTree(minimumValue: 0, rootValue: 0, rootData: PieceNodeData(empty))
         tree.childrenUpdater = PieceChildrenUpdater()
@@ -354,19 +427,43 @@ final class PieceTree {
                 utf8Length: stripped.count,
                 utf16Length: resolved.utf16Length,
                 originalUTF16Start: 0,
-                lineFeedCount: resolved.lineFeedCount
+                lineFeedCount: resolved.lineFeedCount,
+                checkpoints: []
             )
             replaceRoot(with: piece)
         }
         utf16Length = resolved.utf16Length
     }
 
+    /// Per-line UTF-16 lengths for the whole document, read from the pieces' UTF-8.
+    ///
+    /// Walks pieces in document order and threads ``UTF8DocumentScanner/LineScanState`` across the
+    /// boundaries, so a CRLF or a multi-byte NEL/LS/PS delimiter straddling two pieces is still
+    /// counted once. This never reads a UTF-16 unit, which is what makes it viable on a large
+    /// document: ``LineManager/rebuild()``'s `rangeOfNextNewLine` walk costs one
+    /// ``utf16Units(in:)`` allocation plus a checkpoint-relative byte walk *per UTF-16 unit*.
+    ///
+    /// Unlike the previous implementation this reflects edits — it reads the piece tree rather than
+    /// rescanning the whole original mapping.
     func lineMetrics() -> [LineMetric] {
-        guard let original else {
-            return [LineMetric(totalLength: 0, delimiterLength: 0)]
+        var metrics: [LineMetric] = []
+        metrics.reserveCapacity(tree.root.data.nodeTotalLineFeedCount + 1)
+        var state = UTF8DocumentScanner.LineScanState()
+        if utf16Length > 0 {
+            var node = tree.root.leftMost
+            let last = tree.root.rightMost
+            while true {
+                withUTF8(of: node.data.piece) { bytes in
+                    UTF8DocumentScanner.scanLines(bytes, state: &state) { metrics.append($0) }
+                }
+                if node === last {
+                    break
+                }
+                node = node.next
+            }
         }
-        let stripped = UTF8DocumentScanner.stripBOM(from: original.bytes())
-        return UTF8DocumentScanner.lineMetrics(in: stripped)
+        UTF8DocumentScanner.finishLineScan(state: &state) { metrics.append($0) }
+        return metrics
     }
 
     func replaceText(in range: NSRange, with string: String) {
@@ -652,7 +749,8 @@ final class PieceTree {
                 utf8Length: footer.utf8Length,
                 utf16Length: footer.utf16Length,
                 originalUTF16Start: 0,
-                lineFeedCount: footer.lineFeedCount
+                lineFeedCount: footer.lineFeedCount,
+                checkpoints: []
             )
             replaceRoot(with: piece)
             utf16Length = footer.utf16Length
@@ -700,6 +798,7 @@ final class PieceTree {
             extendNode.data.piece.utf8Length += utf8.count
             extendNode.data.piece.utf16Length += utf16
             extendNode.data.piece.lineFeedCount += lineFeeds
+            extendNode.data.piece.checkpoints = checkpoints(for: extendNode.data.piece)
             extendNode.value = extendNode.data.piece.utf16Length
             tree.updateAfterChangingChildren(of: extendNode)
             utf16Length += utf16
@@ -713,7 +812,10 @@ final class PieceTree {
             utf8Length: utf8.count,
             utf16Length: utf16,
             originalUTF16Start: 0,
-            lineFeedCount: lineFeeds
+            lineFeedCount: lineFeeds,
+            checkpoints: utf8.withUnsafeBytes {
+                UTF8DocumentScanner.scan($0, onLine: nil, onProgress: nil, checkpointStride: Self.addCheckpointStride).checkpoints
+            }
         )
         if utf16Length == 0 {
             replaceRoot(with: newPiece)
@@ -753,7 +855,8 @@ final class PieceTree {
                     utf8Length: 0,
                     utf16Length: 0,
                     originalUTF16Start: 0,
-                    lineFeedCount: 0
+                    lineFeedCount: 0,
+                    checkpoints: []
                 ))
                 utf16Length = 0
                 remaining = 0
@@ -810,15 +913,16 @@ final class PieceTree {
             return .node(node.next)
         }
         let leftFeeds = lineFeedCount(in: piece, utf8Length: localUTF8)
-        let left = Piece(
+        var left = Piece(
             source: piece.source,
             utf8Offset: piece.utf8Offset,
             utf8Length: localUTF8,
             utf16Length: actualLeftUTF16,
             originalUTF16Start: piece.originalUTF16Start,
-            lineFeedCount: leftFeeds
+            lineFeedCount: leftFeeds,
+            checkpoints: []
         )
-        let right = Piece(
+        var right = Piece(
             source: piece.source,
             utf8Offset: piece.utf8Offset + localUTF8,
             utf8Length: piece.utf8Length - localUTF8,
@@ -826,8 +930,13 @@ final class PieceTree {
             originalUTF16Start: piece.source == .original
                 ? piece.originalUTF16Start + actualLeftUTF16
                 : 0,
-            lineFeedCount: piece.lineFeedCount - leftFeeds
+            lineFeedCount: piece.lineFeedCount - leftFeeds,
+            checkpoints: []
         )
+        if piece.source == .add {
+            left.checkpoints = checkpoints(for: left)
+            right.checkpoints = checkpoints(for: right)
+        }
         node.data.piece = left
         node.value = left.utf16Length
         tree.updateAfterChangingChildren(of: node)
@@ -859,6 +968,22 @@ final class PieceTree {
         tree.root.data.nodeTotalLineFeedCount = piece.lineFeedCount
         invalidateCache()
     }
+
+    private func checkpoints(for piece: Piece) -> [UTF8DocumentScanner.Checkpoint] {
+        guard piece.source == .add else {
+            return []
+        }
+        return withUTF8(of: piece) { bytes in
+            UTF8DocumentScanner.scan(
+                bytes,
+                onLine: nil,
+                onProgress: nil,
+                checkpointStride: Self.addCheckpointStride
+            ).checkpoints
+        }
+    }
+
+    private static let addCheckpointStride = 4 * 1024
 
     // MARK: - Reads
 
@@ -910,7 +1035,17 @@ final class PieceTree {
         into result: inout [unichar]
     ) {
         withUTF8(of: piece) { bytes in
-            if piece.source == .add || originalCheckpoints.isEmpty {
+            if piece.source == .add {
+                appendUTF16Units(
+                    from: bytes,
+                    utf16Offset: localUTF16,
+                    take: take,
+                    checkpoints: piece.checkpoints,
+                    into: &result
+                )
+                return
+            }
+            if originalCheckpoints.isEmpty {
                 UTF8DocumentScanner.appendUTF16Units(from: bytes, utf16Offset: localUTF16, length: take, into: &result)
                 return
             }
@@ -952,7 +1087,17 @@ final class PieceTree {
         if localUTF16 >= piece.utf16Length {
             return piece.utf8Length
         }
-        if piece.source == .add || originalCheckpoints.isEmpty {
+        if piece.source == .add {
+            return withUTF8(of: piece) { bytes in
+                utf8Offset(
+                    forUTF16Offset: localUTF16,
+                    in: bytes,
+                    checkpoints: piece.checkpoints,
+                    end: end
+                )
+            }
+        }
+        if originalCheckpoints.isEmpty {
             return withUTF8(of: piece) { bytes in
                 if end {
                     return addBufferUTF8EndOffset(in: piece, localUTF16: localUTF16, bytes: bytes)
@@ -981,15 +1126,50 @@ final class PieceTree {
         return (startUTF8 + extra) - piece.utf8Offset
     }
 
-    /// `.add`-buffer pieces carry no ``originalCheckpoints`` (those only exist for the `.original`,
-    /// file-mapped piece), so this used to always resolve `localUTF16` by scanning `bytes` from
-    /// byte 0 — cheap for one call, but `TreeSitterLanguageLayer.parseUsingReader()`'s tree-sitter
-    /// reader requests strictly increasing byte ranges while parsing a whole document, so every one
-    /// of the O(n) chunk reads rescanned from the start: O(n²) total for a single full-document
-    /// parse (measured: ~20s to open a 700 KB file once it crossed `StringView`'s piece-tree
-    /// threshold, vs. ~35ms for the same content just under it). Caching the last forward position
-    /// and resuming from there makes that dominant, monotonically-increasing access pattern
-    /// amortized O(n); a backward seek or a different piece just falls back to scanning from 0.
+    private func appendUTF16Units(
+        from bytes: UnsafeRawBufferPointer,
+        utf16Offset: Int,
+        take: Int,
+        checkpoints: [UTF8DocumentScanner.Checkpoint],
+        into result: inout [unichar]
+    ) {
+        guard take > 0 else {
+            return
+        }
+        let checkpoint = lastCheckpoint(in: checkpoints, utf16Offset: utf16Offset)
+        let startUTF8 = checkpoint?.utf8Offset ?? 0
+        let baseUTF16 = checkpoint?.utf16Offset ?? 0
+        let remaining = UnsafeRawBufferPointer(
+            start: bytes.baseAddress.map { $0 + startUTF8 },
+            count: max(bytes.count - startUTF8, 0)
+        )
+        UTF8DocumentScanner.appendUTF16Units(
+            from: remaining,
+            utf16Offset: utf16Offset - baseUTF16,
+            length: take,
+            into: &result
+        )
+    }
+
+    private func utf8Offset(
+        forUTF16Offset utf16Offset: Int,
+        in bytes: UnsafeRawBufferPointer,
+        checkpoints: [UTF8DocumentScanner.Checkpoint],
+        end: Bool
+    ) -> Int {
+        let checkpoint = lastCheckpoint(in: checkpoints, utf16Offset: utf16Offset)
+        let startUTF8 = checkpoint?.utf8Offset ?? 0
+        let baseUTF16 = checkpoint?.utf16Offset ?? 0
+        let remaining = UnsafeRawBufferPointer(
+            start: bytes.baseAddress.map { $0 + startUTF8 },
+            count: max(bytes.count - startUTF8, 0)
+        )
+        let offset = end
+            ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: utf16Offset - baseUTF16, in: remaining)
+            : UTF8DocumentScanner.utf8Offset(forUTF16Offset: utf16Offset - baseUTF16, in: remaining)
+        return startUTF8 + offset
+    }
+
     private func addBufferUTF8Offset(in piece: Piece, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {
         addBufferUTF8Offset(in: piece, localUTF16: localUTF16, bytes: bytes, end: false)
     }
@@ -1066,6 +1246,27 @@ final class PieceTree {
 
     private func lastCheckpoint(utf16Offset: Int) -> UTF8DocumentScanner.Checkpoint? {
         lastCheckpoint(where: { $0.utf16Offset <= utf16Offset })
+    }
+
+    private func lastCheckpoint(
+        in checkpoints: [UTF8DocumentScanner.Checkpoint],
+        utf16Offset: Int
+    ) -> UTF8DocumentScanner.Checkpoint? {
+        guard !checkpoints.isEmpty else {
+            return nil
+        }
+        var low = 0
+        var high = checkpoints.count
+        while low < high {
+            let mid = (low + high) / 2
+            if checkpoints[mid].utf16Offset <= utf16Offset {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let index = low - 1
+        return index >= 0 ? checkpoints[index] : checkpoints[0]
     }
 
     private func lastCheckpoint(utf8Offset: Int) -> UTF8DocumentScanner.Checkpoint? {

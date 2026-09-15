@@ -65,4 +65,37 @@ final class CommandPaletteControllerTests: XCTestCase {
         _ = textView.perform(.goToImplementation)
         XCTAssertEqual(previousSaw, .goToImplementation)
     }
+
+    /// `CommandRegistry.findActionIDs` is a hand-maintained list, not derived automatically from
+    /// `EditorActionID.builtInTitles` — a new action with a title (and so a `title` shown
+    /// anywhere a `EditorActionID` is listed) silently stays invisible in Find Action unless it's
+    /// also added here. This locks the two in sync so that gap can't reopen unnoticed. If this
+    /// fails after adding a new built-in action, add the ID to `findActionIDs`; if it fails after
+    /// adding a title-less internal ID, add it to `builtInTitles` or exclude it deliberately here.
+    func testFindActionIDsCoversEveryBuiltInTitledAction() {
+        let titled = Set(EditorActionID.builtInTitles.keys)
+        let registered = Set(CommandRegistry.findActionIDs)
+        let missing = titled.subtracting(registered)
+        XCTAssertTrue(missing.isEmpty, "Missing from CommandRegistry.findActionIDs: \(missing.map(\.rawValue).sorted())")
+    }
+
+    func testNewLineAndCommentCommandsAreRegisteredWithTheirKeymapShortcuts() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+
+        let toggleComment = controller.commandRegistry.command(id: "action.\(EditorActionID.toggleComment.rawValue)")
+        XCTAssertNotNil(toggleComment)
+        XCTAssertEqual(toggleComment?.shortcutDisplay, "\u{2318}/")
+
+        let insertBelow = controller.commandRegistry.command(id: "action.\(EditorActionID.insertLineBelow.rawValue)")
+        XCTAssertNotNil(insertBelow)
+
+        let insertAbove = controller.commandRegistry.command(id: "action.\(EditorActionID.insertLineAbove.rawValue)")
+        XCTAssertNotNil(insertAbove)
+
+        // No default keybinding — still discoverable via Find Action, just with no shortcut shown.
+        let sortAscending = controller.commandRegistry.command(id: "action.\(EditorActionID.sortLinesAscending.rawValue)")
+        XCTAssertNotNil(sortAscending)
+        XCTAssertNil(sortAscending?.shortcutDisplay)
+    }
 }

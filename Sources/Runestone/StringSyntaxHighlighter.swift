@@ -54,7 +54,7 @@ public final class StringSyntaxHighlighter {
             stringView: stringView,
             lineManager: lineManager
         )
-        internalLanguageMode.parse(mutableString)
+        internalLanguageMode.parse()
         let tabWidth = TabWidthMeasurer.tabWidth(tabLength: tabLength, font: theme.font)
         let mutableAttributedString = NSMutableAttributedString(string: text)
         let defaultAttributes = DefaultStringAttributes(

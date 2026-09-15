@@ -63,6 +63,11 @@ public extension EditorActionID {
     static let indentLines = EditorActionID("indentLines")
     static let outdentLines = EditorActionID("outdentLines")
     static let reformatCode = EditorActionID("reformatCode")
+    static let toggleComment = EditorActionID("toggleComment")
+    static let insertLineAbove = EditorActionID("insertLineAbove")
+    static let insertLineBelow = EditorActionID("insertLineBelow")
+    static let sortLinesAscending = EditorActionID("sortLinesAscending")
+    static let sortLinesDescending = EditorActionID("sortLinesDescending")
 
     // View
     static let toggleMethodSeparators = EditorActionID("toggleMethodSeparators")
@@ -109,6 +114,11 @@ public extension EditorActionID {
         .indentLines: "Indent Line(s)",
         .outdentLines: "Unindent Line(s)",
         .reformatCode: "Reformat Code",
+        .toggleComment: "Toggle Line Comment",
+        .insertLineAbove: "Insert Line Above",
+        .insertLineBelow: "Insert Line Below",
+        .sortLinesAscending: "Sort Lines Ascending",
+        .sortLinesDescending: "Sort Lines Descending",
         .toggleMethodSeparators: "Method Separators",
         .toggleOccurrenceHighlighting: "Highlight Occurrences of Selection",
         .toggleFindPanel: "Find…",

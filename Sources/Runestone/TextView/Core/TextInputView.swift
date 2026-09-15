@@ -638,7 +638,7 @@ final class TextInputView: UIView, UITextInput {
                 if !preserveUndoStackWhenSettingString {
                     undoManager?.removeAllActions()
                 }
-                startFullParse(of: newValue)
+                startFullParse()
             }
         }
     }
@@ -1353,7 +1353,7 @@ final class TextInputView: UIView, UITextInput {
             lineManager: lineManager)
         self.languageMode = internalLanguageMode
         layoutManager.languageMode = internalLanguageMode
-        internalLanguageMode.parse(string) { [weak self] finished in
+        internalLanguageMode.parse { [weak self] finished in
             guard let self, parseGeneration == self.syntaxParseGeneration else {
                 completion?(false)
                 return
@@ -1376,7 +1376,7 @@ final class TextInputView: UIView, UITextInput {
         case .eager:
             break
         case .deferred:
-            startFullParse(of: string, generation: generation, state: state)
+            startFullParse(generation: generation, state: state)
         case .viewport:
             startViewportParse(generation: generation, state: state, notifyOnCompletion: true)
         }
@@ -1384,8 +1384,9 @@ final class TextInputView: UIView, UITextInput {
 
     /// Full reparse of the current string (``string`` setter, ``setLanguageMode``). Invalidates the
     /// existing tree first so highlighting does not run against a stale AST while the new parse is
-    /// in flight.
-    private func startFullParse(of text: NSString) {
+    /// in flight. Reads from `stringView` (via `languageMode.parse(completion:)`) rather than
+    /// taking a string argument — no implementation of `parse` has ever read a passed-in string.
+    private func startFullParse() {
         guard languageMode is TreeSitterInternalLanguageMode else {
             return
         }
@@ -1397,12 +1398,12 @@ final class TextInputView: UIView, UITextInput {
         if syntaxParsePolicy == .viewport {
             startViewportParse(generation: generation, state: nil, notifyOnCompletion: true)
         } else {
-            startFullParse(of: text, generation: generation, state: nil)
+            startFullParse(generation: generation, state: nil)
         }
     }
 
-    private func startFullParse(of text: NSString, generation: Int, state: TextViewState?) {
-        languageMode.parse(text) { [weak self] finished in
+    private func startFullParse(generation: Int, state: TextViewState?) {
+        languageMode.parse { [weak self] finished in
             guard let self, generation == self.syntaxParseGeneration else {
                 return
             }
@@ -1446,7 +1447,7 @@ final class TextInputView: UIView, UITextInput {
         if syntaxParsePolicy == .viewport {
             startViewportParse(generation: generation, state: nil, notifyOnCompletion: true)
         } else {
-            startFullParse(of: string, generation: generation, state: nil)
+            startFullParse(generation: generation, state: nil)
         }
     }
 
@@ -1493,6 +1494,14 @@ final class TextInputView: UIView, UITextInput {
         methodSeparatorController.recompute()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
+        // Every other invalidation path that can flip glyphs from stale to highlighted
+        // (backing-scale change, marked-text/invisible-character toggles, …) schedules a
+        // deferred flush so a layer-backed/SwiftUI host presents without depending on an
+        // unrelated future layout pass. A parse landing is exactly that case for Metal's
+        // hold-previous-glyphs policy (`MetalRenderer.upsertFragment`) — without this, a
+        // host that never calls `layoutIfNeeded()` on its own can leave freshly-highlighted
+        // colors unpresented indefinitely.
+        scheduleDeferredLayoutIfNeeded()
         if notify {
             hasNotifiedSyntaxParse = true
             delegate?.textInputViewDidFinishSyntaxParse(self)
@@ -1871,13 +1880,13 @@ extension TextInputView {
     }
 
     func selectNextOccurrence() {
-        let string = stringView.string
         if selection?.length == 0,
-           let wordRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, in: string, tokenizer: tokenizer) {
+           let wordRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, documentLength: stringView.length, tokenizer: tokenizer) {
             pushCaretHistory()
             applySelectedRanges([wordRange])
             return
         }
+        let string = stringView.string
         guard let queryRange = selection, queryRange.length > 0,
               let query = text(in: queryRange), !query.isEmpty else {
             return
@@ -1937,7 +1946,7 @@ extension TextInputView {
         if let selection, selection.length > 0 {
             queryRange = selection
         } else {
-            queryRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, in: string, tokenizer: tokenizer)
+            queryRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, documentLength: string.length, tokenizer: tokenizer)
         }
         guard let queryRange, let query = text(in: queryRange), !query.isEmpty else {
             return
@@ -2937,6 +2946,102 @@ extension TextInputView {
     }
 }
 
+// MARK: - Toggle Comment
+extension TextInputView {
+    /// Toggles the active language's line comment (⌘/) over every row touched by the current
+    /// selection(s). Comments if any touched non-blank row lacks the prefix; otherwise uncomments.
+    /// Multi-caret aware, one undo step, shape mirrors `shiftAllSelections` (indent/outdent):
+    /// per-row edits in descending row order (so an edit never shifts a not-yet-processed row's
+    /// location), then every original caret/selection is recomputed against the per-row deltas.
+    /// No-op for a language with no `lineCommentPrefix` (e.g. plain text, or a Tree-sitter
+    /// language that didn't configure one).
+    func toggleComment() {
+        guard let commentPrefix = languageMode.lineCommentPrefix, !commentPrefix.isEmpty else {
+            return
+        }
+        let ranges = multiSelectionController.hasMultipleSelections
+            ? multiSelectionController.selections
+            : selection.map { [$0] } ?? []
+        guard !ranges.isEmpty else {
+            return
+        }
+        toggleComment(in: ranges, commentPrefix: commentPrefix)
+    }
+
+    private func toggleComment(in ranges: [NSRange], commentPrefix: String) {
+        var rows = Set<Int>()
+        for range in ranges {
+            for line in lineManager.lines(in: range) {
+                rows.insert(line.index)
+            }
+        }
+        guard !rows.isEmpty else {
+            return
+        }
+        var boundPairs: [(start: LinePosition, end: LinePosition)] = []
+        for range in ranges {
+            guard let startPosition = lineManager.linePosition(at: range.location),
+                  let endPosition = lineManager.linePosition(at: range.upperBound) else {
+                return
+            }
+            boundPairs.append((startPosition, endPosition))
+        }
+        let service = CommentToggleService(stringView: stringView, lineManager: lineManager, commentPrefix: commentPrefix)
+        let direction = service.direction(forRows: rows)
+        let rowEdits = service.edits(forRows: rows, direction: direction)
+        guard !rowEdits.isEmpty else {
+            return
+        }
+        var editByRow: [Int: (editColumn: Int, delta: Int)] = [:]
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        inputDelegate?.textWillChange(self)
+        timedUndoManager.beginIsolatedUndoGrouping()
+        // Descending row order: an edit at one row's start never shifts the location of a row
+        // above it, so rows still to be processed are unaffected by ones already done.
+        for edit in rowEdits.sorted(by: { $0.row > $1.row }) {
+            replaceText(in: edit.range,
+                       with: edit.replacement,
+                       selectedRangesAfterUndo: ranges,
+                       primaryIndexAfterUndo: primaryIndex,
+                       undoActionName: "Toggle Comment",
+                       updateSelection: false)
+            editByRow[edit.row] = (edit.editColumn, edit.delta)
+        }
+        timedUndoManager.endUndoGrouping()
+        inputDelegate?.textDidChange(self)
+        var newSelections: [NSRange] = []
+        for pair in boundPairs {
+            guard let startLocation = adjustedCommentLocation(forRow: pair.start.row, column: pair.start.column, editByRow: editByRow),
+                  let endLocation = adjustedCommentLocation(forRow: pair.end.row, column: pair.end.column, editByRow: editByRow) else {
+                continue
+            }
+            newSelections.append(NSRange(location: min(startLocation, endLocation), length: abs(endLocation - startLocation)))
+        }
+        guard !newSelections.isEmpty else {
+            return
+        }
+        if newSelections.count == 1 {
+            selection = newSelections[0]
+            selectionAnchor = newSelections[0].location
+        } else {
+            applySelectedRanges(MultiSelectionController.normalize(newSelections))
+        }
+    }
+
+    /// Maps a pre-edit (row, column) to its post-edit document offset. Unlike indent/outdent's
+    /// `adjustedLocation` (whose edit always sits at column 0, so every column on the row shifts
+    /// uniformly), a comment edit sits at the row's leading-whitespace boundary: a caret at or
+    /// after that column shifts by the row's delta; one strictly before it (inside the leading
+    /// whitespace) does not.
+    private func adjustedCommentLocation(forRow row: Int, column: Int, editByRow: [Int: (editColumn: Int, delta: Int)]) -> Int? {
+        guard let edit = editByRow[row] else {
+            return location(forRow: row, column: column)
+        }
+        let adjustedColumn = column >= edit.editColumn ? column + edit.delta : column
+        return location(forRow: row, column: adjustedColumn)
+    }
+}
+
 // MARK: - Move Lines
 extension TextInputView {
     func moveSelectedLinesUp() {
@@ -3243,6 +3348,143 @@ extension TextInputView {
             cumulative += group.count
         }
         return cumulative
+    }
+
+    /// Inserts a new, empty (but indent-matched) line above or below every row touched by the
+    /// current selection(s) (⌘⏎ / ⌘⇧⏎), one undo step. Unlike duplicate/delete, the resulting
+    /// carets don't need to track the original selections' content — every caret simply lands on
+    /// its own freshly inserted blank line, so this only needs row-level dedup, not the
+    /// group/shift bookkeeping `duplicateSelectedLines` needs to preserve original content.
+    func insertLine(above: Bool) {
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else {
+            return
+        }
+        var rows = Set<Int>()
+        for range in originalSelections {
+            for line in lineManager.lines(in: range) {
+                rows.insert(line.index)
+            }
+        }
+        guard !rows.isEmpty else {
+            return
+        }
+        // Sorted ascending: row `sortedRows[i]` has exactly `i` new lines inserted somewhere
+        // before it in the document (one per earlier row in this list), so once every edit has
+        // landed its own new blank line sits at final row `row + i` (above) / `row + i + 1`
+        // (below) — used below to relocate carets *after* editing, not tracked through the edits.
+        let sortedRows = rows.sorted()
+        struct Insertion {
+            let row: Int
+            let location: Int
+            let text: String
+            let indentUTF16Length: Int
+        }
+        var insertions: [Insertion] = []
+        for row in sortedRows {
+            let line = lineManager.line(atRow: row)
+            let content = stringView.substring(in: NSRange(location: line.location, length: line.data.length)) ?? ""
+            let indent = String(content.prefix { $0 == " " || $0 == "\t" })
+            if above {
+                let text = indent + lineEndings.symbol
+                insertions.append(Insertion(row: row, location: line.location, text: text, indentUTF16Length: indent.utf16.count))
+            } else if line.data.delimiterLength > 0 {
+                // A delimiter already separates this line from the next — the new line's own
+                // text is `indent + delimiter`, inserted right at the next line's start.
+                let text = indent + lineEndings.symbol
+                insertions.append(Insertion(row: row, location: line.location + line.data.totalLength, text: text, indentUTF16Length: indent.utf16.count))
+            } else {
+                // Last line of the document, no trailing delimiter yet — the new line needs its
+                // own leading delimiter instead.
+                let text = lineEndings.symbol + indent
+                insertions.append(Insertion(row: row, location: line.location + line.data.length, text: text, indentUTF16Length: indent.utf16.count))
+            }
+        }
+        guard insertions.allSatisfy({ shouldChangeText(in: NSRange(location: $0.location, length: 0), replacementText: $0.text) }) else {
+            return
+        }
+        timedUndoManager.beginIsolatedUndoGrouping()
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        // Bottom-to-top so an earlier (higher-location) insertion never invalidates a later
+        // (lower-location) insertion's precomputed location.
+        for insertion in insertions.sorted(by: { $0.location > $1.location }) {
+            replaceText(in: NSRange(location: insertion.location, length: 0),
+                       with: insertion.text,
+                       selectedRangesAfterUndo: originalSelections,
+                       primaryIndexAfterUndo: primaryIndex,
+                       undoActionName: above ? "Insert Line Above" : "Insert Line Below",
+                       updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        // Relocate every caret *after* all edits have landed — row count changed, so an offset
+        // computed mid-loop (like `insertion.location`) would go stale as soon as a later,
+        // lower-location insertion pushed it forward. `location(forRow:column:)` re-resolves
+        // against the now-fully-updated `lineManager` instead.
+        var newSelections: [NSRange] = []
+        for (index, insertion) in insertions.enumerated() {
+            let finalRow = above ? insertion.row + index : insertion.row + index + 1
+            guard let caretLocation = location(forRow: finalRow, column: insertion.indentUTF16Length) else {
+                continue
+            }
+            newSelections.append(NSRange(location: caretLocation, length: 0))
+        }
+        guard !newSelections.isEmpty else {
+            return
+        }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        if newSelections.count == 1 {
+            selection = newSelections[0]
+            selectionAnchor = newSelections[0].location
+        } else {
+            applySelectedRanges(newSelections.sorted { $0.location < $1.location })
+        }
+    }
+
+    /// Sorts every contiguous block of rows touched by the current selection(s), independently,
+    /// one undo step. A block of one row is left alone (nothing to reorder). The sorted block(s)
+    /// become the new selection, since the original carets' positions no longer correspond to
+    /// meaningful content after a reorder.
+    func sortSelectedLines(descending: Bool) {
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else {
+            return
+        }
+        let groups = contiguousRowGroups(in: originalSelections)
+        let service = LineSortService(stringView: stringView, lineManager: lineManager, lineEndingSymbol: lineEndings.symbol)
+        let operations = groups.compactMap { service.sortOperation(forRows: $0, descending: descending) }
+        guard !operations.isEmpty,
+              operations.allSatisfy({ shouldChangeText(in: $0.range, replacementText: $0.replacement) }) else {
+            return
+        }
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        timedUndoManager.beginIsolatedUndoGrouping()
+        // Bottom-to-top so an earlier block's replacement never shifts a later block's
+        // precomputed range.
+        for operation in operations.sorted(by: { $0.range.location > $1.range.location }) {
+            replaceText(in: operation.range,
+                       with: operation.replacement,
+                       selectedRangesAfterUndo: originalSelections,
+                       primaryIndexAfterUndo: primaryIndex,
+                       undoActionName: descending ? "Sort Lines Descending" : "Sort Lines Ascending",
+                       updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        // Row count is unaffected by a reorder, so every group's rows still line up directly;
+        // re-derive each block's final range fresh now that all edits are applied.
+        var newSelections: [NSRange] = []
+        for group in groups where group.upperBound < lineManager.lineCount {
+            let firstLine = lineManager.line(atRow: group.lowerBound)
+            let lastLine = lineManager.line(atRow: group.upperBound)
+            newSelections.append(NSRange(
+                location: firstLine.location,
+                length: lastLine.location + lastLine.data.totalLength - firstLine.location
+            ))
+        }
+        guard !newSelections.isEmpty else {
+            return
+        }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location })
     }
 }
 
@@ -3576,7 +3818,7 @@ extension TextInputView {
         var result: [NSRange] = []
         let documentRange = NSRange(location: 0, length: string.length)
 
-        if let word = SelectNextOccurrence.wordRange(at: current.location, in: string, tokenizer: tokenizer) {
+        if let word = SelectNextOccurrence.wordRange(at: current.location, documentLength: string.length, tokenizer: tokenizer) {
             result.append(word)
         }
 

@@ -2,8 +2,11 @@ import Foundation
 
 /// Finds the next textual occurrence for multi-cursor "add next occurrence" commands.
 enum SelectNextOccurrence {
-    static func wordRange(at location: Int, in string: NSString, tokenizer: UITextInputTokenizer) -> NSRange? {
-        let position = IndexedPosition(index: min(max(location, 0), string.length))
+    /// Word-boundary lookup at `location`. Only needs the document's UTF-16 `length` to clamp the
+    /// starting position — the actual boundary walk is delegated entirely to `tokenizer`, which is
+    /// already `StringView`-backed — so this never materializes document content.
+    static func wordRange(at location: Int, documentLength: Int, tokenizer: UITextInputTokenizer) -> NSRange? {
+        let position = IndexedPosition(index: min(max(location, 0), documentLength))
         let start = tokenizer.position(from: position, toBoundary: .word, inDirection: .backward) ?? position
         let end = tokenizer.position(from: position, toBoundary: .word, inDirection: .forward) ?? position
         guard let startIndex = (start as? IndexedPosition)?.index,

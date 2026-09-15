@@ -126,7 +126,7 @@ final class TreeSitterCaptureSnapshotTests: XCTestCase {
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         let range = ByteRange(from: 0, to: (text as NSString).byteCount)
         XCTAssertFalse(languageMode.captures(in: range).isEmpty)
 
@@ -203,7 +203,7 @@ final class TreeSitterCaptureSnapshotTests: XCTestCase {
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         return languageMode
     }
 }

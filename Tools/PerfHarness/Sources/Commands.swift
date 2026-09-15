@@ -108,6 +108,19 @@ enum Commands {
         return textView
     }
 
+    /// Ingest + line-index + line-ending-detection cost of `state_init`, with the tree-sitter parse
+    /// excluded. A plain-text `TextViewState` runs exactly that subset (`PlainTextInternalLanguageMode`
+    /// has no parse), so timing one isolates the share that does not depend on the language mode.
+    /// Returns `nil` when the caller's own `state_init` is already parse-free and can be reused.
+    private static func measureConstructionWithoutParse(text: String, options: Options) -> Double? {
+        guard options.highlighted else {
+            return nil
+        }
+        return Measurement.time("TextViewState.init (plain: ingest + line index, no parse)") {
+            _ = TextViewState(text: text)
+        }.seconds
+    }
+
     // MARK: - open
 
     static func open(path: String, options: Options) throws {
@@ -135,6 +148,14 @@ enum Commands {
                 makeState(text: text, options: options)
             }
             ResultLog.row("state_init", file: path, sizeBytes: sizeBytes, seconds: stateResult.seconds, extra: extraLabel(options))
+            let lineIndexSeconds = measureConstructionWithoutParse(text: text, options: options) ?? stateResult.seconds
+            ResultLog.row(
+                "line_index",
+                file: path,
+                sizeBytes: sizeBytes,
+                seconds: lineIndexSeconds,
+                extra: "ingest + line index, no parse"
+            )
             state = stateResult.value
             ingestSeconds = readSeconds + stateResult.seconds
         }
@@ -256,6 +277,65 @@ enum Commands {
         ResultLog.row("keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: times.last ?? 0)
         ResultLog.row("keystroke_\(position.rawValue)_p50", file: path, sizeBytes: sizeBytes, seconds: p50)
         ResultLog.row("keystroke_\(position.rawValue)_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
+        FileHandle.standardError.write(
+            "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
+        )
+    }
+
+    /// Same as `keystroke`, but with occurrence highlighting enabled first — isolates
+    /// `OccurrenceHighlightController.term(for:)`'s cost. Before the 2026-09-15 fix this
+    /// materialized the whole document (`stringView.string`) synchronously on every keystroke,
+    /// before its own debounce; comparing this against plain `keystroke` on the same fixture is
+    /// the regression signal — a large gap between the two means occurrence highlighting is adding
+    /// O(document size) work per edit again.
+    static func occurrenceKeystroke(path: String, position: Position, options: Options, samples: Int = 1) throws {
+        FileHandle.standardError.write("=== occurrence-keystroke \(path) at \(position.rawValue) (\(samples) samples) ===\n".data(using: .utf8)!)
+        let (state, sizeBytes) = try loadOrReadState(path: path, options: options)
+        let textView = makeTextView(state: state)
+        textView.layoutSubviews()
+        textView.highlightsOccurrencesOfSelection = true
+        textView.languageConfigurationOverride = LanguageConfiguration(
+            declarations: [],
+            highlightsOccurrences: true,
+            minimumOccurrenceLength: 2
+        )
+
+        let length = textView.documentLength
+        var location: Int
+        switch position {
+        case .start: location = min(10, length)
+        case .middle: location = length / 2
+        case .end: location = max(length - 10, 0)
+        }
+        if let textLocation = textView.textLocation(at: location) {
+            _ = textView.goToLine(textLocation.lineNumber, select: .beginning)
+        }
+        // Land the caret inside a word (not on whitespace) so `term(for:)` takes the
+        // word-under-caret path `SelectNextOccurrence.wordRange` drives, matching typical typing.
+        textView.selectedRange = NSRange(location: location, length: 0)
+
+        let sampleCount = max(samples, 1)
+        let warmupCount = sampleCount == 1 ? 0 : min(5, sampleCount)
+        for _ in 0..<warmupCount {
+            textView.replace(NSRange(location: location, length: 0), withText: "x")
+            location += 1
+        }
+
+        var times: [Double] = []
+        times.reserveCapacity(sampleCount)
+        for _ in 0..<sampleCount {
+            let editResult = Measurement.time {
+                textView.replace(NSRange(location: location, length: 0), withText: "x")
+            }
+            times.append(editResult.seconds)
+            location += 1
+        }
+
+        let p50 = Measurement.percentile(times, 0.50)
+        let p95 = Measurement.percentile(times, 0.95)
+        ResultLog.row("occurrence_keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: times.last ?? 0)
+        ResultLog.row("occurrence_keystroke_\(position.rawValue)_p50", file: path, sizeBytes: sizeBytes, seconds: p50)
+        ResultLog.row("occurrence_keystroke_\(position.rawValue)_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
         FileHandle.standardError.write(
             "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
         )

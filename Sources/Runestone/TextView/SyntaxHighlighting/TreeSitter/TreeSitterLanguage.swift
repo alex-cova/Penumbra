@@ -15,6 +15,9 @@ public final class TreeSitterLanguage {
     public let injectionsQuery: TreeSitterLanguage.Query?
     /// Rules used for indenting text.
     public let indentationScopes: TreeSitterIndentationScopes?
+    /// The token that starts a line comment (e.g. `"//"`, `"#"`), or `nil` if this language has no
+    /// line-comment syntax. Drives ``TextView/toggleComment()``.
+    public let lineCommentPrefix: String?
 
     var internalLanguage: TreeSitterInternalLanguage {
         prepare()
@@ -34,24 +37,30 @@ public final class TreeSitterLanguage {
     ///   - highlightsQuery: Query used for syntax highlighting.
     ///   - injectionsQuery: Query used for detecting injected languages.
     ///   - indentationScopes: Rules used for indenting text.
+    ///   - lineCommentPrefix: The token that starts a line comment (e.g. `"//"`), or `nil` if this
+    ///     language has no line-comment syntax.
     public init(_ language: TreeSitterLanguagePointer,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
-                indentationScopes: TreeSitterIndentationScopes? = nil) {
+                indentationScopes: TreeSitterIndentationScopes? = nil,
+                lineCommentPrefix: String? = nil) {
         self.languagePointer = language
         self.highlightsQuery = highlightsQuery
         self.injectionsQuery = injectionsQuery
         self.indentationScopes = indentationScopes
+        self.lineCommentPrefix = lineCommentPrefix
     }
 
     public convenience init<T>(_ language: UnsafePointer<T>,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
-                indentationScopes: TreeSitterIndentationScopes? = nil) {
+                indentationScopes: TreeSitterIndentationScopes? = nil,
+                lineCommentPrefix: String? = nil) {
         self.init(TreeSitterLanguagePointer(language),
                   highlightsQuery: highlightsQuery,
                   injectionsQuery: injectionsQuery,
-                  indentationScopes: indentationScopes)
+                  indentationScopes: indentationScopes,
+                  lineCommentPrefix: lineCommentPrefix)
     }
 
     /// Prepares the language to be used by Runestone. This can be called on a background queue to have the language prepared before it is needed.
@@ -100,7 +109,8 @@ private extension TreeSitterInternalLanguage {
         self.init(languagePointer: language.languagePointer,
                   highlightsQuery: highlightsQuery,
                   injectionsQuery: injectionsQuery,
-                  indentationScopes: language.indentationScopes)
+                  indentationScopes: language.indentationScopes,
+                  lineCommentPrefix: language.lineCommentPrefix)
     }
 
     private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: TreeSitterLanguagePointer) -> TreeSitterQuery? {

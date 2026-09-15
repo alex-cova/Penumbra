@@ -14,6 +14,16 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     var canHighlight: Bool {
         parseLock.withLock { rootLanguageLayer.canHighlight && !parseInFlight && hasCompletedInitialParse }
     }
+    /// `false` when this language (and every injected language) has no highlights query, i.e. a
+    /// pending parse can never produce a highlight here. Lets `TreeSitterSyntaxHighlighter` report
+    /// `canEventuallyHighlight == false` so Metal doesn't hold stale pre-edit glyphs waiting on a
+    /// highlight that will never arrive.
+    var highlightsQueryAvailable: Bool {
+        parseLock.withLock { rootLanguageLayer.highlightsQueryAvailable }
+    }
+    var lineCommentPrefix: String? {
+        rootLanguageLayer.language.lineCommentPrefix
+    }
 
     private let stringView: StringView
     private let parser: TreeSitterParser
@@ -84,7 +94,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
     }
 
-    func parse(_ text: NSString) {
+    func parse() {
         parseFromBuffer()
     }
 
@@ -98,7 +108,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
     }
 
-    func parse(_ text: NSString, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+    func parse(completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         operationQueue.cancelAllOperations()
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation, weak self] in
@@ -143,23 +153,6 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 return false
             }
             return parsedUTF16Range.containsUTF16Range(utf16Range)
-        }
-    }
-
-    private func parse(_ text: NSString, isCancelled: (() -> Bool)?) {
-        guard isCancelled != nil else {
-            parseLock.withLock {
-                captureWindows.removeAll()
-                rootLanguageLayer.parse(text)
-                hasCompletedInitialParse = true
-                parsedUTF16Range = NSRange(location: 0, length: text.length)
-            }
-            return
-        }
-        runBackgroundParse(isCancelled: isCancelled) {
-            self.rootLanguageLayer.parse(text)
-        } publish: {
-            NSRange(location: 0, length: text.length)
         }
     }
 

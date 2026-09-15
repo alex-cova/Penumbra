@@ -91,7 +91,7 @@ final class TreeSitterHighlightReadinessTests: XCTestCase, LineControllerDelegat
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         XCTAssertTrue(languageMode.canHighlight, "a completed sync parse should be highlightable")
 
         // An edit at or above `maxSyncEditLength` skips the incremental reparse (`ts_tree_edit`
@@ -111,14 +111,22 @@ final class TreeSitterHighlightReadinessTests: XCTestCase, LineControllerDelegat
         let stringView = StringView(string: text)
         let lineManager = LineManager(stringView: stringView)
         lineManager.rebuild()
-        let language = TreeSitterLanguage(tree_sitter_javascript()).internalLanguage
+        // Needs a real (if trivial) highlights query: `canEventuallyHighlight` is now
+        // `false` for a language with none (so Metal doesn't hold stale glyphs waiting on a
+        // highlight that can never arrive — see `TreeSitterSyntaxHighlighter.canEventuallyHighlight`),
+        // and this test is specifically about the *pending while a reparse is outstanding* case,
+        // which only applies when a highlight could eventually land.
+        let language = TreeSitterLanguage(
+            tree_sitter_javascript(),
+            highlightsQuery: TreeSitterLanguage.Query(string: "(identifier) @variable")
+        ).internalLanguage
         let languageMode = TreeSitterInternalLanguageMode(
             language: language,
             languageProvider: nil,
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         let highlighter = languageMode.createLineSyntaxHighlighter()
 
         let factory = LineControllerFactory(

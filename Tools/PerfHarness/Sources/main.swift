@@ -28,6 +28,7 @@ func printUsageAndExit() -> Never {
       open <path> [--highlighted] [--deferred] [--viewport] [--chunked] [--mmap]
       scroll <path> [--frames N] [--highlighted] [--deferred]
       keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred]
+      occurrence-keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred]
       goto <path> --percent N [--highlighted] [--deferred]
       search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
       save <path> [--highlighted] [--deferred]
@@ -91,6 +92,17 @@ do {
             exit(1)
         }
         try Commands.keystroke(
+            path: path,
+            position: position,
+            options: options,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 1
+        )
+    case "occurrence-keystroke":
+        guard let raw = flagValue("--at", in: rest), let position = Commands.Position(rawValue: raw) else {
+            FileHandle.standardError.write("occurrence-keystroke requires --at start|middle|end\n".data(using: .utf8)!)
+            exit(1)
+        }
+        try Commands.occurrenceKeystroke(
             path: path,
             position: position,
             options: options,

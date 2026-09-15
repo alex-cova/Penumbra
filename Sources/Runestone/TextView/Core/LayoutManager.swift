@@ -299,12 +299,20 @@ final class LayoutManager {
     }
 
     /// Re-upsert Metal paint specs after async syntax highlighting refreshed `CTLine` colours.
+    ///
+    /// Each visible line's highlight completes independently (a separate `Task { @MainActor }`
+    /// hop per line, per `LineController`), so this can be called several times in the same
+    /// run-loop turn when one parse round finishes N visible lines at once. Deliberately does
+    /// *not* call `presentMetalCanvasIfNeeded()` here — `upsertFragment` already calls
+    /// `canvasView?.setNeedsDisplay()`, which schedules one deferred, coalesced present per
+    /// run-loop turn (`MetalTextCanvasView.scheduleDeferredPresentIfNeeded`). Presenting
+    /// synchronously per call would turn that into N separate encode + `waitUntilScheduled`
+    /// cycles instead of one.
     func refreshMetalGlyphsAfterSyntaxHighlight(for lineID: DocumentLineNodeID) {
         guard isMetalRenderingActive, visibleLineIDs.contains(lineID) else {
             return
         }
         upsertLineFragmentsForDisplay(lineID: lineID)
-        presentMetalCanvasIfNeeded()
     }
 
     /// Appearance change: glyph instance colors were baked at extract time. Drop cache keys so

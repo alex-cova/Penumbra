@@ -21,6 +21,9 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     var canHighlight: Bool {
         languageMode.canHighlight
     }
+    var canEventuallyHighlight: Bool {
+        languageMode.highlightsQueryAvailable
+    }
     var isHighlighting: Bool {
         guard let operation = currentOperation else {
             return false

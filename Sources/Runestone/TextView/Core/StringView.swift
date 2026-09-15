@@ -93,8 +93,8 @@ final class StringView {
         self.storage = Self.makeStorage(for: string)
     }
 
-    convenience init(string: String) {
-        self.init(string: NSMutableString(string: string))
+    init(string: String) {
+        self.storage = Self.makeStorage(for: string)
     }
 
     init(pieceTree: PieceTree) {
@@ -107,6 +107,19 @@ final class StringView {
         }
         if let mutable = string as? NSMutableString {
             return .contiguous(mutable)
+        }
+        return .contiguous(NSMutableString(string: string))
+    }
+
+    /// Storage for a Swift `String`, skipping the `NSMutableString` round trip a large document
+    /// does not need: the piece tree reads the string's UTF-8 directly.
+    ///
+    /// The threshold is still measured in UTF-16 units so which documents become piece trees does
+    /// not change. `utf16.count` walks the string but allocates nothing, unlike the
+    /// `NSMutableString` copy it replaces.
+    private static func makeStorage(for string: String) -> Storage {
+        if string.utf16.count >= pieceTreeUntitledThreshold {
+            return .pieceTree(PieceTree(string: string))
         }
         return .contiguous(NSMutableString(string: string))
     }
@@ -171,6 +184,24 @@ final class StringView {
                 return nil
             case .pieceTree(let tree):
                 return tree.bytes(in: range)
+            }
+        }
+    }
+
+    /// Per-line UTF-16 lengths for the whole document, or `nil` when the caller should fall back to
+    /// walking newlines itself.
+    ///
+    /// Only piece-tree storage answers this. A contiguous `NSMutableString` is already served well
+    /// by `NSString.getLineStart` (``NewLineFinder``), which is a single bounded call per line; a
+    /// piece tree is not, because each UTF-16 unit read costs an allocation plus a byte walk from
+    /// the nearest checkpoint.
+    func lineMetrics() -> [LineMetric]? {
+        withLock {
+            switch storage {
+            case .contiguous:
+                return nil
+            case .pieceTree(let tree):
+                return tree.lineMetrics()
             }
         }
     }

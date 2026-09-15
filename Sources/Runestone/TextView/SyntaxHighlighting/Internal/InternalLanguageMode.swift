@@ -7,8 +7,10 @@ struct InsertLineBreakIndentStrategy {
 
 protocol InternalLanguageMode: AnyObject {
     var isSyntaxTreeReady: Bool { get }
-    func parse(_ text: NSString)
-    func parse(_ text: NSString, completion: @escaping @MainActor @Sendable (Bool) -> Void)
+    /// Parses from `stringView` directly — no implementation reads a passed-in string, so there is
+    /// nothing to pass; the buffer is always the source of truth.
+    func parse()
+    func parse(completion: @escaping @MainActor @Sendable (Bool) -> Void)
     /// Parse using the buffer reader (no full-document `NSString` materialization).
     func parseFromBuffer()
     func cancelParse()
@@ -22,6 +24,9 @@ protocol InternalLanguageMode: AnyObject {
         using indentStrategy: IndentStrategy) -> InsertLineBreakIndentStrategy
     func detectIndentStrategy() -> DetectedIndentStrategy
     func invalidateSyntaxTree()
+    /// The active language's line-comment token (e.g. `"//"`), or `nil` if it has none. Drives
+    /// ``TextView/toggleComment()``.
+    var lineCommentPrefix: String? { get }
 }
 
 extension InternalLanguageMode {
@@ -29,6 +34,7 @@ extension InternalLanguageMode {
     func cancelParse() {}
     func invalidateSyntaxTree() {}
     func parseFromBuffer() {
-        parse("" as NSString)
+        parse()
     }
+    var lineCommentPrefix: String? { nil }
 }

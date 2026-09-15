@@ -34,6 +34,42 @@ final class LanguagePackTests: XCTestCase {
         }
     }
 
+    /// `TextView.toggleComment()` is a silent no-op for any language without
+    /// `lineCommentPrefix` set — locks in the real, bundled comment token for every language that
+    /// has one, and explicitly documents the ones that genuinely don't (JSON/HTML/CSS have no
+    /// line-comment syntax at all).
+    func testBundledLanguagesHaveTheirRealLineCommentPrefix() {
+        let withPrefix: [(String, TreeSitterLanguage, String)] = [
+            ("javascript", .javaScript, "//"),
+            ("typescript", .typeScript, "//"),
+            ("python", .python, "#"),
+            ("yaml", .yaml, "#"),
+            ("swift", .swift, "//"),
+            ("go", .go, "//"),
+            ("java", .java, "//"),
+            ("kotlin", .kotlin, "//"),
+            ("bash", .bash, "#"),
+            ("sql", .sql, "--"),
+            ("toml", .toml, "#"),
+            ("http", .http, "#"),
+            ("mermaid", .mermaid, "%%"),
+            ("graphql", .graphQL, "#")
+        ]
+        for (name, language, expected) in withPrefix {
+            XCTAssertEqual(language.lineCommentPrefix, expected, name)
+        }
+
+        // No standard single-line comment syntax in these languages.
+        let withoutPrefix: [(String, TreeSitterLanguage)] = [
+            ("json", .json),
+            ("html", .html),
+            ("css", .css)
+        ]
+        for (name, language) in withoutPrefix {
+            XCTAssertNil(language.lineCommentPrefix, name)
+        }
+    }
+
     func testBundledIdentifierLookup() {
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "javascript"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "typescript"))
@@ -181,7 +217,7 @@ final class LanguagePackTests: XCTestCase {
             stringView: stringView,
             lineManager: lineManager
         )
-        languageMode.parse(text as NSString)
+        languageMode.parse()
         return languageMode
     }
 }

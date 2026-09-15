@@ -11,6 +11,8 @@ public extension CommandRegistry {
         .duplicateLines, .deleteLines, .moveLineUp, .moveLineDown,
         .moveStatementUp, .moveStatementDown, .joinLines, .surroundWith,
         .indentLines, .outdentLines, .reformatCode,
+        .toggleComment, .insertLineAbove, .insertLineBelow,
+        .sortLinesAscending, .sortLinesDescending,
         .toggleMethodSeparators, .toggleOccurrenceHighlighting,
         .toggleFindPanel, .toggleReplacePanel,
         .searchEverywhere, .findAction, .quickOpenFile, .recentFiles, .goToLine,
