@@ -5,6 +5,7 @@ import Runestone
 import SwiftUI
 import RunestoneLanguages
 import RunestoneMarkdownLanguage
+import UmbraCore
 
 struct IDETabRow: Identifiable, Equatable {
     let id: UUID
@@ -22,6 +23,7 @@ final class IDEWorkspace: ObservableObject {
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
     private var adapter: RunestoneWorkbenchEditorAdapter!
+    private var isPromptingGoToLine = false
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
@@ -42,6 +44,10 @@ final class IDEWorkspace: ObservableObject {
     @Published var statusSelectionLength = 0
     @Published var statusRenderer = "Core Graphics"
     @Published var tabsByPane: [UUID: [IDETabRow]] = [:]
+    @Published var isFindInFilesVisible = false
+    @Published var findInFilesQuery = ""
+    @Published var findInFilesHits: [FindInFilesHit] = []
+    @Published var findInFilesStatus = ""
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
@@ -203,6 +209,62 @@ final class IDEWorkspace: ObservableObject {
     func showReplace() {
         adapter.textView?.perform(.toggleReplacePanel)
         focusActiveEditor()
+    }
+
+    func showFindInFiles() {
+        isFindInFilesVisible = true
+        if findInFilesStatus.isEmpty {
+            findInFilesStatus = project.rootURL == nil
+                ? "Open a folder to search the project"
+                : "Enter a query and press Return"
+        }
+    }
+
+    func hideFindInFiles() {
+        isFindInFilesVisible = false
+        focusActiveEditor()
+    }
+
+    func runFindInFiles() {
+        isFindInFilesVisible = true
+        let query = findInFilesQuery
+        guard let root = project.rootURL else {
+            findInFilesHits = []
+            findInFilesStatus = "Open a folder to search the project"
+            return
+        }
+        let files = FindInFilesService.files(under: root)
+        findInFilesStatus = "Searching…"
+        let hits = FindInFilesService.search(query: query, files: files)
+        findInFilesHits = hits
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            findInFilesStatus = "Enter a query and press Return"
+        } else if hits.isEmpty {
+            findInFilesStatus = "No results"
+        } else if hits.count == 1 {
+            findInFilesStatus = "1 result"
+        } else {
+            findInFilesStatus = "\(hits.count) results"
+        }
+    }
+
+    func openFindInFilesHit(_ hit: FindInFilesHit) {
+        let target = FindInFilesService.openTarget(for: hit)
+        Task { await openDocument(from: target.url, selecting: target.range) }
+    }
+
+    func showGoToLine() {
+        guard !isPromptingGoToLine else { return }
+        isPromptingGoToLine = true
+        defer { isPromptingGoToLine = false }
+        guard let input = promptGoToLine() else { return }
+        _ = applyGoToLine(input)
+    }
+
+    @discardableResult
+    func applyGoToLine(_ raw: String) -> Bool {
+        guard let textView = adapter?.textView else { return false }
+        return GoToLineCommand.apply(raw, to: textView)
     }
 
     func splitRight() {
@@ -393,10 +455,11 @@ final class IDEWorkspace: ObservableObject {
         )
         configurePalette(host.paletteController)
         preferences.apply(to: host.textView)
+        installUmbraActionHandler(on: host.textView)
         return host
     }
 
-    func openDocument(from url: URL) async {
+    func openDocument(from url: URL, selecting range: NSRange? = nil) async {
         do {
             let identifier = LanguageIdentifier.identifier(for: url)
             let document = try await WorkbenchDocument.load(
@@ -407,10 +470,21 @@ final class IDEWorkspace: ObservableObject {
             )
             document.language = IDELanguageSupport.language(forIdentifier: identifier)
             workbench.openDocument(document)
+            if let range, let selected = workbench.activePane.selectedDocument {
+                selected.selectedRange = range
+            }
             recordRecentFile(url)
             showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)
+            if let range {
+                let host = host(for: workbench.activePaneID)
+                if host.loadedDocumentID == workbench.activePane.selectedDocumentID {
+                    host.textView.selectedRange = range
+                    host.textView.scrollRangeToVisible(range)
+                    _ = host.textView.focusTextInput()
+                }
+            }
             await workspaceBridge.syncWorkbench(workbench)
             refreshPresentation()
         } catch {
@@ -532,8 +606,43 @@ final class IDEWorkspace: ObservableObject {
             EditorCommand(id: "app.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
                           action: { [weak self] in self?.toggleTypewriterScrolling() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
-                          action: { [weak self] in self?.toggleMetalRendering() })
+                          action: { [weak self] in self?.toggleMetalRendering() }),
+            EditorCommand(id: "app.findInFiles", title: "Find in Files…", group: "Find",
+                          shortcutDisplay: "⌘⇧F",
+                          action: { [weak self] in self?.showFindInFiles() })
         ])
+    }
+
+    private func installUmbraActionHandler(on textView: TextView) {
+        let previous = textView.editorActionHandler
+        textView.editorActionHandler = { [weak self] action in
+            guard let self else { return previous?(action) ?? false }
+            if action == .goToLine {
+                self.showGoToLine()
+                return true
+            }
+            if action == UmbraKeymap.findInFiles {
+                self.showFindInFiles()
+                return true
+            }
+            return previous?(action) ?? false
+        }
+    }
+
+    private func promptGoToLine() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Go to Line"
+        alert.informativeText = "Enter a 1-based line number."
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.placeholderString = "Line number"
+        field.stringValue = ""
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
     }
 
     private func activatePane(_ paneID: UUID) {

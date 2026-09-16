@@ -209,7 +209,7 @@ captureMinimap(atProgress: 0.4, suffix: "mid")
 // MARK: - Folding visual verification
 //
 // Exercises the folding ribbon, zero-height collapse, and placeholder rendering in a headless
-// capture. MacExample has no checked-in Swift sources in this repo, so SmokeTest is the host.
+// capture. SmokeTest is the headless host for Metal regression checks.
 
 let foldingText = """
 func foo() {

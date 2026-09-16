@@ -74,10 +74,22 @@ let package = Package(
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),
+        .target(
+            name: "UmbraCore",
+            dependencies: ["Runestone"],
+            path: "Example/UmbraCore",
+            swiftSettings: swift6
+        ),
         .executableTarget(
             name: "Umbra",
-            dependencies: ["Runestone", "RunestoneLanguages", "RunestoneMarkdownLanguage"],
-            path: "Example/MacExample",
+            dependencies: ["Runestone", "RunestoneLanguages", "RunestoneMarkdownLanguage", "UmbraCore"],
+            path: "Example/Umbra",
+            swiftSettings: swift6
+        ),
+        .testTarget(
+            name: "UmbraTests",
+            dependencies: ["UmbraCore", "Runestone"],
+            path: "Tests/UmbraTests",
             swiftSettings: swift6
         ),
         .target(name: "TestTreeSitterLanguages"),

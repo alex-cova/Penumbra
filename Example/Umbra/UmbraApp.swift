@@ -50,6 +50,8 @@ struct UmbraApp: App {
                     .keyboardShortcut("f")
                 Button("Replace…", systemImage: "arrow.left.arrow.right", action: workspace.showReplace)
                     .keyboardShortcut("f", modifiers: [.command, .option])
+                Button("Find in Files…", systemImage: "folder.badge.gearshape", action: workspace.showFindInFiles)
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
             }
 
             CommandMenu("Go") {
@@ -57,6 +59,8 @@ struct UmbraApp: App {
                     .keyboardShortcut("p")
                 Button("Go to Symbol…", action: workspace.showGoToSymbol)
                     .keyboardShortcut("r")
+                Button("Go to Line…", action: workspace.showGoToLine)
+                    .keyboardShortcut("g")
                 Button("Command Palette…", action: workspace.showCommandPalette)
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }

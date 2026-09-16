@@ -12,13 +12,13 @@ Prioritized by user impact first, then performance, then polish. Paths are relat
 
 The roadmap implementation is now present in the working tree:
 
-- P0: actual presented-drawable capture replaces unreliable `NSView.cacheDisplay` capture; Return + following text, pending-highlight edits, and host reattachment have fixed-window pixel regressions. MacExample was launched through `./run-metal.sh` and exercised with scripted typing/Return input.
+- P0: actual presented-drawable capture replaces unreliable `NSView.cacheDisplay` capture; Return + following text, pending-highlight edits, and host reattachment have fixed-window pixel regressions. Umbra was launched through `./run-metal.sh` and exercised with scripted typing/Return input.
 - P1: deterministic fragment/page ordering, exhaustive decoration cache inputs, GPU-free stats, Metal PerfHarness metrics, dirty-page rebuilds, and command-buffer-completion-fenced triple buffers are enabled. The raster budget is 128 after a five-sample highlighted run recorded 62 capped fragments at 64 and 18 at 128. A 500 MB fixture recorded 1.97 ms keystroke p95, 0 raster-cap skips, and 0.447 ms instance rebuild. Synthetic scroll layout p95 was 0.053 ms.
 - P2-1: the Metal pass paints the opaque editor background, selected-line band, and page-guide hairline/shading; AppKit selection/caret overlays remain above it.
 - P2-2: presented-frame/parity metrics use ink rather than alpha for the opaque canvas, and `.github/workflows/metal.yml` targets a required self-hosted macOS Metal runner. Local synthetic parity measured 78.7% of Metal ink on CG ink (MAD 17.51; mismatch fraction 0.239).
 - P2-3: the layer follows the attached window/screen color space and theme/decorative colors are converted directly into sRGB or Display P3 output space, with color-bearing instances invalidated on display changes.
 - P2-4: 1× glyphs use three horizontal coverage phases; Retina remains bucket zero. Whole-run fallback reserves `UInt8.max`.
-- P2-5: fallback reasons reach the host, update MacExample status, and produce a one-time user-visible warning.
+- P2-5: fallback reasons reach the host, update Umbra status, and produce a one-time user-visible warning.
 
 Hardware acceptance remains explicit: the workflow needs a registered runner labelled `self-hosted`, `macOS`, and `metal`; visual A/B checks require physical P3 and 1× displays.
 
@@ -119,13 +119,13 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 ---
 
-### P0-4: Manual MacExample smoke pass (still outstanding)
+### P0-4: Manual Umbra smoke pass (still outstanding)
 
 **Symptom:** GUI-only failures (palette wiring, visual lag, compositing artifacts against SwiftUI hosts) cannot appear in the headless suite, and Metal is **off by default under XCTest** (`MetalActivation.defaultPropertyValue` returns `!isRunningUnderXCTest`), so the default suite exercises CG.
 
 **Fix direction:** run `./run-metal.sh`, then work a large highlighted file: rapid typing, flick scroll, split panes, tab switch away and back (this is also the P0-2 repro), theme/appearance switch, font size change, window move between displays of different backing scale. Record results in `EDITOR_PERFORMANCE_REPORT.md` and file what you find.
 
-**Files:** `run-metal.sh`, `Example/MacExample/IDEWorkspace.swift`, `Example/MacExample/IDEEditorViews.swift` (`textView.isMetalRenderingEnabled`), `Example/MacExample/IDEStatusBarPanel.swift` (shows renderer mode).
+**Files:** `run-metal.sh`, `Example/Umbra/IDEWorkspace.swift`, `Example/Umbra/IDEEditorViews.swift` (`textView.isMetalRenderingEnabled`), `Example/Umbra/IDEStatusBarPanel.swift` (shows renderer mode).
 
 **Effort:** S. **Risk:** none.
 
@@ -181,7 +181,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 ### P1-4: `TextView.metal*` debug accessors stall the GPU (new)
 
-**Symptom:** any consumer polling Metal stats — PerfHarness, MacExample's status bar, a future HUD — pays a synchronous GPU round-trip per property read. This silently corrupts exactly the measurements P1-5 wants to collect.
+**Symptom:** any consumer polling Metal stats — PerfHarness, Umbra's status bar, a future HUD — pays a synchronous GPU round-trip per property read. This silently corrupts exactly the measurements P1-5 wants to collect.
 
 **Evidence:** `MetalRenderer.debugStats` unconditionally calls `atlas.debugCoverageTexelCensus()`, which blits the **entire first 2048×2048 coverage page** (`GlyphAtlas.coveragePageSize = 2048`, r8 → 4 MB) into a shared buffer, `commandBuffer.waitUntilCompleted()`, copies it into a `Data`, and then loops every byte counting non-zeros. Every `TextView.metal*` accessor (`metalGlyphAtlasBytes`, `metalFragmentCount`, `metalDrawNanosP95`, …) builds a fresh `DebugStats`, so each read pays that cost; `metalTotalInstanceCount` reads `metalDebugStats` twice and pays it **twice**. `debugStats` also sorts the 120-sample `recentDrawNanos` array per read.
 
@@ -301,7 +301,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Evidence:** `MetalContext.markUnavailable(reason:)` is called from `MetalTextCanvasView.encodePass` on command-buffer/encoder failure and is process-wide and one-way; `onRenderingFailure` notifies the view but nothing surfaces to the host.
 
-**Fix direction:** publish `isMetalRenderingActive` changes to the host (delegate callback or notification), and show a one-time notice in MacExample. `Example/MacExample/IDEStatusBarPanel.swift` already displays renderer mode, so the display surface exists.
+**Fix direction:** publish `isMetalRenderingActive` changes to the host (delegate callback or notification), and show a one-time notice in Umbra. `Example/Umbra/IDEStatusBarPanel.swift` already displays renderer mode, so the display surface exists.
 
 **Effort:** S. **Risk:** low.
 
@@ -315,7 +315,7 @@ Two independent tracks. The correctness track should land first; the perf track 
 
 1. **P0-2** (blank canvas after re-attach) — one line plus a test; do it first regardless of anything else.
 2. **P0-3** slow-parse harness, then **P0-1** behind it — the harness is what makes P0-1 provable, so build it first even though P0-1 is the bug users feel.
-3. **P0-4** MacExample pass — also the natural repro for P0-2, so run it after step 1 lands.
+3. **P0-4** Umbra pass — also the natural repro for P0-2, so run it after step 1 lands.
 
 **Perf track** (strict ordering; each step depends on the previous)
 
@@ -354,7 +354,7 @@ Local verification:
 swift build
 swift test --filter TextViewMetalSmokeTests   # skips entirely without a GPU
 swift test --filter MetalDecorationTests
-./run-metal.sh                                # MacExample with Metal on
+./run-metal.sh                                # Umbra with Metal on
 swift run -c release PerfHarness scroll-frames synthetic --frames 240
 swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/metal-goldens
 ```
@@ -370,7 +370,7 @@ swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/metal-golde
 | Caret / page guide covered by opaque canvas | High | Mitigated in v1 by transparent canvas + z-order; re-opens with P2-1 |
 | Triple-buffered instance writes have no in-flight fence | Med | `PageBucket`/`DecorationBuffer` advance a 3-slot cursor with no semaphore or completion handler. Safe while ≤1 write per encode and ≤3 frames outstanding — which holds today, since writes only happen inside `encode`. `encodeForCapture` forcing a rebuild during an in-flight present is the case to watch |
 | Nondeterministic instance order | Med | Tracked as P1-1; affects translucent overlap and golden stability |
-| Fallback drift (Metal-only bugs) | Med | CG is the XCTest default; MacExample A/B toggle; no GPU coverage anywhere automated |
+| Fallback drift (Metal-only bugs) | Med | CG is the XCTest default; Umbra A/B toggle; no GPU coverage anywhere automated |
 | Memory pressure / 32 MB atlas cap | Med | LRU eviction + `DispatchSource` memory-pressure handler; P2-4 would increase pressure |
 | Malicious font huge bounds | Med | Per-glyph cap 256×256 px → run-level fallback |
 | Discrete GPU shared-texture sampling (Intel 2019) | Med | `hasUnifiedMemory` chooses Private+blit vs Shared |

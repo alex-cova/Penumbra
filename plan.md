@@ -590,7 +590,7 @@ enum MetalActivation {
 | absent | `true` | yes | on | production after PR 9 |
 | absent | `false` | `*` | off | XCTest, and PRs 1–8 default |
 
-QA during PRs 1–8 enables Metal with the MacExample menu (`isMetalRenderingEnabled = true`), not with UserDefaults. `RunestoneMetalRendering=true` cannot override a false property.
+QA during PRs 1–8 enables Metal with the Umbra menu (`isMetalRenderingEnabled = true`), not with UserDefaults. `RunestoneMetalRendering=true` cannot override a false property.
 
 `LayoutManager` keeps **both** backends compiled. The CG path is not `#if`'d out. Switching the flag at runtime:
 
@@ -696,7 +696,7 @@ Do not lower the 128k overflow valve: a 200-fragment × ~180 glyph viewport is a
 | Fallback | Existing `TextViewSmokeTests`, `AppearanceChangeSmokeTests`, `TextViewFocusModeTests`, `DiagnosticEmphasisControllerTests`, `MultiSelectionTests` run with `isMetalRenderingEnabled = false` (default under XCTest) | no change |
 | Metal smoke | Same smoke tests with flag forced on, skipped if `!MetalContext.isAvailable`. Includes invisible-character toggle and `unmarkText` (display-only invalidation) | `TextViewMetalSmokeTests.swift` |
 | Visual | Render a fixture (keyword-colored Swift snippet, emoji ZWJ via Apple Color Emoji, italic trait, squiggle, marked range, fold placeholder, custom `tabSymbol`, `"e\\u{0301}"`) into an offscreen `MTLTexture`, readback to `NSBitmapImageRep`, compare against a CG-path PNG with a small per-pixel ΔE tolerance (emoji AA will not be bit-identical). **Fira Code ligatures are a manual `snapshot-metal` case**, not `swift test` — the font is not in the package. Fail Apple Color Emoji cases if that system face is missing (it ships on macOS 12). | `Tools/PerfHarness` subcommand `snapshot-metal` plus checked-in goldens |
-| A/B | MacExample menu item "Use Metal renderer" sets the **property**. UserDefaults `RunestoneMetalRendering=false` kill switch | `Example/MacExample` |
+| A/B | Umbra menu item "Use Metal renderer" sets the **property**. UserDefaults `RunestoneMetalRendering=false` kill switch | `Example/Umbra` |
 | Perf | `Tools/PerfHarness` subcommand `scroll-frames`: host a `NSWindow`, enable Metal, scroll a 100k-line fixture and a wrapping-off 50k-character line for 3 s, **print** p95 `MetalRenderer.draw` and `LayoutManager.layoutLinesInViewport` and compare to a checked-in baseline file. Manual / nightly. **Do not `XCTFail` production CI on GPU frame time.** `swift test` GPU tests are skip-if-no-device smoke, not perf | `Tools/PerfHarness` |
 | Memory | Instruments template already referenced by `record-open-instruments.sh`; atlas byte counter metric (see Observability) | |
 
@@ -716,7 +716,7 @@ No snapshot tests inside `swift test` that require a window on Linux — the pac
 | Caret/handles/page guide covered | **High** | Transparent canvas inside `TextInputView`, z-order between page guide and selection overlay. `isOpaque = false`, clear to zero |
 | Display-only invalidation no-op | **High** | PR 4: LayoutManager walks visible controllers and `upsertFragment`s a fresh spec (glyphs skipped when `ctLineID` + `emitRect` match). No ID-only decoration invalidate |
 | GPU-fragment leak (reuse-queue eviction) | **High** | PR 4 tracks IDs on the backend, not `lineFragmentViewReuseQueue.visibleViews` |
-| Fallback drift (Metal-only bugs) | **Med** | CG path remains default in tests through PR 8; MacExample A/B; goldens |
+| Fallback drift (Metal-only bugs) | **Med** | CG path remains default in tests through PR 8; Umbra A/B; goldens |
 | `CATransaction.setDisableActions(true)` around layout | **Low** | Present happens in the view’s display pass after that transaction commits |
 | Swift 6 / `Sendable` | **Low** | Follow existing `@MainActor` on `LayoutManager`/`TextInputView`. `GlyphAtlas` not `Sendable` |
 | New `NSView` appearing in AX | **Low** | `setAccessibilityElement(false)` + `setAccessibilityHidden(true)` in PR 1 |
@@ -909,8 +909,8 @@ Alerting: N/A for a library. Hosts can read `isMetalRenderingActive`.
 
 ## Rollout Plan
 
-1. **Land behind flag default-off** (PRs 1–8, including run-level fallback). MacExample menu sets the property. CI runs CG path only; Metal smokes skip if no device.
-2. **Default-on in MacExample** as part of PR 9, still default-off on `TextView` public init until the same PR’s production switch.
+1. **Land behind flag default-off** (PRs 1–8, including run-level fallback). Umbra menu sets the property. CI runs CG path only; Metal smokes skip if no device.
+2. **Default-on in Umbra** as part of PR 9, still default-off on `TextView` public init until the same PR’s production switch.
 3. **Default-on for `TextView`** in PR 9 when `MetalActivation.resolved` is true (`property` default becomes `true` outside XCTest). `RunestoneMetalRendering=false` remains the kill switch; `isMetalRenderingEnabled = false` remains the per-view disable.
 4. **Rollback:** hosts set `textView.isMetalRenderingEnabled = false` (wins over defaults `true`) or `UserDefaults` `RunestoneMetalRendering=false` (wins over the property). No document-format implications. Instant, per-view or process-wide.
 
@@ -978,7 +978,7 @@ Shader shipping remains a Swift `StaticString`, compiled with `makeLibrary(sourc
 
 ## PR Plan
 
-Each PR is independently reviewable, keeps tests green on the CG path, and does not require the next PR to be useful in isolation. **`isMetalRenderingEnabled` defaults to `false` through PR 8.** Metal is not default-on in MacExample or production until run-level fallback (PR 8) has landed. Protocol extraction in PR 1 is behavior-neutral (CG backend wraps the existing reuse queue).
+Each PR is independently reviewable, keeps tests green on the CG path, and does not require the next PR to be useful in isolation. **`isMetalRenderingEnabled` defaults to `false` through PR 8.** Metal is not default-on in Umbra or production until run-level fallback (PR 8) has landed. Protocol extraction in PR 1 is behavior-neutral (CG backend wraps the existing reuse queue).
 
 ### PR 1 — Metal feature flag, context, and empty canvas
 
@@ -1006,7 +1006,7 @@ Each PR is independently reviewable, keeps tests green on the CG path, and does 
 - **Title:** Paint visible line fragments with Metal glyphs
 - **Files/components:** `LayoutManager.swift` (`layoutLineFragmentView`, **disappeared IDs from `paintBackend.trackedFragmentIDs`**, `setNeedsDisplayOnLines` / `updateMarkedTextOnVisibleLines` walk visible `LineFragmentController`s and `upsertFragment` a **fresh spec**), `MetalRenderer.swift`, `MetalTextCanvasView.swift` (z-order **in front of** `linesContainerView`, behind selection overlay), `TextView.swift` (`viewDidChangeBackingProperties`)
 - **Depends on:** PR 1, PR 2, PR 3
-- **Description:** When Metal is active, skip `LineFragmentView` dequeue; `upsertFragment` extracts glyphs (if `ctLineID` or `emitRect` changed) and always rebuilds decorations from the spec. View-follows-viewport frame. Theme/font/scale invalidation. `TextViewMetalSmokeTests` (skip if no device), including **invisible-character toggle and `unmarkText`** — those paths must not be ID-only invalidates. MacExample menu sets the property. **Known gap: decoration *drawing* still absent until PR 5** — flag stays default-off. Protocol extraction already landed in PR 1, so this PR is the backend swap only.
+- **Description:** When Metal is active, skip `LineFragmentView` dequeue; `upsertFragment` extracts glyphs (if `ctLineID` or `emitRect` changed) and always rebuilds decorations from the spec. View-follows-viewport frame. Theme/font/scale invalidation. `TextViewMetalSmokeTests` (skip if no device), including **invisible-character toggle and `unmarkText`** — those paths must not be ID-only invalidates. Umbra menu sets the property. **Known gap: decoration *drawing* still absent until PR 5** — flag stays default-off. Protocol extraction already landed in PR 1, so this PR is the backend swap only.
 
 ### PR 5 — Port `LineFragmentRenderer` decorations to Metal
 
@@ -1036,10 +1036,10 @@ Each PR is independently reviewable, keeps tests green on the CG path, and does 
 - **Depends on:** PR 7
 - **Description:** If a run has `NSShadow`, unsupported color layers, glyphs over the size cap, a non-identity text matrix we failed to reproduce, or the per-frame raster cap overflow, rasterize the run into a scratch BGRA quad. **Required before any default-on.** Flag still default-off at the end of this PR.
 
-### PR 9 — Snapshots, PerfHarness, MacExample default-on, production default-on
+### PR 9 — Snapshots, PerfHarness, Umbra default-on, production default-on
 
 - **Title:** Metal snapshots, scroll-frame harness, and production default
-- **Files/components:** `Tools/PerfHarness` (`scroll-frames`, `snapshot-metal`, wrapping-off 50k-character line), goldens, `TextView.isMetalRenderingEnabled` default (`true` outside XCTest), MacExample toggle default-on, `UserDefaults` kill switch already in PR 1
+- **Files/components:** `Tools/PerfHarness` (`scroll-frames`, `snapshot-metal`, wrapping-off 50k-character line), goldens, `TextView.isMetalRenderingEnabled` default (`true` outside XCTest), Umbra toggle default-on, `UserDefaults` kill switch already in PR 1
 - **Depends on:** PR 8
 - **Description:** CI still skips GPU tests when `!MetalContext.isAvailable` and **does not** `XCTFail` on frame time. `scroll-frames` is a manual/nightly subcommand that **prints** p95 and diffs a baseline file. Production `TextView` init: `property` default `true` when not under XCTest; `MetalActivation.resolved` still requires a device and honors the kill switch.
 

@@ -11,7 +11,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 ### 🎨 Native Text Editor Engine (`Runestone`)
 
 * **macOS-Native AppKit Design**: Built with native text input handling (`NSTextInputClient` / `UITextInput`), full IME and accented character support, smooth scrolling, and a configurable keymap layer (`Keymap`) with `.default_` and `.intelliJ` presets.
-* **Metal Rendering (optional)**: GPU-accelerated glyph rasterization and text canvas via `TextView.isMetalRenderingEnabled`. Falls back to Core Graphics automatically when Metal is unavailable. Toggle at launch in MacExample with `--metal` / `--no-metal`.
+* **Metal Rendering (optional)**: GPU-accelerated glyph rasterization and text canvas via `TextView.isMetalRenderingEnabled`. Falls back to Core Graphics automatically when Metal is unavailable. Toggle at launch in Umbra with `--metal` / `--no-metal`.
 * **Large-File Storage**: Untitled buffers over 256 KB and file loads via `TextViewState.load` use a mmap-backed `PieceTree` so multi-megabyte documents stay editable without copying the whole file into memory.
 * **Multi-Cursor & Column Selection**:
   * **Multiple Carets**: Place carets with Option-click, clone carets vertically (⌥⌘↑ / ⌥⌘↓), or undo caret additions (⌘U).
@@ -145,7 +145,7 @@ Runestone/
 │   └── TestTreeSitterLanguages/    # Bundled C grammars (HTML, JS, JSON, Python, YAML)
 │
 ├── Example/
-│   └── MacExample/                 # SwiftUI multi-tab, split-pane macOS demo application
+│   └── Umbra/                      # SwiftUI multi-tab, split-pane macOS demo application
 ├── Tools/
 │   └── PerfHarness/                # Scroll/layout/Metal performance benchmarking CLI
 └── Tests/

@@ -38,6 +38,7 @@ struct IDEWelcomeView: View {
                     shortcutRow("⌘G", "Go to Line")
                     shortcutRow("⌘R", "Go to Symbol")
                     shortcutRow("⌘F", "Find")
+                    shortcutRow("⌘⇧F", "Find in Files")
                 }
                 .font(.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -52,7 +53,7 @@ struct IDEWelcomeView: View {
         HStack {
             Text(keys)
                 .font(.caption.monospaced())
-                .frame(width: 56, alignment: .trailing)
+                .frame(width: 64, alignment: .trailing)
             Text(action)
         }
     }

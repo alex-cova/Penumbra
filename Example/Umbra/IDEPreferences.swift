@@ -1,6 +1,7 @@
 import AppKit
 import Runestone
 import SwiftUI
+import UmbraCore
 
 @MainActor
 final class IDEPreferences: ObservableObject {
@@ -141,7 +142,7 @@ enum KeymapPreset: String, Codable, CaseIterable, Identifiable {
 
     var keymap: Keymap {
         switch self {
-        case .sublime: .sublime
+        case .sublime: UmbraKeymap.sublime
         case .default_: .default_
         case .intelliJ: .intelliJ
         }

@@ -350,7 +350,7 @@ file size (see Fix 2's verification).
   restored** — explicit user decision for this pass (benchmarks recorded here by hand instead).
 - **Metal PR 10 (opaque canvas / line-selection + page-guide fills in Metal)** — not attempted; user
   did not select this tier of work.
-- **No manual `MacExample` smoke pass was run.** The plan's own verification checklist called for
+- **No manual `Umbra` smoke pass was run.** The plan's own verification checklist called for
   launching `./run-metal.sh`, typing rapidly in a large highlighted file to visually confirm no
   stale/invisible-glyph lag, and exercising toggle comment / insert line / sort lines through the
   real app's command palette and default keybindings. This was not done — automated test coverage
@@ -400,7 +400,7 @@ The follow-up Metal pass completed the outstanding renderer roadmap:
 The highlighted wall-clock difference is within run-to-run noise; the raster-cap reduction is the
 actionable signal. The 128 ceiling remains bounded for cold CJK/emoji scrolls.
 
-### MacExample smoke
+### Umbra smoke
 
 `./run-metal.sh` is executable and launches the Metal configuration. The live SwiftUI-hosted app
 accepted scripted ordinary typing and repeated Return/new-line input. Automated presented-drawable

@@ -32,6 +32,12 @@ struct IDERootView: View {
                 .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
             }
 
+            if workspace.isFindInFilesVisible {
+                FindInFilesPanel()
+                    .opacity(workspace.chromeOpacity)
+                    .allowsHitTesting(workspace.chromeOpacity > 0.05)
+            }
+
             IDEStatusBarPanel()
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)

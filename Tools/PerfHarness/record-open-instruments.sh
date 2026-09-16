@@ -1,5 +1,5 @@
 #!/bin/bash
-# Record Instruments traces of MacExample opening a large fixture.
+# Record Instruments traces of Umbra opening a large fixture.
 #
 # Usage:
 #   Tools/PerfHarness/record-open-instruments.sh [fixture-path]
@@ -10,7 +10,7 @@
 #
 # Headless xctrace may fail without GUI/TCC. If so, open Instruments.app,
 # choose those templates, and launch:
-#   Example/MacExample with argument --open <fixture>
+#   swift run -c release Umbra --open <fixture>
 
 set -euo pipefail
 
@@ -26,16 +26,11 @@ if [[ ! -f "$FIXTURE" ]]; then
   exit 1
 fi
 
-cd "$ROOT/Example"
-xcodebuild -scheme MacExample -configuration Release -derivedDataPath "$OUT_DIR/DerivedData" build
+cd "$ROOT"
+swift build -c release --product Umbra
 
-APP=$(find "$OUT_DIR/DerivedData" -name 'MacExample.app' -print -quit)
-if [[ -z "$APP" ]]; then
-  echo "MacExample.app not found after build" >&2
-  exit 1
-fi
-
-BINARY="$APP/Contents/MacOS/MacExample"
+BIN_PATH="$(swift build -c release --product Umbra --show-bin-path)"
+BINARY="$BIN_PATH/Umbra"
 
 record() {
   local template="$1"

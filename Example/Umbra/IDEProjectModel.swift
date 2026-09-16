@@ -1,4 +1,5 @@
 import Foundation
+import UmbraCore
 
 struct IDEFileNode: Identifiable, Hashable {
     let id: String
@@ -24,9 +25,7 @@ final class IDEProjectModel: ObservableObject {
     @Published private(set) var rootNode: IDEFileNode?
     @Published var expandedPaths: Set<String> = []
 
-    private static let ignoredDirectoryNames: Set<String> = [
-        ".git", ".build", "node_modules", "DerivedData", ".swiftpm", "Pods", ".cursor"
-    ]
+    private static var ignoredDirectoryNames: Set<String> { FindInFilesService.ignoredDirectoryNames }
 
     func setRoot(_ url: URL?) {
         rootURL = url
@@ -82,32 +81,7 @@ final class IDEProjectModel: ObservableObject {
 
     func allProjectFiles() -> [URL] {
         guard let rootURL else { return [] }
-        var files: [URL] = []
-        enumerateFiles(at: rootURL, into: &files)
-        return files.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
-    }
-
-    private func enumerateFiles(at url: URL, into files: inout [URL]) {
-        let fileManager = FileManager.default
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-        for entry in entries {
-            let name = entry.lastPathComponent
-            if name.hasPrefix(".") || Self.ignoredDirectoryNames.contains(name) {
-                continue
-            }
-            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true {
-                enumerateFiles(at: entry, into: &files)
-            } else {
-                files.append(entry)
-            }
-        }
+        return FindInFilesService.files(under: rootURL)
     }
 
     private func buildNode(at url: URL, isDirectory: Bool) -> IDEFileNode? {

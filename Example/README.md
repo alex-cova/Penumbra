@@ -70,7 +70,7 @@ swift run Umbra --open path/to/file.swift
 
 ```
 Example/
-├── MacExample/          # Umbra app source (SwiftUI shell + IDEWorkspace)
+├── Umbra/               # Umbra app source (SwiftUI shell + IDEWorkspace)
 ├── umbra.icon/          # App icon (Icon Composer); compiled at build time
 └── Resources/           # Info.plist, entitlements
 ```

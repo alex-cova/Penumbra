@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Shared design tokens for the MacExample shell.
+/// Shared design tokens for the Umbra shell.
 /// VARIANCE 7 · MOTION 3 · DENSITY 8
 enum IDEAppearance {
     enum Spacing {

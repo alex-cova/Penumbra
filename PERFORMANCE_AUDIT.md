@@ -123,7 +123,7 @@ and no cancellation**, on whatever thread calls it (the find panel, i.e. main th
 appears to be newer infrastructure not yet wired into the built-in find UI.
 
 ### 9. Saving
-No save path exists anywhere in Runestone or `Example/MacExample` (`grep` for `write(to:`,
+No save path exists anywhere in Runestone or `Example/Umbra` (`grep` for `write(to:`,
 `FileManager` write APIs, `atomically`, and `NSDocument` all came back empty). Saving is entirely the host
 application's responsibility; there is nothing to audit here beyond "the host app must not do a naive full
 rewrite if the goal is fast-save on a multi-GB file" (see Phase 4).
@@ -337,7 +337,7 @@ the packed line index (linear in *line count*) plus whatever of the live mapping
 attributes as resident. Layout prefetches at most 256 KB of original UTF-8 for the viewport, not the
 whole original piece. Untitled / `init(text:)` still uses `NSMutableString`.
 **Confidence**: CONFIRMED with harness numbers at 10/100 MB; re-run 500 MB/2 GB for the table above.
-MacExample Open of the 500 MB fixture: launch with `--open <path>` and
+Umbra Open of the 500 MB fixture: launch with `--open <path>` and
 `Tools/PerfHarness/record-open-instruments.sh` (Time Profiler / Allocations / VM Tracker, subsystem
 `Runestone` / category `Performance`). Signposts wrap `TextViewState.prepare`, `LineManager.rebuild`,
 `StringView.replaceText`, and `LayoutManager.layoutLinesInViewport`.
@@ -584,7 +584,7 @@ swift run -c release PerfHarness keystroke <fixture> --at middle --mmap --viewpo
 Tools/PerfHarness/record-open-instruments.sh Tools/PerfHarness/Fixtures/short_lines_500mb.txt
 ```
 
-MacExample Open of the 500 MB fixture: `--open <path>`, or `record-open-instruments.sh`. The harness is the RSS and
+Umbra Open of the 500 MB fixture: `--open <path>`, or `record-open-instruments.sh`. The harness is the RSS and
 keystroke gate; on-screen compositing is not observable headlessly.
 
 ### 3. Phased migration plan
@@ -674,14 +674,14 @@ API changes; 6 is additive; 7 is fully decoupled.
 ### 4. Instrumentation
 
 os_signpost points (implemented in `RunestoneSignposts`, subsystem `Runestone`, category `Performance`).
-Record MacExample **Open** of the 500 MB short-line fixture with Time Profiler, Allocations, and VM
+Record Umbra **Open** of the 500 MB short-line fixture with Time Profiler, Allocations, and VM
 Tracker; filter on these names.
 
 ```
 python3 Tools/PerfHarness/generate_fixtures.py --out Tools/PerfHarness/Fixtures --sizes 500mb --variants short_lines
 # GUI Instruments.app, or:
 Tools/PerfHarness/record-open-instruments.sh Tools/PerfHarness/Fixtures/short_lines_500mb.txt
-# MacExample also accepts: --open <path>
+# Umbra also accepts: --open <path>
 ```
 
 Headless `xctrace` needs a GUI session / TCC for developer tools. The PerfHarness RSS and keystroke

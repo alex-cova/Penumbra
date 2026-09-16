@@ -8,6 +8,7 @@ Runestone is a Swift Package Manager library: a high-performance plain text/code
 
 - **`Runestone`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
 - **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Runestone`**. The two are connected only through `Sources/Runestone/EditorIntelligenceAdapter/RunestoneEditorAdapter.swift`.
+- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**: lightweight, fast editing with project folders, split panes, symbol-aware navigation, and session restore (Sublime keymap by default). Built on `Runestone` and `EditorIntelligence`.
 
 Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in `Packages/TreeSitter` as a local SPM package.
 
@@ -74,7 +75,7 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 **Navigation**
 - Go to line (`goToLine`) with selection-at-beginning/end options.
 - `TextLocation` ↔ byte-offset conversion for line/column addressing.
-- Cursor history (`TextView.navigationHistory`, `NavigationHistory`, `EditorActionID.navigateBack`/`navigateForward`, ⌘[ / ⌘]): a bounded back/forward stack of `NavigationEntry` (documentID/url/`TextLocation`) fed by significant cursor moves and `recordNavigationCheckpoint()` before programmatic jumps (`goToLine`, `selectHighlightedRange`). `TextView.navigationHistory` is settable, so `EditorWorkbench.navigationHistory` (one shared instance) + `RunestoneWorkbenchEditorAdapter.bindNavigationHistory(to:document:)` + `onOpenHistoryEntry` give cross-document ⌘[ end-to-end (wired in `Example/MacExample`).
+- Cursor history (`TextView.navigationHistory`, `NavigationHistory`, `EditorActionID.navigateBack`/`navigateForward`, ⌘[ / ⌘]): a bounded back/forward stack of `NavigationEntry` (documentID/url/`TextLocation`) fed by significant cursor moves and `recordNavigationCheckpoint()` before programmatic jumps (`goToLine`, `selectHighlightedRange`). `TextView.navigationHistory` is settable, so `EditorWorkbench.navigationHistory` (one shared instance) + `RunestoneWorkbenchEditorAdapter.bindNavigationHistory(to:document:)` + `onOpenHistoryEntry` give cross-document ⌘[ end-to-end (wired in `Example/Umbra`).
 - Command palette (`Sources/Runestone/Workbench/CommandPalette/`, `Sources/Runestone/UIBridge/CommandPaletteView.swift`, `CommandPaletteController`): Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), Go to File — a `SearchEverywhereEngine` fans a debounced query to concurrent `SearchEverywhereProvider`s (built-ins: commands/files/recent/symbols; host-extensible) and renders grouped results with `FuzzyMatcher.rankedWithMatches`-driven character highlighting. Inside Search Everywhere a leading sigil narrows the sources per keystroke (`PaletteQueryScope`: `>` actions, `@` symbols, `/`+`#` files). `CommandRegistry.registerBuiltInActions(for:)` populates Find Action with every `EditorActionID` + its current shortcut.
 
 **Diagnostics (rendering)**
@@ -174,7 +175,7 @@ swift test --filter ClassName/testMethodName  # run one test method
 
 There is no separate lint/format script wired into SPM; SwiftLint config lives at `.swiftlint.yml` (run `swiftlint` directly if installed). `swiftgen.yml` regenerates `Sources/Runestone/Library/L10n.swift` from `Localizable.strings` — don't hand-edit that generated file.
 
-The `Example/MacExample` app is a standalone Xcode/SPM workspace demonstrating usage; it is not part of the root package's build graph.
+**Umbra** (`swift run Umbra`, `Scripts/build-app.sh`) is the Sublime Text–style editor product; `Example/Umbra` is its SPM executable target and source tree.
 
 ## Architecture
 

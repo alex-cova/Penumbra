@@ -316,7 +316,7 @@ insert-above/below.
 3. `swift run -c release PerfHarness keystroke <piece-tree fixture> --at middle
    --mmap --viewport --samples 40` before/after Fix 2a/2b, with occurrence
    highlighting forced on, recorded in `EDITOR_PERFORMANCE_REPORT.md`.
-4. Manual MacExample smoke pass (`./run-metal.sh`): type rapidly in a large
+4. Manual Umbra smoke pass (`./run-metal.sh`): type rapidly in a large
    tree-sitter-highlighted file and confirm no stale/invisible-glyph lag; toggle
    comment, insert line above/below, sort lines via the command palette and default
    keybindings.
