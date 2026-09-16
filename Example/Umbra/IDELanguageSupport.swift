@@ -1,4 +1,5 @@
 import Runestone
+import RunestoneLanguages
 import RunestoneMarkdownLanguage
 
 enum IDELanguageSupport {
@@ -10,7 +11,27 @@ enum IDELanguageSupport {
             if identifier == "markdown" {
                 return .markdown
             }
-            return TreeSitterLanguage.bundled(forIdentifier: identifier)
+            if let bundled = TreeSitterLanguage.bundled(forIdentifier: identifier) {
+                return bundled
+            }
+            switch identifier {
+            case "java":
+                return .java
+            case "go":
+                return .go
+            case "kotlin":
+                return .kotlin
+            case "bash":
+                return .bash
+            case "sql":
+                return .sql
+            case "toml":
+                return .toml
+            case "graphql":
+                return .graphQL
+            default:
+                return nil
+            }
         }
     }
 

@@ -450,6 +450,7 @@ final class IDEWorkspace: ObservableObject {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
+        host.wireMarkdownPreview()
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
         // `.goToLine` natively.
@@ -689,6 +690,8 @@ final class IDEWorkspace: ObservableObject {
     ) {
         guard let document = pane.selectedDocument else { return }
         host.textView.languageIdentifier = document.languageIdentifier
+        host.markdownPreviewController.documentBaseURL = document.url
+        host.markdownPreviewController.closeIfNotMarkdown()
         adapter.bindNavigationHistory(to: host.textView, document: document)
         if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
             return

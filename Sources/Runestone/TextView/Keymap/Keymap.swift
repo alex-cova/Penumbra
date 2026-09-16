@@ -80,6 +80,7 @@ public extension Keymap {
         // Return is always a key-code chord, like Space above — 0x24 is kVK_Return.
         map.bind(KeyStroke(KeyChord(code: 0x24, .command)), to: .insertLineBelow)
         map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .shift])), to: .insertLineAbove)
+        map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
         return map
     }()
 
@@ -97,7 +98,8 @@ public extension Keymap {
         // Navigation
         map.unbindAll(.selectLines)
         map.bind(KeyStroke(KeyChord("l", .command)), to: .goToLine)
-        map.bind(KeyStroke(KeyChord("b", .command)), to: .goToDefinition)
+        map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
+        map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */)), to: .goToDefinition)
         map.bind(KeyStroke(KeyChord("b", [.command, .option])), to: .goToImplementation)
         map.bind(KeyStroke(KeyChord("b", [.command, .option, .shift])), to: .findUsages)
         map.bind(KeyStroke(KeyChord(code: 0x21 /* [ */, .command)), to: .navigateBack)
@@ -139,7 +141,8 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("g", .command)), to: .goToLine)
         map.bind(KeyStroke(KeyChord("r", .command)), to: .goToSymbol)
         map.bind(KeyStroke(KeyChord("e", .command)), to: .recentFiles)
-        map.bind(KeyStroke(KeyChord("b", .command)), to: .goToDefinition)
+        map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
+        map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */)), to: .goToDefinition)
         map.bind(KeyStroke(KeyChord(code: 0x21 /* [ */, .command)), to: .navigateBack)
         map.bind(KeyStroke(KeyChord(code: 0x1E /* ] */, .command)), to: .navigateForward)
 

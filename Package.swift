@@ -47,6 +47,17 @@ let package = Package(
                 .define("_DARWIN_C_SOURCE")
             ]
         ),
+        .target(
+            name: "ElkSwift",
+            path: "Vendor/ElkSwift/Sources/ElkSwift",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .target(
+            name: "BeautifulMermaid",
+            dependencies: ["ElkSwift"],
+            path: "Vendor/BeautifulMermaid/Sources/BeautifulMermaidSwift",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .target(name: "EditorIntelligence", dependencies: [], swiftSettings: swift6),
         .target(
             name: "EditorIntelligenceLSP",
@@ -59,6 +70,7 @@ let package = Package(
         ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
+            "BeautifulMermaid",
             "TreeSitter",
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [

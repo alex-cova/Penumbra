@@ -3,6 +3,23 @@
 Runestone itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)); it is a macOS port of
 [simonbs/Runestone](https://github.com/simonbs/Runestone).
 
+## Vendored markdown preview dependencies
+
+The markdown preview (`MarkdownPreviewController`) embeds vendored sources under `Vendor/`.
+These are compiled as local SPM path targets, not fetched from GitHub at build time.
+
+| Component | Source | License |
+| --- | --- | --- |
+| BeautifulMermaid | [lukilabs/beautiful-mermaid-swift](https://github.com/lukilabs/beautiful-mermaid-swift) | MIT (see `Vendor/BeautifulMermaid/LICENSE`) |
+| ElkSwift | [lukilabs/elk-swift](https://github.com/lukilabs/elk-swift) | **Eclipse Public License 2.0** (see `Vendor/ElkSwift/LICENSE`) |
+
+BeautifulMermaid uses ElkSwift for graph layout. ElkSwift is **not** MIT — it remains under
+EPL-2.0 in source and binary distributions. The EPL source for ElkSwift must remain available
+when distributing combined works.
+
+Textual, ConcurrencyExtras, and SwiftUIMath are also vendored under `Vendor/` for future use;
+only BeautifulMermaid and ElkSwift are wired into the build today.
+
 ## Bundled Tree-sitter grammars
 
 The `RunestoneLanguages`, `RunestoneGraphQLLanguage`, and `RunestoneMarkdownLanguage`

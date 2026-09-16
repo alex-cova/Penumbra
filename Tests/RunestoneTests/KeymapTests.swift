@@ -47,6 +47,14 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("g", .control))), .selectNextOccurrence)
     }
 
+    func testMarkdownPreviewShortcutOnShippedPresets() {
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("b", .command))), .toggleMarkdownPreview)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("b", .command))), .toggleMarkdownPreview)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("b", .command))), .toggleMarkdownPreview)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord(code: 0x6F))), .goToDefinition)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x6F))), .goToDefinition)
+    }
+
     func testSublimeKeymapMatchesSublimeTextSemanticsForDAndF() {
         // Sublime Text binds ⌘D to Select Next Occurrence and ⌘⇧D to Duplicate Line — the
         // opposite of `default_`'s historical pair — plus ⌘⇧F for Find in Files.

@@ -8,6 +8,7 @@ import SwiftUI
 final class IDEEditorPaneHost: NSView {
     let pane: EditorPane
     let textView: TextView
+    let markdownPreviewController: MarkdownPreviewController
     let paletteController: CommandPaletteController
     let applyGate = RunestoneStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
@@ -23,18 +24,22 @@ final class IDEEditorPaneHost: NSView {
         textView.showMethodSeparators = true
         textView.highlightsOccurrencesOfSelection = true
         textView.keymap = preferences.keymap
+        markdownPreviewController = MarkdownPreviewController(textView: textView)
         paletteController = CommandPaletteController(textView: textView)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         preferences.apply(to: textView)
 
-        addSubview(textView)
+        markdownPreviewController.embed(editorView: textView)
+        let container = markdownPreviewController.containerView
+        container.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(container)
         NSLayoutConstraint.activate([
-            textView.topAnchor.constraint(equalTo: topAnchor),
-            textView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            textView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            textView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            container.topAnchor.constraint(equalTo: topAnchor),
+            container.leadingAnchor.constraint(equalTo: leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))
@@ -48,6 +53,20 @@ final class IDEEditorPaneHost: NSView {
     }
 
     override var acceptsFirstResponder: Bool { false }
+
+    func wireMarkdownPreview() {
+        markdownPreviewController.installMetalFailureHandler(chaining: textView.onMetalRenderingFailure)
+        markdownPreviewController.installTextObservation(chaining: textView.editorDelegate)
+        markdownPreviewController.codeBlockLanguageResolver = { IDELanguageSupport.language(forIdentifier: $0) }
+
+        let previousHandler = textView.editorActionHandler
+        textView.editorActionHandler = { [markdownPreviewController] action in
+            if action == .toggleMarkdownPreview {
+                return markdownPreviewController.toggle()
+            }
+            return previousHandler?(action) ?? false
+        }
+    }
 
     @objc private func paneClicked() {
         onActivated?()
