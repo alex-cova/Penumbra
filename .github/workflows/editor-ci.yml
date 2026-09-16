@@ -1,0 +1,26 @@
+name: Umbra CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Example/**'
+      - 'Sources/Runestone/**'
+      - 'Sources/EditorIntelligence/**'
+      - 'Package.swift'
+      - '.github/workflows/editor-ci.yml'
+  pull_request:
+    paths:
+      - 'Example/**'
+      - 'Sources/Runestone/**'
+      - 'Sources/EditorIntelligence/**'
+      - 'Package.swift'
+      - '.github/workflows/editor-ci.yml'
+
+jobs:
+  build-editor:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Umbra
+        run: swift build -c release --product Umbra

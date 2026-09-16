@@ -31,7 +31,7 @@ public struct EditorIntelligenceServices {
 /// workspace search from editor events.
 @MainActor
 public final class EditorIntelligenceController {
-    public let adapter: RunestoneEditorAdapter
+    public let adapter: EditorAdapter
     public let completionEngine: CompletionEngine
     public let hoverEngine: HoverEngine
     public let diagnosticEngine: DiagnosticEngine
@@ -79,9 +79,14 @@ public final class EditorIntelligenceController {
     private let forwardingDelegateBox: EditorIntelligenceForwardingDelegate
 
     /// Create a controller that connects EIP services to a text view.
+    ///
+    /// Pass an existing ``EditorAdapter`` (e.g. ``RunestoneWorkbenchEditorAdapter``) when the host
+    /// already bridges documents with stable IDs. When `adapter` is nil, a per-view
+    /// ``RunestoneEditorAdapter`` is created.
     public init(
         textView: TextView,
         context: EditorContext = EditorContext(),
+        adapter: EditorAdapter? = nil,
         completionEngine: CompletionEngine,
         hoverEngine: HoverEngine,
         diagnosticEngine: DiagnosticEngine,
@@ -121,8 +126,13 @@ public final class EditorIntelligenceController {
         let forwarding = EditorIntelligenceForwardingDelegate(userDelegate: forwardingDelegate)
         forwardingDelegateBox = forwarding
 
-        adapter = RunestoneEditorAdapter(textView: textView, context: context)
-        adapter.forwardingDelegate = forwarding
+        if let adapter {
+            self.adapter = adapter
+        } else {
+            let runestoneAdapter = RunestoneEditorAdapter(textView: textView, context: context)
+            runestoneAdapter.forwardingDelegate = forwarding
+            self.adapter = runestoneAdapter
+        }
 
         installOverlayViews(on: textView)
         configureAccessoryViews()
@@ -499,6 +509,7 @@ public final class EditorIntelligenceController {
     }
 
     private func handleEditorEvent(_ event: EditorEvent) {
+        guard adapterMatchesActiveTextView() else { return }
         switch event {
         case .documentChanged, .documentEdited:
             refreshDiagnostics()
@@ -885,6 +896,16 @@ public final class EditorIntelligenceController {
             || !codeActionView.isHidden
             || !workspaceSearchPanelView.isHidden
         overlayContainer.isHidden = !hasVisibleChild
+    }
+    private func adapterMatchesActiveTextView() -> Bool {
+        guard let textView else { return false }
+        if let workbench = adapter as? RunestoneWorkbenchEditorAdapter {
+            return workbench.textView === textView
+        }
+        if let runestone = adapter as? RunestoneEditorAdapter {
+            return runestone.textView === textView
+        }
+        return true
     }
 }
 

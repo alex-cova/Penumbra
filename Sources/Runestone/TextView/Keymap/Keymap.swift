@@ -126,4 +126,25 @@ public extension Keymap {
 
         return map
     }()
+
+    /// Sublime Text-style macOS keymap. Starts from ``default_`` and adds palette/navigation
+    /// shortcuts familiar to Sublime users (⌘P quick open, ⌘⇧P command palette, ⌘G go to line,
+    /// ⌘R go to symbol).
+    static let sublime: Keymap = {
+        var map = Keymap.default_
+
+        map.bind(KeyStroke(KeyChord("p", .command)), to: .quickOpenFile)
+        map.bind(KeyStroke(KeyChord("p", [.command, .shift])), to: .findAction)
+        map.bind(KeyStroke(KeyChord("g", .command)), to: .goToLine)
+        map.bind(KeyStroke(KeyChord("r", .command)), to: .goToSymbol)
+        map.bind(KeyStroke(KeyChord("e", .command)), to: .recentFiles)
+        map.bind(KeyStroke(KeyChord("b", .command)), to: .goToDefinition)
+        map.bind(KeyStroke(KeyChord(code: 0x21 /* [ */, .command)), to: .navigateBack)
+        map.bind(KeyStroke(KeyChord(code: 0x1E /* ] */, .command)), to: .navigateForward)
+
+        map.unbindAll(.selectLines)
+        map.bind(KeyStroke(KeyChord("l", [.command, .shift])), to: .selectAllOccurrences)
+
+        return map
+    }()
 }

@@ -1,17 +1,10 @@
 import AppKit
 import Combine
+import EditorIntelligence
 import Runestone
 import SwiftUI
 import RunestoneLanguages
 import RunestoneMarkdownLanguage
-
-struct IDEDocumentRow: Identifiable, Equatable {
-    let id: UUID
-    let title: String
-    let languageIdentifier: String?
-    let isDirty: Bool
-    let isSelected: Bool
-}
 
 struct IDETabRow: Identifiable, Equatable {
     let id: UUID
@@ -22,59 +15,36 @@ struct IDETabRow: Identifiable, Equatable {
 
 @MainActor
 final class IDEWorkspace: ObservableObject {
-    private static let languageCache = TreeSitterLanguageCache<String>()
     private static let languageProvider = BundledLanguageProvider()
 
     private let workbench = EditorWorkbench()
     private let workspaceBridge = RunestoneWorkbenchWorkspaceBridge()
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
+    private let intelligenceServices = IDEIntelligenceServices()
     private var adapter: RunestoneWorkbenchEditorAdapter!
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
+    private var recentFiles: [URL] = []
+
+    let preferences = IDEPreferences.shared
+    let project = IDEProjectModel()
 
     @Published var isSidebarVisible = true
     @Published var chromeOpacity = 1.0
     @Published private(set) var layoutEpoch: UInt64 = 0
     @Published private(set) var activePaneID = UUID()
+    @Published var showsWelcome = true
 
-    @Published var windowTitle = "Runestone"
+    @Published var windowTitle = "Umbra"
     @Published var statusLine = 1
     @Published var statusColumn = 1
     @Published var statusLanguage = ""
     @Published var statusSelectionLength = 0
     @Published var statusRenderer = "Core Graphics"
-
-    /// Host-side Metal preference. Independent of the library `RunestoneMetalRendering` kill switch;
-    /// this sets `TextView.isMetalRenderingEnabled` on every pane. Persisted across launches.
-    /// Override at launch with `--metal` or `--no-metal`.
-    @Published var isMetalRenderingEnabled: Bool = IDEWorkspace.storedMetalRenderingEnabled {
-        didSet {
-            guard oldValue != isMetalRenderingEnabled else { return }
-            UserDefaults.standard.set(isMetalRenderingEnabled, forKey: Self.metalRenderingDefaultsKey)
-            applyMetalRenderingPreference()
-        }
-    }
-
-    @Published var sidebarDocuments: [IDEDocumentRow] = []
     @Published var tabsByPane: [UUID: [IDETabRow]] = [:]
 
     var editorLayout: EditorLayout { workbench.layout }
-
-    private static let metalRenderingDefaultsKey = "MacExampleMetalRendering"
-
-    private static var storedMetalRenderingEnabled: Bool {
-        UserDefaults.standard.object(forKey: metalRenderingDefaultsKey) as? Bool ?? true
-    }
-
-    private static func language(forIdentifier identifier: String?) -> TreeSitterLanguage? {
-        guard let identifier else { return nil }
-        return languageCache.language(for: identifier) {
-            if identifier == "markdown" {
-                return .markdown
-            }
-            return TreeSitterLanguage.bundled(forIdentifier: identifier)
-        }
-    }
+    var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
 
     func host(for paneID: UUID) -> IDEEditorPaneHost {
         hostedPaneIDs.insert(paneID)
@@ -89,11 +59,12 @@ final class IDEWorkspace: ObservableObject {
 
     func bootstrap() {
         applyLaunchConfiguration()
-        seedSampleDocuments()
+        loadSession()
         wireAdapter()
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         refreshPresentation()
+        showsWelcome = !hasOpenDocuments
 
         if let index = CommandLine.arguments.firstIndex(of: "--open"),
            index + 1 < CommandLine.arguments.count {
@@ -104,10 +75,36 @@ final class IDEWorkspace: ObservableObject {
         Task {
             await workspaceBridge.syncWorkbench(workbench)
             await workspaceBridge.workspace.connect(to: adapter)
+            await intelligenceServices.indexingService.connect(to: workspaceBridge.workspace)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.saveSession()
+            }
         }
     }
 
     // MARK: - Commands
+
+    func newFile() {
+        let document = WorkbenchDocument(
+            displayName: "Untitled",
+            text: "",
+            language: nil,
+            languageIdentifier: nil
+        )
+        workbench.openDocument(document)
+        showsWelcome = false
+        rebuildLayoutHosts()
+        activatePane(workbench.activePaneID)
+        refreshPresentation()
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
 
     func openFile() {
         let panel = NSOpenPanel()
@@ -118,6 +115,26 @@ final class IDEWorkspace: ObservableObject {
             guard result == .OK, let url = panel.url, let self else { return }
             Task { await self.openDocument(from: url) }
         }
+    }
+
+    func openFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url, let self else { return }
+            self.project.setRoot(url)
+            self.showsWelcome = false
+        }
+    }
+
+    func openRecentFile(_ url: URL) {
+        Task { await openDocument(from: url) }
+    }
+
+    var recentFileURLs: [URL] {
+        recentFiles
     }
 
     func saveActiveDocument() async {
@@ -134,6 +151,24 @@ final class IDEWorkspace: ObservableObject {
         }
         do {
             _ = try await document.save(from: textView, to: destination)
+            recordRecentFile(destination!)
+            refreshPresentation()
+        } catch {
+            presentError(error)
+        }
+    }
+
+    func saveActiveDocumentAs() async {
+        let pane = workbench.activePane
+        guard let document = pane.selectedDocument else { return }
+        let textView = host(for: pane.id).textView
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = document.displayName
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try await document.save(from: textView, to: url)
+            recordRecentFile(url)
             refreshPresentation()
         } catch {
             presentError(error)
@@ -147,6 +182,26 @@ final class IDEWorkspace: ObservableObject {
 
     func showCommandPalette() {
         host(for: workbench.activePaneID).paletteController.presentFindAction()
+        focusActiveEditor()
+    }
+
+    func showQuickOpen() {
+        host(for: workbench.activePaneID).paletteController.presentQuickOpen()
+        focusActiveEditor()
+    }
+
+    func showGoToSymbol() {
+        host(for: workbench.activePaneID).paletteController.presentSymbols()
+        focusActiveEditor()
+    }
+
+    func showFind() {
+        adapter.textView?.perform(.toggleFindPanel)
+        focusActiveEditor()
+    }
+
+    func showReplace() {
+        adapter.textView?.perform(.toggleReplacePanel)
         focusActiveEditor()
     }
 
@@ -174,7 +229,26 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func toggleMinimap() {
-        adapter.textView?.showMinimap.toggle()
+        preferences.showMinimap.toggle()
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
+    func toggleLineNumbers() {
+        preferences.showLineNumbers.toggle()
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
+    func toggleFolding() {
+        preferences.isLineFoldingEnabled.toggle()
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
+    func toggleWordWrap() {
+        preferences.wrapLines.toggle()
+        applyPreferencesToAllHosts()
         focusActiveEditor()
     }
 
@@ -193,27 +267,35 @@ final class IDEWorkspace: ObservableObject {
     }
 
     func toggleMetalRendering() {
-        isMetalRenderingEnabled.toggle()
+        preferences.isMetalRenderingEnabled.toggle()
+        applyPreferencesToAllHosts()
         focusActiveEditor()
     }
 
-    func undo() {
-        adapter.textView?.undoManager?.undo()
+    func applyPreferencesToAllHosts() {
+        for pane in workbench.panes {
+            preferences.apply(to: host(for: pane.id).textView)
+        }
+        if let textView = adapter?.textView {
+            updateStatus(from: textView)
+        }
     }
 
-    func redo() {
-        adapter.textView?.undoManager?.redo()
-    }
-
-    func selectSidebarDocument(_ id: UUID) {
-        guard let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == id } }) else {
-            return
+    func openDroppedURLs(_ urls: [URL]) {
+        Task {
+            for url in urls {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+                    continue
+                }
+                if isDirectory.boolValue {
+                    project.setRoot(url)
+                    showsWelcome = false
+                } else {
+                    await openDocument(from: url)
+                }
+            }
         }
-        if pane.selectedDocumentID != id {
-            pane.selectDocument(id)
-        }
-        activatePane(pane.id)
-        focusActiveEditor()
     }
 
     func selectTab(_ id: UUID, in paneID: UUID? = nil) {
@@ -250,59 +332,39 @@ final class IDEWorkspace: ObservableObject {
         closeDocument(id, in: pane)
     }
 
+    func makeSession(sidebarWidth: Double) -> AppSession {
+        AppSession(
+            restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
+            projectRootBookmark: project.makeBookmarkData(),
+            recentFiles: recentFiles,
+            preferences: preferences.snapshot(),
+            sidebarWidth: sidebarWidth,
+            isSidebarVisible: isSidebarVisible
+        )
+    }
+
+    func saveSession(sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth) {
+        IDESessionStore.save(makeSession(sidebarWidth: sidebarWidth))
+    }
+
     // MARK: - Private
 
-    private func seedSampleDocuments() {
-        let readme = WorkbenchDocument(
-            displayName: "README.md",
-            text: """
-            # Runestone Demo
+    private func loadSession() {
+        let session = IDESessionStore.load()
+        preferences.restore(from: session.preferences)
+        recentFiles = session.recentFiles
+        isSidebarVisible = session.isSidebarVisible
+        project.restoreRoot(from: session.projectRootBookmark)
 
-            Native macOS editor shell inspired by Zed, Linear, and Raycast.
-
-            - ⌘P: Quick Open
-            - ⌘⇧P: Command Palette
-            - ⌘\\: Split editor right
-            """,
-            language: Self.language(forIdentifier: "markdown"),
-            languageIdentifier: "markdown"
-        )
-        let sampleJS = WorkbenchDocument(
-            displayName: "sample.js",
-            text: """
-            function greet(name) {
-              return `Hello, ${name}`;
+        if let restoration = session.restoration {
+            workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
+            Task {
+                try? await workbench.reloadFileBackedDocuments(languageResolver: IDELanguageSupport.fileBackedLanguageResolver)
+                rebuildLayoutHosts()
+                refreshPresentation()
+                showsWelcome = !hasOpenDocuments
             }
-
-            const message = greet("Runestone");
-            console.log(message);
-            """,
-            language: Self.language(forIdentifier: "javascript"),
-            languageIdentifier: "javascript"
-        )
-        let contentView = WorkbenchDocument(
-            displayName: "ContentView.swift",
-            text: """
-            import SwiftUI
-
-            struct ContentView: View {
-                @State private var count = 0
-
-                var body: some View {
-                    VStack {
-                        Text("Count: \\(count)")
-                        Button("Increment") { count += 1 }
-                    }
-                    .padding()
-                }
-            }
-            """,
-            language: Self.language(forIdentifier: "swift"),
-            languageIdentifier: "swift"
-        )
-        workbench.openDocument(readme)
-        workbench.openDocument(sampleJS)
-        workbench.openDocument(contentView)
+        }
     }
 
     private func wireAdapter() {
@@ -315,21 +377,26 @@ final class IDEWorkspace: ObservableObject {
 
     private func makeHost(paneID: UUID) -> IDEEditorPaneHost {
         let pane = workbench.layout.findPane(id: paneID) ?? EditorPane(id: paneID)
-        let host = IDEEditorPaneHost(pane: pane)
-        host.textView.isMetalRenderingEnabled = isMetalRenderingEnabled
+        let host = IDEEditorPaneHost(pane: pane, preferences: preferences)
         host.textView.onMetalRenderingFailure = { [weak self] reason in
             self?.statusRenderer = "Core Graphics (Metal unavailable)"
-            NSLog("Runestone MacExample: Metal disabled: %@", reason)
+            NSLog("Umbra: Metal disabled: %@", reason)
             self?.presentMetalFailureOnce(reason: reason)
         }
         host.onActivated = { [weak self] in
             self?.activatePane(paneID)
         }
+        host.intelligenceController = intelligenceServices.makeController(
+            textView: host.textView,
+            adapter: adapter,
+            workspace: workspaceBridge.workspace
+        )
         configurePalette(host.paletteController)
+        preferences.apply(to: host.textView)
         return host
     }
 
-    private func openDocument(from url: URL) async {
+    func openDocument(from url: URL) async {
         do {
             let identifier = LanguageIdentifier.identifier(for: url)
             let document = try await WorkbenchDocument.load(
@@ -338,14 +405,24 @@ final class IDEWorkspace: ObservableObject {
                 languageIdentifier: identifier,
                 languageProvider: Self.languageProvider
             )
-            document.language = Self.language(forIdentifier: identifier)
+            document.language = IDELanguageSupport.language(forIdentifier: identifier)
             workbench.openDocument(document)
+            recordRecentFile(url)
+            showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)
             await workspaceBridge.syncWorkbench(workbench)
             refreshPresentation()
         } catch {
             presentError(error)
+        }
+    }
+
+    private func recordRecentFile(_ url: URL) {
+        recentFiles.removeAll { $0 == url }
+        recentFiles.insert(url, at: 0)
+        if recentFiles.count > 15 {
+            recentFiles = Array(recentFiles.prefix(15))
         }
     }
 
@@ -371,6 +448,7 @@ final class IDEWorkspace: ObservableObject {
         pane.closeDocument(documentID)
         if pane.documents.isEmpty {
             closePane(pane.id)
+            showsWelcome = !hasOpenDocuments
             return
         }
         let host = host(for: pane.id)
@@ -386,6 +464,7 @@ final class IDEWorkspace: ObservableObject {
         hostedPaneIDs.remove(paneID)
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
+        showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
@@ -409,30 +488,50 @@ final class IDEWorkspace: ObservableObject {
     private func configurePalette(_ palette: CommandPaletteController) {
         palette.recentFileEntriesProvider = { [weak self] in
             guard let self else { return [] }
-            return self.workbench.recentDocuments(limit: 15).compactMap { document in
-                document.url.map { PaletteFileEntry(url: $0, displayName: document.displayName) }
-            }
+            return self.recentFiles.map { PaletteFileEntry(url: $0, displayName: $0.lastPathComponent) }
         }
         palette.fileEntriesProvider = { [weak self] in
             guard let self else { return [] }
-            return self.workbench.allDocuments().compactMap { document in
+            let projectFiles = self.project.allProjectFiles().map {
+                PaletteFileEntry(url: $0, displayName: $0.lastPathComponent)
+            }
+            let openFiles = self.workbench.allDocuments().compactMap { document in
                 document.url.map { PaletteFileEntry(url: $0, displayName: document.displayName) }
             }
+            var seen = Set<URL>()
+            return (projectFiles + openFiles).filter { seen.insert($0.url).inserted }
         }
+        palette.symbolIndex = intelligenceServices.symbolIndex
+        palette.workspaceRoot = project.rootURL
         palette.onOpenFile = { [weak self] url in
             guard let self else { return }
             Task { await self.openDocument(from: url) }
         }
+        palette.onSelectSymbol = { [weak self] symbol in
+            guard let self else { return }
+            let location = Location(
+                documentID: symbol.documentID,
+                range: symbol.range,
+                displayName: symbol.name
+            )
+            _ = IDEIntelligenceServices.openLocation(location, adapter: self.adapter)
+        }
         palette.commandRegistry.register([
-            EditorCommand(id: "demo.splitRight", title: "Split Editor Right", group: "View",
+            EditorCommand(id: "app.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
-            EditorCommand(id: "demo.toggleSidebar", title: "Toggle Sidebar", group: "View",
+            EditorCommand(id: "app.toggleSidebar", title: "Toggle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleSidebar() }),
-            EditorCommand(id: "demo.toggleMinimap", title: "Toggle Minimap", group: "View",
+            EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
                           action: { [weak self] in self?.toggleMinimap() }),
-            EditorCommand(id: "demo.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
+            EditorCommand(id: "app.toggleLineNumbers", title: "Toggle Line Numbers", group: "View",
+                          action: { [weak self] in self?.toggleLineNumbers() }),
+            EditorCommand(id: "app.toggleFolding", title: "Toggle Code Folding", group: "View",
+                          action: { [weak self] in self?.toggleFolding() }),
+            EditorCommand(id: "app.toggleWrap", title: "Toggle Word Wrap", group: "View",
+                          action: { [weak self] in self?.toggleWordWrap() }),
+            EditorCommand(id: "app.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
                           action: { [weak self] in self?.toggleTypewriterScrolling() }),
-            EditorCommand(id: "demo.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
+            EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
                           action: { [weak self] in self?.toggleMetalRendering() })
         ])
     }
@@ -450,27 +549,14 @@ final class IDEWorkspace: ObservableObject {
         host.textView.editorDelegate = adapter
         showDocument(in: workbench.activePane, host: host)
         adapter.refreshCachedDocuments()
+        host.intelligenceController?.refreshDiagnostics()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
     }
 
-    private func refreshDirtyIndicators() {
-        refreshPresentation()
-    }
-
     private func refreshPresentation() {
         activePaneID = workbench.activePaneID
-        let selectedID = workbench.activePane.selectedDocumentID
-        sidebarDocuments = workbench.allDocuments().map { document in
-            IDEDocumentRow(
-                id: document.id,
-                title: document.displayName,
-                languageIdentifier: document.languageIdentifier,
-                isDirty: document.isDirty,
-                isSelected: document.id == selectedID
-            )
-        }
         var tabs: [UUID: [IDETabRow]] = [:]
         for pane in workbench.panes {
             tabs[pane.id] = pane.documents.map { document in
@@ -484,27 +570,18 @@ final class IDEWorkspace: ObservableObject {
         }
         tabsByPane = tabs
         if let document = workbench.activePane.selectedDocument {
-            windowTitle = "\(document.displayName) · Runestone"
+            windowTitle = "\(document.displayName) · Umbra"
         } else {
-            windowTitle = "Runestone"
+            windowTitle = "Umbra"
         }
     }
 
     private func applyLaunchConfiguration() {
         let arguments = CommandLine.arguments
         if arguments.contains("--no-metal") {
-            isMetalRenderingEnabled = false
+            preferences.isMetalRenderingEnabled = false
         } else if arguments.contains("--metal") {
-            isMetalRenderingEnabled = true
-        }
-    }
-
-    private func applyMetalRenderingPreference() {
-        for pane in workbench.panes {
-            host(for: pane.id).textView.isMetalRenderingEnabled = isMetalRenderingEnabled
-        }
-        if let textView = adapter?.textView {
-            updateStatus(from: textView)
+            preferences.isMetalRenderingEnabled = true
         }
     }
 
@@ -536,6 +613,9 @@ final class IDEWorkspace: ObservableObject {
         guard let document = pane.selectedDocument else { return }
         host.textView.languageIdentifier = document.languageIdentifier
         adapter.bindNavigationHistory(to: host.textView, document: document)
+        if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
+            return
+        }
         if host.loadedDocumentID == document.id {
             return
         }
@@ -581,6 +661,7 @@ final class IDEWorkspace: ObservableObject {
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()
+            host.intelligenceController?.refreshDiagnostics()
         }
     }
 
@@ -589,9 +670,7 @@ final class IDEWorkspace: ObservableObject {
     }
 
     private func presentMetalFailureOnce(reason: String) {
-        guard !hasPresentedMetalFailure else {
-            return
-        }
+        guard !hasPresentedMetalFailure else { return }
         hasPresentedMetalFailure = true
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -612,7 +691,7 @@ extension IDEWorkspace: TextViewDelegate {
     }
 
     func textViewDidChange(_ textView: TextView) {
-        refreshDirtyIndicators()
+        refreshPresentation()
     }
 
     func textView(

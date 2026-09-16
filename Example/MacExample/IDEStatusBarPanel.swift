@@ -9,7 +9,7 @@ struct IDEStatusBarPanel: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Spacer()
-            Text("UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Runestone")
+            Text("UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Umbra")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }

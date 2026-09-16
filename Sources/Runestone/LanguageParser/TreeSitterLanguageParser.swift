@@ -12,6 +12,17 @@ public actor TreeSitterLanguageParser: LanguageParser {
     private let languageConfigurations: LanguageConfigurationRegistry
 
     public init(
+        language: TreeSitterLanguage,
+        languageConfigurations: LanguageConfigurationRegistry = .builtIns
+    ) {
+        let mode = TreeSitterLanguageMode(language: language)
+        self.languageMode = mode
+        self.languageConfigurations = languageConfigurations
+        self.parser = TreeSitterParser(encoding: .treeSitterUTF16)
+        self.parser.language = mode.language.languagePointer
+    }
+
+    public init(
         languageMode: TreeSitterLanguageMode,
         languageConfigurations: LanguageConfigurationRegistry = .builtIns
     ) {

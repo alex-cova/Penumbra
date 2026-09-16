@@ -82,6 +82,7 @@ public extension EditorActionID {
     static let findAction = EditorActionID("findAction")
     static let quickOpenFile = EditorActionID("quickOpenFile")
     static let recentFiles = EditorActionID("recentFiles")
+    static let goToSymbol = EditorActionID("goToSymbol")
     static let goToLine = EditorActionID("goToLine")
     static let goToDefinition = EditorActionID("goToDefinition")
     static let goToImplementation = EditorActionID("goToImplementation")
@@ -127,6 +128,7 @@ public extension EditorActionID {
         .findAction: "Find Action…",
         .quickOpenFile: "Go to File…",
         .recentFiles: "Recent Files",
+        .goToSymbol: "Go to Symbol…",
         .goToLine: "Go to Line…",
         .goToDefinition: "Go to Definition",
         .goToImplementation: "Go to Implementation(s)",

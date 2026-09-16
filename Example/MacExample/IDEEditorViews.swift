@@ -10,23 +10,24 @@ final class IDEEditorPaneHost: NSView {
     let textView: TextView
     let paletteController: CommandPaletteController
     let applyGate = RunestoneStateBuilder.GenerationGate()
+    var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
     var onActivated: (() -> Void)?
 
-    init(pane: EditorPane) {
+    init(pane: EditorPane, preferences: IDEPreferences) {
         self.pane = pane
         textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.theme = IDEEditorTheme.shared
         textView.backgroundColor = IDEAppearance.NSToken.editor
-        textView.showMinimap = true
         textView.showMethodSeparators = true
         textView.highlightsOccurrencesOfSelection = true
-        textView.keymap = .default_
+        textView.keymap = preferences.keymap
         paletteController = CommandPaletteController(textView: textView)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
+        preferences.apply(to: textView)
 
         addSubview(textView)
         NSLayoutConstraint.activate([

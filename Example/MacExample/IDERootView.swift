@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct IDERootView: View {
     @EnvironmentObject private var workspace: IDEWorkspace
-    @State private var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
+    @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
     @State private var didBootstrap = false
 
     var body: some View {
@@ -20,8 +21,15 @@ struct IDERootView: View {
                         .opacity(workspace.chromeOpacity)
                 }
 
-                IDEEditorLayoutNode(layout: workspace.editorLayout)
-                    .id("editor-layout")
+                ZStack {
+                    if workspace.showsWelcome && !workspace.hasOpenDocuments {
+                        IDEWelcomeView()
+                    } else {
+                        IDEEditorLayoutNode(layout: workspace.editorLayout)
+                            .id("editor-layout")
+                    }
+                }
+                .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
             }
 
             IDEStatusBarPanel()
@@ -32,6 +40,9 @@ struct IDERootView: View {
         .background(IDEWindowConfigurator(title: workspace.windowTitle))
         .preferredColorScheme(.dark)
         .onAppear(perform: bootstrapIfNeeded)
+        .onChange(of: sidebarWidth) { _ in
+            workspace.saveSession(sidebarWidth: sidebarWidth)
+        }
         .focusable(false)
     }
 
@@ -40,6 +51,23 @@ struct IDERootView: View {
         didBootstrap = true
         workspace.bootstrap()
         workspace.focusActiveEditor()
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var urls: [URL] = []
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { item, _ in
+                if let url = item {
+                    DispatchQueue.main.async {
+                        workspace.openDroppedURLs([url])
+                    }
+                }
+            }
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                urls.append(URL(fileURLWithPath: "/")) // placeholder; async load handles real URLs
+            }
+        }
+        return !providers.isEmpty
     }
 }
 
@@ -96,7 +124,7 @@ private struct IDEWindowConfigurator: NSViewRepresentable {
 }
 
 final class IDEWindowConfiguratorView: NSView {
-    var title: String = "Runestone"
+    var title: String = "Umbra"
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

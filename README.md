@@ -344,22 +344,27 @@ let state = workbench.makeRestorationState()
 workbench.restore(from: state)
 ```
 
-### 6. Running the MacExample Demo
+### 6. Umbra Editor App
 
-The included demo app is a SwiftUI IDE shell with split panes, LSP wiring, command palette, and a persisted Metal rendering toggle:
+**Umbra** is the lightweight macOS text editor shipped with this repo (Sublime Text–class basics): project folders, symbol-aware editing, split panes, session restore, and optional Metal rendering.
+
+**Development:**
 
 ```bash
-swift run MacExample              # Core Graphics renderer (default)
-swift run MacExample --metal        # GPU Metal renderer
-./run-metal.sh                      # Convenience wrapper for --metal
+swift run Umbra           # debug build
+swift run Umbra --metal     # force Metal renderer
+./run.sh                    # convenience wrapper
+./run-metal.sh              # release build + Metal
 ```
+
+**Download:** pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Runestone/releases) as `Umbra-<version>-macOS.zip`. See [Example/README.md](Example/README.md) for signing, notarization, and release workflow details.
 
 ---
 
 ## Keyboard Shortcuts Reference
 
-Key bindings are driven by a `Keymap` assigned to `textView.keymap`. Two presets ship:
-`.default_` (below) and `.intelliJ` (an IntelliJ IDEA–style layout). `Keymap` values are
+Key bindings are driven by a `Keymap` assigned to `textView.keymap`. Three presets ship:
+`.default_` (below), `.sublime` (Sublime Text–style navigation), and `.intelliJ` (an IntelliJ IDEA–style layout). Umbra uses `.sublime` by default. `Keymap` values are
 editable (`bind(_:to:)` / `unbind(_:)`), and every binding maps to an `EditorActionID` you can
 also invoke directly with `textView.perform(_:)`.
 

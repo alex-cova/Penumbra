@@ -75,7 +75,7 @@ let package = Package(
             swiftSettings: swift6
         ),
         .executableTarget(
-            name: "MacExample",
+            name: "Umbra",
             dependencies: ["Runestone", "RunestoneLanguages", "RunestoneMarkdownLanguage"],
             path: "Example/MacExample",
             swiftSettings: swift6

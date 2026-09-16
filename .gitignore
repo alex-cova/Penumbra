@@ -3,3 +3,5 @@
 .idea
 .DS_Store
 Tools/PerfHarness/Fixtures/
+Example/MacExample/.build
+dist

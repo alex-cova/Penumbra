@@ -1,1 +1,1 @@
-swift run -c release MacExample --metal
+swift run -c release Umbra --metal

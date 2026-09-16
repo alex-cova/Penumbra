@@ -6,15 +6,18 @@ final class IDEEditorTheme: Runestone.Theme, @unchecked Sendable {
     static let shared = IDEEditorTheme()
 
     private let syntax = DefaultTheme()
-    nonisolated(unsafe) private static let codeFont = NSFont(name: "Menlo", size: 13)
-        ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private var fontSize: CGFloat = 13
 
-    let font: UIFont = IDEEditorTheme.codeFont
+    private var codeFont: NSFont {
+        NSFont(name: "Menlo", size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    }
+
+    var font: UIFont { codeFont }
     let textColor: UIColor = IDEAppearance.NSToken.foreground
     let gutterBackgroundColor: UIColor = IDEAppearance.NSToken.editor
     let gutterHairlineColor: UIColor = IDEAppearance.NSToken.border
     let lineNumberColor: UIColor = IDEAppearance.NSToken.muted
-    let lineNumberFont: UIFont = IDEEditorTheme.codeFont
+    var lineNumberFont: UIFont { codeFont }
     let selectedLineBackgroundColor: UIColor = IDEAppearance.NSToken.selection
     let selectedLinesLineNumberColor: UIColor = IDEAppearance.NSToken.foreground
     let selectedLinesGutterBackgroundColor: UIColor = IDEAppearance.NSToken.editor
@@ -27,6 +30,10 @@ final class IDEEditorTheme: Runestone.Theme, @unchecked Sendable {
     let occurrenceHighlightColor: UIColor = IDEAppearance.NSToken.accent.withAlphaComponent(0.18)
 
     private init() {}
+
+    func update(fontSize: Double) {
+        self.fontSize = CGFloat(fontSize)
+    }
 
     func textColor(for highlightName: String) -> UIColor? {
         syntax.textColor(for: highlightName)

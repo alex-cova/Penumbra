@@ -123,6 +123,7 @@ public final class CommandPaletteController {
         case .findAction: presentFindAction()
         case .recentFiles: presentRecentFiles()
         case .quickOpenFile: presentQuickOpen()
+        case .goToSymbol: presentSymbols()
         case .surroundWith: presentSurroundWith()
         default: return false
         }
