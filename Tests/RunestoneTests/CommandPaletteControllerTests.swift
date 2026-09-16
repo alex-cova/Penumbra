@@ -1,4 +1,5 @@
 import AppKit
+import EditorIntelligence
 import XCTest
 @testable import Runestone
 
@@ -50,6 +51,36 @@ final class CommandPaletteControllerTests: XCTestCase {
         let items = await provider.items(matching: "rc", limit: 10)
         XCTAssertEqual(items.first?.title, "Reformat Code")
         XCTAssertFalse(items.first?.matchedIndices.isEmpty ?? true, "Match indices drive the row highlight")
+    }
+
+    func testGoToLineActionPresentsThePaletteSeededWithColon() {
+        let textView = makeFocusedTextView(text: "alpha\nbeta\ngamma\n")
+        let controller = CommandPaletteController(textView: textView)
+        XCTAssertFalse(controller.isPresented)
+
+        XCTAssertTrue(textView.perform(.goToLine))
+        XCTAssertTrue(controller.isPresented)
+        XCTAssertEqual(controller.paletteModel.mode, .goToLine)
+        XCTAssertEqual(controller.paletteModel.query, ":")
+    }
+
+    func testFindInFilesActionIsUnhandledWithoutAProjectSearchEngine() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+
+        XCTAssertFalse(textView.perform(.findInFiles), "No engine/root wired -- a host's own UI should get a chance")
+        XCTAssertFalse(controller.isPresented)
+    }
+
+    func testFindInFilesActionPresentsThePaletteOnceWiredWithAnEngineAndRoot() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.projectSearchEngine = ProjectSearchEngine()
+        controller.workspaceRoot = URL(fileURLWithPath: "/tmp")
+
+        XCTAssertTrue(textView.perform(.findInFiles))
+        XCTAssertTrue(controller.isPresented)
+        XCTAssertEqual(controller.paletteModel.mode, .findInFiles)
     }
 
     func testActionHandlerChainingPreservesAPreviousHandler() {

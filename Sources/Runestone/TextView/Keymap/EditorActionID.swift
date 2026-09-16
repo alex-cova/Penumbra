@@ -76,6 +76,9 @@ public extension EditorActionID {
     // Find
     static let toggleFindPanel = EditorActionID("toggleFindPanel")
     static let toggleReplacePanel = EditorActionID("toggleReplacePanel")
+    /// Disk-wide project search. Presented by the command palette; hosts supply the search
+    /// backend via ``EditorIntelligenceController``.
+    static let findInFiles = EditorActionID("findInFiles")
 
     // Palette / navigation
     static let searchEverywhere = EditorActionID("searchEverywhere")
@@ -124,6 +127,7 @@ public extension EditorActionID {
         .toggleOccurrenceHighlighting: "Highlight Occurrences of Selection",
         .toggleFindPanel: "Find…",
         .toggleReplacePanel: "Replace…",
+        .findInFiles: "Find in Files…",
         .searchEverywhere: "Search Everywhere",
         .findAction: "Find Action…",
         .quickOpenFile: "Go to File…",

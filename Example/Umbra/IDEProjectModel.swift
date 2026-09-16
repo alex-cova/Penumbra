@@ -1,5 +1,4 @@
 import Foundation
-import UmbraCore
 
 struct IDEFileNode: Identifiable, Hashable {
     let id: String
@@ -25,7 +24,13 @@ final class IDEProjectModel: ObservableObject {
     @Published private(set) var rootNode: IDEFileNode?
     @Published var expandedPaths: Set<String> = []
 
-    private static var ignoredDirectoryNames: Set<String> { FindInFilesService.ignoredDirectoryNames }
+    /// Directory names skipped when building the sidebar tree and the Go to File candidate
+    /// list. Kept local rather than shared with `ProjectSearchEngine`'s `FileEnumerationPolicy`:
+    /// this walk needs to stay synchronous (it feeds `CommandPaletteController.fileEntriesProvider`
+    /// directly), while project search runs off the main actor.
+    private static let ignoredDirectoryNames: Set<String> = [
+        ".git", ".build", "node_modules", "DerivedData", ".swiftpm", "Pods", ".cursor"
+    ]
 
     func setRoot(_ url: URL?) {
         rootURL = url
@@ -81,7 +86,31 @@ final class IDEProjectModel: ObservableObject {
 
     func allProjectFiles() -> [URL] {
         guard let rootURL else { return [] }
-        return FindInFilesService.files(under: rootURL)
+        var files: [URL] = []
+        collectFiles(at: rootURL, into: &files)
+        return files.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    private func collectFiles(at url: URL, into files: inout [URL]) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for entry in entries {
+            let name = entry.lastPathComponent
+            if name.hasPrefix(".") || Self.ignoredDirectoryNames.contains(name) {
+                continue
+            }
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            if isDirectory {
+                collectFiles(at: entry, into: &files)
+            } else {
+                files.append(entry)
+            }
+        }
     }
 
     private func buildNode(at url: URL, isDirectory: Bool) -> IDEFileNode? {

@@ -43,9 +43,28 @@ final class PaletteQueryScopeTests: XCTestCase {
         XCTAssertEqual(PaletteQueryScope.resolve(query: ">save", mode: .quickOpen), .commands("save"))
     }
 
-    func testSlashAndHashPrefixesAlwaysResolveToFiles() {
+    func testSlashPrefixAlwaysResolvesToFiles() {
         XCTAssertEqual(PaletteQueryScope.resolve(query: "/main.swift", mode: .textActions), .files("main.swift"))
-        XCTAssertEqual(PaletteQueryScope.resolve(query: "#main.swift", mode: .commands), .files("main.swift"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "/main.swift", mode: .commands), .files("main.swift"))
+    }
+
+    func testHashPrefixAlwaysResolvesToInBufferTextSearch() {
+        // Sublime's `#` is "search this file", not a second file sigil.
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "#needle", mode: .textActions), .text("needle"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "#needle", mode: .commands), .text("needle"))
+    }
+
+    func testColonPrefixAlwaysResolvesToGoToLine() {
+        XCTAssertEqual(PaletteQueryScope.resolve(query: ":42", mode: .textActions), .line("42"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: ":42", mode: .commands), .line("42"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .goToLine), .line("json"))
+    }
+
+    func testExplicitScopeIsNilWithoutASigilAndMatchesResolveWithOne() {
+        XCTAssertNil(PaletteQueryScope.explicitScope(in: "json"))
+        XCTAssertEqual(PaletteQueryScope.explicitScope(in: ">save"), .commands("save"))
+        XCTAssertEqual(PaletteQueryScope.explicitScope(in: "#needle"), .text("needle"))
+        XCTAssertEqual(PaletteQueryScope.explicitScope(in: ":42"), .line("42"))
     }
 
     func testBareQueryHonorsTheModesDefault() {

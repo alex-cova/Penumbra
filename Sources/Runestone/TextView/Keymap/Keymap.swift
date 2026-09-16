@@ -129,7 +129,8 @@ public extension Keymap {
 
     /// Sublime Text-style macOS keymap. Starts from ``default_`` and adds palette/navigation
     /// shortcuts familiar to Sublime users (⌘P quick open, ⌘⇧P command palette, ⌘G go to line,
-    /// ⌘R go to symbol).
+    /// ⌘R go to symbol), then corrects ⌘D / ⌘⇧D to Sublime's semantics (`default_`'s pair is
+    /// inverted) and adds ⌘⇧F for Find in Files.
     static let sublime: Keymap = {
         var map = Keymap.default_
 
@@ -144,6 +145,14 @@ public extension Keymap {
 
         map.unbindAll(.selectLines)
         map.bind(KeyStroke(KeyChord("l", [.command, .shift])), to: .selectAllOccurrences)
+
+        // Sublime Text binds ⌘D to Select Next Occurrence and ⌘⇧D to Duplicate Line — the
+        // opposite of `default_`'s historical pair — plus ⌘⇧F for Find in Files.
+        map.unbindAll(.selectNextOccurrence)
+        map.unbindAll(.duplicateLines)
+        map.bind(KeyStroke(KeyChord("d", .command)), to: .selectNextOccurrence)
+        map.bind(KeyStroke(KeyChord("d", [.command, .shift])), to: .duplicateLines)
+        map.bind(KeyStroke(KeyChord("f", [.command, .shift])), to: .findInFiles)
 
         return map
     }()

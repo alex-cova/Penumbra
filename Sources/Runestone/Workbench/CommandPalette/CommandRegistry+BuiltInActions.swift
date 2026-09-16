@@ -14,7 +14,7 @@ public extension CommandRegistry {
         .toggleComment, .insertLineAbove, .insertLineBelow,
         .sortLinesAscending, .sortLinesDescending,
         .toggleMethodSeparators, .toggleOccurrenceHighlighting,
-        .toggleFindPanel, .toggleReplacePanel,
+        .toggleFindPanel, .toggleReplacePanel, .findInFiles,
         .searchEverywhere, .findAction, .quickOpenFile, .recentFiles, .goToSymbol, .goToLine,
         .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward,
         .triggerCompletion

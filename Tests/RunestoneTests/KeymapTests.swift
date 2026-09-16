@@ -47,6 +47,18 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("g", .control))), .selectNextOccurrence)
     }
 
+    func testSublimeKeymapMatchesSublimeTextSemanticsForDAndF() {
+        // Sublime Text binds ⌘D to Select Next Occurrence and ⌘⇧D to Duplicate Line — the
+        // opposite of `default_`'s historical pair — plus ⌘⇧F for Find in Files.
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("d", .command))), .selectNextOccurrence)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("d", [.command, .shift]))), .duplicateLines)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("f", [.command, .shift]))), .findInFiles)
+        // `default_` and `intelliJ` keep the historical pair; only `sublime` overrides it.
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("d", .command))), .duplicateLines)
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("d", [.command, .shift]))), .selectNextOccurrence)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("d", .command))), .duplicateLines)
+    }
+
     func testControlSpaceResolvesToTriggerCompletion() {
         XCTAssertEqual(
             Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x31, .control))),

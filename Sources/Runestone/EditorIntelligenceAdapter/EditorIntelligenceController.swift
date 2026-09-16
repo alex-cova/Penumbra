@@ -8,19 +8,25 @@ public struct EditorIntelligenceServices {
     public var codeActionProvider: LSPCodeActionProvider?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
+    /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
+    /// Defaults to a private instance when unset; inject a shared one to dedupe concurrent scans
+    /// of the same root across multiple controllers.
+    public var projectSearchEngine: ProjectSearchEngine?
 
     public init(
         formattingProvider: LSPFormattingProvider? = nil,
         signatureHelpProvider: LSPSignatureHelpProvider? = nil,
         codeActionProvider: LSPCodeActionProvider? = nil,
         symbolIndex: SymbolIndex? = nil,
-        workspace: Workspace? = nil
+        workspace: Workspace? = nil,
+        projectSearchEngine: ProjectSearchEngine? = nil
     ) {
         self.formattingProvider = formattingProvider
         self.signatureHelpProvider = signatureHelpProvider
         self.codeActionProvider = codeActionProvider
         self.symbolIndex = symbolIndex
         self.workspace = workspace
+        self.projectSearchEngine = projectSearchEngine
     }
 }
 
@@ -63,6 +69,7 @@ public final class EditorIntelligenceController {
     private let symbolIndex: SymbolIndex?
     private let workspace: Workspace?
     private let workspaceSearchEngine = WorkspaceSearchEngine()
+    private let projectSearchEngine: ProjectSearchEngine
 
     private let overlayContainer = NSView()
     private let completionPanelView: CompletionPanelView
@@ -106,6 +113,7 @@ public final class EditorIntelligenceController {
         self.codeActionProvider = services.codeActionProvider
         self.symbolIndex = services.symbolIndex
         self.workspace = services.workspace
+        self.projectSearchEngine = services.projectSearchEngine ?? ProjectSearchEngine()
 
         let placeholderRange = EditorIntelligence.TextRange(
             start: TextPosition(line: 0, column: 0, utf16Offset: 0),
@@ -158,6 +166,11 @@ public final class EditorIntelligenceController {
     /// different). Return `true` if the host opened it; otherwise the target is focused in the
     /// current text view.
     public var onOpenLocationInOtherDocument: ((Location) -> Bool)?
+    /// Invoked for `.findInFiles` / ⌘⇧F. Present your own UI here (a dedicated panel, a sheet…)
+    /// and call ``searchProject(_:in:matchWholeWord:useRegularExpression:)`` to run it; return
+    /// `true` once handled. Left `nil`, the action falls through to the command palette's own
+    /// `.findInFiles` handling instead.
+    public var onRequestProjectSearch: (() -> Bool)?
 
     private func handleEditorAction(_ action: EditorActionID) -> Bool {
         switch action {
@@ -174,6 +187,9 @@ public final class EditorIntelligenceController {
         case .triggerCompletion:
             triggerCompletion()
             return true
+        case .findInFiles:
+            guard let onRequestProjectSearch else { return false }
+            return onRequestProjectSearch()
         default:
             return false
         }
@@ -421,6 +437,23 @@ public final class EditorIntelligenceController {
                 self.presentWorkspaceSearch(query: query, results: results)
             }
         }
+    }
+
+    /// Disk-wide project search — the counterpart to ``searchWorkspace(query:matchWholeWord:useRegularExpression:)``,
+    /// which only sees open documents. Runs off the main actor; call from an
+    /// ``onRequestProjectSearch`` handler that presents its own results UI.
+    public func searchProject(
+        _ query: String,
+        in root: URL,
+        matchWholeWord: Bool = false,
+        useRegularExpression: Bool = false
+    ) async -> [ProjectSearchResult] {
+        let searchQuery = WorkspaceSearchQuery(
+            text: query,
+            matchWholeWord: matchWholeWord,
+            useRegularExpression: useRegularExpression
+        )
+        return await projectSearchEngine.search(searchQuery, in: root)
     }
 
     /// Mount the breadcrumb bar above the text view inside a container.

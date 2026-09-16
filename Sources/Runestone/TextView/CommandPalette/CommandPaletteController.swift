@@ -26,6 +26,13 @@ public final class CommandPaletteController {
     public var workspaceRoot: URL?
     /// Workspace symbol index for the Symbols section.
     public var symbolIndex: SymbolIndex?
+    /// Disk-wide search engine backing `.findInFiles` / ⌘⇧F. With `workspaceRoot` unset, or this
+    /// left `nil`, `.findInFiles` is left unhandled so a host-installed
+    /// `EditorIntelligenceController.onRequestProjectSearch` (or another `editorActionHandler`
+    /// link) can present its own UI instead.
+    public var projectSearchEngine: ProjectSearchEngine?
+    /// Invoked when a Find in Files row is chosen.
+    public var onOpenProjectSearchResult: ((ProjectSearchResult) -> Void)?
     /// Extra host-supplied sections (settings, run configs, docs…).
     public var extraProviders: [SearchEverywhereProvider] = []
     /// Max rows per section.
@@ -83,6 +90,22 @@ public final class CommandPaletteController {
         present(mode: .symbols, placeholder: "Go to Symbol")
     }
 
+    /// Presents Go to Line with the field pre-seeded with `:`, matching Sublime's Goto Anything.
+    public func presentGoToLine() {
+        present(mode: .goToLine, placeholder: "Go to Line", seed: ":")
+    }
+
+    /// Presents disk-wide Find in Files. Returns `false` without presenting when no
+    /// ``projectSearchEngine`` / ``workspaceRoot`` is wired, so a host's own `.findInFiles`
+    /// handling (e.g. a custom panel via `EditorIntelligenceController.onRequestProjectSearch`)
+    /// gets first refusal.
+    @discardableResult
+    public func presentProjectSearch() -> Bool {
+        guard projectSearchEngine != nil, workspaceRoot != nil else { return false }
+        present(mode: .findInFiles, placeholder: "Find in Files")
+        return true
+    }
+
     /// Presents a fixed list — e.g. multiple "Go to Definition" targets, or the surround-with
     /// templates. `onChoose` runs for the picked item; the palette then dismisses.
     public func presentList(title: String, items: [(title: String, subtitle: String?)], onChoose: @escaping (Int) -> Void) {
@@ -125,6 +148,8 @@ public final class CommandPaletteController {
         case .quickOpenFile: presentQuickOpen()
         case .goToSymbol: presentSymbols()
         case .surroundWith: presentSurroundWith()
+        case .goToLine: presentGoToLine()
+        case .findInFiles: return presentProjectSearch()
         default: return false
         }
         return true
@@ -143,17 +168,17 @@ public final class CommandPaletteController {
         }
     }
 
-    private func present(mode: EditorPaletteMode, placeholder: String) {
+    private func present(mode: EditorPaletteMode, placeholder: String, seed: String = "") {
         isStaticList = false
         engine.setProviders(providers(for: mode))
         paletteModel.mode = mode
-        paletteModel.query = ""
+        paletteModel.query = seed
         paletteModel.selectedIndex = 0
         paletteModel.isPresented = true
         paletteView.placeholder = placeholder
-        paletteView.query = ""
+        paletteView.query = seed
         showOverlay()
-        runQuery("")
+        runQuery(seed)
     }
 
     private func showOverlay() {
@@ -190,6 +215,32 @@ public final class CommandPaletteController {
         }
     }
 
+    private func makeGoToLineProvider() -> GoToLinePaletteProvider {
+        GoToLinePaletteProvider(
+            lineCount: { [weak self] in self?.textView?.lineCount ?? 0 },
+            onGoToLine: { [weak self] line in self?.textView?.goToLine(line - 1) }
+        )
+    }
+
+    private func makeBufferTextProvider() -> BufferTextPaletteProvider {
+        BufferTextPaletteProvider(
+            text: { [weak self] in self?.textView?.text ?? "" },
+            search: { [weak self] query in self?.textView?.search(for: query) ?? [] },
+            onSelect: { [weak self] range in
+                guard let textView = self?.textView else { return }
+                textView.selectedRange = range
+                textView.scrollRangeToVisible(range)
+            }
+        )
+    }
+
+    private func makeProjectSearchProvider() -> ProjectSearchPaletteProvider? {
+        guard let engine = projectSearchEngine, let root = workspaceRoot else { return nil }
+        return ProjectSearchPaletteProvider(engine: engine, root: root) { [weak self] result in
+            self?.onOpenProjectSearchResult?(result)
+        }
+    }
+
     private func providers(for mode: EditorPaletteMode) -> [SearchEverywhereProvider] {
         switch mode {
         case .commands, .textActions:
@@ -203,21 +254,29 @@ public final class CommandPaletteController {
         case .searchEverywhere:
             return ([makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
                 .compactMap { $0 } + [makeCommandsProvider()] + extraProviders
+        case .goToLine:
+            return [makeGoToLineProvider()]
+        case .findInFiles:
+            return [makeProjectSearchProvider()].compactMap { $0 }
         case .locations:
             return []
         }
     }
 
-    /// Provider set for a sigil-scoped query typed inside Search Everywhere (`>` commands,
-    /// `@` symbols, `/` or `#` files).
+    /// Provider set for a sigil-scoped query typed into any palette field (`>` commands,
+    /// `@` symbols, `/` files, `#` in-buffer text, `:` go-to-line) — Sublime's Goto Anything.
     private func providers(forScope scope: PaletteQueryScope) -> [SearchEverywhereProvider] {
         switch scope {
         case .commands:
             return [makeCommandsProvider()] + extraProviders
         case .symbols:
-            return [makeSymbolsProvider()].compactMap { $0 }
+            return ([makeSymbolsProvider()].compactMap { $0 } as [SearchEverywhereProvider]) + extraProviders
         case .files:
-            return ([makeRecentProvider(), makeFilesProvider()] as [SearchEverywhereProvider?]).compactMap { $0 }
+            return ([makeRecentProvider(), makeFilesProvider()] as [SearchEverywhereProvider?]).compactMap { $0 } + extraProviders
+        case .text:
+            return [makeBufferTextProvider()]
+        case .line:
+            return [makeGoToLineProvider()]
         case .textActions:
             return providers(for: .searchEverywhere)
         }
@@ -226,15 +285,14 @@ public final class CommandPaletteController {
     private func runQuery(_ rawQuery: String) {
         guard !isStaticList else { return }
         var effectiveQuery = rawQuery
-        // In Search Everywhere a leading sigil narrows the sources for this keystroke.
-        if paletteModel.mode == .searchEverywhere {
-            let scope = PaletteQueryScope.resolve(query: rawQuery, mode: .searchEverywhere)
-            if case .textActions = scope {
-                engine.setProviders(providers(for: .searchEverywhere))
-            } else {
-                engine.setProviders(providers(forScope: scope))
-                effectiveQuery = scope.query
-            }
+        // A leading sigil narrows the sources for this keystroke, in every mode — not just
+        // Search Everywhere — so ⌘P becomes one Sublime-style Goto Anything field. Without a
+        // sigil, each mode keeps searching its own default provider set exactly as before.
+        if let scope = PaletteQueryScope.explicitScope(in: rawQuery) {
+            engine.setProviders(providers(forScope: scope))
+            effectiveQuery = scope.query
+        } else {
+            engine.setProviders(providers(for: paletteModel.mode))
         }
         engine.search(effectiveQuery) { [weak self] sections in
             guard let self else { return }

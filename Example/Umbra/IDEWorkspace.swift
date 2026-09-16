@@ -5,7 +5,6 @@ import Runestone
 import SwiftUI
 import RunestoneLanguages
 import RunestoneMarkdownLanguage
-import UmbraCore
 
 struct IDETabRow: Identifiable, Equatable {
     let id: UUID
@@ -23,7 +22,6 @@ final class IDEWorkspace: ObservableObject {
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
     private var adapter: RunestoneWorkbenchEditorAdapter!
-    private var isPromptingGoToLine = false
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
@@ -46,7 +44,7 @@ final class IDEWorkspace: ObservableObject {
     @Published var tabsByPane: [UUID: [IDETabRow]] = [:]
     @Published var isFindInFilesVisible = false
     @Published var findInFilesQuery = ""
-    @Published var findInFilesHits: [FindInFilesHit] = []
+    @Published var findInFilesHits: [ProjectSearchResult] = []
     @Published var findInFilesStatus = ""
 
     var editorLayout: EditorLayout { workbench.layout }
@@ -201,6 +199,11 @@ final class IDEWorkspace: ObservableObject {
         focusActiveEditor()
     }
 
+    func showGoToLine() {
+        host(for: workbench.activePaneID).paletteController.presentGoToLine()
+        focusActiveEditor()
+    }
+
     func showFind() {
         adapter.textView?.perform(.toggleFindPanel)
         focusActiveEditor()
@@ -233,38 +236,32 @@ final class IDEWorkspace: ObservableObject {
             findInFilesStatus = "Open a folder to search the project"
             return
         }
-        let files = FindInFilesService.files(under: root)
-        findInFilesStatus = "Searching…"
-        let hits = FindInFilesService.search(query: query, files: files)
-        findInFilesHits = hits
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            findInFilesHits = []
             findInFilesStatus = "Enter a query and press Return"
-        } else if hits.isEmpty {
-            findInFilesStatus = "No results"
-        } else if hits.count == 1 {
-            findInFilesStatus = "1 result"
-        } else {
-            findInFilesStatus = "\(hits.count) results"
+            return
+        }
+        guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else {
+            return
+        }
+        findInFilesStatus = "Searching…"
+        Task {
+            let hits = await intelligenceController.searchProject(query, in: root)
+            findInFilesHits = hits
+            if hits.isEmpty {
+                findInFilesStatus = "No results"
+            } else if hits.count == 1 {
+                findInFilesStatus = "1 result"
+            } else {
+                findInFilesStatus = "\(hits.count) results"
+            }
         }
     }
 
-    func openFindInFilesHit(_ hit: FindInFilesHit) {
-        let target = FindInFilesService.openTarget(for: hit)
-        Task { await openDocument(from: target.url, selecting: target.range) }
-    }
-
-    func showGoToLine() {
-        guard !isPromptingGoToLine else { return }
-        isPromptingGoToLine = true
-        defer { isPromptingGoToLine = false }
-        guard let input = promptGoToLine() else { return }
-        _ = applyGoToLine(input)
-    }
-
-    @discardableResult
-    func applyGoToLine(_ raw: String) -> Bool {
-        guard let textView = adapter?.textView else { return false }
-        return GoToLineCommand.apply(raw, to: textView)
+    func openFindInFilesHit(_ hit: ProjectSearchResult) {
+        let length = max(0, hit.range.end.utf16Offset - hit.range.start.utf16Offset)
+        let range = NSRange(location: hit.range.start.utf16Offset, length: length)
+        Task { await openDocument(from: hit.url, selecting: range) }
     }
 
     func splitRight() {
@@ -453,9 +450,15 @@ final class IDEWorkspace: ObservableObject {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
+        // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
+        // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
+        // `.goToLine` natively.
+        host.intelligenceController?.onRequestProjectSearch = { [weak self] in
+            self?.showFindInFiles()
+            return true
+        }
         configurePalette(host.paletteController)
         preferences.apply(to: host.textView)
-        installUmbraActionHandler(on: host.textView)
         return host
     }
 
@@ -606,43 +609,8 @@ final class IDEWorkspace: ObservableObject {
             EditorCommand(id: "app.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
                           action: { [weak self] in self?.toggleTypewriterScrolling() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
-                          action: { [weak self] in self?.toggleMetalRendering() }),
-            EditorCommand(id: "app.findInFiles", title: "Find in Files…", group: "Find",
-                          shortcutDisplay: "⌘⇧F",
-                          action: { [weak self] in self?.showFindInFiles() })
+                          action: { [weak self] in self?.toggleMetalRendering() })
         ])
-    }
-
-    private func installUmbraActionHandler(on textView: TextView) {
-        let previous = textView.editorActionHandler
-        textView.editorActionHandler = { [weak self] action in
-            guard let self else { return previous?(action) ?? false }
-            if action == .goToLine {
-                self.showGoToLine()
-                return true
-            }
-            if action == UmbraKeymap.findInFiles {
-                self.showFindInFiles()
-                return true
-            }
-            return previous?(action) ?? false
-        }
-    }
-
-    private func promptGoToLine() -> String? {
-        let alert = NSAlert()
-        alert.messageText = "Go to Line"
-        alert.informativeText = "Enter a 1-based line number."
-        alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.placeholderString = "Line number"
-        field.stringValue = ""
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return nil }
-        return field.stringValue
     }
 
     private func activatePane(_ paneID: UUID) {

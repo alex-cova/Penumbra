@@ -1,5 +1,5 @@
+import EditorIntelligence
 import SwiftUI
-import UmbraCore
 
 struct FindInFilesPanel: View {
     @EnvironmentObject private var workspace: IDEWorkspace
@@ -59,7 +59,7 @@ struct FindInFilesPanel: View {
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                                 .lineLimit(1)
-                            Text(hit.lineText.trimmingCharacters(in: .whitespaces))
+                            Text(hit.preview.trimmingCharacters(in: .whitespaces))
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(1)
@@ -93,7 +93,7 @@ struct FindInFilesPanel: View {
         return "No matches."
     }
 
-    private func hitLabel(_ hit: FindInFilesHit) -> String {
+    private func hitLabel(_ hit: ProjectSearchResult) -> String {
         let path: String
         if let root = workspace.project.rootURL {
             let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
@@ -105,6 +105,7 @@ struct FindInFilesPanel: View {
         } else {
             path = hit.url.lastPathComponent
         }
-        return "\(path):\(hit.lineNumber)"
+        // `line` is 0-based (matching WorkspaceSearchResult); display 1-based like an editor gutter.
+        return "\(path):\(hit.line + 1)"
     }
 }

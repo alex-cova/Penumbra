@@ -13,6 +13,11 @@ public enum EditorPaletteMode: Equatable {
     /// A list of jump targets, e.g. the results of "Go to Definition" when there is more than
     /// one, or the surround-with templates.
     case locations
+    /// Go to line (⌘G / ⌘L) — the field is seeded with `:` so a bare number still resolves via
+    /// ``PaletteQueryScope``.
+    case goToLine
+    /// Disk-wide project search (⌘⇧F).
+    case findInFiles
 }
 
 /// Presentation/navigation state for a command palette — which mode it's in, the current query,
@@ -60,6 +65,16 @@ public final class EditorPaletteModel {
 
     public func showLocations() {
         mode = .locations
+        resetForShow()
+    }
+
+    public func showGoToLine() {
+        mode = .goToLine
+        resetForShow()
+    }
+
+    public func showFindInFiles() {
+        mode = .findInFiles
         resetForShow()
     }
 
