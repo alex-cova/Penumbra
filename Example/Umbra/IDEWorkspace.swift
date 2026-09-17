@@ -29,6 +29,7 @@ final class IDEWorkspace {
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
     private var adapter: PenumbraWorkbenchEditorAdapter!
+    @ObservationIgnored
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
