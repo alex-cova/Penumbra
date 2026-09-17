@@ -189,6 +189,18 @@ final class TextViewStateViewportParseTests: XCTestCase {
         )
         XCTAssertGreaterThan(bottomWindow.location, initial!.length)
 
+        // Move the real viewport to match the window we are about to request directly. A
+        // deferred layout flush from the *initial* parse (scheduled to flush pending Metal
+        // presentation; see `TextInputView.scheduleDeferredLayoutIfNeeded`) can still be
+        // pending here and will run `ensureViewportSyntaxParse()` against whatever the live
+        // viewport is once AppKit finally lays the view out. If the viewport were left at its
+        // unset `.zero` value while we ask the language mode to parse a range far past it, that
+        // catch-up layout pass would see the *actual* (still top-of-document) viewport, decide
+        // the newly-parsed bottom window doesn't cover what's on screen, and silently reparse
+        // back to the top — undoing the call below. Scrolling first keeps the live viewport
+        // consistent with `bottomWindow` so any such reconciliation agrees with it instead.
+        textView.contentOffset = CGPoint(x: 0, y: 10_000)
+
         let expanded = expectation(description: "later window parsed")
         mode.parse(coveringUTF16Range: bottomWindow) { _ in
             expanded.fulfill()

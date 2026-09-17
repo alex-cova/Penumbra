@@ -77,6 +77,14 @@ public struct MermaidRenderer {
     }
 }
 
+private struct UncheckedSendableBMImage: @unchecked Sendable {
+    let value: BMImage?
+}
+
+private struct UncheckedSendablePreparedDiagram: @unchecked Sendable {
+    let value: PreparedDiagram
+}
+
 extension MermaidRenderer {
     public static let version = "0.1.1"
     public static let supportedDiagramTypes: [DiagramType] = DiagramType.allCases
@@ -121,8 +129,10 @@ extension MermaidRenderer {
         scale: CGFloat = 2.0
     ) async throws -> BMImage? {
         try await Task.detached(priority: .userInitiated) {
-            try renderImage(source: source, theme: theme, scale: scale)
-        }.value
+            UncheckedSendableBMImage(
+                value: try renderImage(source: source, theme: theme, scale: scale)
+            )
+        }.value.value
     }
 
     /// Render a Mermaid diagram to an SVG string asynchronously.
@@ -153,8 +163,8 @@ extension MermaidRenderer {
     ) async throws -> PreparedDiagram {
         let renderer = MermaidImageRenderer(theme: theme)
         return try await Task.detached {
-            try renderer.prepare(from: source)
-        }.value!
+            UncheckedSendablePreparedDiagram(value: try renderer.prepare(from: source)!)
+        }.value.value
     }
 }
 

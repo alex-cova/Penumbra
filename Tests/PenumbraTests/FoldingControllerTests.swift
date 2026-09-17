@@ -4,6 +4,24 @@ import XCTest
 import TestTreeSitterLanguages
 
 final class FoldingControllerTests: XCTestCase {
+    func testFullRecomputeIsSkippedForVeryLargeDocuments() {
+        let originalLimit = EditorPerformanceConstants.maxFoldRecomputeLineCount
+        EditorPerformanceConstants.maxFoldRecomputeLineCount = 4
+        defer { EditorPerformanceConstants.maxFoldRecomputeLineCount = originalLimit }
+
+        let (foldingController, _, _) = makeFoldingController(text: """
+        func foo() {
+            let x = 1
+            let y = 2
+        }
+        let after = 3
+        """)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        XCTAssertTrue(foldingController.folds.isEmpty)
+        XCTAssertEqual(foldingController.lastScannedLineCount, 0)
+    }
+
     func testIndentationProviderComputesNestedFold() {
         let (foldingController, _, _) = makeFoldingController(text: """
         func foo() {

@@ -34,6 +34,11 @@ final class IDEWorkspace: ObservableObject {
     @Published private(set) var layoutEpoch: UInt64 = 0
     @Published private(set) var activePaneID = UUID()
     @Published var showsWelcome = true
+    /// Mirrors `project.rootURL != nil`. `IDEProjectModel` is a separate `ObservableObject`, so
+    /// its own `@Published` changes don't republish through `IDEWorkspace` — anything that needs
+    /// to react to "a folder opened/closed" (like the sidebar auto-hide below) has to observe
+    /// this instead of reading `project.rootURL` directly from a view.
+    @Published private(set) var hasProjectRoot = false
 
     @Published var windowTitle = "Umbra"
     @Published var statusLine = 1
@@ -49,6 +54,19 @@ final class IDEWorkspace: ObservableObject {
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
+    /// Whether there's anything for the sidebar to show — the same condition that dismisses the
+    /// Welcome screen. On a workspace with neither a folder nor a loose file open, the sidebar
+    /// would just be its own empty state sitting next to the Welcome screen's, so it collapses.
+    var isSidebarAvailable: Bool { hasProjectRoot || hasOpenDocuments }
+    /// What `IDERootView` should actually render — the user's toggle, gated by availability.
+    var showsSidebar: Bool { isSidebarVisible && isSidebarAvailable }
+
+    init() {
+        project.$rootURL
+            .map { $0 != nil }
+            .removeDuplicates()
+            .assign(to: &$hasProjectRoot)
+    }
 
     func host(for paneID: UUID) -> IDEEditorPaneHost {
         hostedPaneIDs.insert(paneID)
@@ -287,6 +305,11 @@ final class IDEWorkspace: ObservableObject {
         focusActiveEditor()
     }
 
+    func toggleMarkdownPreview() {
+        adapter.textView?.perform(.toggleMarkdownPreview)
+        focusActiveEditor()
+    }
+
     func toggleMinimap() {
         preferences.showMinimap.toggle()
         applyPreferencesToAllHosts()
@@ -329,6 +352,37 @@ final class IDEWorkspace: ObservableObject {
         preferences.isMetalRenderingEnabled.toggle()
         applyPreferencesToAllHosts()
         focusActiveEditor()
+    }
+
+    var showLineNumbersBinding: Binding<Bool> {
+        preferenceBinding(\.showLineNumbers)
+    }
+
+    var isLineFoldingEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isLineFoldingEnabled)
+    }
+
+    var wrapLinesBinding: Binding<Bool> {
+        preferenceBinding(\.wrapLines)
+    }
+
+    var showMinimapBinding: Binding<Bool> {
+        preferenceBinding(\.showMinimap)
+    }
+
+    var isMetalRenderingEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isMetalRenderingEnabled)
+    }
+
+    private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<IDEPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { self.preferences[keyPath: keyPath] },
+            set: { newValue in
+                self.preferences[keyPath: keyPath] = newValue
+                self.applyPreferencesToAllHosts()
+                self.focusActiveEditor()
+            }
+        )
     }
 
     func applyPreferencesToAllHosts() {
@@ -466,13 +520,15 @@ final class IDEWorkspace: ObservableObject {
     func openDocument(from url: URL, selecting range: NSRange? = nil) async {
         do {
             let identifier = LanguageIdentifier.identifier(for: url)
+            let language = IDELanguageSupport.language(forIdentifier: identifier)
             let document = try await WorkbenchDocument.load(
                 contentsOf: url,
-                language: nil,
+                theme: IDEEditorTheme.shared,
+                language: language,
                 languageIdentifier: identifier,
                 languageProvider: Self.languageProvider
             )
-            document.language = IDELanguageSupport.language(forIdentifier: identifier)
+            document.language = language
             workbench.openDocument(document)
             if let range, let selected = workbench.activePane.selectedDocument {
                 selected.selectedRange = range
@@ -678,7 +734,9 @@ final class IDEWorkspace: ObservableObject {
     }
 
     private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument) {
-        document.text = textView.text
+        if !document.isFileBacked {
+            document.text = textView.text
+        }
         document.selectedRange = textView.selectedRange
         document.scrollOffset = textView.contentOffset
     }
@@ -693,10 +751,10 @@ final class IDEWorkspace: ObservableObject {
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
         adapter.bindNavigationHistory(to: host.textView, document: document)
-        if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
+        if reloadOnlyIfNeeded, host.loadedDocumentID == document.id, document.pendingState == nil {
             return
         }
-        if host.loadedDocumentID == document.id {
+        if host.loadedDocumentID == document.id, document.pendingState == nil {
             return
         }
         if let previousID = host.loadedDocumentID,
@@ -736,6 +794,7 @@ final class IDEWorkspace: ObservableObject {
         if document.scrollOffset != .zero {
             host.textView.contentOffset = document.scrollOffset
         }
+        preferences.apply(to: host.textView)
         host.loadedDocumentID = document.id
         host.textView.layoutSubtreeIfNeeded()
         if pane.id == workbench.activePaneID {

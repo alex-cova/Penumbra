@@ -3,6 +3,9 @@ import SwiftUI
 struct IDEEditorTabsBar: View {
     let paneID: UUID
     var leadingInset: CGFloat = 0
+    /// Shows the sidebar collapse/expand affordance at the leading edge — only the top-leading
+    /// pane's tab bar carries it, since that's the one adjacent to where the sidebar lives.
+    var showsSidebarToggle: Bool = false
     @EnvironmentObject private var workspace: IDEWorkspace
 
     private var tabs: [IDETabRow] {
@@ -10,18 +13,24 @@ struct IDEEditorTabsBar: View {
     }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(tabs) { tab in
-                    IDEEditorTabItem(tab: tab) {
-                        workspace.selectTab(tab.id, in: paneID)
-                    } onClose: {
-                        workspace.closeTab(tab.id, in: paneID)
+        HStack(spacing: 0) {
+            if showsSidebarToggle {
+                sidebarToggleButton
+                    .padding(.leading, leadingInset + IDEAppearance.Spacing.xs)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(tabs) { tab in
+                        IDEEditorTabItem(tab: tab) {
+                            workspace.selectTab(tab.id, in: paneID)
+                        } onClose: {
+                            workspace.closeTab(tab.id, in: paneID)
+                        }
                     }
                 }
+                .padding(.leading, showsSidebarToggle ? IDEAppearance.Spacing.xs : leadingInset)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
             }
-            .padding(.leading, leadingInset)
-            .padding(.horizontal, IDEAppearance.Spacing.sm)
         }
         .frame(height: IDEAppearance.Spacing.tabHeight)
         .background(IDEAppearance.ColorToken.tabBar)
@@ -32,6 +41,22 @@ struct IDEEditorTabsBar: View {
         }
         .focusable(false)
     }
+
+    private var sidebarToggleButton: some View {
+        Button {
+            workspace.toggleSidebar()
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(workspace.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+        .accessibilityLabel(workspace.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+        .accessibilityAddTraits(.isButton)
+    }
 }
 
 private struct IDEEditorTabItem: View {
@@ -40,31 +65,20 @@ private struct IDEEditorTabItem: View {
     let onClose: () -> Void
 
     @State private var isHovering = false
+    @State private var isCloseHovered = false
+
+    /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
+    /// crosses it — only what's drawn inside this slot changes.
+    private let trailingSlotSide: CGFloat = 14
 
     var body: some View {
         HStack(spacing: 6) {
             Text(tab.title)
                 .foregroundStyle(tab.isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
-                .font(.system(size: 12, weight: tab.isSelected ? .medium : .regular))
+                .font(IDEAppearance.Typography.tabLabel.weight(tab.isSelected ? .medium : .regular))
 
-            if isHovering {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 14, height: 14)
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(TapGesture().onEnded { onClose() })
-                    .accessibilityLabel("Close Tab")
-                    .accessibilityAddTraits(.isButton)
-            } else if tab.isDirty {
-                Circle()
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(width: 6, height: 6)
-                    .accessibilityLabel("Edited")
-            } else {
-                Color.clear.frame(width: 6, height: 6)
-            }
+            trailingSlot
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -76,6 +90,30 @@ private struct IDEEditorTabItem: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .focusable(false)
+    }
+
+    /// Always shows a close button — the dirty dot only takes over the same slot while it isn't
+    /// hovered, and swaps back to the "x" the moment the pointer lands on it.
+    private var trailingSlot: some View {
+        Button(action: onClose) {
+            ZStack {
+                if tab.isDirty && !isCloseHovered {
+                    Circle()
+                        .fill(IDEAppearance.ColorToken.accent)
+                        .frame(width: 6, height: 6)
+                } else {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(isCloseHovered ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                }
+            }
+            .frame(width: trailingSlotSide, height: trailingSlotSide)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isCloseHovered = $0 }
+        .accessibilityLabel(tab.isDirty ? "Close Tab (Edited)" : "Close Tab")
+        .accessibilityAddTraits(.isButton)
     }
 
     private var backgroundColor: Color {

@@ -90,6 +90,7 @@ final class LayoutManager {
         didSet {
             if showLineNumbers != oldValue {
                 updateShownViews()
+                setNeedsLayout()
             }
         }
     }
@@ -192,6 +193,11 @@ final class LayoutManager {
         } else {
             return textContainerInset.left
         }
+    }
+    /// Width of the gutter column, including the leading safe-area inset. This is the region the
+    /// Metal canvas (see ``MetalCanvasGeometry``) must never paint over.
+    private var totalGutterWidth: CGFloat {
+        safeAreaInsets.left + gutterWidthService.gutterWidth
     }
     private var insetViewport: CGRect {
         let x = viewport.minX - textContainerInset.left
@@ -598,7 +604,6 @@ extension LayoutManager {
     }
 
     private func layoutGutter() {
-        let totalGutterWidth = safeAreaInsets.left + gutterWidthService.gutterWidth
         let contentSize = contentSizeService.contentSize
         gutterContainerView.frame = CGRect(x: viewport.minX, y: 0, width: totalGutterWidth, height: contentSize.height)
         gutterBackgroundView.frame = CGRect(x: 0, y: viewport.minY, width: totalGutterWidth, height: viewport.height)
@@ -616,7 +621,6 @@ extension LayoutManager {
 
     private func layoutLineSelection() {
         if let rect = getLineSelectionRect() {
-            let totalGutterWidth = safeAreaInsets.left + gutterWidthService.gutterWidth
             gutterSelectionBackgroundView.frame = CGRect(x: 0, y: rect.minY, width: totalGutterWidth, height: rect.height)
             let lineSelectionBackgroundOrigin = CGPoint(x: viewport.minX + totalGutterWidth, y: rect.minY)
             let lineSelectionBackgroundSize = CGSize(width: scrollViewWidth - gutterWidthService.gutterWidth, height: rect.height)
@@ -856,6 +860,12 @@ extension LayoutManager {
     /// Move the transparent Metal canvas to the visible text rect (view-follows-viewport) and give
     /// the paint backend the viewport / cull rect / backing scale for this layout pass. No-op unless
     /// Metal is the active backend.
+    ///
+    /// The canvas is inset by ``totalGutterWidth`` so its opaque background solid never paints
+    /// over the gutter (line numbers, fold ribbon) — see ``MetalCanvasGeometry``. Without this,
+    /// `bringSubviewToFront(gutterContainerView)` in `TextView.layoutSubviews` cannot rescue the
+    /// gutter: it is a no-op there because the gutter's superview is the scrolling document
+    /// container, not the scroll view the canvas is a fixed overlay of.
     private func layoutMetalCanvas() {
         guard isMetalRenderingActive, let metalCanvasView else {
             return
@@ -863,12 +873,14 @@ extension LayoutManager {
         // Overlay on the scroll view covers the visible rect and stays put while
         // `canvasFrame` (content space) tracks the viewport for projection.
         // Inside the clip view the same layer does not composite.
-        if metalCanvasView.superview === gutterParentView {
-            metalCanvasView.frame = CGRect(origin: .zero, size: viewport.size)
-        } else {
-            metalCanvasView.frame = viewport
-        }
-        paintBackend.setViewport(viewport, canvasFrame: viewport, scale: metalCanvasView.effectiveBackingScale)
+        let isScrollViewOverlay = metalCanvasView.superview === gutterParentView
+        let (viewFrame, canvasFrame) = MetalCanvasGeometry.frames(
+            viewport: viewport,
+            gutterWidth: totalGutterWidth,
+            isScrollViewOverlay: isScrollViewOverlay
+        )
+        metalCanvasView.frame = viewFrame
+        paintBackend.setViewport(canvasFrame, canvasFrame: canvasFrame, scale: metalCanvasView.effectiveBackingScale)
         updateMetalCanvasPaintSpec()
     }
 
@@ -876,11 +888,17 @@ extension LayoutManager {
         guard isMetalRenderingActive, let metalCanvasView else {
             return
         }
+        let isScrollViewOverlay = metalCanvasView.superview === gutterParentView
+        let (_, canvasFrame) = MetalCanvasGeometry.frames(
+            viewport: viewport,
+            gutterWidth: totalGutterWidth,
+            isScrollViewOverlay: isScrollViewOverlay
+        )
         let visiblePageGuide = pageGuideView.flatMap { view in
             view.superview == nil || view.isHidden ? nil : view
         }
         paintBackend.setCanvasPaintSpec(CanvasPaintSpec(
-            frame: viewport,
+            frame: canvasFrame,
             backgroundColor: textInputView?.backgroundColor ?? .textBackgroundColor,
             lineSelectionRect: lineSelectionBackgroundView.isHidden ? nil : getLineSelectionRect(),
             lineSelectionColor: theme.selectedLineBackgroundColor,
@@ -1067,6 +1085,14 @@ extension LayoutManager {
         } else {
             textInputView?.addSubview(metalCanvasView)
         }
+    }
+
+    /// Re-applies gutter visibility and schedules layout. Use after ``TextView/setState(_:addUndoAction:)``
+    /// or other wholesale state swaps that can leave line-number views out of sync even when
+    /// ``showLineNumbers`` stays `true` (its `didSet` does not re-fire for an unchanged value).
+    func refreshGutterChrome() {
+        updateShownViews()
+        setNeedsLayout()
     }
 
     private func updateShownViews() {

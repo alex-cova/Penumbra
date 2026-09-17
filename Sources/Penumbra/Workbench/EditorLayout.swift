@@ -99,6 +99,15 @@ public enum EditorLayout: Equatable, Sendable {
         }
     }
 
+    var isEmptyContainer: Bool {
+        switch self {
+        case .pane:
+            return false
+        case .vertical(let data), .horizontal(let data):
+            return data.children.isEmpty
+        }
+    }
+
     public static func == (lhs: EditorLayout, rhs: EditorLayout) -> Bool {
         switch (lhs, rhs) {
         case let (.pane(lhsPane), .pane(rhsPane)):

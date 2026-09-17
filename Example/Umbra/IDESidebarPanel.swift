@@ -7,7 +7,7 @@ struct IDESidebarPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Explorer")
-                .font(.system(size: 11, weight: .semibold))
+                .font(IDEAppearance.Typography.sidebarHeader)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.leading, leadingInset + IDEAppearance.Spacing.lg)
                 .padding(.trailing, IDEAppearance.Spacing.lg)

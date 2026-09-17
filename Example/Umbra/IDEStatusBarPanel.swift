@@ -6,11 +6,11 @@ struct IDEStatusBarPanel: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(statusSummary)
-                .font(.system(size: 11, design: .monospaced))
+                .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Spacer()
-            Text("UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Umbra")
-                .font(.system(size: 11, design: .monospaced))
+            Text(trailingSummary)
+                .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
@@ -36,6 +36,10 @@ struct IDEStatusBarPanel: View {
             parts.append("\(workspace.statusSelectionLength) selected")
         }
         return parts.joined(separator: "  ·  ")
+    }
+
+    private var trailingSummary: String {
+        "UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Umbra"
     }
 }
 

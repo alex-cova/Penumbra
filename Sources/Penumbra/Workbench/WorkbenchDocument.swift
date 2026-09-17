@@ -57,6 +57,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     /// the line index built during load instead of scanning `text` again.
     public static func load(
         contentsOf url: URL,
+        theme: Theme = DefaultTheme(),
         language: TreeSitterLanguage? = nil,
         languageIdentifier: String? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
@@ -65,6 +66,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     ) async throws -> WorkbenchDocument {
         let prepared = try await PenumbraStateBuilder.load(
             contentsOf: url,
+            theme: theme,
             language: language,
             languageProvider: languageProvider,
             parsePolicy: parsePolicy,

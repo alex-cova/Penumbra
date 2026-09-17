@@ -51,6 +51,26 @@ public protocol Theme: AnyObject {
     /// ``TextView/highlightsOccurrencesOfSelection`` is on. Defaults to a translucent
     /// ``selectionColor``.
     var occurrenceHighlightColor: UIColor { get }
+    /// Background color of the find/replace bar (``TextView/showFindPanel(mode:)``).
+    /// Defaults to `NSColor.windowBackgroundColor`.
+    var findBarBackgroundColor: UIColor { get }
+    /// Color of the hairline separating the find bar from the text underneath it.
+    /// Defaults to ``gutterHairlineColor``.
+    var findBarHairlineColor: UIColor { get }
+    /// Background color of the find bar's search field. Defaults to a shade of
+    /// ``findBarBackgroundColor``.
+    var findBarFieldBackgroundColor: UIColor { get }
+    /// Border color of the find bar's search field when it isn't focused. Defaults to
+    /// ``findBarHairlineColor``.
+    var findBarFieldBorderColor: UIColor { get }
+    /// Color of typed text and button glyphs in the find bar. Defaults to ``textColor``.
+    var findBarTextColor: UIColor { get }
+    /// Color of placeholder text, the match count, and inactive icon buttons in the find bar.
+    /// Defaults to a lower-contrast shade of ``findBarTextColor``.
+    var findBarMutedTextColor: UIColor { get }
+    /// Color of the focus ring and active toggle pills (Case/Regex/Wrap) in the find bar.
+    /// Defaults to ``selectionColor``.
+    var findBarAccentColor: UIColor { get }
     /// Color of text matching the capture sequence.
     ///
     /// See <doc:CreatingATheme> for more information on higlight names.
@@ -107,6 +127,34 @@ public extension Theme {
 
     var occurrenceHighlightColor: UIColor {
         selectionColor.withAlphaComponent(0.28)
+    }
+
+    var findBarBackgroundColor: UIColor {
+        .windowBackgroundColor
+    }
+
+    var findBarHairlineColor: UIColor {
+        gutterHairlineColor
+    }
+
+    var findBarFieldBackgroundColor: UIColor {
+        .textBackgroundColor
+    }
+
+    var findBarFieldBorderColor: UIColor {
+        findBarHairlineColor
+    }
+
+    var findBarTextColor: UIColor {
+        textColor
+    }
+
+    var findBarMutedTextColor: UIColor {
+        .secondaryLabelColor
+    }
+
+    var findBarAccentColor: UIColor {
+        selectionColor
     }
 
     func font(for highlightName: String) -> UIFont? {

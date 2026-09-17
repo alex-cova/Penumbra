@@ -60,6 +60,9 @@ public final class MarkdownPreviewController: NSObject {
             self?.previewView.usesMetalRendering = false
             handler?(reason)
         }
+        previewView.onMetalRenderingFailure = { reason in
+            handler?(reason)
+        }
     }
 
     /// Embeds `editorView` (typically the pane host's outer container) into a horizontal split.

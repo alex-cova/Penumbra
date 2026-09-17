@@ -45,6 +45,9 @@ final class MermaidTextureCache {
     private func makeTexture(from image: CGImage, device: MTLDevice) -> MTLTexture? {
         let width = image.width
         let height = image.height
+        guard MetalTextureUpload.canAllocate(width: width, height: height, device: device) else {
+            return nil
+        }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,

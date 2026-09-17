@@ -28,6 +28,16 @@ final class IDEEditorTheme: Penumbra.Theme, @unchecked Sendable {
     let selectionColor: UIColor = IDEAppearance.NSToken.accent.withAlphaComponent(0.35)
     let methodSeparatorColor: UIColor = IDEAppearance.NSToken.border
     let occurrenceHighlightColor: UIColor = IDEAppearance.NSToken.accent.withAlphaComponent(0.18)
+    // Find bar: chrome-toned background (matches the tab/status bars), with a recessed,
+    // editor-toned field so the input reads as a distinct surface rather than default AppKit
+    // bezel chrome.
+    let findBarBackgroundColor: UIColor = IDEAppearance.NSToken.sidebar
+    let findBarHairlineColor: UIColor = IDEAppearance.NSToken.border
+    let findBarFieldBackgroundColor: UIColor = IDEAppearance.NSToken.editor
+    let findBarFieldBorderColor: UIColor = IDEAppearance.NSToken.border
+    let findBarTextColor: UIColor = IDEAppearance.NSToken.foreground
+    let findBarMutedTextColor: UIColor = IDEAppearance.NSToken.muted
+    let findBarAccentColor: UIColor = IDEAppearance.NSToken.accent
 
     private init() {}
 

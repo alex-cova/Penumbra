@@ -2,6 +2,23 @@
 import Metal
 import QuartzCore
 
+/// Guards Metal texture allocation for full-document preview rasterization.
+enum MetalTextureUpload {
+    /// Keeps uploads within typical GPU budgets (matches the mermaid raster cap).
+    static let maxPixelCount = 16_777_216 // 4096 × 4096
+
+    /// Conservative limit for Apple GPUs when building against the macOS 12 deployment target.
+    static let maxTextureDimension = 16_384
+
+    static func canAllocate(width: Int, height: Int, device: MTLDevice) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let maxDimension = maxTextureDimension
+        guard width <= maxDimension, height <= maxDimension else { return false }
+        guard height <= Int.max / width else { return false }
+        return width * height <= maxPixelCount
+    }
+}
+
 /// Metal paint backend for the markdown preview. The layout is rasterized with Core Graphics,
 /// uploaded to an `MTLTexture`, and blitted into a `CAMetalLayer` drawable.
 @MainActor
@@ -15,15 +32,24 @@ final class MarkdownPreviewMetalRenderer {
         set { metalView.isHidden = !newValue }
     }
 
+    /// Returns `false` when the layout cannot be uploaded as a single Metal texture (caller should
+    /// fall back to the Core Graphics scroll path).
+    @discardableResult
     func update(
         layout: MarkdownPreviewLayout,
         style: MarkdownPreviewStyle,
         rasterImages: [Int: CGImage],
         highlightedCode: [Int: NSAttributedString] = [:]
-    ) {
+    ) -> Bool {
         let scale = metalView.backingScaleFactor
         let pixelWidth = Int(max(layout.contentSize.width, 1) * scale)
         let pixelHeight = Int(max(layout.contentSize.height, 1) * scale)
+        guard let device = MetalContext.shared.device,
+              MetalTextureUpload.canAllocate(width: pixelWidth, height: pixelHeight, device: device) else {
+            metalView.contentTexture = nil
+            metalView.setNeedsDisplay()
+            return false
+        }
         guard pixelWidth > 0, pixelHeight > 0,
               let context = CGContext(
                   data: nil,
@@ -36,7 +62,7 @@ final class MarkdownPreviewMetalRenderer {
               ) else {
             metalView.contentTexture = nil
             metalView.setNeedsDisplay()
-            return
+            return false
         }
 
         context.scaleBy(x: scale, y: scale)
@@ -51,15 +77,15 @@ final class MarkdownPreviewMetalRenderer {
         )
 
         guard let image = context.makeImage(),
-              let device = MetalContext.shared.device,
               let texture = uploadTexture(from: image, device: device) else {
             metalView.contentTexture = nil
             metalView.setNeedsDisplay()
-            return
+            return false
         }
 
         metalView.contentTexture = texture
         metalView.setNeedsDisplay()
+        return true
     }
 
     func clear() {
@@ -70,6 +96,9 @@ final class MarkdownPreviewMetalRenderer {
     private func uploadTexture(from image: CGImage, device: MTLDevice) -> MTLTexture? {
         let width = image.width
         let height = image.height
+        guard MetalTextureUpload.canAllocate(width: width, height: height, device: device) else {
+            return nil
+        }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,

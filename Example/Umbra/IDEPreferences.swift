@@ -79,6 +79,7 @@ final class IDEPreferences: ObservableObject {
         textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared
+        textView.refreshGutterChrome()
     }
 
     func applyTheme() {

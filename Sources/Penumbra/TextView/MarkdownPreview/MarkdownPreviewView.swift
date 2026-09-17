@@ -35,6 +35,9 @@ public final class MarkdownPreviewView: NSView {
         }
     }
 
+    /// Invoked when the Metal path cannot rasterize the current layout (e.g. texture too large).
+    public var onMetalRenderingFailure: ((String) -> Void)?
+
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -98,12 +101,19 @@ public final class MarkdownPreviewView: NSView {
         }
 
         if useMetal {
-            metalRenderer.update(
+            let succeeded = metalRenderer.update(
                 layout: layout,
                 style: style,
                 rasterImages: rasterImages,
                 highlightedCode: highlightedCode
             )
+            if !succeeded {
+                let size = layout.contentSize
+                onMetalRenderingFailure?(
+                    "Markdown preview is too large for a Metal texture (\(Int(size.width))×\(Int(size.height)) pt)"
+                )
+                usesMetalRendering = false
+            }
         }
     }
 

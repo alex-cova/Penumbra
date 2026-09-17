@@ -1,6 +1,10 @@
 import Foundation
 @preconcurrency import AppKit
 
+/// The find/replace bar's content. Every color comes from the active `Theme`'s `findBar*`
+/// members (see `Theme.swift`) via `apply(theme:)`, so it always matches the host app's palette
+/// instead of falling back to stock AppKit chrome — no bezeled/bordered system text fields,
+/// titled `NSButton`s, or checkboxes.
 final class FindPanelBarView: NSView {
     var onFindTextChanged: ((String) -> Void)?
     var onReplaceTextChanged: ((String) -> Void)?
@@ -16,7 +20,7 @@ final class FindPanelBarView: NSView {
 
     var mode: FindPanelMode = .find {
         didSet {
-            replaceField.isHidden = mode == .find
+            replaceFieldContainer.isHidden = mode == .find
             replaceButton.isHidden = mode == .find
             replaceAllButton.isHidden = mode == .find
             invalidateIntrinsicContentSize()
@@ -46,24 +50,29 @@ final class FindPanelBarView: NSView {
     }
 
     let findField = FindPanelTextField()
-    let replaceField = NSTextField()
+    let replaceField = FindPanelTextField()
+    private let findFieldContainer: FindPanelFieldContainer
+    private let replaceFieldContainer: FindPanelFieldContainer
     private let matchLabel = NSTextField(labelWithString: "")
-    private let previousButton = NSButton(title: "Previous", target: nil, action: nil)
-    private let nextButton = NSButton(title: "Next", target: nil, action: nil)
+    private let previousButton = FindPanelIconButton(symbolName: "chevron.up", accessibilityLabel: "Previous Match")
+    private let nextButton = FindPanelIconButton(symbolName: "chevron.down", accessibilityLabel: "Next Match")
+    private let closeButton = FindPanelIconButton(symbolName: "xmark", accessibilityLabel: "Close")
     private let replaceButton = NSButton(title: "Replace", target: nil, action: nil)
     private let replaceAllButton = NSButton(title: "All", target: nil, action: nil)
-    private let closeButton = NSButton(title: "Done", target: nil, action: nil)
     private let modeControl = NSSegmentedControl(labels: ["Find", "Replace"], trackingMode: .selectOne, target: nil, action: nil)
-    private let matchCaseButton = NSButton(checkboxWithTitle: "Case", target: nil, action: nil)
-    private let wrapAroundButton = NSButton(checkboxWithTitle: "Wrap", target: nil, action: nil)
-    private let regexButton = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
+    private let matchCaseButton = FindPanelToggleButton(title: "Aa", accessibilityLabel: "Match Case")
+    private let regexButton = FindPanelToggleButton(title: ".*", accessibilityLabel: "Use Regular Expression")
+    private let wrapAroundButton = FindPanelToggleButton(symbolName: "repeat", accessibilityLabel: "Wrap Around")
+    private let hairlineView = NSView()
+    private var theme: Theme = DefaultTheme()
 
     override init(frame frameRect: NSRect) {
+        findFieldContainer = FindPanelFieldContainer(field: findField)
+        replaceFieldContainer = FindPanelFieldContainer(field: replaceField)
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        configureField(findField, placeholder: "Find")
-        configureField(replaceField, placeholder: "Replace")
+        findField.placeholderString = "Find"
+        replaceField.placeholderString = "Replace"
         findField.onReturn = { [weak self] shiftHeld in
             if shiftHeld {
                 self?.onPrevious?()
@@ -71,25 +80,23 @@ final class FindPanelBarView: NSView {
                 self?.onNext?()
             }
         }
+        findField.onEscape = { [weak self] in self?.onClose?() }
+        replaceField.onEscape = { [weak self] in self?.onClose?() }
         matchLabel.font = .systemFont(ofSize: 11)
-        matchLabel.textColor = .secondaryLabelColor
-        [previousButton, nextButton, replaceButton, replaceAllButton, closeButton].forEach {
-            $0.bezelStyle = .rounded
-        }
+        [previousButton, nextButton, closeButton].forEach { $0.target = self }
+        previousButton.action = #selector(previousClicked)
+        nextButton.action = #selector(nextClicked)
+        closeButton.action = #selector(closeClicked)
+        [replaceButton, replaceAllButton].forEach { $0.bezelStyle = .rounded }
         modeControl.selectedSegment = 0
         wrapAroundButton.state = .on
-        [findField, replaceField, matchLabel, modeControl, matchCaseButton, wrapAroundButton, regexButton,
+        [hairlineView, findFieldContainer, replaceFieldContainer, matchLabel, modeControl,
+         matchCaseButton, wrapAroundButton, regexButton,
          previousButton, nextButton, replaceButton, replaceAllButton, closeButton].forEach(addSubview)
-        previousButton.target = self
-        previousButton.action = #selector(previousClicked)
-        nextButton.target = self
-        nextButton.action = #selector(nextClicked)
         replaceButton.target = self
         replaceButton.action = #selector(replaceClicked)
         replaceAllButton.target = self
         replaceAllButton.action = #selector(replaceAllClicked)
-        closeButton.target = self
-        closeButton.action = #selector(closeClicked)
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         matchCaseButton.target = self
@@ -106,9 +113,10 @@ final class FindPanelBarView: NSView {
                                                selector: #selector(replaceFieldChanged),
                                                name: NSControl.textDidChangeNotification,
                                                object: replaceField)
-        replaceField.isHidden = true
+        replaceFieldContainer.isHidden = true
         replaceButton.isHidden = true
         replaceAllButton.isHidden = true
+        apply(theme: theme)
     }
 
     required init?(coder: NSCoder) {
@@ -119,12 +127,37 @@ final class FindPanelBarView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// `layer?.backgroundColor` above is baked to `CGColor` once, at init, so a dynamic
-    /// (appearance-adaptive) system color like `.windowBackgroundColor` goes stale if the
-    /// effective appearance changes afterward. Re-bake it whenever that happens.
+    /// Applies every `findBar*` color from `theme` — background, hairline, field chrome, text,
+    /// and the toggle pills' accent — so the bar matches the host app instead of a fixed system
+    /// look. Called once at init and again whenever `TextView.theme` is reassigned.
+    func apply(theme: Theme) {
+        self.theme = theme
+        layer?.backgroundColor = theme.findBarBackgroundColor.cgColor
+        hairlineView.layer?.backgroundColor = theme.findBarHairlineColor.cgColor
+        [findFieldContainer, replaceFieldContainer].forEach {
+            $0.apply(
+                backgroundColor: theme.findBarFieldBackgroundColor,
+                borderColor: theme.findBarFieldBorderColor,
+                accentColor: theme.findBarAccentColor,
+                textColor: theme.findBarTextColor,
+                placeholderColor: theme.findBarMutedTextColor
+            )
+        }
+        matchLabel.textColor = theme.findBarMutedTextColor
+        [previousButton, nextButton, closeButton].forEach { $0.tintColor = theme.findBarMutedTextColor }
+        [matchCaseButton, wrapAroundButton, regexButton].forEach {
+            $0.accentColor = theme.findBarAccentColor
+            $0.mutedColor = theme.findBarMutedTextColor
+        }
+        [replaceButton, replaceAllButton].forEach { $0.contentTintColor = theme.findBarTextColor }
+    }
+
+    /// `layer?.backgroundColor` above is baked to `CGColor` once, so a dynamic
+    /// (appearance-adaptive) color goes stale if the effective appearance changes afterward.
+    /// Re-bake every themed layer color whenever that happens.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        apply(theme: theme)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -133,31 +166,48 @@ final class FindPanelBarView: NSView {
 
     override func layout() {
         super.layout()
-        let padding: CGFloat = 8
-        let spacing: CGFloat = 6
+        let padding: CGFloat = 10
+        let spacing: CGFloat = 8
+        let rowHeight: CGFloat = 24
+        hairlineView.frame = CGRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
+
+        let topRowY = bounds.height - rowHeight - padding
         var x = padding
-        modeControl.frame = CGRect(x: x, y: bounds.height - 22 - padding, width: 120, height: 22)
+        modeControl.frame = CGRect(x: x, y: topRowY + 1, width: 108, height: rowHeight - 2)
         x = modeControl.frame.maxX + spacing
-        findField.frame = CGRect(x: x, y: bounds.height - 22 - padding, width: 180, height: 22)
-        x = findField.frame.maxX + spacing
-        if mode == .replace {
-            replaceField.frame = CGRect(x: padding + 126, y: bounds.height - 22 - padding - 26, width: 180, height: 22)
-        }
-        matchLabel.frame = CGRect(x: x, y: bounds.height - 18 - padding, width: 80, height: 16)
+        findFieldContainer.frame = CGRect(x: x, y: topRowY, width: 220, height: rowHeight)
+        x = findFieldContainer.frame.maxX + spacing
+        matchLabel.frame = CGRect(x: x, y: topRowY + 4, width: 50, height: 16)
         x = matchLabel.frame.maxX + spacing
-        previousButton.frame = CGRect(x: x, y: bounds.height - 24 - padding, width: 72, height: 24)
-        x = previousButton.frame.maxX + spacing
-        nextButton.frame = CGRect(x: x, y: bounds.height - 24 - padding, width: 56, height: 24)
-        x = nextButton.frame.maxX + spacing
+        previousButton.frame = CGRect(x: x, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
+        x = previousButton.frame.maxX + 4
+        nextButton.frame = CGRect(x: x, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
+
+        // Trailing cluster (toggle pills + close) is right-aligned so it stays put as the find
+        // field's row grows or shrinks.
+        let toggleWidth: CGFloat = 32
+        let toggleSpacing: CGFloat = 4
+        let trailingClusterWidth = toggleWidth * 3 + toggleSpacing * 2 + spacing + (rowHeight - 2)
+        var trailingX = bounds.width - padding - trailingClusterWidth
+        matchCaseButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingX = matchCaseButton.frame.maxX + toggleSpacing
+        regexButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingX = regexButton.frame.maxX + toggleSpacing
+        wrapAroundButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingX = wrapAroundButton.frame.maxX + spacing
+        closeButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
+
         if mode == .replace {
-            replaceButton.frame = CGRect(x: x, y: bounds.height - 24 - padding - 26, width: 72, height: 24)
-            replaceAllButton.frame = CGRect(x: replaceButton.frame.maxX + spacing, y: replaceButton.frame.maxY, width: 48, height: 24)
+            let secondRowY = topRowY - spacing - rowHeight
+            replaceFieldContainer.frame = CGRect(x: modeControl.frame.minX + modeControl.frame.width + spacing,
+                                                 y: secondRowY,
+                                                 width: 220,
+                                                 height: rowHeight)
+            var replaceX = replaceFieldContainer.frame.maxX + spacing
+            replaceButton.frame = CGRect(x: replaceX, y: secondRowY, width: 70, height: rowHeight)
+            replaceX = replaceButton.frame.maxX + spacing
+            replaceAllButton.frame = CGRect(x: replaceX, y: secondRowY, width: 50, height: rowHeight)
         }
-        closeButton.frame = CGRect(x: bounds.width - 56 - padding, y: bounds.height - 24 - padding, width: 56, height: 24)
-        let optionsY = bounds.height - 22 - padding - 26
-        matchCaseButton.frame = CGRect(x: padding, y: optionsY, width: 64, height: 18)
-        wrapAroundButton.frame = CGRect(x: matchCaseButton.frame.maxX + spacing, y: optionsY, width: 64, height: 18)
-        regexButton.frame = CGRect(x: wrapAroundButton.frame.maxX + spacing, y: optionsY, width: 72, height: 18)
     }
 
     func focusFindField(selecting selection: String? = nil) {
@@ -207,22 +257,172 @@ final class FindPanelBarView: NSView {
     @objc private func regexChanged() {
         onUsesRegularExpressionChanged?(regexButton.state == .on)
     }
+}
 
-    private func configureField(_ field: NSTextField, placeholder: String) {
-        field.placeholderString = placeholder
-        field.isBordered = true
-        field.isBezeled = true
-        field.bezelStyle = .roundedBezel
-        field.focusRingType = .exterior
+/// A borderless text field inside a token-colored, rounded container — the replacement for a
+/// system bezeled/bordered `NSTextField`. Its border brightens to the theme's accent color while
+/// the field is focused, tracked via first-responder notifications.
+private final class FindPanelFieldContainer: NSView {
+    private let field: NSTextField
+    private var isFocused = false
+    private var borderColor: NSColor = .separatorColor
+    private var accentColor: NSColor = .controlAccentColor
+
+    init(field: NSTextField) {
+        self.field = field
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 12)
+        addSubview(field)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(didBeginEditing),
+                                               name: NSControl.textDidBeginEditingNotification,
+                                               object: field)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(didEndEditing),
+                                               name: NSControl.textDidEndEditingNotification,
+                                               object: field)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func layout() {
+        super.layout()
+        // While hidden (e.g. the replace field in `.find` mode) this container is never given an
+        // explicit frame and stays at its `.zero` initial size — insetting that would hand the
+        // field a negative-size frame, which AppKit's geometry validation flags as invalid.
+        guard bounds.width > 16, bounds.height > 6 else {
+            field.frame = .zero
+            return
+        }
+        field.frame = bounds.insetBy(dx: 8, dy: 3)
+    }
+
+    func apply(backgroundColor: NSColor, borderColor: NSColor, accentColor: NSColor, textColor: NSColor, placeholderColor: NSColor) {
+        self.borderColor = borderColor
+        self.accentColor = accentColor
+        layer?.backgroundColor = backgroundColor.cgColor
+        field.textColor = textColor
+        if let placeholder = field.placeholderString {
+            field.placeholderAttributedString = NSAttributedString(
+                string: placeholder,
+                attributes: [.foregroundColor: placeholderColor, .font: field.font ?? .systemFont(ofSize: 12)]
+            )
+        }
+        updateBorder()
+    }
+
+    @objc private func didBeginEditing() {
+        isFocused = true
+        updateBorder()
+    }
+
+    @objc private func didEndEditing() {
+        isFocused = false
+        updateBorder()
+    }
+
+    private func updateBorder() {
+        layer?.borderColor = (isFocused ? accentColor : borderColor).cgColor
+    }
+}
+
+/// A compact, icon-only action button (previous/next/close) with no bezel — SF Symbol content
+/// tinted by ``tintColor`` instead of a titled system button.
+private final class FindPanelIconButton: NSButton {
+    var tintColor: NSColor = .secondaryLabelColor {
+        didSet { contentTintColor = tintColor }
+    }
+
+    init(symbolName: String, accessibilityLabel: String) {
+        super.init(frame: .zero)
+        let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)?
+            .withSymbolConfiguration(symbolConfiguration)
+        imageScaling = .scaleProportionallyDown
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        setAccessibilityLabel(accessibilityLabel)
+        toolTip = accessibilityLabel
+        contentTintColor = tintColor
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+/// A small pill toggle (Case/Regex/Wrap Around) using AppKit's `.inline` bezel — the same native
+/// style macOS uses for exactly this "search option chip" pattern — tinted by ``accentColor``
+/// while on and ``mutedColor`` while off, instead of a titled checkbox.
+private final class FindPanelToggleButton: NSButton {
+    var accentColor: NSColor = .controlAccentColor {
+        didSet { updateAppearance() }
+    }
+    var mutedColor: NSColor = .secondaryLabelColor {
+        didSet { updateAppearance() }
+    }
+
+    override var state: NSControl.StateValue {
+        didSet { updateAppearance() }
+    }
+
+    init(title: String, accessibilityLabel: String) {
+        super.init(frame: .zero)
+        self.title = title
+        commonInit(accessibilityLabel: accessibilityLabel)
+    }
+
+    init(symbolName: String, accessibilityLabel: String) {
+        super.init(frame: .zero)
+        let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+        image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)?
+            .withSymbolConfiguration(symbolConfiguration)
+        commonInit(accessibilityLabel: accessibilityLabel)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func commonInit(accessibilityLabel: String) {
+        setButtonType(.pushOnPushOff)
+        bezelStyle = .inline
+        font = .systemFont(ofSize: 11, weight: .medium)
+        setAccessibilityLabel(accessibilityLabel)
+        toolTip = accessibilityLabel
+        updateAppearance()
+    }
+
+    private func updateAppearance() {
+        contentTintColor = state == .on ? accentColor : mutedColor
     }
 }
 
 final class FindPanelTextField: NSTextField {
     var onReturn: ((Bool) -> Void)?
+    var onEscape: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76 {
             onReturn?(event.modifierFlags.contains(.shift))
+            return
+        }
+        if event.keyCode == 53 {
+            onEscape?()
             return
         }
         super.keyDown(with: event)

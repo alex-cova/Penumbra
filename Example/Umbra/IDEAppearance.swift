@@ -9,17 +9,38 @@ enum IDEAppearance {
         static let sm = 8.0
         static let md = 12.0
         static let lg = 16.0
+        static let xl = 24.0
+        static let xxl = 32.0
         static let sidebarWidth = 220.0
         static let sidebarMinWidth = 160.0
         static let sidebarMaxWidth = 420.0
         static let tabHeight = 36.0
         static let statusBarHeight = 24.0
+        static let welcomeMaxWidth = 520.0
+        static let settingsWidth = 480.0
+        static let settingsMinHeight = 460.0
         /// Space reserved so traffic lights do not overlap the first chrome row.
         static let trafficLightsInset = 78.0
     }
 
     enum Radius {
         static let control = 6.0
+        static let card = 8.0
+    }
+
+    enum Typography {
+        static let brandTitle = Font.system(.title, design: .default).weight(.semibold)
+        static let sectionHeader = Font.system(.caption, design: .default).weight(.semibold)
+        static let body = Font.system(.subheadline)
+        static let caption = Font.system(.caption)
+        static let monoCaption = Font.system(.caption, design: .monospaced)
+        static let monoSmall = Font.system(size: 11, design: .monospaced)
+        static let tabLabel = Font.system(size: 12)
+        static let sidebarHeader = Font.system(size: 11, weight: .semibold)
+    }
+
+    enum Motion {
+        static let spring = Animation.spring(duration: 0.35, bounce: 0.15)
     }
 
     enum ColorToken {
@@ -65,5 +86,20 @@ extension Color {
         let green = Double((hex >> 8) & 0xFF) / 255
         let blue = Double(hex & 0xFF) / 255
         self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
+    }
+}
+
+/// File-type SF Symbol lookup shared by the file tree and Find in Files rows, so a given
+/// extension always gets the same glyph wherever a file is listed.
+enum IDEFileIcon {
+    static func systemName(forFilename filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "swift": "swift"
+        case "js", "jsx", "ts", "tsx": "curlybraces"
+        case "json": "curlybraces.square"
+        case "md", "markdown": "text.book.closed"
+        case "py": "chevron.left.forwardslash.chevron.right"
+        default: "doc.text"
+        }
     }
 }

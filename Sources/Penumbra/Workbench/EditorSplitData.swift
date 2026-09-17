@@ -43,6 +43,9 @@ public final class EditorSplitData: @unchecked Sendable {
             child.flatten()
             children[index] = child
         }
+        // A nested split can collapse to zero children (e.g. a stale restored
+        // layout); prune it here so no empty split node reaches rendering.
+        children.removeAll { $0.isEmptyContainer }
         if children.count == 1 {
             // Caller replaces container when collapsing; nested flatten handles descendants.
         }

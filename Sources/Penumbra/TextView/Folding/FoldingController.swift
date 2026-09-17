@@ -350,6 +350,13 @@ private extension FoldingController {
     private func recompute() {
         PenumbraSignposts.interval("FoldingController.recompute") {
             let lineCount = lineManager.lineCount
+            if lineCount > EditorPerformanceConstants.maxFoldRecomputeLineCount {
+                pendingFullRecompute = false
+                pendingDirtyRows = nil
+                lastScannedLineCount = 0
+                applyRecomputedFolds([])
+                return
+            }
             if pendingFullRecompute || pendingDirtyRows == nil || lineCount == 0 {
                 pendingFullRecompute = false
                 pendingDirtyRows = nil

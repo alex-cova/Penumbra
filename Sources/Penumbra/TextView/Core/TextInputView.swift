@@ -1591,6 +1591,12 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.redisplayVisibleLines()
     }
 
+    func refreshGutterChrome() {
+        gutterWidthService.invalidateLineNumberWidth()
+        layoutManager.refreshGutterChrome()
+        setNeedsLayout()
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if hasPendingFullLayout && window != nil {

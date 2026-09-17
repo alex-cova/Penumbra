@@ -24,17 +24,7 @@ struct IDEFileTreeView: View {
                     .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
             } else {
-                VStack(spacing: IDEAppearance.Spacing.sm) {
-                    Image(systemName: "folder")
-                        .font(.title2)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    Text("No Folder Open")
-                        .font(.subheadline)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    Button("Open Folder…", action: onOpenFolder)
-                        .buttonStyle(.bordered)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                IDEFileTreeEmptyState(onOpenFolder: onOpenFolder)
             }
         }
     }
@@ -60,6 +50,30 @@ struct IDEFileTreeView: View {
     }
 }
 
+private struct IDEFileTreeEmptyState: View {
+    let onOpenFolder: () -> Void
+
+    var body: some View {
+        VStack(spacing: IDEAppearance.Spacing.md) {
+            Image(systemName: "folder.badge.plus")
+                .font(.title2)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("No Folder Open")
+                .font(IDEAppearance.Typography.body)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            Text("Open a project folder to browse files.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .multilineTextAlignment(.center)
+            Button("Open Folder…", systemImage: "folder", action: onOpenFolder)
+                .buttonStyle(.bordered)
+                .tint(IDEAppearance.ColorToken.accent)
+        }
+        .padding(IDEAppearance.Spacing.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 private struct IDEFileTreeRow: View {
     let node: IDEFileNode
     let depth: Int
@@ -81,7 +95,7 @@ private struct IDEFileTreeRow: View {
                 Spacer().frame(width: 12)
             }
 
-            Image(systemName: node.isDirectory ? "folder" : iconName(for: node.name))
+            Image(systemName: node.isDirectory ? "folder" : IDEFileIcon.systemName(forFilename: node.name))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(width: 14)
 
@@ -111,16 +125,5 @@ private struct IDEFileTreeRow: View {
 
     private var displayName: String {
         node.isDirectory && depth == 0 ? node.url.lastPathComponent : node.name
-    }
-
-    private func iconName(for filename: String) -> String {
-        switch (filename as NSString).pathExtension.lowercased() {
-        case "swift": "swift"
-        case "js", "jsx", "ts", "tsx": "curlybraces"
-        case "json": "curlybraces.square"
-        case "md", "markdown": "text.book.closed"
-        case "py": "chevron.left.forwardslash.chevron.right"
-        default: "doc.text"
-        }
     }
 }

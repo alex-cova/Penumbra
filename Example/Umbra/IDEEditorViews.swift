@@ -100,11 +100,8 @@ struct IDEEditorLayoutNode: View {
     var body: some View {
         switch layout {
         case .pane(let pane):
-            IDEEditorPaneView(
-                paneID: pane.id,
-                padTrafficLights: isTopLeading && !workspace.isSidebarVisible
-            )
-            .id(pane.id)
+            IDEEditorPaneView(paneID: pane.id, isTopLeading: isTopLeading)
+                .id(pane.id)
         case .vertical(let data):
             IDESplitStack(axis: .horizontal, childCount: data.children.count) { index in
                 IDEEditorLayoutNode(
@@ -126,13 +123,21 @@ struct IDEEditorLayoutNode: View {
 struct IDEEditorPaneView: View {
     @EnvironmentObject private var workspace: IDEWorkspace
     let paneID: UUID
-    var padTrafficLights: Bool = false
+    var isTopLeading: Bool = false
+
+    /// Whether this pane's tab bar needs to reserve room for the traffic lights itself. When the
+    /// sidebar is showing, or the Find in Files drawer is up, one of those already claims the
+    /// inset (see `IDESidebarPanel`/`IDERootView`), so the tab bar underneath must not also claim it.
+    private var padTrafficLights: Bool {
+        isTopLeading && !workspace.showsSidebar && !workspace.isFindInFilesVisible
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             IDEEditorTabsBar(
                 paneID: paneID,
-                leadingInset: padTrafficLights ? IDEAppearance.Spacing.trafficLightsInset : 0
+                leadingInset: padTrafficLights ? IDEAppearance.Spacing.trafficLightsInset : 0,
+                showsSidebarToggle: isTopLeading
             )
             .opacity(workspace.chromeOpacity)
 
@@ -159,7 +164,9 @@ struct IDESplitStack<Content: View>: View {
 
     var body: some View {
         Group {
-            if childCount <= 1 {
+            if childCount <= 0 {
+                Color.clear
+            } else if childCount == 1 {
                 content(0)
             } else {
                 GeometryReader { geometry in

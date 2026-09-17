@@ -11,32 +11,37 @@ struct IDERootView: View {
         let _ = workspace.layoutEpoch
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                if workspace.isSidebarVisible {
+                if workspace.showsSidebar {
                     IDESidebarPanel(leadingInset: IDEAppearance.Spacing.trafficLightsInset)
                         .frame(width: sidebarWidth)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
 
                     IDESidebarResizeHandle(width: $sidebarWidth)
                         .opacity(workspace.chromeOpacity)
+                        .transition(.opacity)
                 }
 
-                ZStack {
-                    if workspace.showsWelcome && !workspace.hasOpenDocuments {
-                        IDEWelcomeView()
-                    } else {
-                        IDEEditorLayoutNode(layout: workspace.editorLayout)
-                            .id("editor-layout")
+                VStack(spacing: 0) {
+                    if workspace.isFindInFilesVisible {
+                        FindInFilesPanel(leadingInset: workspace.showsSidebar ? 0 : IDEAppearance.Spacing.trafficLightsInset)
+                            .opacity(workspace.chromeOpacity)
+                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
-                }
-                .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
-            }
 
-            if workspace.isFindInFilesVisible {
-                FindInFilesPanel()
-                    .opacity(workspace.chromeOpacity)
-                    .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                    ZStack {
+                        if workspace.showsWelcome && !workspace.hasOpenDocuments {
+                            IDEWelcomeView()
+                        } else {
+                            IDEEditorLayoutNode(layout: workspace.editorLayout)
+                                .id("editor-layout")
+                        }
+                    }
+                    .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
+                }
             }
+            .animation(IDEAppearance.Motion.spring, value: workspace.showsSidebar)
 
             IDEStatusBarPanel()
                 .opacity(workspace.chromeOpacity)
@@ -45,32 +50,26 @@ struct IDERootView: View {
         .background(IDEAppearance.ColorToken.workbench)
         .background(IDEWindowConfigurator(title: workspace.windowTitle))
         .preferredColorScheme(.dark)
-        .onAppear(perform: bootstrapIfNeeded)
-        .onChange(of: sidebarWidth) { _ in
-            workspace.saveSession(sidebarWidth: sidebarWidth)
+        .task {
+            guard !didBootstrap else { return }
+            didBootstrap = true
+            workspace.bootstrap()
+            workspace.focusActiveEditor()
+        }
+        .onChange(of: sidebarWidth) { newWidth in
+            workspace.saveSession(sidebarWidth: newWidth)
         }
         .focusable(false)
     }
 
-    private func bootstrapIfNeeded() {
-        guard !didBootstrap else { return }
-        didBootstrap = true
-        workspace.bootstrap()
-        workspace.focusActiveEditor()
-    }
-
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        var urls: [URL] = []
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { item, _ in
                 if let url = item {
-                    DispatchQueue.main.async {
+                    Task { @MainActor in
                         workspace.openDroppedURLs([url])
                     }
                 }
-            }
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                urls.append(URL(fileURLWithPath: "/")) // placeholder; async load handles real URLs
             }
         }
         return !providers.isEmpty

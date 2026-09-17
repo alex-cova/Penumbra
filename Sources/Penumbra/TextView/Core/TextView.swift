@@ -137,6 +137,7 @@ public struct MetalPerformanceStats: Sendable {
         set {
             textInputView.theme = newValue
             minimapView.applyTheme()
+            findPanelController.panelView.apply(theme: newValue)
         }
     }
     /// The autocorrection style for the text view.
@@ -435,6 +436,12 @@ public struct MetalPerformanceStats: Sendable {
             textInputView.showLineNumbers = newValue
         }
     }
+
+    /// Re-syncs gutter visibility and line-number layout after wholesale state changes.
+    public func refreshGutterChrome() {
+        textInputView.refreshGutterChrome()
+    }
+
     /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
     /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
     /// simply take up zero height, so scrolling and hit-testing already skip them for free — with
@@ -1186,6 +1193,17 @@ public struct MetalPerformanceStats: Sendable {
         textInputView.handleBackingPropertiesChange()
     }
 
+    /// Adds the space reserved for the top-anchored find bar (``findPanelTopInset``) on top of
+    /// whatever inset the host configured, so scrolling-to-top rests below the bar instead of
+    /// under it. Every consumer of `adjustedContentInset` — `scrollViewport(at:)`,
+    /// `minimumContentOffset`/`maximumContentOffset`, typewriter scrolling — picks this up for
+    /// free.
+    override open var adjustedContentInset: UIEdgeInsets {
+        var inset = contentInset
+        inset.top += findPanelTopInset
+        return inset
+    }
+
     override open func layoutSubviews() {
         super.layoutSubviews()
         // SwiftUI often sizes the host after the first setState. Without
@@ -1233,7 +1251,7 @@ public struct MetalPerformanceStats: Sendable {
         }
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
         findPanelController.panelView.frame = CGRect(x: 0,
-                                                     y: bounds.height - panelHeight,
+                                                     y: 0,
                                                      width: bounds.width - reservedMinimapWidth,
                                                      height: panelHeight)
         if shouldReanchorAfterLayout {
@@ -2685,12 +2703,27 @@ extension TextView: FindPanelTarget {
     }
 
     func findPanelWillShow(panelHeight: CGFloat) {
-        findPanelTopInset = panelHeight
-        setNeedsLayout()
+        setFindPanelTopInset(panelHeight)
     }
 
     func findPanelWillHide(panelHeight: CGFloat) {
-        findPanelTopInset = 0
+        setFindPanelTopInset(0)
+    }
+
+    /// Grows or shrinks the space reserved for the top-anchored find bar, translating
+    /// `contentOffset` by exactly the change so already-visible text stays visible — pushed down
+    /// (or back up) by the bar rather than left to scroll out from under it. Also covers the
+    /// Find ↔ Replace mode toggle, which changes `panelHeight` while the bar is already showing,
+    /// by reading the *current* `findPanelTopInset` rather than assuming a fresh open from zero.
+    private func setFindPanelTopInset(_ newInset: CGFloat) {
+        let delta = newInset - findPanelTopInset
+        findPanelTopInset = newInset
+        guard delta != 0 else {
+            setNeedsLayout()
+            return
+        }
+        let clampedY = min(max(contentOffset.y - delta, minimumContentOffset.y), maximumContentOffset.y)
+        contentOffset = CGPoint(x: contentOffset.x, y: clampedY)
         setNeedsLayout()
     }
 

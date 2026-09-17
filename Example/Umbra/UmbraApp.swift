@@ -72,35 +72,25 @@ struct UmbraApp: App {
                 Button("Close Editor Group", systemImage: "rectangle.slash", action: workspace.closeActivePane)
                 Divider()
                 Button("Toggle Sidebar", systemImage: "sidebar.leading", action: workspace.toggleSidebar)
+                    .keyboardShortcut("0", modifiers: .command)
+                    .disabled(!workspace.isSidebarAvailable)
+                Button("Markdown Preview", systemImage: "doc.richtext", action: workspace.toggleMarkdownPreview)
                     .keyboardShortcut("b", modifiers: .command)
-                Toggle("Line Numbers", isOn: Binding(
-                    get: { workspace.preferences.showLineNumbers },
-                    set: { _ in workspace.toggleLineNumbers() }
-                ))
-                Toggle("Code Folding", isOn: Binding(
-                    get: { workspace.preferences.isLineFoldingEnabled },
-                    set: { _ in workspace.toggleFolding() }
-                ))
-                Toggle("Word Wrap", isOn: Binding(
-                    get: { workspace.preferences.wrapLines },
-                    set: { _ in workspace.toggleWordWrap() }
-                ))
-                Toggle("Minimap", isOn: Binding(
-                    get: { workspace.preferences.showMinimap },
-                    set: { _ in workspace.toggleMinimap() }
-                ))
+                Toggle("Line Numbers", isOn: workspace.showLineNumbersBinding)
+                Toggle("Code Folding", isOn: workspace.isLineFoldingEnabledBinding)
+                Toggle("Word Wrap", isOn: workspace.wrapLinesBinding)
+                Toggle("Minimap", isOn: workspace.showMinimapBinding)
                 Divider()
                 Button("Toggle Typewriter Scrolling", action: workspace.toggleTypewriterScrolling)
                 Button("Toggle Distraction Free", action: workspace.toggleDistractionFreeMode)
-                Toggle("Use Metal Renderer", isOn: Binding(
-                    get: { workspace.preferences.isMetalRenderingEnabled },
-                    set: { _ in workspace.toggleMetalRendering() }
-                ))
+                Toggle("Use Metal Renderer", isOn: workspace.isMetalRenderingEnabledBinding)
             }
 
             CommandGroup(after: .appInfo) {
-                Button("Settings…", action: showSettings)
-                    .keyboardShortcut(",", modifiers: .command)
+                if #unavailable(macOS 13) {
+                    Button("Settings…", action: showSettings)
+                        .keyboardShortcut(",", modifiers: .command)
+                }
             }
 
             CommandGroup(replacing: .help) {
@@ -111,14 +101,35 @@ struct UmbraApp: App {
                 }
             }
         }
+
+        settingsScene
+    }
+
+    @SceneBuilder
+    private var settingsScene: some Scene {
+        if #available(macOS 13, *) {
+            Settings {
+                IDEPreferencesView(preferences: workspace.preferences)
+                    .environmentObject(workspace)
+            }
+        }
     }
 
     private func showSettings() {
-        let controller = NSHostingController(rootView: IDEPreferencesView(preferences: workspace.preferences))
+        let controller = NSHostingController(
+            rootView: IDEPreferencesView(preferences: workspace.preferences)
+                .environmentObject(workspace)
+        )
         let window = NSWindow(contentViewController: controller)
         window.title = "Umbra Settings"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 460, height: 400))
+        window.backgroundColor = IDEAppearance.NSToken.workbench
+        window.setContentSize(
+            NSSize(
+                width: IDEAppearance.Spacing.settingsWidth,
+                height: IDEAppearance.Spacing.settingsMinHeight
+            )
+        )
         window.center()
         window.makeKeyAndOrderFront(nil)
     }

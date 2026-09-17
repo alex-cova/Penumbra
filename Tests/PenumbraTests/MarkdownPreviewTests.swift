@@ -136,6 +136,29 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(metalView?.isHidden == true, "Metal canvas should stay hidden when CG path is active")
     }
 
+    @MainActor
+    func testMetalPreviewFallsBackWhenLayoutExceedsTextureLimits() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        var failureReason: String?
+        preview.onMetalRenderingFailure = { failureReason = $0 }
+        preview.usesMetalRendering = true
+
+        let maxDimension = MetalTextureUpload.maxTextureDimension
+        let tallHeight = CGFloat(maxDimension + 100)
+        let layout = MarkdownPreviewLayout(
+            blockLayouts: [],
+            contentSize: CGSize(width: 320, height: tallHeight)
+        )
+        preview.applyLayout(layout)
+
+        XCTAssertFalse(preview.usesMetalRendering)
+        XCTAssertNotNil(failureReason)
+    }
+
     func testMermaidErrorForInvalidDiagram() async {
         let result = await MermaidPaintAdapter.render(
             source: "gantt\n  title Bad\n  section A\n  task : 2024-01-01, 1d",
