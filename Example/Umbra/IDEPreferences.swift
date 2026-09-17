@@ -1,5 +1,5 @@
 import AppKit
-import Runestone
+import Penumbra
 import SwiftUI
 
 @MainActor

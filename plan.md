@@ -1,18 +1,18 @@
-# Metal Rendering for Runestone
+# Metal Rendering for Penumbra
 
 | Field | Value |
 | --- | --- |
 | **Author** | TBD |
 | **Date** | 2026-09-05 |
 | **Status** | Draft (open questions resolved 2026-09-05) |
-| **Audience** | Runestone engine maintainers |
-| **Scope** | `Sources/Runestone/TextView` drawing path only. No EIP, Tree-sitter, or storage changes. |
+| **Audience** | Penumbra engine maintainers |
+| **Scope** | `Sources/Penumbra/TextView` drawing path only. No EIP, Tree-sitter, or storage changes. |
 
 ---
 
 ## Overview
 
-Runestone paints every visible line fragment with a dedicated `NSView` (`LineFragmentView`) whose `draw(_:)` calls `CTLineDraw` into a Core Graphics context. Layout, typesetting, hit-testing, and IME already scale with the viewport — the red-black-tree `LineManager`, incremental `LineTypesetter`, and `ViewReuseQueue` are not the problem. The problem is the per-fragment view/layer tax: on a typical retina viewport Runestone currently owns ~80–150 layer-backed views, each CPU-rasterizing glyphs into its own backing store on every invalidation, then asking Core Animation to composite them.
+Penumbra paints every visible line fragment with a dedicated `NSView` (`LineFragmentView`) whose `draw(_:)` calls `CTLineDraw` into a Core Graphics context. Layout, typesetting, hit-testing, and IME already scale with the viewport — the red-black-tree `LineManager`, incremental `LineTypesetter`, and `ViewReuseQueue` are not the problem. The problem is the per-fragment view/layer tax: on a typical retina viewport Penumbra currently owns ~80–150 layer-backed views, each CPU-rasterizing glyphs into its own backing store on every invalidation, then asking Core Animation to composite them.
 
 This design introduces an opt-in Metal canvas that **replaces only the glyph-and-decoration paint** of those fragment views. Core Text remains the typesetter. `TextInputView` remains the first responder and `NSTextInputClient`. Gutter, minimap, caret, selection handles, page guide, find panel, and ghost text stay AppKit views.
 
@@ -49,16 +49,16 @@ Concrete types:
 
 | Stage | Type | File |
 | --- | --- | --- |
-| Scroll / viewport | `TextView.contentOffset` forces `textInputView.layoutIfNeeded()` | `Sources/Runestone/TextView/Core/TextView.swift` (~349–363, 1030–1052) |
-| Layout | `LayoutManager.layoutLinesInViewport()` | `Sources/Runestone/TextView/Core/LayoutManager.swift` (~488–590) |
-| Typesetting | `LineTypesetter.makeLineFragment` → `CTTypesetterCreateLine` | `Sources/Runestone/TextView/LineController/LineTypesetter.swift` (~219–244) |
-| Per-fragment view | `LineFragmentView.draw` | `Sources/Runestone/TextView/Core/LineFragmentView.swift` (~32–36) |
-| Glyph paint | `LineFragmentRenderer.drawText` → `CTLineDraw` | `Sources/Runestone/TextView/LineController/LineFragmentRenderer.swift` (~285–293) |
+| Scroll / viewport | `TextView.contentOffset` forces `textInputView.layoutIfNeeded()` | `Sources/Penumbra/TextView/Core/TextView.swift` (~349–363, 1030–1052) |
+| Layout | `LayoutManager.layoutLinesInViewport()` | `Sources/Penumbra/TextView/Core/LayoutManager.swift` (~488–590) |
+| Typesetting | `LineTypesetter.makeLineFragment` → `CTTypesetterCreateLine` | `Sources/Penumbra/TextView/LineController/LineTypesetter.swift` (~219–244) |
+| Per-fragment view | `LineFragmentView.draw` | `Sources/Penumbra/TextView/Core/LineFragmentView.swift` (~32–36) |
+| Glyph paint | `LineFragmentRenderer.drawText` → `CTLineDraw` | `Sources/Penumbra/TextView/LineController/LineFragmentRenderer.swift` (~285–293) |
 | Decorations | highlights, marked text, invisibles, fold placeholder | same renderer |
-| View reuse | `ViewReuseQueue<LineFragmentID, LineFragmentView>` | `Sources/Runestone/Library/ViewReuseQueue.swift` |
+| View reuse | `ViewReuseQueue<LineFragmentID, LineFragmentView>` | `Sources/Penumbra/Library/ViewReuseQueue.swift` |
 | Hit testing | `CTLineGetStringIndexForPosition` | `LineController.closestIndex(to:)` |
 
-`LineFragmentView` sets `backgroundColor = .clear`. `UIView.backgroundColor`'s `didSet` (`Sources/Runestone/Library/UIKitCompatibility/UIView.swift`) turns on `wantsLayer = true`. Every visible fragment is therefore a layer-backed `NSView`. `layoutLineFragmentView` parents it under `linesContainerView`, which itself is a full-`contentSize` child of `TextInputView`.
+`LineFragmentView` sets `backgroundColor = .clear`. `UIView.backgroundColor`'s `didSet` (`Sources/Penumbra/Library/UIKitCompatibility/UIView.swift`) turns on `wantsLayer = true`. Every visible fragment is therefore a layer-backed `NSView`. `layoutLineFragmentView` parents it under `linesContainerView`, which itself is a full-`contentSize` child of `TextInputView`.
 
 ### What already scales
 
@@ -247,7 +247,7 @@ Do **not** key by `CFHash(CGFont)` alone — synthetic italic is often the same 
 
 Coverage glyphs live in one or more 2048×2048 `R8Unorm` pages. Color glyphs live in 1024×1024 `BGRA8Unorm` pages.
 
-**Threading:** v1 `GlyphAtlas` is `@MainActor`. Lookup, raster, `replace`/blit, and cache insert all happen on the main thread. There is **no** `MTLSharedEvent` in v1. The only allowed background work is a serial queue `runestone.glyph-atlas.prewarm` that builds **CPU bitmaps** for Latin-1 of `theme.font` plus line-number digits; the main actor uploads and inserts them. Off-thread encode is v2.
+**Threading:** v1 `GlyphAtlas` is `@MainActor`. Lookup, raster, `replace`/blit, and cache insert all happen on the main thread. There is **no** `MTLSharedEvent` in v1. The only allowed background work is a serial queue `penumbra.glyph-atlas.prewarm` that builds **CPU bitmaps** for Latin-1 of `theme.font` plus line-number digits; the main actor uploads and inserts them. Off-thread encode is v2.
 
 **Storage mode:** pick from `device.hasUnifiedMemory`:
 
@@ -270,7 +270,7 @@ This is part of PR 2, not later hardening. Sampling a Shared atlas over PCIe on 
 
 Do **not** use `MTKView`. It brings MetalKit, owns its own display link, and fights AppKit layout.
 
-This port’s `UIView` is `open class UIView: NSView` (`Sources/Runestone/Library/UIKitCompatibility/UIView.swift`) and does **not** define `layerClass`. AppKit’s hook is `makeBackingLayer()`. Do not add a fake `layerClass` to the UIKit shim.
+This port’s `UIView` is `open class UIView: NSView` (`Sources/Penumbra/Library/UIKitCompatibility/UIView.swift`) and does **not** define `layerClass`. AppKit’s hook is `makeBackingLayer()`. Do not add a fake `layerClass` to the UIKit shim.
 
 **v1 pick: view-follows-viewport, transparent canvas, child of `TextInputView`.**
 
@@ -294,7 +294,7 @@ Z-order by PR:
 | PR 1 | Child of `TextInputView`, **behind** `linesContainerView` (insert below it). Hidden unless the flag is on. Clears transparent. | Still `LineFragmentView`s (z-order check: fragments on top of an empty/transparent canvas) |
 | PR 4+ | Same parent, **in front of** `linesContainerView` and **behind** `selectionOverlayView`. `linesContainerView` has no fragment subviews when Metal is active. | Metal |
 
-`MetalTextCanvasView` (`Sources/Runestone/TextView/Metal/MetalTextCanvasView.swift`):
+`MetalTextCanvasView` (`Sources/Penumbra/TextView/Metal/MetalTextCanvasView.swift`):
 
 - Subclass of `UIView` (flipped `NSView`).
 - `wantsLayer = true`.
@@ -401,7 +401,7 @@ destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
 Coverage fragment: `out = SIMD4(color.rgb * coverage, color.a * coverage)` where `coverage = sample.r` of the R8 atlas and `color` is already premultiplied sRGB (focus alpha included). Color-glyph fragment: sample BGRA from `CTFontDrawGlyphs` into a `.premultipliedLast` bitmap; treat as premultiplied. If a snapshot shows dark fringes, premultiply in the rasterizer (`rgb *= a`) — verify in PR 2’s emoji readback test, do not guess in the shader.
 
-Shaders are a Swift `StaticString` on `MetalContext`, compiled once via `device.makeLibrary(source:options:)` and cached on the context. **Do not add a `.metal` file under `Sources/Runestone/`** — SPM would treat it as an unhandled source (`Package.swift` currently `resources: [.copy("PrivacyInfo.xcprivacy"), .process("TextView/Appearance/Theme.xcassets")]`). 10–20 ms once per process is acceptable versus typesetting a file; time it in PerfHarness, do not gate CI on it.
+Shaders are a Swift `StaticString` on `MetalContext`, compiled once via `device.makeLibrary(source:options:)` and cached on the context. **Do not add a `.metal` file under `Sources/Penumbra/`** — SPM would treat it as an unhandled source (`Package.swift` currently `resources: [.copy("PrivacyInfo.xcprivacy"), .process("TextView/Appearance/Theme.xcassets")]`). 10–20 ms once per process is acceptable versus typesetting a file; time it in PerfHarness, do not gate CI on it.
 
 - `text_vertex` / `text_fragment`: per-instance `GlyphInstance`. Coverage path as above.
 - `color_glyph_fragment`: sample BGRA, output the sample (premultiplied), multiply alpha by instance alpha (focus dim).
@@ -553,7 +553,7 @@ Dirty rects vs full viewport: `CAMetalLayer` presents a full drawable. We always
 ### 6. Fallback
 
 ```swift
-// Sources/Runestone/TextView/Core/TextView.swift
+// Sources/Penumbra/TextView/Core/TextView.swift
 extension TextView {
     /// Host-controlled preference. Default `false` under XCTest and in PRs 1–8;
     /// `true` in production after PR 9. Ignored when no Metal device exists.
@@ -565,7 +565,7 @@ extension TextView {
 }
 
 enum MetalActivation {
-    static let defaultsKey = "RunestoneMetalRendering"
+    static let defaultsKey = "PenumbraMetalRendering"
 
     /// Single resolution function. Call from `TextView` init and on flag/defaults change.
     static func resolved(
@@ -590,7 +590,7 @@ enum MetalActivation {
 | absent | `true` | yes | on | production after PR 9 |
 | absent | `false` | `*` | off | XCTest, and PRs 1–8 default |
 
-QA during PRs 1–8 enables Metal with the Umbra menu (`isMetalRenderingEnabled = true`), not with UserDefaults. `RunestoneMetalRendering=true` cannot override a false property.
+QA during PRs 1–8 enables Metal with the Umbra menu (`isMetalRenderingEnabled = true`), not with UserDefaults. `PenumbraMetalRendering=true` cannot override a false property.
 
 `LayoutManager` keeps **both** backends compiled. The CG path is not `#if`'d out. Switching the flag at runtime:
 
@@ -688,7 +688,7 @@ Do not lower the 128k overflow valve: a 200-fragment × ~180 glyph viewport is a
 
 | Layer | What | Where |
 | --- | --- | --- |
-| Unit | `GlyphRunExtractor` vs a known `CTLine`: glyph count, first/last positions equal `CTLineGetOffsetForStringIndex` for ASCII; baseline Y matches `paddingTop + baseSize.height - descent`; ligature via **Hoefler Text** (`NSFont(name: "HoeflerText-Regular", size:)` + `kCTLigatureAttributeName = 2`) — skip *that one test* only if the system face is nil (should not happen on macOS 12); combining mark `"e\u{0301}"` produces ≥2 glyphs; emoji ZWJ requires **Apple Color Emoji** by name (`isColor == true`); italic `withSymbolicTraits` vs regular asserts quad width is larger by **roughly the shear, not ~shear²** (guards double-applied `CTFontGetMatrix`) and a different `matrixHash` | `Tests/RunestoneTests/GlyphRunExtractorTests.swift` |
+| Unit | `GlyphRunExtractor` vs a known `CTLine`: glyph count, first/last positions equal `CTLineGetOffsetForStringIndex` for ASCII; baseline Y matches `paddingTop + baseSize.height - descent`; ligature via **Hoefler Text** (`NSFont(name: "HoeflerText-Regular", size:)` + `kCTLigatureAttributeName = 2`) — skip *that one test* only if the system face is nil (should not happen on macOS 12); combining mark `"e\u{0301}"` produces ≥2 glyphs; emoji ZWJ requires **Apple Color Emoji** by name (`isColor == true`); italic `withSymbolicTraits` vs regular asserts quad width is larger by **roughly the shear, not ~shear²** (guards double-applied `CTFontGetMatrix`) and a different `matrixHash` | `Tests/PenumbraTests/GlyphRunExtractorTests.swift` |
 | Unit | `GlyphAtlas`: miss → raster → hit; eviction at 32 MB; scale-key isolation; color vs coverage routing; `hasUnifiedMemory` storage-mode branch (mockable device flag) | `GlyphAtlasTests.swift` |
 | Unit | `MetalProjection`: content-space quad → NDC at 1× and 2×, flipped Y, **non-zero gutter, vertical pan, horizontal pan**. Wrapping-off long line: `emitRect` change rebuilds instances with unchanged `ctLineID` | `MetalProjectionTests.swift` |
 | Unit | Decoration conversion: `HighlightedRangeFragment` `.standard`/`.squiggle`/`.underline`/`.outline` produce the same start/end X as `CTLineGetOffsetForStringIndex`; fold chip uses system 11 pt medium, not theme font | `MetalDecorationTests.swift` |
@@ -696,7 +696,7 @@ Do not lower the 128k overflow valve: a 200-fragment × ~180 glyph viewport is a
 | Fallback | Existing `TextViewSmokeTests`, `AppearanceChangeSmokeTests`, `TextViewFocusModeTests`, `DiagnosticEmphasisControllerTests`, `MultiSelectionTests` run with `isMetalRenderingEnabled = false` (default under XCTest) | no change |
 | Metal smoke | Same smoke tests with flag forced on, skipped if `!MetalContext.isAvailable`. Includes invisible-character toggle and `unmarkText` (display-only invalidation) | `TextViewMetalSmokeTests.swift` |
 | Visual | Render a fixture (keyword-colored Swift snippet, emoji ZWJ via Apple Color Emoji, italic trait, squiggle, marked range, fold placeholder, custom `tabSymbol`, `"e\\u{0301}"`) into an offscreen `MTLTexture`, readback to `NSBitmapImageRep`, compare against a CG-path PNG with a small per-pixel ΔE tolerance (emoji AA will not be bit-identical). **Fira Code ligatures are a manual `snapshot-metal` case**, not `swift test` — the font is not in the package. Fail Apple Color Emoji cases if that system face is missing (it ships on macOS 12). | `Tools/PerfHarness` subcommand `snapshot-metal` plus checked-in goldens |
-| A/B | Umbra menu item "Use Metal renderer" sets the **property**. UserDefaults `RunestoneMetalRendering=false` kill switch | `Example/Umbra` |
+| A/B | Umbra menu item "Use Metal renderer" sets the **property**. UserDefaults `PenumbraMetalRendering=false` kill switch | `Example/Umbra` |
 | Perf | `Tools/PerfHarness` subcommand `scroll-frames`: host a `NSWindow`, enable Metal, scroll a 100k-line fixture and a wrapping-off 50k-character line for 3 s, **print** p95 `MetalRenderer.draw` and `LayoutManager.layoutLinesInViewport` and compare to a checked-in baseline file. Manual / nightly. **Do not `XCTFail` production CI on GPU frame time.** `swift test` GPU tests are skip-if-no-device smoke, not perf | `Tools/PerfHarness` |
 | Memory | Instruments template already referenced by `record-open-instruments.sh`; atlas byte counter metric (see Observability) | |
 
@@ -733,7 +733,7 @@ Public surface is one property and one UserDefaults key. No changes to `Theme`, 
 See `MetalActivation.resolved(property:deviceAvailable:defaults:)` in §6. Internal protocol so `LayoutManager` does not import Metal types:
 
 ```swift
-// Sources/Runestone/TextView/Metal/LinePaintBackend.swift
+// Sources/Penumbra/TextView/Metal/LinePaintBackend.swift
 @MainActor
 protocol LinePaintBackend: AnyObject {
     var trackedFragmentIDs: Set<LineFragmentID> { get }
@@ -874,7 +874,7 @@ Metal’s atlas is worth the complexity only because F cannot meet the Intel 60 
 - No new network, no GPU-side document storage. Instance buffers contain glyph positions and theme colors, not Unicode text. Atlas pages are glyph coverage bitmaps.
 - `MTLDevice` is the system default; we do not enumerate GPUs or persist device IDs.
 - Offscreen readback for snapshot tests happens only in `PerfHarness` / XCTest, never in the library's default path.
-- Privacy manifest (`Sources/Runestone/PrivacyInfo.xcprivacy`) does not need a new accessed-API reason for Metal.
+- Privacy manifest (`Sources/Penumbra/PrivacyInfo.xcprivacy`) does not need a new accessed-API reason for Metal.
 - Shader source is a `StaticString` in the binary; treat it as code, not user data.
 
 Threat model: a malicious font could theoretically produce huge glyph bounds and bloat the atlas. Cap per-glyph raster size at 256×256 px and send the run to the run-level fallback. This is also a robustness fix.
@@ -883,7 +883,7 @@ Threat model: a malicious font could theoretically produce huge glyph bounds and
 
 ## Observability
 
-Reuse `RunestoneSignposts` (`Sources/Runestone/Library/RunestoneSignposts.swift`, subsystem `Runestone`, category `Performance`). New intervals/events:
+Reuse `PenumbraSignposts` (`Sources/Penumbra/Library/PenumbraSignposts.swift`, subsystem `Penumbra`, category `Performance`). New intervals/events:
 
 | Name | Kind | When |
 | --- | --- | --- |
@@ -911,8 +911,8 @@ Alerting: N/A for a library. Hosts can read `isMetalRenderingActive`.
 
 1. **Land behind flag default-off** (PRs 1–8, including run-level fallback). Umbra menu sets the property. CI runs CG path only; Metal smokes skip if no device.
 2. **Default-on in Umbra** as part of PR 9, still default-off on `TextView` public init until the same PR’s production switch.
-3. **Default-on for `TextView`** in PR 9 when `MetalActivation.resolved` is true (`property` default becomes `true` outside XCTest). `RunestoneMetalRendering=false` remains the kill switch; `isMetalRenderingEnabled = false` remains the per-view disable.
-4. **Rollback:** hosts set `textView.isMetalRenderingEnabled = false` (wins over defaults `true`) or `UserDefaults` `RunestoneMetalRendering=false` (wins over the property). No document-format implications. Instant, per-view or process-wide.
+3. **Default-on for `TextView`** in PR 9 when `MetalActivation.resolved` is true (`property` default becomes `true` outside XCTest). `PenumbraMetalRendering=false` remains the kill switch; `isMetalRenderingEnabled = false` remains the per-view disable.
+4. **Rollback:** hosts set `textView.isMetalRenderingEnabled = false` (wins over defaults `true`) or `UserDefaults` `PenumbraMetalRendering=false` (wins over the property). No document-format implications. Instant, per-view or process-wide.
 
 Staged by **view**, not by session: a workbench can mix Metal and CG `TextView`s during development; they share the atlas only if both are Metal.
 
@@ -933,20 +933,20 @@ Shader shipping remains a Swift `StaticString`, compiled with `makeLibrary(sourc
 
 ## References
 
-- `Sources/Runestone/TextView/Core/LayoutManager.swift` — viewport layout, view hierarchy, fragment reuse, `constrainingLineWidth = 10_000`
-- `Sources/Runestone/TextView/Core/LineFragmentView.swift` — current `draw(_:)`
-- `Sources/Runestone/TextView/LineController/LineFragmentRenderer.swift` — CG paint order, baseline, fold chip, invisibles, squiggle math
-- `Sources/Runestone/TextView/LineController/LineTypesetter.swift` — `CTTypesetterCreateLine`
-- `Sources/Runestone/TextView/LineController/LineController.swift` — invalidation, `setNeedsDisplayOnLineFragmentViews`, caret vertical centering
-- `Sources/Runestone/TextView/Core/TextView.swift` — `contentOffset` → forced layout
-- `Sources/Runestone/TextView/Core/TextInputView.swift` — `layoutSubviews`, `NSTextInputClient` host, page guide `sendSubviewToBack`, `setNeedsDisplayOnLines` for invisibles
-- `Sources/Runestone/TextView/TextSelection/SelectionOverlayController.swift` — caret/selection/handles z-order
-- `Sources/Runestone/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterSyntaxHighlighter.swift` — `withSymbolicTraits`, `NSShadow`
-- `Sources/Runestone/Library/ViewReuseQueue.swift` — fragment view pool
-- `Sources/Runestone/Library/UIKitCompatibility/UIView.swift` — `UIView: NSView`, no `layerClass`
-- `Sources/Runestone/Library/UIKitCompatibility/UIScrollView.swift` — clip view, `addFixedOverlaySubview`
-- `Sources/Runestone/Library/UIKitCompatibility/PlatformServices.swift` — `didReceiveMemoryWarningNotification` compat string; `UIScreen.scale`
-- `Sources/Runestone/Workbench/EditorHostCache.swift` — up to 8 live hosts; no Metal API
+- `Sources/Penumbra/TextView/Core/LayoutManager.swift` — viewport layout, view hierarchy, fragment reuse, `constrainingLineWidth = 10_000`
+- `Sources/Penumbra/TextView/Core/LineFragmentView.swift` — current `draw(_:)`
+- `Sources/Penumbra/TextView/LineController/LineFragmentRenderer.swift` — CG paint order, baseline, fold chip, invisibles, squiggle math
+- `Sources/Penumbra/TextView/LineController/LineTypesetter.swift` — `CTTypesetterCreateLine`
+- `Sources/Penumbra/TextView/LineController/LineController.swift` — invalidation, `setNeedsDisplayOnLineFragmentViews`, caret vertical centering
+- `Sources/Penumbra/TextView/Core/TextView.swift` — `contentOffset` → forced layout
+- `Sources/Penumbra/TextView/Core/TextInputView.swift` — `layoutSubviews`, `NSTextInputClient` host, page guide `sendSubviewToBack`, `setNeedsDisplayOnLines` for invisibles
+- `Sources/Penumbra/TextView/TextSelection/SelectionOverlayController.swift` — caret/selection/handles z-order
+- `Sources/Penumbra/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterSyntaxHighlighter.swift` — `withSymbolicTraits`, `NSShadow`
+- `Sources/Penumbra/Library/ViewReuseQueue.swift` — fragment view pool
+- `Sources/Penumbra/Library/UIKitCompatibility/UIView.swift` — `UIView: NSView`, no `layerClass`
+- `Sources/Penumbra/Library/UIKitCompatibility/UIScrollView.swift` — clip view, `addFixedOverlaySubview`
+- `Sources/Penumbra/Library/UIKitCompatibility/PlatformServices.swift` — `didReceiveMemoryWarningNotification` compat string; `UIScreen.scale`
+- `Sources/Penumbra/Workbench/EditorHostCache.swift` — up to 8 live hosts; no Metal API
 - `PERFORMANCE_AUDIT.md` Phase 1 §5 — rendering already viewport-scoped
 - Apple: *Preparing Your Metal App to Participate in the Display Workflow*; `CAMetalLayer.presentsWithTransaction`; `CTRun`; `CTFontGetBoundingRectsForGlyphs`; `kCTFontColorGlyphsAttribute`
 
@@ -983,7 +983,7 @@ Each PR is independently reviewable, keeps tests green on the CG path, and does 
 ### PR 1 — Metal feature flag, context, and empty canvas
 
 - **Title:** Add opt-in Metal canvas host and `isMetalRenderingEnabled` flag
-- **Files/components:** `TextView.swift`, `TextInputView.swift`, `LayoutManager.swift` (hierarchy hook only), new `Sources/Runestone/TextView/Metal/MetalContext.swift`, `MetalTextCanvasView.swift` (`makeBackingLayer`, AX hidden, `hitTest → nil`), `LinePaintBackend.swift` (protocol + `CGLinePaintBackend` wrapper around existing reuse queue), `MetalActivation.swift` + tests
+- **Files/components:** `TextView.swift`, `TextInputView.swift`, `LayoutManager.swift` (hierarchy hook only), new `Sources/Penumbra/TextView/Metal/MetalContext.swift`, `MetalTextCanvasView.swift` (`makeBackingLayer`, AX hidden, `hitTest → nil`), `LinePaintBackend.swift` (protocol + `CGLinePaintBackend` wrapper around existing reuse queue), `MetalActivation.swift` + tests
 - **Depends on:** none
 - **Description:** Create `MetalContext` (`MTLCreateSystemDefaultDevice`, compile the clear shader from a `StaticString`, `isAvailable`, memory-pressure source). Add `MetalTextCanvasView` as a **hidden child of `TextInputView` behind `linesContainerView`**. Public flag defaults to **off**. When on and available, canvas clears **transparent** every display pass; fragment views still draw on top (z-order check). `presentsWithTransaction = true`; no `nextDrawable` from layout. Tests: `MetalActivation.resolved` table; canvas `hitTest` returns nil; CG path unaffected. No glyph work yet.
 

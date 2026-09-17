@@ -3,9 +3,9 @@ name: Metal rendering
 on:
   pull_request:
     paths:
-      - "Sources/Runestone/TextView/**"
-      - "Tests/RunestoneTests/*Metal*"
-      - "Tests/RunestoneTests/Helpers/MetalPresentedPixelTestHelpers.swift"
+      - "Sources/Penumbra/TextView/**"
+      - "Tests/PenumbraTests/*Metal*"
+      - "Tests/PenumbraTests/Helpers/MetalPresentedPixelTestHelpers.swift"
       - "Tools/PerfHarness/**"
       - ".github/workflows/metal.yml"
   push:
@@ -23,7 +23,7 @@ jobs:
     runs-on: [self-hosted, macOS, metal]
     timeout-minutes: 30
     env:
-      RUNESTONE_REQUIRE_METAL: "1"
+      PENUMBRA_REQUIRE_METAL: "1"
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
@@ -42,16 +42,16 @@ jobs:
     runs-on: [self-hosted, macOS, metal]
     timeout-minutes: 60
     env:
-      RUNESTONE_REQUIRE_METAL: "1"
+      PENUMBRA_REQUIRE_METAL: "1"
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Run full suite
         run: swift test
       - name: Capture Metal parity artifacts
-        run: swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/runestone-metal-goldens
+        run: swift run -c release PerfHarness snapshot-metal synthetic --out /tmp/penumbra-metal-goldens
       - uses: actions/upload-artifact@v4
         with:
           name: metal-parity-${{ github.run_id }}
-          path: /tmp/runestone-metal-goldens
+          path: /tmp/penumbra-metal-goldens
           if-no-files-found: error

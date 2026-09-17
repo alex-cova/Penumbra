@@ -1,6 +1,6 @@
 # Markdown Preview Integration Plan
 
-Integrate vendored [Textual](https://github.com/gonzalezreal/textual) (markdown) and [BeautifulMermaid](https://github.com/lukilabs/beautiful-mermaid-swift) (diagrams) into Runestone so Umbra can preview the current buffer when it is Markdown. Preview painting must follow the same Metal / Core Graphics split as `TextView`. Toggle the preview with **⌘B**; rebind the existing ⌘B action.
+Integrate vendored [Textual](https://github.com/gonzalezreal/textual) (markdown) and [BeautifulMermaid](https://github.com/lukilabs/beautiful-mermaid-swift) (diagrams) into Penumbra so Umbra can preview the current buffer when it is Markdown. Preview painting must follow the same Metal / Core Graphics split as `TextView`. Toggle the preview with **⌘B**; rebind the existing ⌘B action.
 
 This document is the implementation plan. The libraries are already copied into `Vendor/` (not added as SPM git dependencies). Audit findings and proposed fixes are in [§9](#9-audit-findings-and-proposed-fixes).
 
@@ -16,11 +16,11 @@ This document is the implementation plan. The libraries are already copied into 
 
 ---
 
-## 2. Current state (Runestone)
+## 2. Current state (Penumbra)
 
 | Piece | Today |
 | --- | --- |
-| Markdown | Syntax highlighting only (`RunestoneMarkdownLanguage` + tree-sitter block/inline grammars). No rendered preview. |
+| Markdown | Syntax highlighting only (`PenumbraMarkdownLanguage` + tree-sitter block/inline grammars). No rendered preview. |
 | Language id | `WorkbenchDocument.languageIdentifier` / `TextView.languageIdentifier` is `"markdown"` for `.md` files (`Example/Umbra/IDELanguageSupport.swift`). |
 | Metal | `TextView.isMetalRenderingEnabled` → `MetalActivation.resolved` → `isMetalRenderingActive`. Glyphs go through `MetalRenderer` + `GlyphRunExtractor` into `MetalTextCanvasView` (`CAMetalLayer`). Off → existing CG `LineFragmentView` path. |
 | Keymap | Umbra defaults to `Keymap.sublime`. **⌘B is already `goToDefinition`** on both `Keymap.sublime` and `Keymap.intelliJ`. `Keymap.default_` leaves ⌘B unbound. |
@@ -53,21 +53,21 @@ Examples, tests, and `.git` were not copied. Upstream tests can be cherry-picked
 
 ### 4.1 Do not use Textual’s SwiftUI views as the preview renderer
 
-Textual’s public API (`StructuredText`, `InlineText`) is a SwiftUI `Text` pipeline (`Text.Layout`, `@Observable`, `@Entry` environment keys). That cannot be routed through Runestone’s `MetalRenderer` / CG fragment views, and the package declares **macOS 15** while Runestone is **macOS 12**.
+Textual’s public API (`StructuredText`, `InlineText`) is a SwiftUI `Text` pipeline (`Text.Layout`, `@Observable`, `@Entry` environment keys). That cannot be routed through Penumbra’s `MetalRenderer` / CG fragment views, and the package declares **macOS 15** while Penumbra is **macOS 12**.
 
 Use Textual as a **parser and block model**:
 
 1. `AttributedStringMarkdownParser` → `AttributedString` with `PresentationIntent`.
-2. A new Runestone type, `MarkdownPreviewDocument`, walks presentation intents into blocks (heading, paragraph, list, quote, table, thematic break, **code**, **mermaid**).
+2. A new Penumbra type, `MarkdownPreviewDocument`, walks presentation intents into blocks (heading, paragraph, list, quote, table, thematic break, **code**, **mermaid**).
 3. A new AppKit view, `MarkdownPreviewView`, lays those blocks out and paints them with a CG or Metal backend selected from the host `TextView`’s Metal flag.
 
 Keep the SwiftUI sources in `Vendor/Textual` for reference and a possible later “native Textual chrome” mode, but they are **not** on the preview paint path.
 
 BeautifulMermaid already draws with `CGContext` (`DiagramRenderer`, `MermaidLayer`, `MermaidView`). That is the CG backend. Metal is a new adapter (see [§6](#6-metal-vs-core-graphics)).
 
-### 4.2 New types (Runestone)
+### 4.2 New types (Penumbra)
 
-Suggested location: `Sources/Runestone/TextView/MarkdownPreview/`.
+Suggested location: `Sources/Penumbra/TextView/MarkdownPreview/`.
 
 ```
 MarkdownPreviewController     // toggle, gating, debounce, backend choice
@@ -188,10 +188,10 @@ Add **local path targets** only. Suggested products stay internal unless a host 
 
 Do **not** add a `Textual` target that compiles the full SwiftUI module on macOS 12. Instead:
 
-1. **v1:** A thin `RunestoneMarkdownPreview` (or code inside `Runestone`) that copies/adapts only `AttributedStringMarkdownParser`, `MarkupParser`, `PatternProcessor`, and presentation-intent block walking. Exclude SwiftUI views, Prism.js, math, emoji loaders.
+1. **v1:** A thin `PenumbraMarkdownPreview` (or code inside `Penumbra`) that copies/adapts only `AttributedStringMarkdownParser`, `MarkupParser`, `PatternProcessor`, and presentation-intent block walking. Exclude SwiftUI views, Prism.js, math, emoji loaders.
 2. **Optional later:** `Textual` + `ConcurrencyExtras` + `SwiftUIMath` as a macOS 15+ example target. Not required for Umbra preview.
 
-`Runestone` then depends on `BeautifulMermaid` (and the parser slice). `Umbra` picks it up through `Runestone`.
+`Penumbra` then depends on `BeautifulMermaid` (and the parser slice). `Umbra` picks it up through `Penumbra`.
 
 Swift 6: BeautifulMermaid and ElkSwift are Swift 5.9-style (`[String: Any]` ELK graphs). Expect a compatibility pass (`@unchecked Sendable`, typed ELK dictionaries, or `.unsafeFlags` isolated to those targets — prefer fixing the adapter, not silencing the whole module).
 
@@ -201,7 +201,7 @@ Swift 6: BeautifulMermaid and ElkSwift are Swift 5.9-style (`[String: Any]` ELK 
 
 ## 8. Licensing
 
-Runestone is **Apache 2.0**.
+Penumbra is **Apache 2.0**.
 
 | Tree | License | Action |
 | --- | --- | --- |
@@ -220,9 +220,9 @@ Audited the copies in `Vendor/` after import. Prioritize fixes that affect the p
 
 **Blockers for using the library as-is**
 
-1. **Platform mismatch.** `Package.swift` is macOS 15 / iOS 18. `@Observable`, `@Entry`, `Text.Layout` need macOS 14+ at minimum. Runestone’s package is macOS 12. **Fix:** do not compile the SwiftUI target into Runestone. Extract the Foundation parser.
+1. **Platform mismatch.** `Package.swift` is macOS 15 / iOS 18. `@Observable`, `@Entry`, `Text.Layout` need macOS 14+ at minimum. Penumbra’s package is macOS 12. **Fix:** do not compile the SwiftUI target into Penumbra. Extract the Foundation parser.
 2. **Wrong renderer for this product.** Design center is SwiftUI `Text`, not AppKit/Metal. **Fix:** `MarkdownPreviewView` as in [§4](#4-architecture).
-3. **Prism.js via JavaScriptCore** (`Internal/Highlighter/CodeTokenizer.swift` + `prism-bundle.js`). Extra attack surface, first-highlight latency, and it ignores languages Runestone already highlights with tree-sitter. **Fix:** preview code fences with Runestone’s highlighter (or uncolored Core Text in v1). Do not load Prism in Umbra.
+3. **Prism.js via JavaScriptCore** (`Internal/Highlighter/CodeTokenizer.swift` + `prism-bundle.js`). Extra attack surface, first-highlight latency, and it ignores languages Penumbra already highlights with tree-sitter. **Fix:** preview code fences with Penumbra’s highlighter (or uncolored Core Text in v1). Do not load Prism in Umbra.
 4. **SwiftUIMath (~7.5 MB)** pulled for `$math$` attachments. **Fix:** omit math from v1; leave the vendor tree unused. If math ships later, load fonts lazily.
 5. **`ConcurrencyExtras` + `private import SwiftUIMath`** assume Textual’s own Swift settings (`InternalImportsByDefault`). **Fix:** irrelevant if the SwiftUI module is not a target.
 
@@ -241,7 +241,7 @@ Audited the copies in `Vendor/` after import. Prioritize fixes that affect the p
 2. **Deprecated `NSImage.lockFocus()`** in `MermaidLayer.renderImage`. **Fix:** draw into a `CGContext` bitmap (as `ImageRenderer` already does on AppKit) so Retina / color space match Metal uploads.
 3. **Invalid regex fallback.** `_regex` in `src_parser.swift` / `src_text_metrics.swift` returns `NSRegularExpression()` (bare `NSObject.init`) after `assertionFailure`. In release that object is not a compiled regex. **Fix:** `preconditionFailure` or cache a known-good pattern; never return a dummy instance.
 4. **Layout on the caller’s thread.** `MermaidLayer.prepareDiagram()` parses + ELK-layouts in `source`/`theme` `didSet`. Setting source on the main thread will hitch. **Fix:** async `layout` (the library already has `renderImageAsync`); preview controller must use that, not `MermaidLayer`’s sync path.
-5. **Swift 6 / Sendable.** `ElkNode = [String: Any]`, untyped dictionaries through `src_layout.swift` / `src_elk_instance.swift`. **Fix:** typed ELK graph structs at the bridge, or isolate the adapter; required before depending from `Runestone` (swift 6).
+5. **Swift 6 / Sendable.** `ElkNode = [String: Any]`, untyped dictionaries through `src_layout.swift` / `src_elk_instance.swift`. **Fix:** typed ELK graph structs at the bridge, or isolate the adapter; required before depending from `Penumbra` (swift 6).
 6. **Shared `ELK()` singleton** (`_ElkBridgeRuntime`) behind `NSLock`. Confirm re-entrancy under concurrent markdown docs; if ELK is not reentrant, serialize layouts on one actor.
 
 **Improvements**
@@ -257,9 +257,9 @@ Audited the copies in `Vendor/` after import. Prioritize fixes that affect the p
 1. **EPL-2.0** (see [§8](#8-licensing)).
 2. **~410 Swift files**, Java-style names (`org_eclipse_elk_…`). Do not reformat wholesale; treat as frozen third-party.
 3. Version constant `ElkSwift.version = "1.0.0"` while BeautifulMermaid probes `_ElkBridge.version`. Keep the probe compiling.
-4. Prefer not to expose `ElkSwift` as a public Runestone product.
+4. Prefer not to expose `ElkSwift` as a public Penumbra product.
 
-### 9.4 Integration-level (Runestone / Umbra)
+### 9.4 Integration-level (Penumbra / Umbra)
 
 1. Preview must track `isMetalRenderingActive`, not `isMetalRenderingEnabled` (XCTest forces CG; GPU-less hosts fall back).
 2. Large markdown: cap mermaid raster size (max dimension / downscale) so a huge flowchart cannot allocate a 16k texture.

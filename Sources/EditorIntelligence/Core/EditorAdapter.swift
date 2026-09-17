@@ -2,7 +2,7 @@ import Foundation
 
 /// Interface an editor must provide to the Editor Intelligence Platform.
 ///
-/// Implementations are editor-specific (e.g., `RunestoneEditorAdapter`) and bridge the
+/// Implementations are editor-specific (e.g., `PenumbraEditorAdapter`) and bridge the
 /// editor's native document model to the EIP's `Document`, `Cursor`, `Selection`, and
 /// `Viewport` abstractions. The adapter emits events through an `AsyncSequence` event
 /// stream and applies edits back to the editor asynchronously.

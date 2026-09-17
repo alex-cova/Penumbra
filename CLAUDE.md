@@ -4,17 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Runestone is a Swift Package Manager library: a high-performance plain text/code editor engine for **macOS** (AppKit), forked from simonbs/Runestone (originally iOS/UIKit) and ported natively to macOS. It combines two layers:
+Penumbra is a Swift Package Manager library: a high-performance plain text/code editor engine for **macOS** (AppKit), forked from simonbs/Runestone (originally iOS/UIKit) and ported natively to macOS. It combines two layers:
 
-- **`Runestone`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
-- **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Runestone`**. The two are connected only through `Sources/Runestone/EditorIntelligenceAdapter/RunestoneEditorAdapter.swift`.
-- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**: lightweight, fast editing with project folders, split panes, symbol-aware navigation, and session restore (Sublime keymap by default). Built on `Runestone` and `EditorIntelligence`.
+- **`Penumbra`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
+- **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Penumbra`**. The two are connected only through `Sources/Penumbra/EditorIntelligenceAdapter/PenumbraEditorAdapter.swift`.
+- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**: lightweight, fast editing with project folders, split panes, symbol-aware navigation, and session restore (Sublime keymap by default). Built on `Penumbra` and `EditorIntelligence`.
 
 Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in `Packages/TreeSitter` as a local SPM package.
 
 ## Features
 
-### Runestone text engine (`TextView`)
+### Penumbra text engine (`TextView`)
 
 **Editing & input**
 - Full `NSTextInputClient` / `UITextInput` compatibility for native macOS text input, IME, and accessibility.
@@ -28,7 +28,7 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 - Join lines (`EditorActionID.joinLines`, `JoinLinesService`) — collapses the line break + next line's indent to one space, comment-aware, multi-line aware, multi-caret aware (each caret ends at its own join point), one undo step.
 - Surround selection with a template (`TextView.surroundSelection(with:)`, `SurroundTemplate` — if/while/for/try-catch/brackets/quotes, per-language + registerable, expanded via `EditorIntelligence`'s `SnippetExpander` with `$TM_SELECTED_TEXT`).
 - Reindent fallback (`TextView.reindentSelectedLines()`) — bracket-depth reindent used for `EditorActionID.reformatCode` when no LSP formatter is wired.
-- **Keymap layer** (`Sources/Runestone/TextView/Keymap/`): `TextView.keymap` holds `[KeyStroke: EditorActionID]` bindings resolved by `KeymapDispatcher` (generic two-step chords like ⌘K ⌘D, plus double-⇧ via `DoubleModifierDetector` on `flagsChanged`). Presets `Keymap.default_` (historical shortcuts) and `Keymap.intelliJ`. Actions the core doesn't own return `false` from `TextInputView.performKeymapAction` and fall through to `TextView.editorActionHandler` / registered `addKeyDownInterceptor`s. Invoke any action directly with `TextView.perform(_:)`.
+- **Keymap layer** (`Sources/Penumbra/TextView/Keymap/`): `TextView.keymap` holds `[KeyStroke: EditorActionID]` bindings resolved by `KeymapDispatcher` (generic two-step chords like ⌘K ⌘D, plus double-⇧ via `DoubleModifierDetector` on `flagsChanged`). Presets `Keymap.default_` (historical shortcuts) and `Keymap.intelliJ`. Actions the core doesn't own return `false` from `TextInputView.performKeymapAction` and fall through to `TextView.editorActionHandler` / registered `addKeyDownInterceptor`s. Invoke any action directly with `TextView.perform(_:)`.
 - Configurable `keyDownHandler` (single) or `addKeyDownInterceptor` (composable) for custom keybindings, both run before the keymap.
 - Floating caret (long-press drag) for precise cursor placement on touch/trackpad.
 - Smart text substitutions: autocorrection, smart quotes/dashes, spell checking (via UIKit-compat properties).
@@ -75,8 +75,8 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 **Navigation**
 - Go to line (`goToLine`) with selection-at-beginning/end options.
 - `TextLocation` ↔ byte-offset conversion for line/column addressing.
-- Cursor history (`TextView.navigationHistory`, `NavigationHistory`, `EditorActionID.navigateBack`/`navigateForward`, ⌘[ / ⌘]): a bounded back/forward stack of `NavigationEntry` (documentID/url/`TextLocation`) fed by significant cursor moves and `recordNavigationCheckpoint()` before programmatic jumps (`goToLine`, `selectHighlightedRange`). `TextView.navigationHistory` is settable, so `EditorWorkbench.navigationHistory` (one shared instance) + `RunestoneWorkbenchEditorAdapter.bindNavigationHistory(to:document:)` + `onOpenHistoryEntry` give cross-document ⌘[ end-to-end (wired in `Example/Umbra`).
-- Command palette (`CommandPaletteController` in `Sources/Runestone/TextView/CommandPalette/`; model/engine in `Sources/Runestone/Workbench/CommandPalette/`; `Sources/Runestone/UIBridge/CommandPaletteView.swift`): Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), Go to File, Go to Line (⌘G, `EditorActionID.goToLine`), Find in Files (⌘⇧F, `EditorActionID.findInFiles`, backed by `EditorIntelligence.ProjectSearchEngine` when `CommandPaletteController.projectSearchEngine`/`workspaceRoot` are set) — a `SearchEverywhereEngine` fans a debounced query to concurrent `SearchEverywhereProvider`s (built-ins: commands/files/recent/symbols/go-to-line/in-buffer-text/project-search; host-extensible) and renders grouped results with `FuzzyMatcher.rankedWithMatches`-driven character highlighting. A leading sigil narrows the sources per keystroke in every palette mode, not just Search Everywhere (`PaletteQueryScope`: `>` commands, `@` symbols, `/` files, `#` in-buffer text, `:` go-to-line — Sublime's Goto Anything). `CommandRegistry.registerBuiltInActions(for:)` populates Find Action with every `EditorActionID` + its current shortcut.
+- Cursor history (`TextView.navigationHistory`, `NavigationHistory`, `EditorActionID.navigateBack`/`navigateForward`, ⌘[ / ⌘]): a bounded back/forward stack of `NavigationEntry` (documentID/url/`TextLocation`) fed by significant cursor moves and `recordNavigationCheckpoint()` before programmatic jumps (`goToLine`, `selectHighlightedRange`). `TextView.navigationHistory` is settable, so `EditorWorkbench.navigationHistory` (one shared instance) + `PenumbraWorkbenchEditorAdapter.bindNavigationHistory(to:document:)` + `onOpenHistoryEntry` give cross-document ⌘[ end-to-end (wired in `Example/Umbra`).
+- Command palette (`CommandPaletteController` in `Sources/Penumbra/TextView/CommandPalette/`; model/engine in `Sources/Penumbra/Workbench/CommandPalette/`; `Sources/Penumbra/UIBridge/CommandPaletteView.swift`): Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), Go to File, Go to Line (⌘G, `EditorActionID.goToLine`), Find in Files (⌘⇧F, `EditorActionID.findInFiles`, backed by `EditorIntelligence.ProjectSearchEngine` when `CommandPaletteController.projectSearchEngine`/`workspaceRoot` are set) — a `SearchEverywhereEngine` fans a debounced query to concurrent `SearchEverywhereProvider`s (built-ins: commands/files/recent/symbols/go-to-line/in-buffer-text/project-search; host-extensible) and renders grouped results with `FuzzyMatcher.rankedWithMatches`-driven character highlighting. A leading sigil narrows the sources per keystroke in every palette mode, not just Search Everywhere (`PaletteQueryScope`: `>` commands, `@` symbols, `/` files, `#` in-buffer text, `:` go-to-line — Sublime's Goto Anything). `CommandRegistry.registerBuiltInActions(for:)` populates Find Action with every `EditorActionID` + its current shortcut.
 
 **Diagnostics (rendering)**
 - Squiggle underlines for `TextViewDiagnostic` values by severity (`DiagnosticEmphasisController`).
@@ -141,39 +141,39 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 - `OutlineBuilder` builds a hierarchical symbol tree from `SymbolIndex` data.
 - `BreadcrumbBarModel` / `BreadcrumbBarView` show enclosing symbols at the cursor.
 
-**UI presentation (`UIBridge` + Runestone views)**
+**UI presentation (`UIBridge` + Penumbra views)**
 - `CompletionPanelView`, `HoverWindowView`, `GhostTextView`, `ParameterHintsView`.
 - `EditorIntelligenceController` wires engines to a live `TextView` (completion, hover, diagnostics, ghost text, parameter hints, formatting, code actions, outline, breadcrumbs, workspace search).
 - `EditorIntelligenceServices` bundles optional LSP/workspace services (`LSPFormattingProvider`, `LSPSignatureHelpProvider`, `LSPCodeActionProvider`, `SymbolIndex`, `Workspace`).
 - `TextEditApplicator` applies LSP `TextEdit` arrays to a `TextView` in reverse-offset order.
 - `BreadcrumbBarView`, `OutlineSidebarView`, `CodeActionView`, `WorkspaceSearchPanelView` — AppKit accessory views.
 - `JumpToDefinitionController` for Cmd+click / programmatic go-to-definition.
-- `RunestoneEditorAdapter` bridges `TextView` ↔ EIP.
+- `PenumbraEditorAdapter` bridges `TextView` ↔ EIP.
 
-### Workbench (`Runestone/Workbench`)
+### Workbench (`Penumbra/Workbench`)
 
 - Multi-pane editor layout with horizontal/vertical splits (`EditorWorkbench`, `EditorLayout`).
 - Per-pane tab groups with preview (temporary) tabs, pin, and back/forward tab history (`EditorPane`, `EditorTabHistory`, `TabListEngine`).
-- `WorkbenchDocument` holding editor state; `RunestoneStateBuilder` for `TextViewState` construction.
+- `WorkbenchDocument` holding editor state; `PenumbraStateBuilder` for `TextViewState` construction.
 - Session restoration (`EditorRestorationState`, Codable layout/document snapshots).
-- `RunestoneWorkbenchWorkspaceBridge` syncs open documents into EIP `Workspace`.
-- `RunestoneWorkbenchEditorAdapter` implements `EditorAdapter` at workbench scope.
+- `PenumbraWorkbenchWorkspaceBridge` syncs open documents into EIP `Workspace`.
+- `PenumbraWorkbenchEditorAdapter` implements `EditorAdapter` at workbench scope.
 
 ### Language packs
 
 - `TestTreeSitterLanguages` — bundled grammars for tests (HTML, JavaScript, JSON, Python, YAML).
-- `RunestoneGraphQLLanguage` — example SPM language target pattern (C grammar + `highlights.scm` + indentation scopes).
+- `PenumbraGraphQLLanguage` — example SPM language target pattern (C grammar + `highlights.scm` + indentation scopes).
 
 ## Common commands
 
 ```bash
 swift build                                   # build all targets
-swift test                                    # run the full RunestoneTests suite
+swift test                                    # run the full PenumbraTests suite
 swift test --filter ClassName                 # run one test class
 swift test --filter ClassName/testMethodName  # run one test method
 ```
 
-There is no separate lint/format script wired into SPM; SwiftLint config lives at `.swiftlint.yml` (run `swiftlint` directly if installed). `swiftgen.yml` regenerates `Sources/Runestone/Library/L10n.swift` from `Localizable.strings` — don't hand-edit that generated file.
+There is no separate lint/format script wired into SPM; SwiftLint config lives at `.swiftlint.yml` (run `swiftlint` directly if installed). `swiftgen.yml` regenerates `Sources/Penumbra/Library/L10n.swift` from `Localizable.strings` — don't hand-edit that generated file.
 
 **Umbra** (`swift run Umbra`, `Scripts/build-app.sh`) is the Sublime Text–style editor product; `Example/Umbra` is its SPM executable target and source tree.
 
@@ -183,15 +183,15 @@ There is no separate lint/format script wired into SPM; SwiftLint config lives a
 
 `EditorIntelligence` is intentionally decoupled from any specific text-editing UI. It defines its own `Document`, `Cursor`, `Selection`, `TextEdit`/`TextRange` types and talks to an editor only through the `EditorAdapter` protocol (`Sources/EditorIntelligence/Core/EditorAdapter.swift`): a stable `id`, a `context`, a `currentDocument`/`openDocuments` snapshot, an `AsyncStream<EditorEvent>` of edits/selection changes, and async `applyEdit`/`focusRange` methods.
 
-`RunestoneEditorAdapter` (`Sources/Runestone/EditorIntelligenceAdapter/RunestoneEditorAdapter.swift`) is the concrete bridge: it becomes a `TextView`'s `editorDelegate`, caches a `Document` snapshot behind a lock so EIP services can read it off the main actor, and marshals edits/focus changes onto `MainActor` since they touch UI. When adding a new EIP feature, implement it against `EditorAdapter`/`Document`/etc. generically — don't reach into `Runestone` types from `EditorIntelligence` code.
+`PenumbraEditorAdapter` (`Sources/Penumbra/EditorIntelligenceAdapter/PenumbraEditorAdapter.swift`) is the concrete bridge: it becomes a `TextView`'s `editorDelegate`, caches a `Document` snapshot behind a lock so EIP services can read it off the main actor, and marshals edits/focus changes onto `MainActor` since they touch UI. When adding a new EIP feature, implement it against `EditorAdapter`/`Document`/etc. generically — don't reach into `Penumbra` types from `EditorIntelligence` code.
 
-### Runestone engine internals
+### Penumbra engine internals
 
 - **`TextView/Core`** — `TextView.swift` (public AppKit view, ~1.5k lines) and `TextInputView.swift` (~1.8k lines, implements `NSTextInputClient`/keyboard-mouse handling) are the two central classes; most other `TextView/*` subfolders (Gutter, Highlight, Indent, InvisibleCharacters, Navigation, PageGuide, SearchAndReplace, TextSelection, CharacterPairs, LineController, Appearance) are focused collaborators they own.
 - **`LineManager`** — maintains document lines as a red-black tree (`RedBlackTree/`) keyed by line position, so line lookups/edits are O(log n) rather than O(n) array operations. `DocumentLineChildrenUpdater` and `LineChangeSet` propagate edits through the tree.
 - **`LanguageParser` + `TreeSitter`** — `TreeSitterLanguageParser`/`TreeSitterSyntaxTree` wrap the C tree-sitter library (`TreeSitter*.swift` files) to provide incremental AST parsing; `TreeSitterInternalLanguageMode` and `TreeSitterSyntaxHighlighter` consume the tree to drive syntax highlighting, while `PlainTextInternalLanguageMode`/`PlainTextSyntaxHighlighter` are the no-highlighting fallback. `TextViewState` lets a document + tree-sitter parse be prepared off the main thread before being handed to a `TextView`.
 - **`Library`** — cross-cutting helpers (byte/range conversions between UTF-16 and tree-sitter's UTF-8 byte offsets, string helpers, `UIKitCompatibility/` shims used to keep API shape close to the original iOS/UIKit-based upstream project).
-- **`RunestoneGraphQLLanguage`** — an example of the pattern for adding a tree-sitter language as its own SPM target: a `TreeSitterGraphQL` C target (grammar) + a Swift target providing `highlights.scm` and indentation scopes, depending on both `Runestone` and the C grammar target. Follow this structure when adding another language.
+- **`PenumbraGraphQLLanguage`** — an example of the pattern for adding a tree-sitter language as its own SPM target: a `TreeSitterGraphQL` C target (grammar) + a Swift target providing `highlights.scm` and indentation scopes, depending on both `Penumbra` and the C grammar target. Follow this structure when adding another language.
 
 ### EditorIntelligence internals
 
@@ -201,8 +201,8 @@ There is no separate lint/format script wired into SPM; SwiftLint config lives a
 - **`Snippets`** — tab-stop/placeholder snippet expansion engine, driven through `UIBridge`'s `GhostTextModel`/`CompletionPanelModel`.
 - **`Hover`**, **`Navigation`**, **`Diagnostics`**, **`Refactoring`** — each follows the same provider-engine pattern: an `*Engine` orchestrates one or more `*Provider`s (e.g. `DuplicateSymbolDiagnosticProvider`, `GoToDefinitionProvider`, `RenameOperation`) and returns typed results.
 - **`AI`** and **`LSP`** — pluggable backends implementing the same provider protocols as native providers (`AICompletionProvider`, `LSPCompletionProvider`, etc.), so completion/hover/diagnostics can mix local, LSP, and AI sources transparently.
-- **`UIBridge`** — AppKit-facing presentation models (`CompletionPanelModel`, `HoverWindowModel`, `ParameterHintsModel`, `GhostTextModel`) that translate engine output into view state; actual AppKit views live back in `Runestone/TextView`.
+- **`UIBridge`** — AppKit-facing presentation models (`CompletionPanelModel`, `HoverWindowModel`, `ParameterHintsModel`, `GhostTextModel`) that translate engine output into view state; actual AppKit views live back in `Penumbra/TextView`.
 
 ### Tests
 
-`Tests/RunestoneTests` is a single XCTest target covering both `Runestone` and `EditorIntelligence` (798+ tests), plus `TestTreeSitterLanguages` (bundled grammars: html/javascript/json/python/yaml) and `RunestoneGraphQLLanguage` used as fixtures. Test files are one-class-per-file and named `<SubjectUnderTest>Tests.swift`; mocks live in `Tests/RunestoneTests/Mock` and `MockTextInput.swift`.
+`Tests/PenumbraTests` is a single XCTest target covering both `Penumbra` and `EditorIntelligence` (798+ tests), plus `TestTreeSitterLanguages` (bundled grammars: html/javascript/json/python/yaml) and `PenumbraGraphQLLanguage` used as fixtures. Test files are one-class-per-file and named `<SubjectUnderTest>Tests.swift`; mocks live in `Tests/PenumbraTests/Mock` and `MockTextInput.swift`.

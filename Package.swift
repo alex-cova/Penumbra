@@ -10,18 +10,18 @@ import PackageDescription
 let swift6: [SwiftSetting] = [.swiftLanguageMode(.v6)]
 
 let package = Package(
-    name: "Runestone",
+    name: "Penumbra",
     defaultLocalization: "en",
     platforms: [
         .macOS(.v12)
     ],
     products: [
-        .library(name: "Runestone", targets: ["Runestone"]),
+        .library(name: "Penumbra", targets: ["Penumbra"]),
         .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
         .library(name: "EditorIntelligenceLSP", targets: ["EditorIntelligenceLSP"]),
-        .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"]),
-        .library(name: "RunestoneMarkdownLanguage", targets: ["RunestoneMarkdownLanguage"]),
-        .library(name: "RunestoneLanguages", targets: ["RunestoneLanguages"])
+        .library(name: "PenumbraGraphQLLanguage", targets: ["PenumbraGraphQLLanguage"]),
+        .library(name: "PenumbraMarkdownLanguage", targets: ["PenumbraMarkdownLanguage"]),
+        .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -48,13 +48,13 @@ let package = Package(
             ]
         ),
         .target(
-            name: "RunestoneElkSwift",
+            name: "PenumbraElkSwift",
             path: "Vendor/ElkSwift/Sources/ElkSwift",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
-            name: "RunestoneBeautifulMermaid",
-            dependencies: ["RunestoneElkSwift"],
+            name: "PenumbraBeautifulMermaid",
+            dependencies: ["PenumbraElkSwift"],
             path: "Vendor/BeautifulMermaid/Sources/BeautifulMermaidSwift",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -68,9 +68,9 @@ let package = Package(
             ],
             swiftSettings: swift6
         ),
-        .target(name: "Runestone", dependencies: [
+        .target(name: "Penumbra", dependencies: [
             "EditorIntelligence",
-            "RunestoneBeautifulMermaid",
+            "PenumbraBeautifulMermaid",
             "TreeSitter",
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
@@ -79,16 +79,16 @@ let package = Package(
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
         ], swiftSettings: swift6),
-        .executableTarget(name: "SmokeTest", dependencies: ["Runestone", "RunestoneMarkdownLanguage"], swiftSettings: swift6),
+        .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
-            dependencies: ["Runestone", "RunestoneMarkdownLanguage", "RunestoneLanguages"],
+            dependencies: ["Penumbra", "PenumbraMarkdownLanguage", "PenumbraLanguages"],
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),
         .executableTarget(
             name: "Umbra",
-            dependencies: ["Runestone", "RunestoneLanguages", "RunestoneMarkdownLanguage"],
+            dependencies: ["Penumbra", "PenumbraLanguages", "PenumbraMarkdownLanguage"],
             path: "Example/Umbra",
             swiftSettings: swift6
         ),
@@ -97,9 +97,9 @@ let package = Package(
             .headerSearchPath("src")
         ]),
         .target(
-            name: "RunestoneGraphQLLanguage",
+            name: "PenumbraGraphQLLanguage",
             dependencies: [
-                "Runestone",
+                "Penumbra",
                 "TreeSitterGraphQL"
             ],
             resources: [
@@ -126,14 +126,14 @@ let package = Package(
             ]
         ),
 
-        // Per-language grammar packs migrated from Hextech's Vendor/RunestoneLanguages.
+        // Per-language grammar packs migrated from Hextech's Vendor/PenumbraLanguages.
         // Each language is a trio: a C grammar target, a `*Queries` resource target,
-        // and a `*Runestone` target that adds the `TreeSitterLanguage` factory.
+        // and a `*Penumbra` target that adds the `TreeSitterLanguage` factory.
         .target(name: "TreeSitterTOML", cSettings: [.headerSearchPath("src")]),
         .target(name: "TreeSitterTOMLQueries", resources: [.copy("highlights.scm")]),
         .target(
-            name: "TreeSitterTOMLRunestone",
-            dependencies: ["Runestone", "TreeSitterTOML", "TreeSitterTOMLQueries"],
+            name: "TreeSitterTOMLPenumbra",
+            dependencies: ["Penumbra", "TreeSitterTOML", "TreeSitterTOMLQueries"],
             swiftSettings: swift6
         ),
         .target(
@@ -143,8 +143,8 @@ let package = Package(
         ),
         .target(name: "TreeSitterSQLQueries", resources: [.copy("highlights.scm")]),
         .target(
-            name: "TreeSitterSQLRunestone",
-            dependencies: ["Runestone", "TreeSitterSQL", "TreeSitterSQLQueries"],
+            name: "TreeSitterSQLPenumbra",
+            dependencies: ["Penumbra", "TreeSitterSQL", "TreeSitterSQLQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterSwift", cSettings: [.headerSearchPath("src")]),
@@ -153,8 +153,8 @@ let package = Package(
             resources: [.copy("highlights.scm"), .copy("highlights-swiftui.scm"), .copy("locals.scm")]
         ),
         .target(
-            name: "TreeSitterSwiftRunestone",
-            dependencies: ["Runestone", "TreeSitterSwift", "TreeSitterSwiftQueries"],
+            name: "TreeSitterSwiftPenumbra",
+            dependencies: ["Penumbra", "TreeSitterSwift", "TreeSitterSwiftQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterJava", cSettings: [.headerSearchPath("src")]),
@@ -163,8 +163,8 @@ let package = Package(
             resources: [.copy("highlights.scm"), .copy("tags.scm")]
         ),
         .target(
-            name: "TreeSitterJavaRunestone",
-            dependencies: ["Runestone", "TreeSitterJava", "TreeSitterJavaQueries"],
+            name: "TreeSitterJavaPenumbra",
+            dependencies: ["Penumbra", "TreeSitterJava", "TreeSitterJavaQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterKotlin", cSettings: [.headerSearchPath("src")]),
@@ -173,8 +173,8 @@ let package = Package(
             resources: [.copy("highlights.scm"), .copy("tags.scm")]
         ),
         .target(
-            name: "TreeSitterKotlinRunestone",
-            dependencies: ["Runestone", "TreeSitterKotlin", "TreeSitterKotlinQueries"],
+            name: "TreeSitterKotlinPenumbra",
+            dependencies: ["Penumbra", "TreeSitterKotlin", "TreeSitterKotlinQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterGo", cSettings: [.headerSearchPath("src")]),
@@ -183,8 +183,8 @@ let package = Package(
             resources: [.copy("highlights.scm"), .copy("tags.scm")]
         ),
         .target(
-            name: "TreeSitterGoRunestone",
-            dependencies: ["Runestone", "TreeSitterGo", "TreeSitterGoQueries"],
+            name: "TreeSitterGoPenumbra",
+            dependencies: ["Penumbra", "TreeSitterGo", "TreeSitterGoQueries"],
             swiftSettings: swift6
         ),
         .target(
@@ -194,22 +194,22 @@ let package = Package(
         ),
         .target(name: "TreeSitterBashQueries", resources: [.copy("highlights.scm")]),
         .target(
-            name: "TreeSitterBashRunestone",
-            dependencies: ["Runestone", "TreeSitterBash", "TreeSitterBashQueries"],
+            name: "TreeSitterBashPenumbra",
+            dependencies: ["Penumbra", "TreeSitterBash", "TreeSitterBashQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterHTTP", cSettings: [.headerSearchPath("src")]),
         .target(name: "TreeSitterHTTPQueries", resources: [.copy("highlights.scm")]),
         .target(
-            name: "TreeSitterHTTPRunestone",
-            dependencies: ["Runestone", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
+            name: "TreeSitterHTTPPenumbra",
+            dependencies: ["Penumbra", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterMermaid", cSettings: [.headerSearchPath("src")]),
         .target(name: "TreeSitterMermaidQueries", resources: [.copy("highlights.scm")]),
         .target(
-            name: "TreeSitterMermaidRunestone",
-            dependencies: ["Runestone", "TreeSitterMermaid", "TreeSitterMermaidQueries"],
+            name: "TreeSitterMermaidPenumbra",
+            dependencies: ["Penumbra", "TreeSitterMermaid", "TreeSitterMermaidQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterRust", cSettings: [.headerSearchPath("src")]),
@@ -218,8 +218,8 @@ let package = Package(
             resources: [.copy("highlights.scm")]
         ),
         .target(
-            name: "TreeSitterRustRunestone",
-            dependencies: ["Runestone", "TreeSitterRust", "TreeSitterRustQueries"],
+            name: "TreeSitterRustPenumbra",
+            dependencies: ["Penumbra", "TreeSitterRust", "TreeSitterRustQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterC", cSettings: [.headerSearchPath("src")]),
@@ -228,8 +228,8 @@ let package = Package(
             resources: [.copy("highlights.scm")]
         ),
         .target(
-            name: "TreeSitterCRunestone",
-            dependencies: ["Runestone", "TreeSitterC", "TreeSitterCQueries"],
+            name: "TreeSitterCPenumbra",
+            dependencies: ["Penumbra", "TreeSitterC", "TreeSitterCQueries"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterCpp", cSettings: [.headerSearchPath("src")]),
@@ -238,31 +238,31 @@ let package = Package(
             resources: [.copy("highlights.scm"), .copy("injections.scm")]
         ),
         .target(
-            name: "TreeSitterCppRunestone",
-            dependencies: ["Runestone", "TreeSitterCpp", "TreeSitterCppQueries", "TreeSitterCQueries"],
+            name: "TreeSitterCppPenumbra",
+            dependencies: ["Penumbra", "TreeSitterCpp", "TreeSitterCppQueries", "TreeSitterCQueries"],
             swiftSettings: swift6
         ),
         .target(
-            name: "RunestoneLanguages",
+            name: "PenumbraLanguages",
             dependencies: [
-                "Runestone",
+                "Penumbra",
                 "TestTreeSitterLanguages",
                 "TreeSitterCSS",
                 "TreeSitterTypeScript",
-                "RunestoneGraphQLLanguage",
-                "RunestoneMarkdownLanguage",
-                "TreeSitterTOMLRunestone",
-                "TreeSitterSQLRunestone",
-                "TreeSitterSwiftRunestone",
-                "TreeSitterJavaRunestone",
-                "TreeSitterKotlinRunestone",
-                "TreeSitterGoRunestone",
-                "TreeSitterBashRunestone",
-                "TreeSitterHTTPRunestone",
-                "TreeSitterMermaidRunestone",
-                "TreeSitterRustRunestone",
-                "TreeSitterCRunestone",
-                "TreeSitterCppRunestone"
+                "PenumbraGraphQLLanguage",
+                "PenumbraMarkdownLanguage",
+                "TreeSitterTOMLPenumbra",
+                "TreeSitterSQLPenumbra",
+                "TreeSitterSwiftPenumbra",
+                "TreeSitterJavaPenumbra",
+                "TreeSitterKotlinPenumbra",
+                "TreeSitterGoPenumbra",
+                "TreeSitterBashPenumbra",
+                "TreeSitterHTTPPenumbra",
+                "TreeSitterMermaidPenumbra",
+                "TreeSitterRustPenumbra",
+                "TreeSitterCPenumbra",
+                "TreeSitterCppPenumbra"
             ],
             resources: [
                 .copy("Queries")
@@ -270,9 +270,9 @@ let package = Package(
             swiftSettings: swift6
         ),
         .target(
-            name: "RunestoneMarkdownLanguage",
+            name: "PenumbraMarkdownLanguage",
             dependencies: [
-                "Runestone",
+                "Penumbra",
                 "TreeSitterMarkdown",
                 "TreeSitterMarkdownInline"
             ],
@@ -281,14 +281,14 @@ let package = Package(
             ],
             swiftSettings: swift6
         ),
-        .testTarget(name: "RunestoneTests", dependencies: [
-            "Runestone",
+        .testTarget(name: "PenumbraTests", dependencies: [
+            "Penumbra",
             "EditorIntelligence",
             "EditorIntelligenceLSP",
             "TestTreeSitterLanguages",
-            "RunestoneGraphQLLanguage",
-            "RunestoneMarkdownLanguage",
-            "RunestoneLanguages",
+            "PenumbraGraphQLLanguage",
+            "PenumbraMarkdownLanguage",
+            "PenumbraLanguages",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], swiftSettings: swift6)
     ]

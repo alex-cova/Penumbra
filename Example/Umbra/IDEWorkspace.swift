@@ -1,10 +1,10 @@
 import AppKit
 import Combine
 import EditorIntelligence
-import Runestone
+import Penumbra
 import SwiftUI
-import RunestoneLanguages
-import RunestoneMarkdownLanguage
+import PenumbraLanguages
+import PenumbraMarkdownLanguage
 
 struct IDETabRow: Identifiable, Equatable {
     let id: UUID
@@ -18,10 +18,10 @@ final class IDEWorkspace: ObservableObject {
     private static let languageProvider = BundledLanguageProvider()
 
     private let workbench = EditorWorkbench()
-    private let workspaceBridge = RunestoneWorkbenchWorkspaceBridge()
+    private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
-    private var adapter: RunestoneWorkbenchEditorAdapter!
+    private var adapter: PenumbraWorkbenchEditorAdapter!
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
@@ -427,7 +427,7 @@ final class IDEWorkspace: ObservableObject {
     }
 
     private func wireAdapter() {
-        adapter = RunestoneWorkbenchEditorAdapter(workbench: workbench)
+        adapter = PenumbraWorkbenchEditorAdapter(workbench: workbench)
         adapter.forwardingDelegate = self
         adapter.onOpenHistoryEntry = { [weak self] entry in
             self?.openHistoryEntry(entry) ?? false
@@ -711,7 +711,7 @@ final class IDEWorkspace: ObservableObject {
             return
         }
         let generation = host.applyGate.bump()
-        RunestoneStateBuilder.prepareAndApply(
+        PenumbraStateBuilder.prepareAndApply(
             text: document.text,
             theme: IDEEditorTheme.shared,
             language: document.language,

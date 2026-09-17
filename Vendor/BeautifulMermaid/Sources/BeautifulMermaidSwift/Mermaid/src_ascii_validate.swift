@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/validate.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public struct DiagonalChars: Sendable {
     public let ascii: [Character]

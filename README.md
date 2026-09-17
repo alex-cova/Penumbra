@@ -1,4 +1,6 @@
-# Runestone
+# Penumbra
+
+**Repository:** [github.com/alex-cova/Penumbra](https://github.com/alex-cova/Penumbra)
 
 **v1.4.0** — A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
 
@@ -8,7 +10,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 
 ## Key Features
 
-### 🎨 Native Text Editor Engine (`Runestone`)
+### 🎨 Native Text Editor Engine (`Penumbra`)
 
 * **macOS-Native AppKit Design**: Built with native text input handling (`NSTextInputClient` / `UITextInput`), full IME and accented character support, smooth scrolling, and a configurable keymap layer (`Keymap`) with `.default_` and `.intelliJ` presets.
 * **Metal Rendering (optional)**: GPU-accelerated glyph rasterization and text canvas via `TextView.isMetalRenderingEnabled`. Falls back to Core Graphics automatically when Metal is unavailable. Toggle at launch in Umbra with `--metal` / `--no-metal`.
@@ -67,15 +69,15 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Signature Help**: Parameter hints auto-triggered on `(` and `,` (`LSPSignatureHelpProvider`, `ParameterHintsView`).
 * **Semantic Token Highlighting**: Semantic token decoding and delta synchronization for enhanced syntax highlighting.
 
-### 🪟 Multi-Pane Workbench (`Runestone/Workbench`)
+### 🪟 Multi-Pane Workbench (`Penumbra/Workbench`)
 
 * **Split Editor Layouts**: Horizontal and vertical split-pane layouts (`EditorWorkbench`, `EditorLayout`, `EditorPane`).
 * **Tab Management**: Per-pane tab groups with preview (transient) tabs, pinned tabs, and tab navigation history (`EditorTabHistory`, `TabListEngine`).
 * **Session Restoration**: Codable layout and document snapshots for persistent editor sessions (`EditorRestorationState`).
-* **Workspace Integration**: `RunestoneWorkbenchWorkspaceBridge` syncing open workbench documents directly into EIP `Workspace`.
+* **Workspace Integration**: `PenumbraWorkbenchWorkspaceBridge` syncing open workbench documents directly into EIP `Workspace`.
 * **Command Palette**: Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), and Go to File — a debounced `SearchEverywhereEngine` fans out to concurrent providers with fuzzy-ranked results and sigil-scoped queries (`>` actions, `@` symbols, `/` + `#` files).
 
-### 🖥️ Ready-to-Use AppKit Views (`Runestone/UIBridge`)
+### 🖥️ Ready-to-Use AppKit Views (`Penumbra/UIBridge`)
 
 * `CompletionPanelView`: Floating code completion panel with keyboard navigation.
 * `HoverWindowView`: Rich markdown hover tooltip popover.
@@ -90,10 +92,10 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 
 ### 📦 Language Packs
 
-* **`RunestoneLanguages`**: Ready-to-use `TreeSitterLanguage` factories for CSS, HTML, JavaScript, JSON, Python, TypeScript, YAML, plus TOML, SQL, Swift (including SwiftUI captures), Java, Kotlin, Go, Bash, HTTP, and Mermaid. Re-exports GraphQL from `RunestoneGraphQLLanguage`.
-* **`RunestoneGraphQLLanguage`**: Ready-to-use Tree-sitter GraphQL grammar, highlight queries, and indentation scopes.
-* **`RunestoneMarkdownLanguage`**: Ready-to-use Tree-sitter Markdown grammar, highlight queries, and indentation scopes.
-* **`TestTreeSitterLanguages`**: Bundled C grammars for HTML, JavaScript, JSON, Python, and YAML backing `RunestoneLanguages`.
+* **`PenumbraLanguages`**: Ready-to-use `TreeSitterLanguage` factories for CSS, HTML, JavaScript, JSON, Python, TypeScript, YAML, plus TOML, SQL, Swift (including SwiftUI captures), Java, Kotlin, Go, Bash, HTTP, and Mermaid. Re-exports GraphQL from `PenumbraGraphQLLanguage`.
+* **`PenumbraGraphQLLanguage`**: Ready-to-use Tree-sitter GraphQL grammar, highlight queries, and indentation scopes.
+* **`PenumbraMarkdownLanguage`**: Ready-to-use Tree-sitter Markdown grammar, highlight queries, and indentation scopes.
+* **`TestTreeSitterLanguages`**: Bundled C grammars for HTML, JavaScript, JSON, Python, and YAML backing `PenumbraLanguages`.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for grammar attributions.
 
@@ -114,9 +116,9 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for grammar attributions.
 ## Project Architecture
 
 ```
-Runestone/
+Penumbra/
 ├── Sources/
-│   ├── Runestone/                  # Core text editor engine, Workbench, and AppKit UI
+│   ├── Penumbra/                  # Core text editor engine, Workbench, and AppKit UI
 │   │   ├── TextView/               # Text layout, gutter, themes, multi-selection, folding, minimap
 │   │   │   ├── Metal/              # Optional GPU glyph atlas and text canvas
 │   │   │   └── Keymap/             # Keymap presets, EditorActionID, chord dispatcher
@@ -137,10 +139,10 @@ Runestone/
 │   │   └── Workspace/              # Multi-document workspace & cross-file search
 │   │
 │   ├── EditorIntelligenceLSP/      # Concrete LSP client backed by ChimeHQ LanguageClient
-│   ├── RunestoneLanguages/         # TreeSitterLanguage factories for the full language set
-│   ├── RunestoneGraphQLLanguage/   # Tree-sitter GraphQL grammar + queries
-│   ├── RunestoneMarkdownLanguage/  # Tree-sitter Markdown grammar + queries
-│   ├── TreeSitter{TOML,SQL,Swift,Java,Kotlin,Go,Bash,HTTP,Mermaid}{,Queries,Runestone}/
+│   ├── PenumbraLanguages/         # TreeSitterLanguage factories for the full language set
+│   ├── PenumbraGraphQLLanguage/   # Tree-sitter GraphQL grammar + queries
+│   ├── PenumbraMarkdownLanguage/  # Tree-sitter Markdown grammar + queries
+│   ├── TreeSitter{TOML,SQL,Swift,Java,Kotlin,Go,Bash,HTTP,Mermaid}{,Queries,Penumbra}/
 │   ├── SmokeTest/                  # Minimal runtime executable target
 │   └── TestTreeSitterLanguages/    # Bundled C grammars (HTML, JS, JSON, Python, YAML)
 │
@@ -149,18 +151,18 @@ Runestone/
 ├── Tools/
 │   └── PerfHarness/                # Scroll/layout/Metal performance benchmarking CLI
 └── Tests/
-    └── RunestoneTests/             # 1,050+ unit and integration tests (135 test files)
+    └── PenumbraTests/             # 1,050+ unit and integration tests (135 test files)
 ```
 
 ---
 
 ## Installation
 
-Add Runestone to your `Package.swift` dependencies:
+Add Penumbra to your `Package.swift` dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/alex-cova/Runestone.git", branch: "main")
+    .package(url: "https://github.com/alex-cova/Penumbra.git", branch: "main")
 ]
 ```
 
@@ -170,12 +172,12 @@ Then add the required products to your target dependencies:
 .target(
     name: "YourAppTarget",
     dependencies: [
-        .product(name: "Runestone", package: "Runestone"),
-        .product(name: "EditorIntelligence", package: "Runestone"),
-        .product(name: "EditorIntelligenceLSP", package: "Runestone"),       // Optional: LSP support
-        .product(name: "RunestoneLanguages", package: "Runestone"),             // Optional: bundled grammars
-        .product(name: "RunestoneGraphQLLanguage", package: "Runestone"),      // Optional: GraphQL
-        .product(name: "RunestoneMarkdownLanguage", package: "Runestone")     // Optional: Markdown
+        .product(name: "Penumbra", package: "Penumbra"),
+        .product(name: "EditorIntelligence", package: "Penumbra"),
+        .product(name: "EditorIntelligenceLSP", package: "Penumbra"),       // Optional: LSP support
+        .product(name: "PenumbraLanguages", package: "Penumbra"),             // Optional: bundled grammars
+        .product(name: "PenumbraGraphQLLanguage", package: "Penumbra"),      // Optional: GraphQL
+        .product(name: "PenumbraMarkdownLanguage", package: "Penumbra")     // Optional: Markdown
     ]
 )
 ```
@@ -188,7 +190,7 @@ Then add the required products to your target dependencies:
 
 ```swift
 import AppKit
-import Runestone
+import Penumbra
 
 class EditorViewController: NSViewController {
     private var textView: TextView!
@@ -202,7 +204,7 @@ class EditorViewController: NSViewController {
         textView.isLineFoldingEnabled = true
         textView.isMetalRenderingEnabled = true  // Optional GPU path
         textView.text = """
-        // Welcome to Runestone on macOS!
+        // Welcome to Penumbra on macOS!
         func greet(name: String) {
             print("Hello, \(name)!")
         }
@@ -217,8 +219,8 @@ class EditorViewController: NSViewController {
 For smooth performance on large files, initialize the editor state on a background thread:
 
 ```swift
-import Runestone
-import RunestoneLanguages
+import Penumbra
+import PenumbraLanguages
 
 let jsLanguage = TreeSitterLanguage.javaScript
 
@@ -282,7 +284,7 @@ textView.deleteSelectedLines()    // ⌘⌫  — remove every line the selection
 Coordinate code completion, hover tooltips, diagnostics, and UI overlays using `EditorIntelligenceController`:
 
 ```swift
-import Runestone
+import Penumbra
 import EditorIntelligence
 
 // 1. Setup symbol index and providers
@@ -319,7 +321,7 @@ intelligenceController.refreshDiagnostics()
 Create a multi-tab, split-pane editing environment:
 
 ```swift
-import Runestone
+import Penumbra
 
 let workbench = EditorWorkbench()
 
@@ -333,7 +335,7 @@ workbench.openDocument(docB)
 let rightPane = workbench.splitActivePane(edge: .trailing)
 
 // Sync with EIP workspace
-let workspaceBridge = RunestoneWorkbenchWorkspaceBridge()
+let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
 Task {
     await workspaceBridge.syncWorkbench(workbench)
 }
@@ -357,7 +359,7 @@ swift run Umbra --metal     # force Metal renderer
 ./run-metal.sh              # release build + Metal
 ```
 
-**Download:** pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Runestone/releases) as `Umbra-<version>-macOS.zip`. See [Example/README.md](Example/README.md) for signing, notarization, and release workflow details.
+**Download:** pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Penumbra/releases) as `Umbra-<version>-macOS.zip`. See [Example/README.md](Example/README.md) for signing, notarization, and release workflow details.
 
 ---
 
@@ -442,4 +444,4 @@ swift test
 
 ## License
 
-Runestone is available under the Apache License 2.0. See the [LICENSE](LICENSE) file for more information.
+Penumbra is available under the Apache License 2.0. See the [LICENSE](LICENSE) file for more information.

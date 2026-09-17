@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/class-diagram.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public struct AsciiClassMember {
     public var visibility: String?

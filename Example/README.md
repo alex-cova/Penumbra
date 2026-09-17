@@ -1,10 +1,10 @@
 # Umbra
 
-Umbra is a lightweight macOS code editor — Sublime Text–class basics without the weight of a full IDE. It is built on the [Runestone](https://github.com/alex-cova/Runestone) text engine (tree-sitter highlighting, multi-cursor editing, optional Metal rendering) and ships as a native AppKit app from this repository.
+Umbra is a lightweight macOS code editor — Sublime Text–class basics without the weight of a full IDE. It is built on the [Penumbra](https://github.com/alex-cova/Penumbra) text engine (tree-sitter highlighting, multi-cursor editing, optional Metal rendering) and ships as a native AppKit app from this repository.
 
 ## Download
 
-Pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Runestone/releases) as `Umbra-<version>-macOS.zip`.
+Pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Penumbra/releases) as `Umbra-<version>-macOS.zip`.
 
 1. Download and unzip the archive.
 2. Move `Umbra.app` to Applications (or anywhere you like).
@@ -135,4 +135,4 @@ Editor state is saved to:
 
 ## License
 
-Umbra is part of the Runestone repository; see the root [LICENSE](../LICENSE) and [README](../README.md) for the library and its terms.
+Umbra is part of the Penumbra repository; see the root [LICENSE](../LICENSE) and [README](../README.md) for the library and its terms.

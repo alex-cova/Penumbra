@@ -1,6 +1,6 @@
 import Foundation
 import CoreGraphics
-import RunestoneElkSwift
+import PenumbraElkSwift
 #if targetEnvironment(macCatalyst)
 import UIKit
 #elseif canImport(UIKit)

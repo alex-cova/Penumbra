@@ -6,7 +6,7 @@
 #
 # Default fixture: Tools/PerfHarness/Fixtures/short_lines_500mb.txt
 # Templates: Time Profiler, Allocations, VM Tracker.
-# Filter signposts: subsystem Runestone, category Performance.
+# Filter signposts: subsystem Penumbra, category Performance.
 #
 # Headless xctrace may fail without GUI/TCC. If so, open Instruments.app,
 # choose those templates, and launch:
@@ -48,4 +48,4 @@ record "Allocations" "open-allocations"
 record "VM Tracker" "open-vm-tracker"
 
 echo "Traces in $OUT_DIR"
-echo "Signposts: subsystem Runestone / category Performance"
+echo "Signposts: subsystem Penumbra / category Performance"

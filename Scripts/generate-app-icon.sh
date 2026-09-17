@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 iconset="$root/Example/Resources/AppIcon.iconset"
 output="$root/Example/Resources/AppIcon.icns"
-tmp_png="$(mktemp /tmp/runestone-icon.XXXXXX.png)"
+tmp_png="$(mktemp /tmp/penumbra-icon.XXXXXX.png)"
 
 mkdir -p "$iconset"
 

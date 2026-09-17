@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthetic file generator for the Runestone large-file performance audit.
+"""Synthetic file generator for the Penumbra large-file performance audit.
 
 See PERFORMANCE_AUDIT.md Phase 5 §2. Generates fixtures for PerfHarness (Tools/PerfHarness/Sources)
 across the sizes and variants called out in the audit brief:
@@ -11,11 +11,11 @@ across the sizes and variants called out in the audit brief:
             unicode_emoji - mixed BMP + astral-plane (surrogate-pair) content, stresses UTF-16
                             offset/column math
             crlf          - CRLF line endings throughout
-            invalid_utf8  - NOT valid UTF-8. PerfHarness cannot open this directly (Runestone's
+            invalid_utf8  - NOT valid UTF-8. PerfHarness cannot open this directly (Penumbra's
                             source of truth is a Swift String, which is always valid Unicode -
                             see PERFORMANCE_AUDIT.md Phase 1 SS4). This fixture exists to test a
                             *host app's* encoding-detection/repair step before text ever reaches
-                            Runestone, not to be fed to PerfHarness itself.
+                            Penumbra, not to be fed to PerfHarness itself.
 
 Usage:
     python3 generate_fixtures.py --out Fixtures --sizes 10mb,100mb --variants short_lines,crlf

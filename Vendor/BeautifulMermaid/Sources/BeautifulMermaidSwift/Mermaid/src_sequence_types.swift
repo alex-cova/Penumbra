@@ -1,6 +1,6 @@
 // Ported from original/src/sequence/types.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public typealias Actor = SequenceActor
 public typealias Message = SequenceMessage

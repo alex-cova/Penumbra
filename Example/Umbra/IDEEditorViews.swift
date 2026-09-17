@@ -1,5 +1,5 @@
 import AppKit
-import Runestone
+import Penumbra
 import SwiftUI
 
 // MARK: - Pane host
@@ -10,7 +10,7 @@ final class IDEEditorPaneHost: NSView {
     let textView: TextView
     let markdownPreviewController: MarkdownPreviewController
     let paletteController: CommandPaletteController
-    let applyGate = RunestoneStateBuilder.GenerationGate()
+    let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
     var onActivated: (() -> Void)?

@@ -1,6 +1,6 @@
 // Ported from original/src/sequence/renderer.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public func renderSequenceSvg(
     _ diagram: PositionedSequenceDiagram,

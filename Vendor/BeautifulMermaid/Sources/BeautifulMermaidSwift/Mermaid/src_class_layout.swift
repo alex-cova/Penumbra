@@ -1,6 +1,6 @@
 // Ported from original/src/class/layout.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public enum CLS {
     public static let padding: Double = 40

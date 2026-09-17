@@ -1,5 +1,5 @@
 import Foundation
-import Runestone
+import Penumbra
 
 struct AppSession: Codable {
     var restoration: EditorRestorationState?

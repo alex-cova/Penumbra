@@ -1,6 +1,6 @@
 // Ported from original/src/text-metrics.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 open class original_src_text_metrics {
     public init() {}

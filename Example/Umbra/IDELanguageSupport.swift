@@ -1,5 +1,5 @@
-import Runestone
-import RunestoneLanguages
+import Penumbra
+import PenumbraLanguages
 
 enum IDELanguageSupport {
     static func language(forIdentifier identifier: String?) -> TreeSitterLanguage? {

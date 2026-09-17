@@ -1,10 +1,10 @@
 import Foundation
 @preconcurrency import AppKit
-import Runestone
-import RunestoneMarkdownLanguage
-import RunestoneLanguages
+import Penumbra
+import PenumbraMarkdownLanguage
+import PenumbraLanguages
 
-/// Headless benchmarks against the public `Runestone` API, driving `TextView`/`TextViewState` directly
+/// Headless benchmarks against the public `Penumbra` API, driving `TextView`/`TextViewState` directly
 /// with no `NSWindow`/run loop. See PERFORMANCE_AUDIT.md Phase 5 for what these numbers mean and what
 /// still needs a real Instruments pass (actual on-screen frame compositing isn't observable headlessly).
 enum Commands {
@@ -15,7 +15,7 @@ enum Commands {
         var mmap = false
         var viewport = false
         var metal = false
-        /// Bundled `RunestoneLanguages` identifier (e.g. "javascript", "json", "html") to use
+        /// Bundled `PenumbraLanguages` identifier (e.g. "javascript", "json", "html") to use
         /// instead of markdown when `highlighted` is set. Isolates a language with no injected
         /// child layers from markdown's per-paragraph `markdown_inline` injection.
         var language: String?
@@ -24,7 +24,7 @@ enum Commands {
     // MARK: - Shared setup
 
     /// Reads `path` into a `String` and reports how long that alone takes — this is the "decode the
-    /// whole file before Runestone can even start" cost described in PERFORMANCE_AUDIT.md Phase 1 §2.
+    /// whole file before Penumbra can even start" cost described in PERFORMANCE_AUDIT.md Phase 1 §2.
     private static func readFile(_ path: String) throws -> (text: String, readSeconds: Double, sizeBytes: UInt64) {
         let url = URL(fileURLWithPath: path)
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? UInt64) ?? 0
@@ -51,7 +51,7 @@ enum Commands {
     }
 
     /// Defaults to markdown (has injected child layers per paragraph); `--lang <id>` selects any
-    /// `RunestoneLanguages`-bundled identifier (e.g. "javascript") to isolate a single-layer parse.
+    /// `PenumbraLanguages`-bundled identifier (e.g. "javascript") to isolate a single-layer parse.
     private static func resolvedLanguage(_ options: Options) -> TreeSitterLanguage {
         if let identifier = options.language, let language = TreeSitterLanguage.bundled(forIdentifier: identifier) {
             return language

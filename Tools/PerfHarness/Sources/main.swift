@@ -12,7 +12,7 @@ import Foundation
 //
 // Always run with `-c release` — debug builds of tree-sitter/CoreText-heavy code are not representative.
 // Add `--highlighted` to route through TreeSitterLanguage.markdown instead of plain text.
-// Add `--lang <id>` (e.g. javascript, json, html) to highlight with a bundled RunestoneLanguages
+// Add `--lang <id>` (e.g. javascript, json, html) to highlight with a bundled PenumbraLanguages
 // grammar instead of markdown — useful for isolating a single-layer language (no injected child
 // layers) from markdown's per-paragraph markdown_inline injection.
 // Add `--deferred` to skip eager parse in TextViewState (first paint without a syntax tree).

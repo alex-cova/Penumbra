@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/er-diagram.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public struct AsciiErAttribute {
     public var keys: [String]

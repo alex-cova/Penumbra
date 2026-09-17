@@ -105,7 +105,7 @@ struct UmbraApp: App {
 
             CommandGroup(replacing: .help) {
                 Button("Umbra on GitHub") {
-                    if let url = URL(string: "https://github.com/alex-cova/Runestone") {
+                    if let url = URL(string: "https://github.com/alex-cova/Penumbra") {
                         NSWorkspace.shared.open(url)
                     }
                 }

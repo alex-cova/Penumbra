@@ -1,6 +1,6 @@
 // Ported from original/src/er/layout.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private enum ER {
     static let padding: Double = 40

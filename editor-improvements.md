@@ -1,4 +1,4 @@
-# Runestone: typing-latency fixes + missing line/comment commands
+# Penumbra: typing-latency fixes + missing line/comment commands
 
 ## Context
 
@@ -33,12 +33,12 @@ CI/perf-gate automation (user declined).
 ## What's already done (do not re-implement)
 
 - Piece-tree storage for file-backed *and* large in-memory (≥256 KiB) documents
-  (`Sources/Runestone/TextView/Core/StringView.swift`, `PieceTree.swift`).
+  (`Sources/Penumbra/TextView/Core/StringView.swift`, `PieceTree.swift`).
 - mmap load, fat-leaf `PackedLineIndex`, viewport/eager parse policy with
   `syntaxParseGeneration` staleness gating (`TextInputView.swift:855-1476`).
 - Metal glyph-atlas renderer, PRs 1–9 of `plan.md` (atlas, extractor, decoration
   builder, run-level fallback, retina/appearance handling) — shipped and default-on
-  outside XCTest (`Sources/Runestone/TextView/Metal/*`).
+  outside XCTest (`Sources/Penumbra/TextView/Metal/*`).
 - Async, debounced, cancellable find (`FindSearchEngine`/`FindSession`), delta-based
   undo (`TextEditHelper.apply`), a real save path (`DocumentWriter`,
   `WorkbenchDocument.save`).
@@ -49,10 +49,10 @@ CI/perf-gate automation (user declined).
 
 ## Fix 1 — Stale/invisible glyphs while typing (regression from 665f59b)
 
-**Where:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift:246-252`,
-`Sources/Runestone/TextView/LineController/LineController.swift:143-145`,
-`Sources/Runestone/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterSyntaxHighlighter.swift`,
-`Sources/Runestone/TextView/SyntaxHighlighting/Internal/PlainText/PlainTextSyntaxHighlighter.swift:10-12`.
+**Where:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift:246-252`,
+`Sources/Penumbra/TextView/LineController/LineController.swift:143-145`,
+`Sources/Penumbra/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterSyntaxHighlighter.swift`,
+`Sources/Penumbra/TextView/SyntaxHighlighting/Internal/PlainText/PlainTextSyntaxHighlighter.swift:10-12`.
 
 **Problem:** `MetalRenderer.upsertFragment` holds the *pre-edit* glyph instances
 whenever `spec.isSyntaxHighlightPending` is true and the fragment already has glyphs
@@ -95,7 +95,7 @@ and confirm its fragments extract immediately rather than pinning
 ## Fix 2 — Two confirmed per-keystroke O(document) allocations
 
 **2a. `OccurrenceHighlightController.term(for:)`**
-(`Sources/Runestone/TextView/Highlight/OccurrenceHighlightController.swift:95-96`)
+(`Sources/Penumbra/TextView/Highlight/OccurrenceHighlightController.swift:95-96`)
 
 Called synchronously from `selectionDidChange` (`:56-67`), which fires on every
 `_selectedRange.didSet` — i.e. every keystroke, *before* the controller's own 120 ms
@@ -117,7 +117,7 @@ window instead of a full `String` (mirror the ±16-doubling-window pattern alrea
 for grapheme walks, `PieceTree.swift:531-547`, cited as the audit's P1 fix #9).
 
 **2b. `restartSyntaxParseAfterCancelledEdit` → `startFullParse(of: string, …)`**
-(`Sources/Runestone/TextView/Core/TextInputView.swift:1437-1451`)
+(`Sources/Penumbra/TextView/Core/TextInputView.swift:1437-1451`)
 
 `string` here is `stringView.string` (full materialization, `TextInputView.swift:613-616`).
 `startFullParse` calls `languageMode.parse(text) { … }`
@@ -145,7 +145,7 @@ deliberately kept in-flight.
 
 ## Fix 3 — Per-keystroke Metal instance-buffer full rebuild
 
-**Where:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift:454-482` (`rebuildInstanceBuffers`),
+**Where:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift:454-482` (`rebuildInstanceBuffers`),
 `:500-540` (`rebuildGlyphBuckets`), and the unconditional `MetalDecorationBuilder.build`
 call inside `upsertFragment` (`:280-286`).
 
@@ -195,8 +195,8 @@ to cover this trio too.
 ## Feature gap 1 — Toggle comment
 
 **Confirmed absent:** no `toggleComment`, `lineCommentPrefix`, `blockComment`, or
-comment-token concept exists anywhere in `Sources/Runestone` or the language packs
-(`RunestoneLanguages`, `RunestoneMarkdownLanguage`, `RunestoneGraphQLLanguage`) —
+comment-token concept exists anywhere in `Sources/Penumbra` or the language packs
+(`PenumbraLanguages`, `PenumbraMarkdownLanguage`, `PenumbraGraphQLLanguage`) —
 verified by exhaustive grep, not assumed. This is a Phase-27/VS-Code-parity item the
 brief explicitly calls out and it's a real, user-facing gap, not a documentation
 artifact like most of the brief's other asks.
@@ -206,10 +206,10 @@ computation struct, no mutation, `TextInputView` applies the edit under one undo
 group):
 
 - Add comment-token metadata. Simplest integration point: extend
-  `TreeSitterLanguage` (`Sources/Runestone/TextView/Language/TreeSitterLanguage.swift`)
+  `TreeSitterLanguage` (`Sources/Penumbra/TextView/Language/TreeSitterLanguage.swift`)
   with an optional `lineCommentPrefix: String?` (block-comment pairs are a stretch
   goal, not required for v1 — line comments cover the overwhelming majority of
-  toggle-comment usage and every bundled language in `RunestoneLanguages`).
+  toggle-comment usage and every bundled language in `PenumbraLanguages`).
   `JoinLinesService.swift:41` already hardcodes `"//"` for its own comment-merge
   special case — this is the second place that logic is needed, which is the signal
   a shared per-language token is worth adding now rather than than hardcoding again.
@@ -219,7 +219,7 @@ group):
   behavior) and returns a list of per-line insert/remove-prefix edits.
 - New `EditorActionID.toggleComment` in `EditorActionID.swift`'s "Line & block editing"
   group, `builtInTitles` entry, default keymap binding (⌘/ in `Keymap.default_`, ⌘/ in
-  `Keymap.intelliJ` too — check both presets in `Sources/Runestone/TextView/Keymap/Keymap.swift`
+  `Keymap.intelliJ` too — check both presets in `Sources/Penumbra/TextView/Keymap/Keymap.swift`
   for the existing ⌘/ status before assigning, avoid a collision).
   `TextInputView.toggleComment()` applies all edits from `CommentToggleService` under
   one `beginIsolatedUndoGrouping()`/`endUndoGrouping()` pair (mirroring

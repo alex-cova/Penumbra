@@ -1,6 +1,6 @@
 # Third-party notices
 
-Runestone itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)); it is a macOS port of
+Penumbra itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)); it is a macOS port of
 [simonbs/Runestone](https://github.com/simonbs/Runestone).
 
 ## Vendored markdown preview dependencies
@@ -22,7 +22,7 @@ only BeautifulMermaid and ElkSwift are wired into the build today.
 
 ## Bundled Tree-sitter grammars
 
-The `RunestoneLanguages`, `RunestoneGraphQLLanguage`, and `RunestoneMarkdownLanguage`
+The `PenumbraLanguages`, `PenumbraGraphQLLanguage`, and `PenumbraMarkdownLanguage`
 products embed third-party Tree-sitter grammars and highlight queries. Each grammar
 keeps the license of its upstream project; all are MIT.
 
@@ -37,8 +37,8 @@ keeps the license of its upstream project; all are MIT.
 | HTTP | [rest-nvim/tree-sitter-http](https://github.com/rest-nvim/tree-sitter-http) | MIT |
 | Mermaid | [monaqa/tree-sitter-mermaid](https://github.com/monaqa/tree-sitter-mermaid) | MIT |
 
-The TOML/SQL/Swift/Java/Go/Bash and Kotlin `*Runestone` wrapper targets were migrated
-from Hextech's former `Vendor/RunestoneLanguages` package; the Kotlin wrapper is
+The TOML/SQL/Swift/Java/Go/Bash and Kotlin `*Penumbra` wrapper targets were migrated
+from Hextech's former `Vendor/PenumbraLanguages` package; the Kotlin wrapper is
 hand-written to match the other language targets since simonbs/TreeSitterLanguages
 does not ship Kotlin.
 

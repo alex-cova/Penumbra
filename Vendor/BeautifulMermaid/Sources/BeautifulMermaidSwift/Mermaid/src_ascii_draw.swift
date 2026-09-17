@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/draw.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 // ============================================================================
 // Standalone grid→drawing coordinate conversion (for types-based AsciiGraph)

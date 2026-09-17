@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/pathfinder.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 open class original_src_ascii_pathfinder {
     public init() {}

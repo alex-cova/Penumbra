@@ -1,6 +1,6 @@
-# Runestone Performance Audit: Scaling to 500 MB–2 GB Files
+# Penumbra Performance Audit: Scaling to 500 MB–2 GB Files
 
-Scope: `Sources/Runestone` (text engine) and `Sources/EditorIntelligence` (+ `EditorIntelligenceLSP`).
+Scope: `Sources/Penumbra` (text engine) and `Sources/EditorIntelligence` (+ `EditorIntelligenceLSP`).
 Toolchain used for verification: Xcode 26.6 / Swift 6.3.3 / SDK macosx26.5. Package manifest currently
 declares `platforms: [.macOS(.v12)]`. All claims below are either (a) a direct code citation, (b) a
 directly-run measurement (build logs, compiler probes), or (c) explicitly labeled **HYPOTHESIS** with a
@@ -33,7 +33,7 @@ clone+`mmap` (or copy-to-temp+`mmap`), scan UTF-8 for line metrics without alloc
 the user's path does not SIGBUS the clone.
 
 ### 3. Line indexing
-`LineManager` (`Sources/Runestone/LineManager/LineManager.swift`) sits on an order-statistics tree of
+`LineManager` (`Sources/Penumbra/LineManager/LineManager.swift`) sits on an order-statistics tree of
 **fat leaves** (`PackedLineIndex`, ~64 `PackedLine` records per node) so short-line files do not allocate
 one heap object per line. Lookups remain O(log n). Text is not cached in the index. File-backed loads
 feed `rebuild(fromLineMetrics:)` from the UTF-8 scan (no second newline pass, no per-line substring).
@@ -43,10 +43,10 @@ Insert/delete split or merge packed slots and only touch the affected leaf (and 
 ### 4. Encoding
 Not handled by the library at all, by construction: a Swift `String` is always valid Unicode, so once a
 document reaches `TextViewState`, there is no invalid-byte, mixed-encoding, or mojibake path to audit
-inside Runestone. `LineEndingDetector` (`Sources/Runestone/Library/LineEndingDetector.swift:12-46`)
+inside Penumbra. `LineEndingDetector` (`Sources/Penumbra/Library/LineEndingDetector.swift:12-46`)
 samples up to 20 lines of the already-decoded string to guess LF/CRLF/CR; it never touches raw bytes or a
 BOM. **Any encoding sniffing, BOM stripping, or invalid-byte repair for a 2 GB file must happen in the
-host app before it ever calls into Runestone** — this is a hard architectural boundary, not a
+host app before it ever calls into Penumbra** — this is a hard architectural boundary, not a
 missing feature to patch internally.
 
 ### 5. Rendering
@@ -123,7 +123,7 @@ and no cancellation**, on whatever thread calls it (the find panel, i.e. main th
 appears to be newer infrastructure not yet wired into the built-in find UI.
 
 ### 9. Saving
-No save path exists anywhere in Runestone or `Example/Umbra` (`grep` for `write(to:`,
+No save path exists anywhere in Penumbra or `Example/Umbra` (`grep` for `write(to:`,
 `FileManager` write APIs, `atomically`, and `NSDocument` all came back empty). Saving is entirely the host
 application's responsibility; there is nothing to audit here beyond "the host app must not do a naive full
 rewrite if the goal is fast-save on a multi-GB file" (see Phase 4).
@@ -132,7 +132,7 @@ rewrite if the goal is fast-save on a multi-GB file" (see Phase 4).
 The `EditorIntelligence` platform is thoroughly actor-based: 34 custom actors across
 Completion/Navigation/Hover/Diagnostics/Refactoring/LSP/Indexing/Workspace/Cache (full list gathered via
 `grep -rn "^public actor "`), e.g. `IndexingService`, `Workspace`, `CompletionEngine`,
-`LSPWorkspaceSyncBridge`. Exactly one actor exists in `Runestone` proper: `TreeSitterLanguageParser`
+`LSPWorkspaceSyncBridge`. Exactly one actor exists in `Penumbra` proper: `TreeSitterLanguageParser`
 (`LanguageParser/TreeSitterLanguageParser.swift:9`). Everything else in the text engine —
 `LineManager`, `StringView`, `TextInputView`, `LayoutManager`, `FoldingController` — is a plain class
 mutated only on the main thread by convention (confirmed explicitly in the `FoldingController.swift:20-24`
@@ -144,14 +144,14 @@ This creates a hard boundary: every time the actor-based EIP layer needs to see 
 on the main-thread side must bridge the live `NSMutableString` into an immutable `Sendable` snapshot. Three
 independent bridge points do this **unconditionally on every keystroke, with no debounce**:
 
-- `RunestoneEditorAdapter.textViewDidChange` → `refreshDocument()` → `makeDocument(with:)` →
-  **`let text = textView.text as String`** (`RunestoneEditorAdapter.swift:107`) — a full
+- `PenumbraEditorAdapter.textViewDidChange` → `refreshDocument()` → `makeDocument(with:)` →
+  **`let text = textView.text as String`** (`PenumbraEditorAdapter.swift:107`) — a full
   `NSMutableString`→`String` bridge, documented in the adapter's own comment
-  (`RunestoneEditorAdapter.swift:102-104`) as "eager and unavoidable." (Selection-only changes already
-  avoid this by reusing the previous snapshot — `RunestoneEditorAdapter.swift:204-209` — so this
+  (`PenumbraEditorAdapter.swift:102-104`) as "eager and unavoidable." (Selection-only changes already
+  avoid this by reusing the previous snapshot — `PenumbraEditorAdapter.swift:204-209` — so this
   optimization exists for one call path but not the text-changed path.)
-- `RunestoneWorkbenchEditorAdapter.refreshLiveDocumentFromTextView` →
-  **`selected.text = textView.text`** (`RunestoneWorkbenchEditorAdapter.swift:~103`) — the same full
+- `PenumbraWorkbenchEditorAdapter.refreshLiveDocumentFromTextView` →
+  **`selected.text = textView.text`** (`PenumbraWorkbenchEditorAdapter.swift:~103`) — the same full
   bridge, for the multi-pane workbench adapter.
 - `LSPWorkspaceSyncBridge.handle(.documentChanged)` → **`syncService.notifyFullChange(document, version:)`**
   (`LSPWorkspaceSyncBridge.swift:63`) — bypasses the incremental, 250ms-batched machinery that already
@@ -169,7 +169,7 @@ the LSP sync service, which — as above — is bypassed for full-change notific
 genuinely lock-protected, not silenced warnings over real races:
 - `FindSearchEngine.swift:381-382` — `nonisolated(unsafe) static var cache` guarded by a co-located
   `NSLock`.
-- `RunestoneStateBuilder.swift:9,15,21,27` — four small carrier types (`PreparedState`, `WeakBox`,
+- `PenumbraStateBuilder.swift:9,15,21,27` — four small carrier types (`PreparedState`, `WeakBox`,
   `UncheckedBox`, `GenerationGate`); three are either immutable-after-init or `NSLock`-protected.
   `WeakBox<T>` was the one soft spot: a `weak var` mutated/read across threads with no explicit lock,
   and no comment explaining why it's exempt. **Fixed** — added a doc comment explaining the actual
@@ -193,7 +193,7 @@ not assumed from memory.
 manifest. Tools-version 5.5 predates Swift 6 language modes entirely, so **this package compiles in Swift
 5 language mode today**, on a Swift 6.3.3 toolchain, despite the audit brief's framing of it as a
 "Swift 6 (strict concurrency enabled)" codebase. To quantify the gap, I ran a clean build of the
-`Runestone` target with `-Xswiftc -strict-concurrency=complete` (the closest approximation to Swift 6
+`Penumbra` target with `-Xswiftc -strict-concurrency=complete` (the closest approximation to Swift 6
 mode available without changing tools-version) and it **completed successfully with 0 errors and 8,292
 warnings across 50 files** — the large majority explicitly annotated "this is an error in the Swift 6
 language mode" (`#SendingRisksDataRace`, `#ConformanceIsolation`, `#MutableGlobalVariable`,
@@ -222,12 +222,12 @@ spot-checked during this pass and still read as accurate descriptions of the cur
 Each entry: what/where, cost class, which stated metric it degrades, confidence.
 
 ### 1. Per-keystroke full-document copy + full re-parse + full re-index + full LSP resync (compounding) — CONFIRMED, **partially fixed**
-**Where (as originally found)**: `RunestoneEditorAdapter.swift:107`, `RunestoneWorkbenchEditorAdapter.swift:~103`,
+**Where (as originally found)**: `PenumbraEditorAdapter.swift:107`, `PenumbraWorkbenchEditorAdapter.swift:~103`,
 `IndexingService.swift:32-55`, `LSPWorkspaceSyncBridge.swift:63`.
 **Cost**: O(document size) NSString→String bridge, PLUS a second full tree-sitter parse, PLUS
 whole-document word tokenization, PLUS (if an LSP is attached) serializing the entire document into a
 `textDocument/didChange` full-sync payload — **all four, unthrottled, on every single character typed**,
-whenever `RunestoneEditorAdapter`/`RunestoneWorkbenchEditorAdapter` is attached to the `TextView` (i.e.
+whenever `PenumbraEditorAdapter`/`PenumbraWorkbenchEditorAdapter` is attached to the `TextView` (i.e.
 whenever any EIP feature — completion, hover, diagnostics, LSP — is wired up, which is the platform's
 entire purpose).
 **Degrades**: keystroke-to-render latency, directly and severely — this is the single largest threat to
@@ -263,7 +263,7 @@ Phase 4 remediation** — the shape of the curve (linear vs. super-linear) deter
 "skip eager parse above a size threshold" degradation mode in Phase 4 is needed.
 **Degrades**: "near-instant open" and "memory usage that does not scale linearly with file size" — both,
 simultaneously. Nothing enforces that this happens off the main thread — only
-`RunestoneStateBuilder.prepareAndApply` (`RunestoneStateBuilder.swift:74-98`) does that for you, and only
+`PenumbraStateBuilder.prepareAndApply` (`PenumbraStateBuilder.swift:74-98`) does that for you, and only
 if a caller opts into it.
 **Confidence**: CONFIRMED, with a real measurement at one data point; the full size curve is the next
 thing to measure with the harness, not a hypothesis about the mechanism itself.
@@ -315,7 +315,7 @@ respectively) rather than being simple unaddressed debt.
 before/after freeze-duration delta is a HYPOTHESIS to measure with Instruments, not done here.
 
 ### 6. No mmap/streaming/chunked loading — architecture gap — **fixed** (2026-08-26)
-**Was**: the entire file had to be resident as a `String` before Runestone did anything.
+**Was**: the entire file had to be resident as a `String` before Penumbra did anything.
 **Now**: `TextViewState.load` maps a private clone (`FileMapping`) and keeps it as the piece-tree
 original buffer. Line metrics are scanned from UTF-8 without allocating UTF-16 text. EIP snapshots
 for file-backed documents are elided (`text == nil`) and carry a ``TextRangeReader`` so completion,
@@ -339,7 +339,7 @@ whole original piece. Untitled / `init(text:)` still uses `NSMutableString`.
 **Confidence**: CONFIRMED with harness numbers at 10/100 MB; re-run 500 MB/2 GB for the table above.
 Umbra Open of the 500 MB fixture: launch with `--open <path>` and
 `Tools/PerfHarness/record-open-instruments.sh` (Time Profiler / Allocations / VM Tracker, subsystem
-`Runestone` / category `Performance`). Signposts wrap `TextViewState.prepare`, `LineManager.rebuild`,
+`Penumbra` / category `Performance`). Signposts wrap `TextViewState.prepare`, `LineManager.rebuild`,
 `StringView.replaceText`, and `LayoutManager.layoutLinesInViewport`.
 
 ### 7. Unbounded full-document undo snapshots for batch operations — CONFIRMED, **fixed**
@@ -372,7 +372,7 @@ same size) — keystroke-to-render latency.
 fixtures to see whether the gap widens (consistent with an O(line length) mechanism) or plateaus.
 
 ### 9. `Task { @MainActor in ... }` created per keystroke and per selection change — CONFIRMED, minor
-**Where**: `RunestoneEditorAdapter.swift:83,92,202`.
+**Where**: `PenumbraEditorAdapter.swift:83,92,202`.
 **Cost**: one unstructured `Task` allocation + scheduler hop per edit/selection event. Small in isolation
 (microseconds), but compounds with #1 and adds actor-hop overhead exactly where the goal is <16ms.
 **Degrades**: keystroke latency, marginally.
@@ -402,7 +402,7 @@ line-controller eviction it already did. The one line it must never evict is whi
 tracked as longest (`lineIDTrackingWidth`) — `setSize(of:to:)` reads that entry as the "current maximum"
 to compare newly-measured lines against, so losing it would make the comparison read 0 and let almost
 any subsequently-measured line incorrectly overtake it, silently shrinking the reported content width.
-Verified in `Tests/RunestoneTests/ContentSizeServiceTests.swift`.
+Verified in `Tests/PenumbraTests/ContentSizeServiceTests.swift`.
 **Confidence**: CONFIRMED and fixed. Not re-measured with Instruments (VM Tracker/Allocations) at scale
 — the fix bounds growth to memory-pressure-notification frequency, not continuously, since `clearMemory()`
 only fires on an actual `UIApplication.didReceiveMemoryWarningNotification`-equivalent signal in this
@@ -515,7 +515,7 @@ however long the scan takes.
 ### Highlighting: fix the eager full parse, keep the lazy per-line highlighting
 Per-line highlighting (Phase 1 §8) is already correctly viewport-scoped and lazy — no change needed there.
 The fix is making the *initial parse* non-blocking and, ideally, incremental/degradable: for files above
-some size threshold, either (a) always route through `RunestoneStateBuilder.prepareAndApply`'s background
+some size threshold, either (a) always route through `PenumbraStateBuilder.prepareAndApply`'s background
 queue (currently opt-in) so it's never on the caller's thread, and/or (b) add an explicit large-file
 degradation mode that skips the eager whole-document parse entirely and only parses+highlights the
 currently-visible region on demand, parsing the rest incrementally in the background while idle. (b) is
@@ -536,7 +536,7 @@ practice this mostly helps in-place fixed-width scenarios). For the general case
 deletes, which shift everything after the edit), atomic replacement (write to a temp file, `rename()`) is
 still the correct default for data safety — it is the only strategy that can't corrupt the file on a crash
 mid-write. Given saving is entirely outside this library (Phase 1 §9), this is guidance for the host app,
-not a Runestone change.
+not a Penumbra change.
 
 ### What's not worth doing
 - A custom executor for the render path: no actor contention exists on the render path today (Phase 3).
@@ -590,7 +590,7 @@ keystroke gate; on-screen compositing is not observable headlessly.
 ### 3. Phased migration plan
 1. **Debounce the EIP bridge (Phase 2 #1)** — highest win, lowest risk. **Partially done.** Added a
    200ms coalescing window (matching `LSPDocumentSyncService`'s default) in front of
-   `RunestoneEditorAdapter.refreshDocument()` and `RunestoneWorkbenchEditorAdapter`'s content refresh
+   `PenumbraEditorAdapter.refreshDocument()` and `PenumbraWorkbenchEditorAdapter`'s content refresh
    (split out of the old `refreshLiveDocumentFromTextView`, which turned out to also run the full
    O(document) bridge on every *selection* change, not just every edit — now only the debounced
    content path does that; selection/scroll updates stay synchronous and cheap). Both are `EventBus`
@@ -621,7 +621,7 @@ keystroke gate; on-screen compositing is not observable headlessly.
    with Instruments — the full test suite and a `SmokeTest` run confirm correctness, not the allocation
    delta).
 4. **Make the eager full-document parse non-blocking and cancellable by default** (Phase 2 #2) — route
-   `TextViewState` construction through `RunestoneStateBuilder.prepareAndApply` universally (or make an
+   `TextViewState` construction through `PenumbraStateBuilder.prepareAndApply` universally (or make an
    equivalent the default rather than opt-in), and make the underlying `ts_parser_parse` cancellable
    mid-flight for the "user closed the file/opened a different one before parse finished" case. This is
    the first phase that touches the open-file "happy path," so it needs a feature-flag rollout and A/B
@@ -634,9 +634,9 @@ keystroke gate; on-screen compositing is not observable headlessly.
    which computes its own inverse in turn, so undo/redo/undo/... never holds more than the edited
    ranges' worth of text per step regardless of document size — the "N replace-alls ≈ N × document
    size" blow-up this item was written to fix is gone. Verified with
-   `Tests/RunestoneTests/TextEditHelperTests.swift` (inverse correctness, including cases where
+   `Tests/PenumbraTests/TextEditHelperTests.swift` (inverse correctness, including cases where
    replacement length differs from the original range, which shifts later ranges) and
-   `Tests/RunestoneTests/BatchReplaceUndoTests.swift` (round-trips through the real `TextView` +
+   `Tests/PenumbraTests/BatchReplaceUndoTests.swift` (round-trips through the real `TextView` +
    `UndoManager`, including a many-replacement stress case).
    **Found and fixed a separate, pre-existing correctness bug while adding that test coverage** —
    this is a Swift-6-adjacent-looking but actually orthogonal bug, called out per the audit's own
@@ -673,7 +673,7 @@ API changes; 6 is additive; 7 is fully decoupled.
 
 ### 4. Instrumentation
 
-os_signpost points (implemented in `RunestoneSignposts`, subsystem `Runestone`, category `Performance`).
+os_signpost points (implemented in `PenumbraSignposts`, subsystem `Penumbra`, category `Performance`).
 Record Umbra **Open** of the 500 MB short-line fixture with Time Profiler, Allocations, and VM
 Tracker; filter on these names.
 
@@ -693,7 +693,7 @@ numbers in §2 are the quantitative gate.
 | `TreeSitterParser.parse` | `TreeSitterParser.swift:31` | Time Profiler: fraction of open time spent in `ts_parser_parse_string_encoding` specifically, vs. `LineManager.rebuild`. |
 | `LineManager.rebuild` | `LineManager.swift:51` | Allocations: object-count spike from the per-line `substring(with:)` calls (Phase 2 #4) — should roughly halve after the fix. |
 | `StringView.replaceText` | `StringView.swift:49` | Time Profiler + Allocations: per-edit duration vs. edit position (start/middle/end of buffer) — tests Phase 2 #3's position-dependence hypothesis. |
-| `RunestoneEditorAdapter.refreshDocument` | `RunestoneEditorAdapter.swift:91` | Time Profiler: duration and *frequency* — frequency should drop to ~1 per debounce window after migration step 1, not 1 per keystroke. |
+| `PenumbraEditorAdapter.refreshDocument` | `PenumbraEditorAdapter.swift:91` | Time Profiler: duration and *frequency* — frequency should drop to ~1 per debounce window after migration step 1, not 1 per keystroke. |
 | `IndexingService.indexDocument` | `IndexingService.swift:32` | Swift Concurrency template: how many of these actor jobs are in flight/queued during rapid typing — should collapse to one after debouncing. |
 | `LSPWorkspaceSyncBridge.handle` | `LSPWorkspaceSyncBridge.swift:52` | System Trace: bytes serialized per event before/after switching from `notifyFullChange` to `enqueueChange`. |
 | `FoldingController.recompute` | `FoldingController.swift:294` | Time Profiler: only fires when folding is enabled — confirms this cost is conditional, and measures its magnitude at high line counts. |
@@ -890,7 +890,7 @@ fixture is 44 µs, the worst scroll frame is 0.73 ms, and construction is at mma
 optimization was skipped rather than implemented speculatively. Those two functions are still
 allocation-heavy per call, so this remains available if a future profile points at them.
 
-**Test coverage:** `Tests/RunestoneTests/DocumentLineScanTests.swift` (18 tests). The risk the
+**Test coverage:** `Tests/PenumbraTests/DocumentLineScanTests.swift` (18 tests). The risk the
 resumable scanner introduces is entirely about buffer boundaries, so the bulk of it is equivalence
 testing: every fixture scanned at every single split point, at every *pair* of split points, and
 with every byte in its own buffer, each compared against the single-pass `scan`. Fixtures cover
@@ -922,7 +922,7 @@ assert a performance hint.
 
 - The audit and the harness described in §2 involved no production code changes (the harness is new,
   additive tooling under `Tools/`). A subsequent round of fixes, explicitly requested afterward, *did*
-  change `Sources/Runestone` — each such change is called out inline (search this document for
+  change `Sources/Penumbra` — each such change is called out inline (search this document for
   "**fixed**") and summarized in §3's migration-plan status; nothing was changed silently or outside
   what's documented here.
 - Claims are labeled CONFIRMED (directly read in code or directly measured) or HYPOTHESIS (plausible cost

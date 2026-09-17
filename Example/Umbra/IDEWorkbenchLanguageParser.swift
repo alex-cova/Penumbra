@@ -1,7 +1,7 @@
 import EditorIntelligence
-import Runestone
-import RunestoneLanguages
-import RunestoneMarkdownLanguage
+import Penumbra
+import PenumbraLanguages
+import PenumbraMarkdownLanguage
 
 /// Per-document Tree-sitter parser for workspace symbol indexing.
 final class IDEWorkbenchLanguageParser: LanguageParser, @unchecked Sendable {

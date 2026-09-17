@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/index.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private func _basicBoxDimensions(_ label: String, _ options: ShapeRenderOptions) -> ShapeDimensions {
     let lines = splitLines(label)

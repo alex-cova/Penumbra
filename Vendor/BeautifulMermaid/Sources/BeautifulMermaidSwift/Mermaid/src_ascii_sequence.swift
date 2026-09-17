@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/sequence.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public struct AsciiSequenceActor {
     public var id: String

@@ -1,5 +1,5 @@
 import EditorIntelligence
-import Runestone
+import Penumbra
 
 @MainActor
 final class IDEIntelligenceServices {
@@ -32,7 +32,7 @@ final class IDEIntelligenceServices {
 
     func makeController(
         textView: TextView,
-        adapter: RunestoneWorkbenchEditorAdapter,
+        adapter: PenumbraWorkbenchEditorAdapter,
         workspace: Workspace
     ) -> EditorIntelligenceController {
         let services = EditorIntelligenceServices(
@@ -61,7 +61,7 @@ final class IDEIntelligenceServices {
     }
 
     @MainActor
-    static func openLocation(_ location: Location, adapter: RunestoneWorkbenchEditorAdapter) -> Bool {
+    static func openLocation(_ location: Location, adapter: PenumbraWorkbenchEditorAdapter) -> Bool {
         let documentID = location.documentID
         let workbench = adapter.workbench
         guard let pane = workbench.panes.first(where: { pane in

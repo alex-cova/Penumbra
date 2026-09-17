@@ -1,6 +1,6 @@
 excluded:
-  - Sources/Runestone/Library/L10n.swift
-  - Sources/Runestone/Documentation.docc/Tutorials
+  - Sources/Penumbra/Library/L10n.swift
+  - Sources/Penumbra/Documentation.docc/Tutorials
   - Submodules
   - .build
 disabled_rules:

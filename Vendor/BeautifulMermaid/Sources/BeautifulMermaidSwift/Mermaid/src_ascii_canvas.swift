@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/canvas.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 // Global compatibility aliases expected by ascii/*.swift modules.
 public typealias AsciiNodeShape = original_src_ascii_types.AsciiNodeShape

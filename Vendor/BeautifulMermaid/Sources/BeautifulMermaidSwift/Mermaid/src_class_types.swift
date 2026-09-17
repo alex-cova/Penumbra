@@ -1,6 +1,6 @@
 // Ported from original/src/class/types.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public typealias ClassDiagramModel = ClassDiagram
 public typealias ClassNodeModel = ClassNode

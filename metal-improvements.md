@@ -68,12 +68,12 @@ These were real bugs. Most have fixes on the current branch; the remaining trade
 
 Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever `spec.frame != fragment.frame` even while pending. Kills defect 2 only.
 
-**Acceptance:** two new tests in `Tests/RunestoneTests/TextViewMetalSmokeTests.swift`:
+**Acceptance:** two new tests in `Tests/PenumbraTests/TextViewMetalSmokeTests.swift`:
 
 - `testMetalPaintsEditedCharacterOnExistingLineWhileHighlightIsPending` — with a forced-slow highlighter, type into an existing highlighted line and assert the new character's glyph is present (instance count / `metalDebugGlyphColors` at that location) rather than the pre-edit set.
 - `testMetalMovesHeldGlyphsWhenFragmentFrameChangesWhileHighlightPending` — insert a line above a highlighted line mid-parse; assert the held glyph origins moved by one line height.
 
-**Files:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift`, `Sources/Runestone/TextView/Metal/GlyphRunExtractor.swift`, `Sources/Runestone/TextView/LineController/LineController.swift` (`isSyntaxHighlightPending`), `Sources/Runestone/TextView/Metal/LinePaintBackend.swift` (`LineFragmentPaintSpec`), `Sources/Runestone/TextView/Core/LayoutManager.swift` (spec assembly ~913–942).
+**Files:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift`, `Sources/Penumbra/TextView/Metal/GlyphRunExtractor.swift`, `Sources/Penumbra/TextView/LineController/LineController.swift` (`isSyntaxHighlightPending`), `Sources/Penumbra/TextView/Metal/LinePaintBackend.swift` (`LineFragmentPaintSpec`), `Sources/Penumbra/TextView/Core/LayoutManager.swift` (spec assembly ~913–942).
 
 **Effort:** M (full fix) / S (interim positional fix). **Risk:** medium — this is the code path the white-flash regression lives on; land it behind the acceptance tests above plus the existing `testMetalHoldsSyntaxColorsInsteadOfDefaultWhenEditOutrunsHighlight`.
 
@@ -103,7 +103,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Symptom:** none directly; this is the test gap that let the `665f59b` regression ship.
 
-**What exists already** (the previous revision of this doc understated it): `TextViewMetalSmokeTests` covers `testMetalHoldsSyntaxColorsInsteadOfDefaultWhenEditOutrunsHighlight` and `testMetalPaintsNewlyInsertedLineImmediatelyWhileHighlightIsPending`; scheduling-state coverage is in `Tests/RunestoneTests/LineSyntaxHighlightSchedulingTests.swift` (`isSyntaxHighlightPending` assertions ~145–158).
+**What exists already** (the previous revision of this doc understated it): `TextViewMetalSmokeTests` covers `testMetalHoldsSyntaxColorsInsteadOfDefaultWhenEditOutrunsHighlight` and `testMetalPaintsNewlyInsertedLineImmediatelyWhileHighlightIsPending`; scheduling-state coverage is in `Tests/PenumbraTests/LineSyntaxHighlightSchedulingTests.swift` (`isSyntaxHighlightPending` assertions ~145–158).
 
 **What is missing:**
 
@@ -113,7 +113,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Note:** `TreeSitterHighlightReadinessTests.swift` (cited by the previous revision) does not exist. Do not go looking for it.
 
-**Files:** `Tests/RunestoneTests/TextViewMetalSmokeTests.swift`, `Tests/RunestoneTests/LineSyntaxHighlightSchedulingTests.swift`, `Sources/Runestone/TextView/Core/TextView.swift` (`metalDebugGlyphColors(atLocation:)` ~957).
+**Files:** `Tests/PenumbraTests/TextViewMetalSmokeTests.swift`, `Tests/PenumbraTests/LineSyntaxHighlightSchedulingTests.swift`, `Sources/Penumbra/TextView/Core/TextView.swift` (`metalDebugGlyphColors(atLocation:)` ~957).
 
 **Effort:** M. **Risk:** low. Do this together with P0-1 — the harness is what makes P0-1 verifiable.
 
@@ -141,7 +141,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Fix:** sort deterministically before writing buffers — fragments by `(frame.minY, frame.minX, id)`, page order by `pageID`. Both are ~200-element sorts once per rebuild, negligible next to the pixel-align map already there.
 
-**Acceptance:** `testInstanceOrderIsStableAcrossRebuilds` in `Tests/RunestoneTests/MetalDecorationTests.swift` — rebuild twice with identical fragment state (insert them in different orders) and assert byte-identical instance arrays. Also unblocks byte-comparable `snapshot-metal` goldens.
+**Acceptance:** `testInstanceOrderIsStableAcrossRebuilds` in `Tests/PenumbraTests/MetalDecorationTests.swift` — rebuild twice with identical fragment state (insert them in different orders) and assert byte-identical instance arrays. Also unblocks byte-comparable `snapshot-metal` goldens.
 
 **Effort:** S. **Risk:** low. Do this before P2-2 and before any golden-image work.
 
@@ -157,7 +157,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Acceptance:** `MetalDecorationTests` case asserting `build` is not re-entered for an unchanged upsert (inject a counting builder or assert via a `didRebuildDecorations` debug counter), plus no change to existing decoration goldens.
 
-**Files:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift`, `Sources/Runestone/TextView/Metal/MetalDecorationBuilder.swift`, `Sources/Runestone/TextView/Metal/LinePaintBackend.swift`, `Tests/RunestoneTests/MetalDecorationTests.swift`.
+**Files:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift`, `Sources/Penumbra/TextView/Metal/MetalDecorationBuilder.swift`, `Sources/Penumbra/TextView/Metal/LinePaintBackend.swift`, `Tests/PenumbraTests/MetalDecorationTests.swift`.
 
 **Effort:** M. **Risk:** medium — a missed field in the equality check means stale decorations, which is exactly the class of bug PR 4 fixed. Enumerate `MetalDecorationBuilder.build`'s reads exhaustively rather than deriving equality from `LineFragmentPaintSpec` wholesale.
 
@@ -173,7 +173,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Acceptance:** `Tools/PerfHarness` keystroke-frame probe (needs P1-5) showing reduced per-keystroke rebuild time on a 500 MB fixture; correctness held by the existing smoke tests plus P1-1's order-stability test.
 
-**Files:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift` (`rebuildInstanceBuffers` ~464, `rebuildGlyphBuckets` ~510), `plan.md` §"PR 6 — Partial invalidation, shared atlas, off-screen pause".
+**Files:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift` (`rebuildInstanceBuffers` ~464, `rebuildGlyphBuckets` ~510), `plan.md` §"PR 6 — Partial invalidation, shared atlas, off-screen pause".
 
 **Effort:** L. **Risk:** medium. Sequence after P1-1 (deterministic order makes patching tractable) and P1-2 (cheaper win first).
 
@@ -189,7 +189,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Acceptance:** `MetalActivationTests` / `GlyphAtlasTests` case asserting `debugStats` performs no blit (e.g. census fields default to 0 / a `nil` sentinel), and PerfHarness output showing stable `metalDrawNanosP95` under repeated polling.
 
-**Files:** `Sources/Runestone/TextView/Metal/MetalRenderer.swift` (`DebugStats`, `debugStats`), `Sources/Runestone/TextView/Metal/GlyphAtlas.swift` (`debugCoverageTexelCensus`, `copyPixels`), `Sources/Runestone/TextView/Core/TextView.swift` (~942–989).
+**Files:** `Sources/Penumbra/TextView/Metal/MetalRenderer.swift` (`DebugStats`, `debugStats`), `Sources/Penumbra/TextView/Metal/GlyphAtlas.swift` (`debugCoverageTexelCensus`, `copyPixels`), `Sources/Penumbra/TextView/Core/TextView.swift` (~942–989).
 
 **Effort:** S. **Risk:** low, but it is a prerequisite for P1-5 being meaningful.
 
@@ -209,7 +209,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Update:** `.github/workflows/metal.yml` now defines focused and nightly jobs for a self-hosted macOS Metal runner, with required-Metal mode so missing GPU support fails instead of silently skipping.
 
-**Files:** `Tools/PerfHarness/Sources/Commands.swift`, `Tools/PerfHarness/Sources/main.swift`, `Sources/Runestone/TextView/Core/TextView.swift` (debug stats), `EDITOR_PERFORMANCE_REPORT.md` (§benchmark gaps).
+**Files:** `Tools/PerfHarness/Sources/Commands.swift`, `Tools/PerfHarness/Sources/main.swift`, `Sources/Penumbra/TextView/Core/TextView.swift` (debug stats), `EDITOR_PERFORMANCE_REPORT.md` (§benchmark gaps).
 
 **Effort:** M. **Risk:** low.
 
@@ -223,7 +223,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Fix direction:** measure the actual miss rate first (add a `rasterCap` skip counter to `DebugStats` — cheap, and P1-4 makes stats safe to poll). Only then tune `perFrameLimit`, widen `MetalProjection.atlasWarmRect`, or extend `prewarm` to the ranges the document actually uses. Moving the CPU bitmap build off-main is permitted by the design doc for prewarm and is the real fix if misses are common.
 
-**Files:** `Sources/Runestone/TextView/Metal/GlyphRunExtractor.swift` (budget, `pendingRasterRetry`, run fallback ~146–191), `Sources/Runestone/TextView/Metal/GlyphAtlas.swift` (LRU, `lruBudgetBytes = 32 MB`), `Sources/Runestone/TextView/Metal/MetalRenderer.swift` (`rasterBudget`, `prewarm`), `Sources/Runestone/TextView/Metal/GlyphRasterizer.swift`, `Tests/RunestoneTests/GlyphRunExtractorTests.swift`.
+**Files:** `Sources/Penumbra/TextView/Metal/GlyphRunExtractor.swift` (budget, `pendingRasterRetry`, run fallback ~146–191), `Sources/Penumbra/TextView/Metal/GlyphAtlas.swift` (LRU, `lruBudgetBytes = 32 MB`), `Sources/Penumbra/TextView/Metal/MetalRenderer.swift` (`rasterBudget`, `prewarm`), `Sources/Penumbra/TextView/Metal/GlyphRasterizer.swift`, `Tests/PenumbraTests/GlyphRunExtractorTests.swift`.
 
 **Effort:** M. **Risk:** low.
 
@@ -237,7 +237,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Fix direction:** measure with `scroll-frames` first. Then consider deferring typeset for fragments outside the viewport but inside the emit band, and batching upserts during fast scroll (velocity-gated).
 
-**Files:** `Sources/Runestone/TextView/Core/TextView.swift` (forced layout on `contentOffset`), `Sources/Runestone/TextView/Core/LayoutManager.swift` (`layoutLinesInViewport`), `Sources/Runestone/TextView/Metal/MetalTextCanvasView.swift`, `Tools/PerfHarness/Sources/main.swift` (`scroll-frames`).
+**Files:** `Sources/Penumbra/TextView/Core/TextView.swift` (forced layout on `contentOffset`), `Sources/Penumbra/TextView/Core/LayoutManager.swift` (`layoutLinesInViewport`), `Sources/Penumbra/TextView/Metal/MetalTextCanvasView.swift`, `Tools/PerfHarness/Sources/main.swift` (`scroll-frames`).
 
 **Effort:** L. **Risk:** medium — touches the shared CG path too.
 
@@ -251,7 +251,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Constraint:** the page guide and current-line fill are AppKit views showing *through* the transparent canvas. Flipping `isOpaque = true` before those fills exist in Metal hides them. Ship the fills first, the flag second, in that order, and keep caret/selection z-order intact (`plan.md` §G, §"Alternatives — E").
 
-**Files:** `plan.md` §G and §"PR 10", `Sources/Runestone/TextView/Metal/MetalRenderer.swift`, `Sources/Runestone/TextView/Metal/MetalDecorationBuilder.swift`, `Sources/Runestone/TextView/Core/LayoutManager.swift` (`layoutLineSelection`, page guide), `Sources/Runestone/TextView/Metal/MetalTextCanvasView.swift` (`isOpaque`), `Tests/RunestoneTests/MetalTextCanvasViewTests.swift`.
+**Files:** `plan.md` §G and §"PR 10", `Sources/Penumbra/TextView/Metal/MetalRenderer.swift`, `Sources/Penumbra/TextView/Metal/MetalDecorationBuilder.swift`, `Sources/Penumbra/TextView/Core/LayoutManager.swift` (`layoutLineSelection`, page guide), `Sources/Penumbra/TextView/Metal/MetalTextCanvasView.swift` (`isOpaque`), `Tests/PenumbraTests/MetalTextCanvasViewTests.swift`.
 
 **Effort:** L. **Risk:** high (visual regressions in chrome). Gate on P1-1 + working goldens.
 
@@ -265,7 +265,7 @@ Cheaper interim fix if (2) is too large: keep the hold, but re-extract whenever 
 
 **Fix direction:** (a) enumerate the `TextViewSmokeTests` / `AppearanceChangeSmokeTests` cases with no Metal counterpart and port the visually meaningful ones; (b) make `snapshot-metal` goldens byte-comparable — **requires P1-1**; (c) stand up CI with a GPU-capable runner, which does not exist yet, and only then add a nightly golden job. Treat (c) as its own infrastructure task, not a test-writing task.
 
-**Files:** `Tests/RunestoneTests/TextViewMetalSmokeTests.swift`, `Tests/RunestoneTests/TextViewSmokeTests.swift`, `Tests/RunestoneTests/AppearanceChangeSmokeTests.swift`, `Tools/PerfHarness/Sources/main.swift` (`snapshot-metal`), `Sources/Runestone/TextView/Metal/MetalActivation.swift`.
+**Files:** `Tests/PenumbraTests/TextViewMetalSmokeTests.swift`, `Tests/PenumbraTests/TextViewSmokeTests.swift`, `Tests/PenumbraTests/AppearanceChangeSmokeTests.swift`, `Tools/PerfHarness/Sources/main.swift` (`snapshot-metal`), `Sources/Penumbra/TextView/Metal/MetalActivation.swift`.
 
 **Effort:** L. **Risk:** low.
 
@@ -333,18 +333,18 @@ Two independent tracks. The correctness track should land first; the perf track 
 
 | Component | Path | Lines |
 |---|---|---|
-| Renderer core | `Sources/Runestone/TextView/Metal/MetalRenderer.swift` | 625 |
-| Canvas / present | `Sources/Runestone/TextView/Metal/MetalTextCanvasView.swift` | 397 |
-| Glyph extract | `Sources/Runestone/TextView/Metal/GlyphRunExtractor.swift` | 640 |
-| Atlas (LRU, 32 MB, 2048² coverage / 1024² color pages) | `Sources/Runestone/TextView/Metal/GlyphAtlas.swift` | 748 |
-| Rasterizer | `Sources/Runestone/TextView/Metal/GlyphRasterizer.swift` | 368 |
-| Decorations | `Sources/Runestone/TextView/Metal/MetalDecorationBuilder.swift` | 406 |
+| Renderer core | `Sources/Penumbra/TextView/Metal/MetalRenderer.swift` | 625 |
+| Canvas / present | `Sources/Penumbra/TextView/Metal/MetalTextCanvasView.swift` | 397 |
+| Glyph extract | `Sources/Penumbra/TextView/Metal/GlyphRunExtractor.swift` | 640 |
+| Atlas (LRU, 32 MB, 2048² coverage / 1024² color pages) | `Sources/Penumbra/TextView/Metal/GlyphAtlas.swift` | 748 |
+| Rasterizer | `Sources/Penumbra/TextView/Metal/GlyphRasterizer.swift` | 368 |
+| Decorations | `Sources/Penumbra/TextView/Metal/MetalDecorationBuilder.swift` | 406 |
 | Device / library / kill switch | `MetalContext.swift`, `MetalActivation.swift` | 298 / 42 |
-| Projection & pixel align | `Sources/Runestone/TextView/Metal/MetalProjection.swift` | 62 |
+| Projection & pixel align | `Sources/Penumbra/TextView/Metal/MetalProjection.swift` | 62 |
 | Instance & key types | `GlyphInstance.swift`, `GlyphKey.swift`, `DecorationInstance.swift`, `MetalColor.swift` | 126 / 77 / 48 / 30 |
-| Backend protocol + CG backend | `Sources/Runestone/TextView/Metal/LinePaintBackend.swift` | 113 |
-| Layout integration | `Sources/Runestone/TextView/Core/LayoutManager.swift` | — |
-| Pending-highlight signal | `Sources/Runestone/TextView/LineController/LineController.swift` | — |
+| Backend protocol + CG backend | `Sources/Penumbra/TextView/Metal/LinePaintBackend.swift` | 113 |
+| Layout integration | `Sources/Penumbra/TextView/Core/LayoutManager.swift` | — |
+| Pending-highlight signal | `Sources/Penumbra/TextView/LineController/LineController.swift` | — |
 | Tests | `TextViewMetalSmokeTests`, `GlyphAtlasTests`, `GlyphRunExtractorTests`, `MetalDecorationTests`, `MetalProjectionTests`, `MetalTextCanvasViewTests`, `MetalActivationTests` | — |
 | Design doc / audit trail | `plan.md`; `EDITOR_PERFORMANCE_REPORT.md`, `editor-improvements.md` | — |
 

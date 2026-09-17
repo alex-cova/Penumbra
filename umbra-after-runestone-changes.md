@@ -1,12 +1,12 @@
-# Plan: Adopt the Runestone APIs from `required-changes-runestone.md` in Umbra
+# Plan: Adopt the Penumbra APIs from `required-changes-penumbra.md` in Umbra
 
-Do this **after** the engine work in `required-changes-runestone.md` has landed. Until then, keep the current Umbra workarounds (`UmbraKeymap`, `GoToLineCommand` prompt, host `EditorActionID("findInFiles")`, disk `FindInFilesService`).
+Do this **after** the engine work in `required-changes-penumbra.md` has landed. Until then, keep the current Umbra workarounds (`UmbraKeymap`, `GoToLineCommand` prompt, host `EditorActionID("findInFiles")`, disk `FindInFilesService`).
 
 Scope is Umbra + `UmbraCore` + `UmbraTests` only. Do not re-implement engine behavior in the app.
 
 ## Preconditions (engine must already provide)
 
-Confirm each item in Runestone before touching Umbra:
+Confirm each item in Penumbra before touching Umbra:
 
 1. **`Keymap.sublime`** binds ⌘D → `.selectNextOccurrence` and ⌘⇧D → `.duplicateLines` (no host rebind needed).
 2. **`CommandPaletteController`** (or a small engine Go-to-Line helper it owns) handles `.goToLine`: prompt for a 1-based line, call `TextView.goToLine(_:)`. Hosts may still wrap `editorActionHandler` and intercept first.
@@ -59,7 +59,7 @@ These are product chrome, not engine workarounds:
 - Remove `showGoToLine` / `promptGoToLine` / `isPromptingGoToLine` / `applyGoToLine` from `IDEWorkspace`.
 - Go menu **Go to Line…** should call the same engine path the keymap uses: `adapter.textView?.perform(.goToLine)` (same pattern as Find / Replace).
 - Delete `Example/UmbraCore/GoToLine.swift` once nothing in Umbra calls it.
-- Move or drop `GoToLineTests`: parse/apply coverage belongs in Runestone if the engine owns the prompt; Umbra only needs a structural/menu check that Go to Line still calls `perform(.goToLine)`.
+- Move or drop `GoToLineTests`: parse/apply coverage belongs in Penumbra if the engine owns the prompt; Umbra only needs a structural/menu check that Go to Line still calls `perform(.goToLine)`.
 
 Keep a reentrancy guard only if the engine does not already debounce menu + keymap both firing ⌘G.
 
@@ -69,7 +69,7 @@ Keep a reentrancy guard only if the engine does not already debounce menu + keym
 
 **After.** Use the engine types. Keep the panel.
 
-Suggested shape (adapt names to whatever Runestone shipped):
+Suggested shape (adapt names to whatever Penumbra shipped):
 
 1. **Action.** `installUmbraActionHandler` / Find menu / palette command all end in `showFindInFiles()` as they do now, but the action ID is `.findInFiles`. If the engine also presents its own UI for that action, either:
    - let the engine UI win and retire `FindInFilesPanel`, **or**
@@ -101,14 +101,14 @@ No Umbra parser for palette prefixes — if sigils mis-route, that is an engine 
 
 After tasks 1–3:
 
-- If `UmbraCore` has no remaining types, delete the target, drop it from `Package.swift` and the Umbra executable, and move leftover tests to depend on `Runestone` only (or keep a tiny host helper target if project-file enumeration stays shared).
+- If `UmbraCore` has no remaining types, delete the target, drop it from `Package.swift` and the Umbra executable, and move leftover tests to depend on `Penumbra` only (or keep a tiny host helper target if project-file enumeration stays shared).
 - `UmbraTests` remains; it must not import the Umbra **executable**.
 
 ## Task 6 — Docs and leftover comments
 
-- Delete or rewrite `required-changes-runestone.md` so it does not describe workarounds that no longer exist. If any engine gap remains, keep only those bullets.
+- Delete or rewrite `required-changes-penumbra.md` so it does not describe workarounds that no longer exist. If any engine gap remains, keep only those bullets.
 - Update `Example/README.md` shortcuts if ⌘P meaning changes.
-- Strip comments that say “Runestone has no `findInFiles`” / “host rebinds because Keymap.sublime is swapped.”
+- Strip comments that say “Penumbra has no `findInFiles`” / “host rebinds because Keymap.sublime is swapped.”
 
 ## Suggested order
 
@@ -120,7 +120,7 @@ After tasks 1–3:
 
 ## Verification
 
-- `git diff --stat -- Example/Umbra Example/UmbraCore Tests/UmbraTests Package.swift` is the only expected app churn (plus README / `required-changes-runestone.md`).
+- `git diff --stat -- Example/Umbra Example/UmbraCore Tests/UmbraTests Package.swift` is the only expected app churn (plus README / `required-changes-penumbra.md`).
 - `swift test --filter UmbraTests` green.
 - `swift build --product Umbra` green.
 - Manual: Sublime preset — ⌘D next occurrence, ⌘⇧D duplicate, ⌘⇧F Find in Files, ⌘G Go to Line (one prompt, not two), ⌘P accepts `file`, `@symbol`, `#text`, `:N`.
@@ -129,5 +129,5 @@ After tasks 1–3:
 ## Non-goals
 
 - Package Control, plugins, build systems, Vintage, macros, Replace in Files, `.sublime-keymap` files.
-- Changing Runestone in this follow-up (that work is the prerequisite).
+- Changing Penumbra in this follow-up (that work is the prerequisite).
 - Pixel-perfect remaining Sublime bindings (⌃G vs ⌘G, ⌘B sidebar vs definition).

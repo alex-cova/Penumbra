@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/converter.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 open class original_src_ascii_converter {
     public init() {}

@@ -1,8 +1,8 @@
 import AppKit
-import Runestone
+import Penumbra
 
 /// Example-app theme: quiet gutter, workbench-matched surfaces, DefaultTheme syntax colors.
-final class IDEEditorTheme: Runestone.Theme, @unchecked Sendable {
+final class IDEEditorTheme: Penumbra.Theme, @unchecked Sendable {
     static let shared = IDEEditorTheme()
 
     private let syntax = DefaultTheme()

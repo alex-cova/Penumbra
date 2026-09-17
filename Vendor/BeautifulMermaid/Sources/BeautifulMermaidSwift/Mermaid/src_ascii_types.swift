@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/types.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 open class original_src_ascii_types {
     public init() {}

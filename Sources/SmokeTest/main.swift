@@ -1,6 +1,6 @@
 import AppKit
-import Runestone
-import RunestoneMarkdownLanguage
+import Penumbra
+import PenumbraMarkdownLanguage
 
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
@@ -14,7 +14,7 @@ application.setActivationPolicy(.accessory)
 // across the board and not meaningful for comparison.
 //
 // This runs ahead of the basic smoke test below and uses TextView.replace(_:withText:) (the same
-// programmatic entry point RunestoneEditorAdapter.applyEdit uses) rather than insertText(_:), so
+// programmatic entry point PenumbraEditorAdapter.applyEdit uses) rather than insertText(_:), so
 // it doesn't depend on the process actually holding key-window/first-responder status, which
 // isn't guaranteed in every environment this executable runs in (e.g. headless CI).
 

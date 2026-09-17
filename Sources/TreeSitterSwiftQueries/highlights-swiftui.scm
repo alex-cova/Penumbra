@@ -1,4 +1,4 @@
-; Runestone SwiftUI overlay — layered on upstream tree-sitter-swift highlights.
+; Penumbra SwiftUI overlay — layered on upstream tree-sitter-swift highlights.
 ; Property wrappers and common SwiftUI view types get distinct captures for theme coloring.
 
 ; Common property-wrapper type names inside attributes

@@ -1,4 +1,4 @@
-# Runestone editing-latency pass — 2026-09-15
+# Penumbra editing-latency pass — 2026-09-15
 
 Scope: confirmed regressions and gaps found by independently re-verifying the two existing audits
 (`PERFORMANCE_AUDIT.md`, `audit.md`) against the current code and tracing the live typing/render
@@ -180,7 +180,7 @@ layer; flagged under Remaining Bottlenecks / harness gaps below.
 ### 4. Feature gap — toggle line comment (⌘/)
 
 **Confirmed absent** before this pass: exhaustive `grep` for `toggleComment`, `lineCommentPrefix`,
-`blockComment`, or any comment-token concept returned nothing anywhere in `Sources/Runestone` or the
+`blockComment`, or any comment-token concept returned nothing anywhere in `Sources/Penumbra` or the
 language packs. `JoinLinesService` already special-cased `"//"` for its own comment-merge behavior —
 the second place this exact logic was needed, which is the signal a shared per-language token was
 worth adding.
@@ -207,8 +207,8 @@ delivered work rather than assuming "wired up" meant "usable":
 
 1. **No bundled language actually had `lineCommentPrefix` set.** Adding the field to
    `TreeSitterLanguage` made the feature *possible*, but every real, shippable language
-   (`RunestoneLanguages`' JS/TS/Python/YAML/Swift/Go/Java/Kotlin/Bash/SQL/TOML/HTTP/Mermaid, plus
-   `RunestoneGraphQLLanguage`) still left it at the default `nil` — ⌘/ would have been a silent
+   (`PenumbraLanguages`' JS/TS/Python/YAML/Swift/Go/Java/Kotlin/Bash/SQL/TOML/HTTP/Mermaid, plus
+   `PenumbraGraphQLLanguage`) still left it at the default `nil` — ⌘/ would have been a silent
    no-op for every one of them. Fixed by setting the real per-language token at each of their 9
    call sites (`//` for the C-family languages, `#` for Python/YAML/Bash/TOML/HTTP/GraphQL, `--`
    for SQL, `%%` for Mermaid); JSON/HTML/CSS correctly keep `nil` — none has line-comment syntax.

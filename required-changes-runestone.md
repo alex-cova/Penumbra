@@ -1,13 +1,13 @@
-# Required Runestone changes — resolved
+# Required Penumbra changes — resolved
 
 The four engine/API gaps this file used to describe (Sublime-accurate ⌘D/⌘⇧D, `.goToLine`
 handling in the command palette, a disk-wide Find in Files API, and unified Goto Anything
 sigils on one ⌘P field) have been closed in the engine:
 
-- `Keymap.sublime` (`Sources/Runestone/TextView/Keymap/Keymap.swift`) now binds ⌘D to
+- `Keymap.sublime` (`Sources/Penumbra/TextView/Keymap/Keymap.swift`) now binds ⌘D to
   `.selectNextOccurrence`, ⌘⇧D to `.duplicateLines`, and ⌘⇧F to the new
   `EditorActionID.findInFiles`.
-- `CommandPaletteController` (`Sources/Runestone/TextView/CommandPalette/`) handles both
+- `CommandPaletteController` (`Sources/Penumbra/TextView/CommandPalette/`) handles both
   `.goToLine` (presents the palette seeded with `:`) and `.findInFiles` (presents a
   `ProjectSearchPaletteProvider` when `projectSearchEngine`/`workspaceRoot` are set).
 - `EditorIntelligence.ProjectSearchEngine` (`Sources/EditorIntelligence/Search/`) is the
@@ -20,6 +20,6 @@ sigils on one ⌘P field) have been closed in the engine:
   leading sigil for one keystroke (`CommandPaletteController.runQuery`).
 
 `Example/Umbra` (and the `UmbraCore` target it used to carry these workarounds in) has been
-updated to use the engine APIs directly; see `Tests/RunestoneTests/ProjectSearchEngineTests.swift`,
+updated to use the engine APIs directly; see `Tests/PenumbraTests/ProjectSearchEngineTests.swift`,
 `KeymapTests.swift`, `CommandPaletteTests.swift`, `CommandPaletteControllerTests.swift`, and
 `GoToLinePaletteProviderTests.swift` for coverage.

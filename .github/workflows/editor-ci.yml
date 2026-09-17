@@ -5,14 +5,14 @@ on:
     branches: [main]
     paths:
       - 'Example/**'
-      - 'Sources/Runestone/**'
+      - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'
   pull_request:
     paths:
       - 'Example/**'
-      - 'Sources/Runestone/**'
+      - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'

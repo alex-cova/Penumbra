@@ -1,6 +1,6 @@
 @preconcurrency import AppKit
 import Foundation
-import Runestone
+import Penumbra
 
 /// Metal-specific PerfHarness subcommands. Both host a real `NSWindow` (the Metal present path
 /// no-ops without one) and are meant for manual / nightly runs — they print numbers and never

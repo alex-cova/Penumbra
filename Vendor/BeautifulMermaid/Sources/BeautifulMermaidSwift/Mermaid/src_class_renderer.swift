@@ -1,6 +1,6 @@
 // Ported from original/src/class/renderer.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private enum _ClassFont {
     static let memberSize: Double = 11

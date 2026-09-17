@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/state.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private func _stateDimensions() -> ShapeDimensions {
     ShapeDimensions(

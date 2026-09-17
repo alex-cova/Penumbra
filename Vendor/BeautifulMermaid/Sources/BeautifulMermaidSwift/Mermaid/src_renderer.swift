@@ -1,6 +1,6 @@
 // Ported from original/src/renderer.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private struct _SvgPoint {
     var x: Double

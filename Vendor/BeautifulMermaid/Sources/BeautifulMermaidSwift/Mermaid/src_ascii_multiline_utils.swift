@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/multiline-utils.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public func splitLines(_ label: String) -> [String] {
     label.components(separatedBy: "\n")

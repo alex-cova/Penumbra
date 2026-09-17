@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/rounded.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 public struct RoundedRenderer: ShapeRenderer {
     public init() {}

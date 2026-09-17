@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/rectangle.ts
 import Foundation
-import RunestoneElkSwift
+import PenumbraElkSwift
 
 private func _shapeSplitLines(_ label: String) -> [String] {
     label.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
