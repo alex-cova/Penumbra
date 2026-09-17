@@ -1,14 +1,16 @@
 @preconcurrency import AppKit
 
-/// Toggles and maintains a rendered markdown preview beside a host ``TextView``.
+/// Toggles and maintains a rendered markdown preview that covers a host ``TextView``.
 ///
 /// Owned by the pane host (Umbra: ``IDEEditorPaneHost``). The preview is offered only when
-/// `textView.languageIdentifier == "markdown"`.
+/// `textView.languageIdentifier == "markdown"`. When shown, the preview is layered directly on
+/// top of the editor (same frame, via constraints) rather than in a side-by-side split, so
+/// toggling it replaces the editor in place instead of splitting the pane.
 @MainActor
 public final class MarkdownPreviewController: NSObject {
     public let previewView = MarkdownPreviewView()
     private weak var textView: TextView?
-    private let splitView = NSSplitView()
+    private let containerStack = NSView()
     private var editorContainer: NSView?
     private var isPreviewVisible = false
     private var parseGeneration = 0
@@ -47,9 +49,7 @@ public final class MarkdownPreviewController: NSObject {
         previewView.style = MarkdownPreviewStyle.from(textView: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
 
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        splitView.translatesAutoresizingMaskIntoConstraints = false
+        containerStack.translatesAutoresizingMaskIntoConstraints = false
 
         previewDelegate = PreviewTextViewDelegate(controller: self)
     }
@@ -72,18 +72,30 @@ public final class MarkdownPreviewController: NSObject {
         }
     }
 
-    /// Embeds `editorView` (typically the pane host's outer container) into a horizontal split.
+    /// Layers `editorView` (typically the pane host's outer container) and the preview into the
+    /// same frame, with the preview on top so toggling it covers the editor in place.
     public func embed(editorView: NSView) {
         guard editorContainer == nil else { return }
         editorContainer = editorView
         editorView.removeFromSuperview()
-        splitView.addArrangedSubview(editorView)
-        splitView.addArrangedSubview(previewView)
+        editorView.translatesAutoresizingMaskIntoConstraints = false
+        previewView.translatesAutoresizingMaskIntoConstraints = false
+        containerStack.addSubview(editorView)
+        containerStack.addSubview(previewView)
+        NSLayoutConstraint.activate([
+            editorView.topAnchor.constraint(equalTo: containerStack.topAnchor),
+            editorView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
+            editorView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
+            editorView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor),
+            previewView.topAnchor.constraint(equalTo: containerStack.topAnchor),
+            previewView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
+            previewView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
+            previewView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor)
+        ])
         previewView.isHidden = true
-        splitView.setPosition(1, ofDividerAt: 0)
     }
 
-    public var containerView: NSView { splitView }
+    public var containerView: NSView { containerStack }
 
     /// Toggles the preview. Returns `false` when the buffer is not markdown.
     @discardableResult
@@ -121,10 +133,6 @@ public final class MarkdownPreviewController: NSObject {
     private func showPreview() {
         isPreviewVisible = true
         previewView.isHidden = false
-        if let divider = splitView.subviews.firstIndex(of: previewView), divider > 0 {
-            let total = splitView.bounds.width
-            splitView.setPosition(total * 0.55, ofDividerAt: divider - 1)
-        }
         refreshStyle()
         scheduleParse()
     }
