@@ -39,7 +39,7 @@ if [[ -d "$ICON_SOURCE" ]]; then
     --output-partial-info-plist "$ICON_STAGING/partial.plist" \
     --include-all-app-icons \
     --target-device mac \
-    --minimum-deployment-target 12.0 \
+    --minimum-deployment-target 14.0 \
     --platform macosx
   for artifact in Assets.car umbra.icns; do
     if [[ -f "$ICON_STAGING/$artifact" ]]; then

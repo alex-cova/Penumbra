@@ -13,7 +13,7 @@ let package = Package(
     name: "Penumbra",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v12)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "Penumbra", targets: ["Penumbra"]),
