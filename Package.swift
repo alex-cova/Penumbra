@@ -108,12 +108,10 @@ let package = Package(
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterMarkdown", exclude: ["LICENSE", "VERSION"], cSettings: [
-            .headerSearchPath("src"),
-            .unsafeFlags(["-w"])
+            .headerSearchPath("src")
         ]),
         .target(name: "TreeSitterMarkdownInline", exclude: ["LICENSE", "VERSION"], cSettings: [
-            .headerSearchPath("src"),
-            .unsafeFlags(["-w"])
+            .headerSearchPath("src")
         ]),
         .target(
             name: "TreeSitterCSS",
