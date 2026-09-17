@@ -333,7 +333,7 @@ private func _buildElkGraph(_ graph: _ParsedGraph) -> _ElkNode {
             opts["elk.direction"] = _mapDirection(dir)
         }
 
-        let subLabel = sub.label ?? sub.id
+        let subLabel = sub.label
         var result: [String: Any] = [
             "id": sub.id,
             "layoutOptions": opts,
@@ -1375,7 +1375,7 @@ private func _buildElkGraphNoCrossEdges(_ graph: _ParsedGraph) -> _ElkNode {
             opts["elk.direction"] = _mapDirection(dir)
         }
 
-        let subLabel = sub.label ?? sub.id
+        let subLabel = sub.label
         var result: [String: Any] = [
             "id": sub.id,
             "layoutOptions": opts,

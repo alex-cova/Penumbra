@@ -139,7 +139,7 @@ final class MarkdownPreviewTests: XCTestCase {
     func testMermaidErrorForInvalidDiagram() async {
         let result = await MermaidPaintAdapter.render(
             source: "gantt\n  title Bad\n  section A\n  task : 2024-01-01, 1d",
-            style: MarkdownPreviewStyle(),
+            mermaidStyle: MarkdownPreviewStyle().mermaidRenderingContext,
             contentWidth: 300
         )
         XCTAssertNil(result.image)
@@ -279,7 +279,11 @@ final class MarkdownPreviewTests: XCTestCase {
     func testMermaidImageRendersFlowchartWithInk() async throws {
         let source = "graph TD\n  A --> B"
         let style = MarkdownPreviewStyle()
-        let result = await MermaidPaintAdapter.render(source: source, style: style, contentWidth: 300)
+        let result = await MermaidPaintAdapter.render(
+            source: source,
+            mermaidStyle: style.mermaidRenderingContext,
+            contentWidth: 300
+        )
         guard let image = result.image else {
             return XCTFail("Expected rendered image: \(result.errorMessage ?? "unknown")")
         }

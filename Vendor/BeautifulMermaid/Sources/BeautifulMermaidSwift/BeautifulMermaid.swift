@@ -120,7 +120,7 @@ extension MermaidRenderer {
         theme: DiagramTheme = .default,
         scale: CGFloat = 2.0
     ) async throws -> BMImage? {
-        try await Task.detached {
+        try await Task.detached(priority: .userInitiated) {
             try renderImage(source: source, theme: theme, scale: scale)
         }.value
     }

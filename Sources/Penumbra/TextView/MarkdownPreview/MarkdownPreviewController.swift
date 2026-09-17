@@ -18,6 +18,7 @@ public final class MarkdownPreviewController: NSObject {
     private var rasterImages: [Int: CGImage] = [:]
     private var highlightedCode: [Int: NSAttributedString] = [:]
     private var previewDelegate: PreviewTextViewDelegate?
+    private var chainedTextViewDelegate: ChainedTextViewDelegate?
 
     /// Base URL for resolving relative markdown image paths (typically the open document's file URL).
     public var documentBaseURL: URL?
@@ -48,7 +49,9 @@ public final class MarkdownPreviewController: NSObject {
 
     /// Chains preview text/Metal observation ahead of an existing delegate (e.g. EIP forwarding).
     public func installTextObservation(chaining delegate: TextViewDelegate?) {
-        textView?.editorDelegate = ChainedTextViewDelegate(primary: previewDelegate, secondary: delegate)
+        let chained = ChainedTextViewDelegate(primary: previewDelegate, secondary: delegate)
+        chainedTextViewDelegate = chained
+        textView?.editorDelegate = chained
     }
 
     /// Chains preview Metal fallback ahead of an existing host handler.
@@ -126,6 +129,14 @@ public final class MarkdownPreviewController: NSObject {
         }
     }
 
+    private static func sleepForDebounce(_ nanoseconds: UInt64) async throws {
+        if #available(macOS 13.0, *) {
+            try await Task.sleep(for: .nanoseconds(Int64(nanoseconds)))
+        } else {
+            try await Task.sleep(nanoseconds: nanoseconds)
+        }
+    }
+
     private func scheduleParse() {
         guard isPreviewVisible, let textView else { return }
         parseGeneration += 1
@@ -138,16 +149,14 @@ public final class MarkdownPreviewController: NSObject {
         parseTask?.cancel()
         let debounce = parseDebounceNanoseconds
         parseTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: debounce)
+            try? await Self.sleepForDebounce(debounce)
             guard !Task.isCancelled else { return }
-            let document = await Task.detached {
+            let document = await Task.detached(priority: .userInitiated) {
                 MarkdownPreviewDocument.parse(source)
             }.value
-            await MainActor.run {
-                guard let self, self.parseGeneration == generation else { return }
-                self.previewView.document = document
-                self.scheduleRasterLayout(document: document, style: style, generation: generation)
-            }
+            guard let self, parseGeneration == generation else { return }
+            previewView.document = document
+            scheduleRasterLayout(document: document, style: style, generation: generation)
         }
     }
 
@@ -184,48 +193,29 @@ public final class MarkdownPreviewController: NSObject {
 
         let contentWidth = max(previewView.bounds.width - style.contentInset * 2, 200)
         let baseURL = documentBaseURL
-        let syntaxTheme = textView?.theme ?? DefaultTheme()
-        let languageResolver = codeBlockLanguageResolver
-        let languageProvider = codeBlockLanguageProvider
-        mermaidTask = Task { [weak self] in
-            var images: [Int: CGImage] = [:]
-            var code: [Int: NSAttributedString] = [:]
-            var errors: [Int: String] = [:]
-            for (index, reference) in imageBlocks {
-                if let image = MarkdownPreviewImageLoader.loadImage(at: reference, baseURL: baseURL) {
-                    images[index] = image
-                }
-            }
-            if let languageResolver {
-                for (index, language, source) in codeBlocks {
-                    if let highlighted = MarkdownPreviewCodeHighlighter.highlight(
-                        source: source,
-                        languageHint: language,
-                        theme: syntaxTheme,
-                        languageResolver: languageResolver,
-                        languageProvider: languageProvider
-                    ) {
-                        code[index] = highlighted
-                    }
-                }
-            }
-            for (index, source) in mermaidBlocks {
-                let result = await MermaidPaintAdapter.render(source: source, style: style, contentWidth: contentWidth)
-                if let image = result.image {
-                    images[index] = image
-                } else if let message = result.errorMessage {
-                    errors[index] = message
-                }
-            }
+        let mermaidStyle = style.mermaidRenderingContext
+        let work = MarkdownPreviewRasterWork(
+            imageBlocks: imageBlocks,
+            codeBlocks: codeBlocks,
+            mermaidBlocks: mermaidBlocks,
+            baseURL: baseURL,
+            mermaidStyle: mermaidStyle,
+            contentWidth: contentWidth,
+            syntaxTheme: UncheckedSendableTheme(value: textView?.theme ?? DefaultTheme()),
+            languageResolver: codeBlockLanguageResolver.map(UncheckedLanguageResolver.init),
+            languageProvider: UncheckedLanguageProvider(value: codeBlockLanguageProvider)
+        )
+        mermaidTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let result = await MarkdownPreviewRasterWorker.perform(work)
             await MainActor.run {
                 guard let self, self.mermaidGeneration == rasterGen, self.parseGeneration == generation else { return }
-                self.rasterImages = images
-                self.highlightedCode = code
-                self.previewView.rasterImages = images
-                self.previewView.highlightedCode = code
-                if !errors.isEmpty {
+                self.rasterImages = result.images
+                self.highlightedCode = result.highlightedCode
+                self.previewView.rasterImages = result.images
+                self.previewView.highlightedCode = result.highlightedCode
+                if !result.errors.isEmpty {
                     var blocks = document.blocks
-                    for (index, message) in errors {
+                    for (index, message) in result.errors {
                         if case .mermaid(let source) = blocks[index] {
                             blocks[index] = .mermaidError(source: source, message: message)
                         }
@@ -235,6 +225,82 @@ public final class MarkdownPreviewController: NSObject {
                 self.previewView.needsLayout = true
             }
         }
+    }
+}
+
+private struct RasterWorkResult: @unchecked Sendable {
+    let images: [Int: CGImage]
+    let highlightedCode: [Int: NSAttributedString]
+    let errors: [Int: String]
+}
+
+private struct MarkdownPreviewRasterWork: Sendable {
+    let imageBlocks: [(Int, String)]
+    let codeBlocks: [(Int, String?, String)]
+    let mermaidBlocks: [(Int, String)]
+    let baseURL: URL?
+    let mermaidStyle: MarkdownPreviewStyle.MermaidRenderingContext
+    let contentWidth: CGFloat
+    let syntaxTheme: UncheckedSendableTheme
+    let languageResolver: UncheckedLanguageResolver?
+    let languageProvider: UncheckedLanguageProvider
+}
+
+/// Read-only `Theme` handle for off-main syntax highlighting.
+private struct UncheckedSendableTheme: @unchecked Sendable {
+    let value: Theme
+}
+
+private struct UncheckedLanguageResolver: @unchecked Sendable {
+    let value: (String) -> TreeSitterLanguage?
+
+    init(_ value: @escaping (String) -> TreeSitterLanguage?) {
+        self.value = value
+    }
+}
+
+private struct UncheckedLanguageProvider: @unchecked Sendable {
+    let value: TreeSitterLanguageProvider?
+}
+
+private enum MarkdownPreviewRasterWorker {
+    nonisolated static func perform(_ work: MarkdownPreviewRasterWork) async -> RasterWorkResult {
+        var images: [Int: CGImage] = [:]
+        var highlightedCode: [Int: NSAttributedString] = [:]
+        var errors: [Int: String] = [:]
+
+        for (index, reference) in work.imageBlocks {
+            if let image = MarkdownPreviewImageLoader.loadImage(at: reference, baseURL: work.baseURL) {
+                images[index] = image
+            }
+        }
+        if let languageResolver = work.languageResolver {
+            for (index, language, source) in work.codeBlocks {
+                if let highlighted = MarkdownPreviewCodeHighlighter.highlight(
+                    source: source,
+                    languageHint: language,
+                    theme: work.syntaxTheme.value,
+                    languageResolver: languageResolver.value,
+                    languageProvider: work.languageProvider.value
+                ) {
+                    highlightedCode[index] = highlighted
+                }
+            }
+        }
+        for (index, source) in work.mermaidBlocks {
+            let result = await MermaidPaintAdapter.render(
+                source: source,
+                mermaidStyle: work.mermaidStyle,
+                contentWidth: work.contentWidth
+            )
+            if let image = result.image {
+                images[index] = image
+            } else if let message = result.errorMessage {
+                errors[index] = message
+            }
+        }
+
+        return RasterWorkResult(images: images, highlightedCode: highlightedCode, errors: errors)
     }
 }
 

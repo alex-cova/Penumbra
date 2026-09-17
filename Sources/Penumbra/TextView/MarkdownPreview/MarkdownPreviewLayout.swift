@@ -139,7 +139,7 @@ struct MarkdownPreviewLayout: Equatable {
         baseFont: NSFont,
         color: NSColor
     ) -> CTFramesetter {
-        var mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+        let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
         let fullRange = NSRange(location: 0, length: mutable.length)
         mutable.addAttribute(.font, value: baseFont, range: fullRange)
         mutable.addAttribute(.foregroundColor, value: color, range: fullRange)

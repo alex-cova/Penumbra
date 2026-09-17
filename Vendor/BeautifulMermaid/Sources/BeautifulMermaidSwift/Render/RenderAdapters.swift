@@ -6,8 +6,8 @@ import CoreGraphics
 enum EdgeStyleParser {
     static func parse(from styleString: String, hasArrowStart: Bool, hasArrowEnd: Bool) -> EdgeStyle {
         var lineStyle: LineStyle = .solid
-        var sourceArrow: ArrowHead = hasArrowStart ? .arrow : .none
-        var targetArrow: ArrowHead = hasArrowEnd ? .arrow : .none
+        let sourceArrow: ArrowHead = hasArrowStart ? .arrow : .none
+        let targetArrow: ArrowHead = hasArrowEnd ? .arrow : .none
 
         switch styleString.lowercased() {
         case "dotted":

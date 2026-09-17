@@ -1,5 +1,10 @@
 import Foundation
 import CoreGraphics
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 public struct RenderConfig: Sendable {
 

@@ -81,19 +81,35 @@ enum MermaidPaintAdapter {
     static let maxRasterDimension: CGFloat = 4096
 
     static func diagramTheme(from style: MarkdownPreviewStyle) -> DiagramTheme {
-        DiagramTheme(
-            background: style.backgroundColor,
-            foreground: style.bodyColor
+        diagramTheme(from: style.mermaidRenderingContext)
+    }
+
+    static func diagramTheme(from context: MarkdownPreviewStyle.MermaidRenderingContext) -> DiagramTheme {
+        let background = context.backgroundRGBA
+        let foreground = context.foregroundRGBA
+        return DiagramTheme(
+            background: BMColor(
+                red: background.red,
+                green: background.green,
+                blue: background.blue,
+                alpha: background.alpha
+            ),
+            foreground: BMColor(
+                red: foreground.red,
+                green: foreground.green,
+                blue: foreground.blue,
+                alpha: foreground.alpha
+            )
         )
     }
 
     /// Lays out and rasterizes a mermaid diagram off the main actor.
     static func render(
         source: String,
-        style: MarkdownPreviewStyle,
+        mermaidStyle: MarkdownPreviewStyle.MermaidRenderingContext,
         contentWidth: CGFloat
     ) async -> MermaidPaintResult {
-        let theme = diagramTheme(from: style)
+        let theme = diagramTheme(from: mermaidStyle)
         do {
             let prepared = try await MermaidRenderer.prepareAsync(source: source, theme: theme)
             let bounds = prepared.bounds
@@ -104,7 +120,7 @@ enum MermaidPaintAdapter {
             var scale: CGFloat = 2
             var pixelWidth = bounds.width * scale
             var pixelHeight = bounds.height * scale
-            let maxDim = min(style.mermaidMaxDimension, maxRasterDimension)
+            let maxDim = min(mermaidStyle.mermaidMaxDimension, maxRasterDimension)
             if pixelWidth > maxDim || pixelHeight > maxDim {
                 let downscale = maxDim / max(pixelWidth, pixelHeight)
                 scale *= downscale

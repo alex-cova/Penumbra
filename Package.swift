@@ -50,7 +50,11 @@ let package = Package(
         .target(
             name: "PenumbraElkSwift",
             path: "Vendor/ElkSwift/Sources/ElkSwift",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-suppress-warnings"], .when(configuration: .debug)),
+                .unsafeFlags(["-suppress-warnings"], .when(configuration: .release))
+            ]
         ),
         .target(
             name: "PenumbraBeautifulMermaid",

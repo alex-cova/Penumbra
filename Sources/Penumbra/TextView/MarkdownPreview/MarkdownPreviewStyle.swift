@@ -1,7 +1,10 @@
 @preconcurrency import AppKit
 
 /// Typography and colors for the markdown preview, typically derived from the host editor.
-public struct MarkdownPreviewStyle: Sendable, Equatable {
+///
+/// AppKit font and color references are main-actor resources. For async mermaid rendering,
+/// use ``mermaidRenderingContext`` to cross isolation with a `Sendable` color snapshot.
+public struct MarkdownPreviewStyle: Equatable {
     public var bodyFont: NSFont
     public var bodyColor: NSColor
     public var backgroundColor: NSColor
@@ -41,6 +44,33 @@ public struct MarkdownPreviewStyle: Sendable, Equatable {
         self.listIndent = listIndent
         self.codePadding = codePadding
         self.mermaidMaxDimension = mermaidMaxDimension
+    }
+
+    /// Sendable color snapshot for off-main mermaid rasterization.
+    public struct MermaidRenderingContext: Sendable {
+        public let backgroundRGBA: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)
+        public let foregroundRGBA: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)
+        public let mermaidMaxDimension: CGFloat
+    }
+
+    public var mermaidRenderingContext: MermaidRenderingContext {
+        MermaidRenderingContext(
+            backgroundRGBA: Self.rgbaComponents(backgroundColor),
+            foregroundRGBA: Self.rgbaComponents(bodyColor),
+            mermaidMaxDimension: mermaidMaxDimension
+        )
+    }
+
+    private static func rgbaComponents(_ color: NSColor) -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
+        guard let rgb = color.usingColorSpace(.deviceRGB) else {
+            return (0, 0, 0, 1)
+        }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return (red, green, blue, alpha)
     }
 
     @MainActor

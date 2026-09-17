@@ -28,13 +28,9 @@ private enum _ElkBridgeRuntime {
         if let sharedInstance {
             return sharedInstance
         }
-        do {
-            let created = try ELK()
-            sharedInstance = created
-            return created
-        } catch {
-            throw _ElkInstanceAdapterError.elkUnavailable(error.localizedDescription)
-        }
+        let created = ELK()
+        sharedInstance = created
+        return created
     }
 }
 
