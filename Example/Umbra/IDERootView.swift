@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct IDERootView: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
     @State private var didBootstrap = false
 

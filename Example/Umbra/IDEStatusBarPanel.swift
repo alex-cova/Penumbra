@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct IDEStatusBarPanel: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: 0) {
@@ -45,7 +45,7 @@ struct IDEStatusBarPanel: View {
 
 #Preview {
     IDEStatusBarPanel()
-        .environmentObject({
+        .environment({
             let workspace = IDEWorkspace()
             workspace.statusLine = 12
             workspace.statusColumn = 4

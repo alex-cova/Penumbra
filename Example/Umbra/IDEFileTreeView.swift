@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct IDEFileTreeView: View {
-    @ObservedObject var project: IDEProjectModel
+    let project: IDEProjectModel
     let onOpenFile: (URL) -> Void
 
     var body: some View {

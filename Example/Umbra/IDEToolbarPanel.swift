@@ -5,7 +5,7 @@ import SwiftUI
 /// actions (split/preview/close) — the one place in the window that reserves
 /// `Spacing.trafficLightsInset`, so nothing below it needs to.
 struct IDEToolbarPanel: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -167,7 +167,7 @@ private struct IDEToolbarIconButton: View {
 
 #Preview {
     IDEToolbarPanel()
-        .environmentObject({
+        .environment({
             let workspace = IDEWorkspace()
             let paneID = UUID()
             workspace.tabsByPane = [

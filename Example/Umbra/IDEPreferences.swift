@@ -1,9 +1,11 @@
 import AppKit
+import Observation
 import Penumbra
 import SwiftUI
 
 @MainActor
-final class IDEPreferences: ObservableObject {
+@Observable
+final class IDEPreferences {
     static let shared = IDEPreferences()
 
     private enum Keys {
@@ -18,39 +20,39 @@ final class IDEPreferences: ObservableObject {
         static let keymapPreset = "com.umbra.editor.keymapPreset"
     }
 
-    @Published var fontSize: Double {
+    var fontSize: Double {
         didSet { UserDefaults.standard.set(fontSize, forKey: Keys.fontSize); applyTheme() }
     }
 
-    @Published var tabWidth: Int {
+    var tabWidth: Int {
         didSet { UserDefaults.standard.set(tabWidth, forKey: Keys.tabWidth) }
     }
 
-    @Published var useSpacesForTab: Bool {
+    var useSpacesForTab: Bool {
         didSet { UserDefaults.standard.set(useSpacesForTab, forKey: Keys.useSpacesForTab) }
     }
 
-    @Published var wrapLines: Bool {
+    var wrapLines: Bool {
         didSet { UserDefaults.standard.set(wrapLines, forKey: Keys.wrapLines) }
     }
 
-    @Published var showLineNumbers: Bool {
+    var showLineNumbers: Bool {
         didSet { UserDefaults.standard.set(showLineNumbers, forKey: Keys.showLineNumbers) }
     }
 
-    @Published var isLineFoldingEnabled: Bool {
+    var isLineFoldingEnabled: Bool {
         didSet { UserDefaults.standard.set(isLineFoldingEnabled, forKey: Keys.isLineFoldingEnabled) }
     }
 
-    @Published var showMinimap: Bool {
+    var showMinimap: Bool {
         didSet { UserDefaults.standard.set(showMinimap, forKey: Keys.showMinimap) }
     }
 
-    @Published var isMetalRenderingEnabled: Bool {
+    var isMetalRenderingEnabled: Bool {
         didSet { UserDefaults.standard.set(isMetalRenderingEnabled, forKey: Keys.metalRendering) }
     }
 
-    @Published var keymapPreset: KeymapPreset {
+    var keymapPreset: KeymapPreset {
         didSet { UserDefaults.standard.set(keymapPreset.rawValue, forKey: Keys.keymapPreset) }
     }
 

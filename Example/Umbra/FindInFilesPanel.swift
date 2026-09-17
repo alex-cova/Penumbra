@@ -5,10 +5,11 @@ import SwiftUI
 /// reads as part of the same "find" system as the in-editor bar rather than a separate bottom
 /// panel.
 struct FindInFilesPanel: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var queryFocused: Bool
 
     var body: some View {
+        @Bindable var workspace = workspace
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
                 FindInFilesSearchField(query: $workspace.findInFilesQuery, isFocused: $queryFocused) {

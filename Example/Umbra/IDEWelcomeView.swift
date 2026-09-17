@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct IDEWelcomeView: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: 0) {
@@ -146,6 +146,6 @@ private struct IDEWelcomeLinkButtonStyle: ButtonStyle {
 
 #Preview {
     IDEWelcomeView()
-        .environmentObject(IDEWorkspace())
+        .environment(IDEWorkspace())
         .preferredColorScheme(.dark)
 }

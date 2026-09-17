@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct IDEFileNode: Identifiable, Hashable {
     let id: String
@@ -19,10 +20,11 @@ struct IDEFileNode: Identifiable, Hashable {
 }
 
 @MainActor
-final class IDEProjectModel: ObservableObject {
-    @Published private(set) var rootURL: URL?
-    @Published private(set) var rootNode: IDEFileNode?
-    @Published var expandedPaths: Set<String> = []
+@Observable
+final class IDEProjectModel {
+    private(set) var rootURL: URL?
+    private(set) var rootNode: IDEFileNode?
+    var expandedPaths: Set<String> = []
 
     /// Directory names skipped when building the sidebar tree and the Go to File candidate
     /// list. Kept local rather than shared with `ProjectSearchEngine`'s `FileEnumerationPolicy`:

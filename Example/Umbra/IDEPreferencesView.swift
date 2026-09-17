@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct IDEPreferencesView: View {
-    @ObservedObject var preferences: IDEPreferences
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         VStack(spacing: 0) {
@@ -234,6 +234,6 @@ private struct IDESettingsTypePreview: View {
 
 #Preview {
     IDEPreferencesView(preferences: IDEPreferences.shared)
-        .environmentObject(IDEWorkspace())
+        .environment(IDEWorkspace())
         .preferredColorScheme(.dark)
 }

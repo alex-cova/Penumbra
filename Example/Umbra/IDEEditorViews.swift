@@ -93,7 +93,7 @@ struct IDETextViewRepresentable: NSViewRepresentable {
 // MARK: - Layout
 
 struct IDEEditorLayoutNode: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
     let layout: EditorLayout
 
     var body: some View {
@@ -114,7 +114,7 @@ struct IDEEditorLayoutNode: View {
 }
 
 struct IDEEditorPaneView: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
     let paneID: UUID
 
     var body: some View {

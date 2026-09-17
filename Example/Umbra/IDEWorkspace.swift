@@ -1,6 +1,6 @@
 import AppKit
-import Combine
 import EditorIntelligence
+import Observation
 import Penumbra
 import SwiftUI
 import PenumbraLanguages
@@ -20,7 +20,8 @@ struct IDEHeaderContext: Equatable {
 }
 
 @MainActor
-final class IDEWorkspace: ObservableObject {
+@Observable
+final class IDEWorkspace {
     private static let languageProvider = BundledLanguageProvider()
 
     private let workbench = EditorWorkbench()
@@ -35,42 +36,30 @@ final class IDEWorkspace: ObservableObject {
     let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
 
-    @Published var isSidebarVisible = true
-    @Published var chromeOpacity = 1.0
-    @Published private(set) var layoutEpoch: UInt64 = 0
-    @Published private(set) var activePaneID = UUID()
-    @Published var showsWelcome = true
-    /// Mirrors `project.rootURL != nil`. `IDEProjectModel` is a separate `ObservableObject`, so
-    /// its own `@Published` changes don't republish through `IDEWorkspace` — anything that needs
-    /// to react to "a folder opened/closed" (like the sidebar auto-hide below) has to observe
-    /// this instead of reading `project.rootURL` directly from a view.
-    @Published private(set) var hasProjectRoot = false
+    var isSidebarVisible = true
+    var chromeOpacity = 1.0
+    private(set) var layoutEpoch: UInt64 = 0
+    private(set) var activePaneID = UUID()
+    var showsWelcome = true
 
-    @Published var windowTitle = "Umbra"
-    @Published var headerContext = IDEHeaderContext()
-    @Published var statusLine = 1
-    @Published var statusColumn = 1
-    @Published var statusLanguage = ""
-    @Published var statusSelectionLength = 0
-    @Published var statusRenderer = "Core Graphics"
-    @Published var tabsByPane: [UUID: [IDETabRow]] = [:]
-    @Published var isFindInFilesVisible = false
-    @Published var findInFilesQuery = ""
-    @Published var findInFilesHits: [ProjectSearchResult] = []
-    @Published var findInFilesStatus = ""
+    var windowTitle = "Umbra"
+    var headerContext = IDEHeaderContext()
+    var statusLine = 1
+    var statusColumn = 1
+    var statusLanguage = ""
+    var statusSelectionLength = 0
+    var statusRenderer = "Core Graphics"
+    var tabsByPane: [UUID: [IDETabRow]] = [:]
+    var isFindInFilesVisible = false
+    var findInFilesQuery = ""
+    var findInFilesHits: [ProjectSearchResult] = []
+    var findInFilesStatus = ""
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
     /// What `IDERootView` should actually render — just the user's sidebar toggle. The Explorer
     /// stays visible even with no folder or documents open, showing its own empty state.
     var showsSidebar: Bool { isSidebarVisible }
-
-    init() {
-        project.$rootURL
-            .map { $0 != nil }
-            .removeDuplicates()
-            .assign(to: &$hasProjectRoot)
-    }
 
     func host(for paneID: UUID) -> IDEEditorPaneHost {
         hostedPaneIDs.insert(paneID)

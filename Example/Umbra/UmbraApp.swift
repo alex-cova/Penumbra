@@ -4,12 +4,12 @@ import SwiftUI
 @main
 struct UmbraApp: App {
     @NSApplicationDelegateAdaptor(IDEAppDelegate.self) private var appDelegate
-    @StateObject private var workspace = IDEWorkspace()
+    @State private var workspace = IDEWorkspace()
 
     var body: some Scene {
         WindowGroup {
             IDERootView()
-                .environmentObject(workspace)
+                .environment(workspace)
                 .frame(minWidth: 960, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
@@ -109,7 +109,7 @@ struct UmbraApp: App {
         if #available(macOS 13, *) {
             Settings {
                 IDEPreferencesView(preferences: workspace.preferences)
-                    .environmentObject(workspace)
+                    .environment(workspace)
             }
         }
     }
@@ -117,7 +117,7 @@ struct UmbraApp: App {
     private func showSettings() {
         let controller = NSHostingController(
             rootView: IDEPreferencesView(preferences: workspace.preferences)
-                .environmentObject(workspace)
+                .environment(workspace)
         )
         let window = NSWindow(contentViewController: controller)
         window.title = "Umbra Settings"

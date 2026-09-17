@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct IDESidebarPanel: View {
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

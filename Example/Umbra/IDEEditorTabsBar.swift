@@ -2,7 +2,7 @@ import SwiftUI
 
 struct IDEEditorTabsBar: View {
     let paneID: UUID
-    @EnvironmentObject private var workspace: IDEWorkspace
+    @Environment(IDEWorkspace.self) private var workspace
 
     private var tabs: [IDETabRow] {
         workspace.tabsByPane[paneID] ?? []
@@ -121,7 +121,7 @@ private struct IDEEditorTabItem: View {
 
 #Preview {
     IDEEditorTabsBar(paneID: UUID())
-        .environmentObject({
+        .environment({
             let workspace = IDEWorkspace()
             let paneID = UUID()
             workspace.tabsByPane = [
