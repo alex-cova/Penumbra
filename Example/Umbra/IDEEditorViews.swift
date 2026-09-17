@@ -170,7 +170,7 @@ struct IDESplitStack<Content: View>: View {
             }
         }
         .onAppear(perform: resetFractions)
-        .onChange(of: childCount) { _ in
+        .onChange(of: childCount) {
             resetFractions()
         }
     }

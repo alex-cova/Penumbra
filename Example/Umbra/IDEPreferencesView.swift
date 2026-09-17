@@ -95,13 +95,13 @@ struct IDEPreferencesView: View {
         .background(IDEAppearance.ColorToken.workbench)
         .preferredColorScheme(.dark)
         .tint(IDEAppearance.ColorToken.accent)
-        .onChange(of: preferences.fontSize) { _ in applyLivePreferences() }
-        .onChange(of: preferences.keymapPreset) { _ in applyLivePreferences() }
-        .onChange(of: preferences.showLineNumbers) { _ in applyLivePreferences() }
-        .onChange(of: preferences.isLineFoldingEnabled) { _ in applyLivePreferences() }
-        .onChange(of: preferences.wrapLines) { _ in applyLivePreferences() }
-        .onChange(of: preferences.showMinimap) { _ in applyLivePreferences() }
-        .onChange(of: preferences.isMetalRenderingEnabled) { _ in applyLivePreferences() }
+        .onChange(of: preferences.fontSize) { applyLivePreferences() }
+        .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
+        .onChange(of: preferences.showLineNumbers) { applyLivePreferences() }
+        .onChange(of: preferences.isLineFoldingEnabled) { applyLivePreferences() }
+        .onChange(of: preferences.wrapLines) { applyLivePreferences() }
+        .onChange(of: preferences.showMinimap) { applyLivePreferences() }
+        .onChange(of: preferences.isMetalRenderingEnabled) { applyLivePreferences() }
     }
 
     private func applyLivePreferences() {

@@ -57,7 +57,7 @@ struct IDERootView: View {
             workspace.bootstrap()
             workspace.focusActiveEditor()
         }
-        .onChange(of: sidebarWidth) { newWidth in
+        .onChange(of: sidebarWidth) { _, newWidth in
             workspace.saveSession(sidebarWidth: newWidth)
         }
         .focusable(false)

@@ -117,11 +117,10 @@ private struct IDEToolbarPaletteField: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .frame(width: IDEAppearance.Spacing.searchFieldWidth, height: IDEAppearance.Spacing.searchFieldHeight)
-            .background(IDEAppearance.ColorToken.controlHover)
-            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-            .overlay {
+            .background {
                 RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
-                    .strokeBorder(IDEAppearance.ColorToken.border, lineWidth: 1)
+                    .fill(IDEAppearance.ColorToken.controlHover)
+                    .stroke(IDEAppearance.ColorToken.border, lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
