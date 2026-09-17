@@ -27,7 +27,7 @@ final class BundledLanguagesTests: XCTestCase {
     }
 
     func testIdentifierAliasesResolveToGrammars() {
-        let aliases = ["xml", "groovy", "shell", "scss"]
+        let aliases = ["xml", "groovy", "shell", "scss", "bash", "sh", "zsh", "diff", "patch"]
         for identifier in aliases {
             XCTAssertNotNil(
                 BundledLanguages.language(forIdentifier: identifier),
@@ -41,7 +41,7 @@ final class BundledLanguagesTests: XCTestCase {
         let extensions = [
             "txt", "md", "json", "xml", "yaml", "toml", "swift", "java", "kt",
             "gradle", "js", "ts", "html", "css", "scss", "py", "rs", "go",
-            "c", "cpp", "sh", "sql", "graphql", "http", "mmd"
+            "c", "cpp", "sh", "sql", "graphql", "http", "mmd", "diff", "patch"
         ]
         for ext in extensions {
             guard let identifier = LanguageIdentifier.identifier(forFileExtension: ext) else {

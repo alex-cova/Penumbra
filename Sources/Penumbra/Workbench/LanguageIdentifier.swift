@@ -84,6 +84,8 @@ public enum LanguageIdentifier {
             return "http"
         case "mmd", "mermaid":
             return "mermaid"
+        case "diff", "patch":
+            return "diff"
         default:
             return nil
         }

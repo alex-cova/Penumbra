@@ -7,13 +7,6 @@ internal enum _ElkBridge {
 }
 
 public enum MermaidParser {
-    private static func _diagramLines(from source: String) -> [String] {
-        source
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("%%") }
-    }
-
     private static func _decodeXMLEntities(_ s: String) -> String {
         s.replacingOccurrences(of: "&amp;", with: "&")
          .replacingOccurrences(of: "&lt;", with: "<")
@@ -25,29 +18,44 @@ public enum MermaidParser {
     public static func parse(_ source: String) throws -> MermaidGraph {
         _ = _ElkBridge.version
         let decoded = _decodeXMLEntities(source)
-        let lines = _diagramLines(from: decoded)
-        let firstLine = lines.first?.lowercased() ?? ""
+        let prepared = DiagramKindDetector.prepare(decoded)
+        guard !prepared.lines.isEmpty else {
+            throw MermaidParserError.emptyDiagram
+        }
 
-        if firstLine.hasPrefix("sequencediagram") {
-            let parsed = try parseSequenceDiagram(lines)
+        switch prepared.kind {
+        case .sequenceDiagram:
+            let parsed = try parseSequenceDiagram(prepared.lines)
             return MermaidGraph(type: .sequenceDiagram, payload: parsed)
-        }
-        if firstLine.hasPrefix("classdiagram") {
-            let parsed = try parseClassDiagram(lines)
+        case .classDiagram:
+            let parsed = try parseClassDiagram(prepared.lines)
             return MermaidGraph(type: .classDiagram, payload: parsed)
-        }
-        if firstLine.hasPrefix("erdiagram") {
-            let parsed = try parseErDiagram(lines)
+        case .erDiagram:
+            let parsed = try parseErDiagram(prepared.lines)
             return MermaidGraph(type: .erDiagram, payload: parsed)
-        }
-        if firstLine.hasPrefix("xychart") {
-            let chart = parseXYChart(lines)
+        case .xyChart:
+            let chart = parseXYChart(prepared.lines)
             return MermaidGraph(type: .xyChart, payload: chart)
+        case .flowchart:
+            let parsed = try parseMermaid(prepared.source)
+            return MermaidGraph(type: .flowchart, payload: parsed.payload)
+        case .stateDiagram:
+            let parsed = try parseMermaid(prepared.source)
+            return MermaidGraph(type: .stateDiagram, payload: parsed.payload)
+        case .agentflow:
+            let rewritten = rewriteAgentflowAsFlowchart(prepared.source)
+            let parsed = try parseMermaid(rewritten)
+            return MermaidGraph(type: .agentflow, payload: parsed.payload)
+        case .zenuml:
+            throw MermaidParserError.unsupportedDiagram("zenuml")
+        case .unknown:
+            throw MermaidParserError.unsupportedDiagram(prepared.headerToken)
+        default:
+            let extra = try parseExtra(kind: prepared.kind, lines: prepared.lines, source: prepared.source)
+            guard let type = DiagramKindDetector.diagramType(for: prepared.kind) else {
+                throw MermaidParserError.unsupportedDiagram(prepared.headerToken)
+            }
+            return MermaidGraph(type: type, payload: extra)
         }
-
-        // Flowchart + stateDiagram-v2 share the same parser entry in the original TS.
-        let parsed = try parseMermaid(decoded)
-        let parsedType: DiagramType = firstLine.hasPrefix("statediagram") ? .stateDiagram : .flowchart
-        return MermaidGraph(type: parsedType, payload: parsed.payload)
     }
 }

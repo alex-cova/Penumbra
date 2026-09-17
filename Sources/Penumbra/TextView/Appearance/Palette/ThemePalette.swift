@@ -38,6 +38,13 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
     public let string: UInt32
     public let variableBuiltin: UInt32
     public let punctuation: UInt32
+    /// Foreground for added lines in a diff (`@diff.plus`). Defaults to a neutral green so
+    /// existing palettes built with the memberwise initializer stay source-compatible.
+    public let diffPlus: UInt32
+    /// Foreground for removed lines in a diff (`@diff.minus`). Defaults to a neutral red.
+    public let diffMinus: UInt32
+    /// Foreground for changed/renamed lines in a diff (`@diff.delta`). Defaults to a neutral amber.
+    public let diffDelta: UInt32
 
     public init(
         id: String,
@@ -64,7 +71,10 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         property: UInt32,
         string: UInt32,
         variableBuiltin: UInt32,
-        punctuation: UInt32
+        punctuation: UInt32,
+        diffPlus: UInt32 = 0x227D34,
+        diffMinus: UInt32 = 0xC41E3A,
+        diffDelta: UInt32 = 0xB36B00
     ) {
         self.id = id
         self.name = name
@@ -91,6 +101,9 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         self.string = string
         self.variableBuiltin = variableBuiltin
         self.punctuation = punctuation
+        self.diffPlus = diffPlus
+        self.diffMinus = diffMinus
+        self.diffDelta = diffDelta
     }
 
     /// Text-selection highlight shared by ``PaletteTheme/selectionColor`` and live

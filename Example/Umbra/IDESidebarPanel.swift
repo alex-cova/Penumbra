@@ -22,8 +22,7 @@ struct IDESidebarPanel: View {
                 project: workspace.project,
                 onOpenFile: { url in
                     Task { await workspace.openDocument(from: url) }
-                },
-                onOpenFolder: workspace.openFolder
+                }
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -4,7 +4,6 @@ import SwiftUI
 struct IDEFileTreeView: View {
     @ObservedObject var project: IDEProjectModel
     let onOpenFile: (URL) -> Void
-    let onOpenFolder: () -> Void
 
     var body: some View {
         Group {
@@ -24,7 +23,7 @@ struct IDEFileTreeView: View {
                     .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
             } else {
-                IDEFileTreeEmptyState(onOpenFolder: onOpenFolder)
+                IDEFileTreeEmptyState()
             }
         }
     }
@@ -51,8 +50,6 @@ struct IDEFileTreeView: View {
 }
 
 private struct IDEFileTreeEmptyState: View {
-    let onOpenFolder: () -> Void
-
     var body: some View {
         VStack(spacing: IDEAppearance.Spacing.md) {
             Image(systemName: "folder.badge.plus")
@@ -65,9 +62,6 @@ private struct IDEFileTreeEmptyState: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .multilineTextAlignment(.center)
-            Button("Open Folder…", systemImage: "folder", action: onOpenFolder)
-                .buttonStyle(.bordered)
-                .tint(IDEAppearance.ColorToken.accent)
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

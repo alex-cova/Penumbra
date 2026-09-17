@@ -1,83 +1,15 @@
 import PenumbraBeautifulMermaid
 @preconcurrency import AppKit
 import CoreGraphics
-import Metal
 
 struct MermaidPaintResult: Equatable {
     var height: CGFloat
     var image: CGImage?
+    /// The diagram's unscaled size, in points (`prepared.bounds.size` before the raster `scale`
+    /// multiplier) — lets the layout pass size the block to the diagram's natural extent instead
+    /// of always stretching it to the full content width.
+    var naturalSize: CGSize?
     var errorMessage: String?
-}
-
-@MainActor
-final class MermaidTextureCache {
-    private struct Key: Hashable {
-        var sourceHash: Int
-        var themeHash: Int
-        var width: Int
-        var scaleBits: UInt32
-    }
-
-    private var textures: [Key: MTLTexture] = [:]
-
-    func texture(
-        for image: CGImage,
-        sourceHash: Int,
-        themeHash: Int,
-        device: MTLDevice
-    ) -> MTLTexture? {
-        let key = Key(
-            sourceHash: sourceHash,
-            themeHash: themeHash,
-            width: image.width,
-            scaleBits: 0
-        )
-        if let cached = textures[key] { return cached }
-        guard let texture = makeTexture(from: image, device: device) else { return nil }
-        textures[key] = texture
-        return texture
-    }
-
-    func clear() {
-        textures.removeAll()
-    }
-
-    private func makeTexture(from image: CGImage, device: MTLDevice) -> MTLTexture? {
-        let width = image.width
-        let height = image.height
-        guard MetalTextureUpload.canAllocate(width: width, height: height, device: device) else {
-            return nil
-        }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        descriptor.usage = [.shaderRead]
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-
-        let bytesPerRow = width * 4
-        var data = [UInt8](repeating: 0, count: bytesPerRow * height)
-        guard let context = CGContext(
-            data: &data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else { return nil }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: data,
-            bytesPerRow: bytesPerRow
-        )
-        return texture
-    }
 }
 
 enum MermaidPaintAdapter {
@@ -131,12 +63,20 @@ enum MermaidPaintAdapter {
                 pixelHeight = bounds.height * scale
             }
 
-            let displayHeight = contentWidth * (bounds.height / bounds.width)
+            // Never upscale a diagram past its natural size: display width is capped at the
+            // diagram's own point width, only shrinking (not growing) to fit `contentWidth`.
+            let displayWidth = min(contentWidth, bounds.width)
+            let displayHeight = displayWidth * (bounds.height / bounds.width)
             let image = try await Task.detached {
                 try rasterize(prepared: prepared, scale: scale, theme: theme)
             }.value
 
-            return MermaidPaintResult(height: max(displayHeight, 80), image: image, errorMessage: nil)
+            return MermaidPaintResult(
+                height: max(displayHeight, 80),
+                image: image,
+                naturalSize: bounds.size,
+                errorMessage: nil
+            )
         } catch {
             return MermaidPaintResult(height: 120, image: nil, errorMessage: error.localizedDescription)
         }
@@ -168,28 +108,5 @@ enum MermaidPaintAdapter {
         context.translateBy(x: -bounds.minX, y: -bounds.minY)
         prepared.render(context, bounds)
         return context.makeImage()
-    }
-
-    static func drawPrepared(
-        prepared: PreparedDiagram,
-        in context: CGContext,
-        frame: CGRect
-    ) {
-        let bounds = prepared.bounds
-        guard bounds.width > 0, bounds.height > 0, frame.width > 0, frame.height > 0 else { return }
-        let fitScale = min(frame.width / bounds.width, frame.height / bounds.height)
-        let scaledWidth = bounds.width * fitScale
-        let scaledHeight = bounds.height * fitScale
-        let offsetX = frame.minX + (frame.width - scaledWidth) / 2
-        let offsetY = frame.minY + (frame.height - scaledHeight) / 2
-
-        context.saveGState()
-        context.translateBy(x: 0, y: frame.maxY + frame.minY)
-        context.scaleBy(x: 1, y: -1)
-        context.translateBy(x: offsetX, y: offsetY)
-        context.scaleBy(x: fitScale, y: fitScale)
-        context.translateBy(x: -bounds.minX, y: -bounds.minY)
-        prepared.render(context, bounds)
-        context.restoreGState()
     }
 }

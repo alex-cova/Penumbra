@@ -8,10 +8,14 @@ enum HighlightName: String {
     case attribute
     case boolean
     case comment
+    case constant
     case constantBuiltin = "constant.builtin"
     case constantCharacter = "constant.character"
     case constantMacro = "constant.macro"
     case constructor
+    case diffPlus = "diff.plus"
+    case diffMinus = "diff.minus"
+    case diffDelta = "diff.delta"
     case embedded
     case float
     case function

@@ -97,6 +97,12 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
             return NSColor(rgb: palette.keyword)
         case "operator", "punctuation":
             return NSColor(rgb: palette.punctuation)
+        case "diff.plus":
+            return NSColor(rgb: palette.diffPlus)
+        case "diff.minus":
+            return NSColor(rgb: palette.diffMinus)
+        case "diff.delta":
+            return NSColor(rgb: palette.diffDelta)
         default:
             return nil
         }

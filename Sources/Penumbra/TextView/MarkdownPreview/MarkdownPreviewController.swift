@@ -189,15 +189,15 @@ public final class MarkdownPreviewController: NSObject {
         mermaidTask?.cancel()
 
         let mermaidBlocks: [(Int, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .mermaid(let source) = block { return (index, source) }
+            if case .mermaid(let source) = block.kind { return (index, source) }
             return nil
         }
         let imageBlocks: [(Int, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .image(_, let reference) = block { return (index, reference) }
+            if case .image(_, let reference) = block.kind { return (index, reference) }
             return nil
         }
         let codeBlocks: [(Int, String?, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .codeBlock(let language, let source) = block { return (index, language, source) }
+            if case .codeBlock(let language, let source) = block.kind { return (index, language, source) }
             return nil
         }
 
@@ -206,6 +206,7 @@ public final class MarkdownPreviewController: NSObject {
             rasterImages = [:]
             highlightedCode = [:]
             previewView.rasterImages = [:]
+            previewView.rasterNaturalSizes = [:]
             previewView.highlightedCode = [:]
             previewView.needsLayout = true
             return
@@ -232,12 +233,13 @@ public final class MarkdownPreviewController: NSObject {
                 self.rasterImages = result.images
                 self.highlightedCode = result.highlightedCode
                 self.previewView.rasterImages = result.images
+                self.previewView.rasterNaturalSizes = result.naturalSizes
                 self.previewView.highlightedCode = result.highlightedCode
                 if !result.errors.isEmpty {
                     var blocks = document.blocks
                     for (index, message) in result.errors {
-                        if case .mermaid(let source) = blocks[index] {
-                            blocks[index] = .mermaidError(source: source, message: message)
+                        if case .mermaid(let source) = blocks[index].kind {
+                            blocks[index].kind = .mermaidError(source: source, message: message)
                         }
                     }
                     self.previewView.document = MarkdownPreviewDocument(blocks: blocks)
@@ -250,6 +252,7 @@ public final class MarkdownPreviewController: NSObject {
 
 private struct RasterWorkResult: @unchecked Sendable {
     let images: [Int: CGImage]
+    let naturalSizes: [Int: CGSize]
     let highlightedCode: [Int: NSAttributedString]
     let errors: [Int: String]
 }
@@ -286,12 +289,14 @@ private struct UncheckedLanguageProvider: @unchecked Sendable {
 private enum MarkdownPreviewRasterWorker {
     nonisolated static func perform(_ work: MarkdownPreviewRasterWork) async -> RasterWorkResult {
         var images: [Int: CGImage] = [:]
+        var naturalSizes: [Int: CGSize] = [:]
         var highlightedCode: [Int: NSAttributedString] = [:]
         var errors: [Int: String] = [:]
 
         for (index, reference) in work.imageBlocks {
             if let image = MarkdownPreviewImageLoader.loadImage(at: reference, baseURL: work.baseURL) {
                 images[index] = image
+                naturalSizes[index] = MarkdownPreviewImageLoader.naturalSize(of: image)
             }
         }
         if let languageResolver = work.languageResolver {
@@ -315,12 +320,13 @@ private enum MarkdownPreviewRasterWorker {
             )
             if let image = result.image {
                 images[index] = image
+                naturalSizes[index] = result.naturalSize
             } else if let message = result.errorMessage {
                 errors[index] = message
             }
         }
 
-        return RasterWorkResult(images: images, highlightedCode: highlightedCode, errors: errors)
+        return RasterWorkResult(images: images, naturalSizes: naturalSizes, highlightedCode: highlightedCode, errors: errors)
     }
 }
 

@@ -113,11 +113,13 @@ For local signed builds, set:
 
 CI releases use `.github/workflows/release-app.yml` with the secrets documented in the table above (`APPLE_CERTIFICATE_BASE64`, `KEYCHAIN_PASSWORD`, etc.).
 
-Trigger a release:
+Trigger a release by pushing an unprefixed semver tag (this repo does not use a `v` prefix):
 
 ```bash
-git tag v1.4.0
-git push origin v1.4.0
+./Scripts/push-version.sh          # bump VERSION, commit, tag, and push
+# or:
+git tag 1.4.0
+git push origin 1.4.0
 ```
 
 ## Settings & session

@@ -28,7 +28,8 @@ final class LanguageIdentifierTests: XCTestCase {
             ("sql", "sql"),
             ("graphql", "graphql"), ("gql", "graphql"),
             ("http", "http"), ("rest", "http"),
-            ("mmd", "mermaid"), ("mermaid", "mermaid")
+            ("mmd", "mermaid"), ("mermaid", "mermaid"),
+            ("diff", "diff"), ("patch", "diff")
         ]
         for (ext, expected) in cases {
             XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: ext), expected, "extension: \(ext)")

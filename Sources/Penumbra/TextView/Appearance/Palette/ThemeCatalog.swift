@@ -40,7 +40,8 @@ public enum ThemeCatalog {
         markedTextBackground: 0xFFE08A,
         comment: 0x6B6B6B, constant: 0x1C1C9C, type: 0x267F99, function: 0x795E26,
         keyword: 0x9B229C, number: 0x1C00CF, property: 0x0451A5, string: 0xA31515,
-        variableBuiltin: 0x0070C1, punctuation: 0x383A42
+        variableBuiltin: 0x0070C1, punctuation: 0x383A42,
+        diffPlus: 0x227D34, diffMinus: 0xC41E3A, diffDelta: 0xB36B00
     )
 
     fileprivate static let hextechDark = ThemePalette(
@@ -53,7 +54,8 @@ public enum ThemeCatalog {
         markedTextBackground: 0x5C4B00,
         comment: 0x6A9955, constant: 0xD0A8FF, type: 0x4EC9B0, function: 0xDCDCAA,
         keyword: 0xFC6C85, number: 0xB5D4A8, property: 0x9CDCFE, string: 0xFC9A5D,
-        variableBuiltin: 0x569CD6, punctuation: 0xD4D4D4
+        variableBuiltin: 0x569CD6, punctuation: 0xD4D4D4,
+        diffPlus: 0x4FD675, diffMinus: 0xFF6B6B, diffDelta: 0xE8A33D
     )
 
     // MARK: - Ported from Runestone's Example/Themes

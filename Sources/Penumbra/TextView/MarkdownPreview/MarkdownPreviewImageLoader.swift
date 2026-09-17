@@ -10,6 +10,13 @@ enum MarkdownPreviewImageLoader {
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
 
+    /// A loaded image's natural size, in points — treats one pixel as one point (there is no
+    /// resolution-tagging convention for markdown image references), matching how the same image
+    /// is rasterized 1:1 for the preview.
+    static func naturalSize(of image: CGImage) -> CGSize {
+        CGSize(width: image.width, height: image.height)
+    }
+
     static func resolveURL(_ reference: String, baseURL: URL?) -> URL? {
         let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

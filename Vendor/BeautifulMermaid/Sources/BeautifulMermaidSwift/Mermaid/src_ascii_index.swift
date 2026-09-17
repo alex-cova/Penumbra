@@ -283,6 +283,8 @@ open class original_src_ascii_index {
         case `class`
         case er
         case xychart
+        case extra
+        case unsupported
     }
 
     struct AsciiConfig {
@@ -350,6 +352,10 @@ open class original_src_ascii_index {
             return "er"
         case .xychart:
             return "xychart"
+        case .extra:
+            return DiagramKindDetector.prepare(text).kind.rawValue
+        case .unsupported:
+            return "unsupported"
         case .flowchart:
             return "flowchart"
         }
@@ -388,6 +394,17 @@ open class original_src_ascii_index {
 
         case .er:
             return try renderErAscii(text, config, resolvedColorMode, theme)
+
+        case .extra:
+            let graph = try MermaidParser.parse(text)
+            let positioned = try GraphLayout().layout(graph)
+            if case .extra(let scene) = positioned.content {
+                return extraSceneAscii(scene)
+            }
+            return graph.type.rawValue
+
+        case .unsupported:
+            throw MermaidParserError.unsupportedDiagram(DiagramKindDetector.prepare(text).headerToken)
 
         case .xychart:
             let mappedColorMode = _mapColorMode(resolvedColorMode)
@@ -440,27 +457,26 @@ open class original_src_ascii_index {
     // MARK: - Internal detection
 
     private static func detectDiagramTypeInternal(_ text: String) -> DetectedDiagramType {
-        let firstLine = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-            .first
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            ?? ""
+        switch DiagramKindDetector.prepare(text).kind {
+        case .sequenceDiagram: return .sequence
+        case .classDiagram: return .class
+        case .erDiagram: return .er
+        case .xyChart: return .xychart
+        case .flowchart, .stateDiagram: return .flowchart
+        case .zenuml, .unknown: return .unsupported
+        default: return .extra
+        }
+    }
 
-        if firstLine.range(of: #"^sequencediagram\s*$"#, options: .regularExpression) != nil {
-            return .sequence
+    private static func extraSceneAscii(_ scene: ExtraScene) -> String {
+        var lines: [String] = []
+        for item in scene.items {
+            if case let .text(text, _, _, _, _, _, _) = item {
+                lines.append(text)
+            }
         }
-        if firstLine.range(of: #"^classdiagram\s*$"#, options: .regularExpression) != nil {
-            return .class
-        }
-        if firstLine.range(of: #"^erdiagram\s*$"#, options: .regularExpression) != nil {
-            return .er
-        }
-        if firstLine.hasPrefix("xychart") {
-            return .xychart
-        }
-
-        return .flowchart
+        if lines.isEmpty { return "[diagram \(Int(scene.width))x\(Int(scene.height))]" }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Downstream call sites (explicit placeholders)

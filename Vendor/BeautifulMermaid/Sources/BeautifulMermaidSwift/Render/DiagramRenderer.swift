@@ -42,10 +42,12 @@ public final class DiagramRenderer {
             _drawEr(positioned, in: context, bounds: bounds)
         case .sequenceDiagram:
             _drawSequence(positioned, in: context, bounds: bounds)
-        case .stateDiagram, .flowchart:
+        case .stateDiagram, .flowchart, .agentflow:
             _drawFlowOrState(positioned, in: context, bounds: bounds)
         case .xyChart:
             _drawXYChart(positioned, in: context, bounds: bounds)
+        default:
+            _drawExtra(positioned, in: context, bounds: bounds)
         }
     }
 

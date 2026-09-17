@@ -112,7 +112,7 @@ public extension TreeSitterLanguage {
             return .kotlin
         case "go":
             return .go
-        case "shell":
+        case "shell", "bash", "sh", "zsh":
             return .bash
         case "graphql":
             return .graphQL
@@ -128,6 +128,8 @@ public extension TreeSitterLanguage {
             return .c
         case "cpp":
             return .cpp
+        case "diff", "patch":
+            return .diff
         case "plain":
             return nil
         default:

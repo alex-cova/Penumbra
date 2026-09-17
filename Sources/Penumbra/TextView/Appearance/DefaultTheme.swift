@@ -37,6 +37,9 @@ public final class DefaultTheme: Penumbra.Theme {
     private static let attributeColor = UIColor(themeColorNamed: "attribute")
     private static let searchMatchFoundColor = UIColor(themeColorNamed: "search_match_found")
     private static let searchMatchHighlightedColor = UIColor(themeColorNamed: "search_match_highlighted")
+    private static let diffPlusColor = UIColor(themeColorNamed: "diff_plus")
+    private static let diffMinusColor = UIColor(themeColorNamed: "diff_minus")
+    private static let diffDeltaColor = UIColor(themeColorNamed: "diff_delta")
 
     private var textColorCache: [String: UIColor?] = [:]
     private var fontTraitsCache: [String: FontTraits] = [:]
@@ -113,6 +116,8 @@ public final class DefaultTheme: Penumbra.Theme {
             return propertyColor
         case .comment:
             return commentColor
+        case .constant:
+            return propertyColor
         case .constantBuiltin:
             return propertyColor
         case .constantCharacter:
@@ -121,6 +126,12 @@ public final class DefaultTheme: Penumbra.Theme {
             return functionColor
         case .constructor:
             return constructorColor
+        case .diffPlus:
+            return diffPlusColor
+        case .diffMinus:
+            return diffMinusColor
+        case .diffDelta:
+            return diffDeltaColor
         case .embedded:
             return nil
         case .float:
@@ -245,6 +256,18 @@ private extension UIColor {
                 return isDark
                     ? UIColor(srgbRed: 0.988, green: 0.827, blue: 0.302, alpha: 1)
                     : UIColor(srgbRed: 0.769, green: 0.502, blue: 0.000, alpha: 1)
+            case "diff_plus":
+                return isDark
+                    ? UIColor(srgbRed: 0.310, green: 0.839, blue: 0.459, alpha: 1)
+                    : UIColor(srgbRed: 0.133, green: 0.490, blue: 0.204, alpha: 1)
+            case "diff_minus":
+                return isDark
+                    ? UIColor(srgbRed: 1.000, green: 0.420, blue: 0.420, alpha: 1)
+                    : UIColor(srgbRed: 0.769, green: 0.118, blue: 0.227, alpha: 1)
+            case "diff_delta":
+                return isDark
+                    ? UIColor(srgbRed: 0.910, green: 0.639, blue: 0.239, alpha: 1)
+                    : UIColor(srgbRed: 0.702, green: 0.420, blue: 0.000, alpha: 1)
             default:
                 return .labelColor
             }

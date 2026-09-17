@@ -72,14 +72,6 @@ private enum _IndexDefaults {
     static let fg = "#27272A"
 }
 
-private enum _DiagramRoutingType {
-    case flowchart
-    case sequence
-    case `class`
-    case er
-    case xychart
-}
-
 private func _decodeXML(_ text: String) -> String {
     // Aligns with TS decodeXML intent for markdown-escaped Mermaid source.
     text
@@ -88,30 +80,6 @@ private func _decodeXML(_ text: String) -> String {
         .replacingOccurrences(of: "&quot;", with: "\"")
         .replacingOccurrences(of: "&apos;", with: "'")
         .replacingOccurrences(of: "&amp;", with: "&")
-}
-
-private func detectDiagramType(_ text: String) -> _DiagramRoutingType {
-    let firstLine = text
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .components(separatedBy: CharacterSet(charactersIn: "\n;"))
-        .first?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased() ?? ""
-
-    if firstLine.range(of: "^sequencediagram\\s*$", options: .regularExpression) != nil {
-        return .sequence
-    }
-    if firstLine.range(of: "^classdiagram\\s*$", options: .regularExpression) != nil {
-        return .class
-    }
-    if firstLine.range(of: "^erdiagram\\s*$", options: .regularExpression) != nil {
-        return .er
-    }
-    if firstLine.hasPrefix("xychart") {
-        return .xychart
-    }
-
-    return .flowchart
 }
 
 private func buildColors(_ options: RenderOptions) -> DiagramColors {
@@ -132,38 +100,48 @@ public func renderMermaidSVG(
 ) throws -> String {
     _ = ElkSwift.version
 
-    let decodedText = _decodeXML(text)
+    let decodedText = DiagramKindDetector.stripFrontmatter(_decodeXML(text))
     let colors = buildColors(options)
     let font = options.font ?? "Inter"
     let transparent = options.transparent ?? false
-    let diagramType = detectDiagramType(decodedText)
+    let prepared = DiagramKindDetector.prepare(decodedText)
+    let lines = prepared.lines
 
-    let lines = decodedText
-        .components(separatedBy: CharacterSet(charactersIn: "\n;"))
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty && !$0.hasPrefix("%%") }
-
-    switch diagramType {
-    case .sequence:
+    switch prepared.kind {
+    case .sequenceDiagram:
         let diagram = try parseSequenceDiagram(lines)
         let positioned = try layoutSequenceDiagram(diagram, options)
         return try renderSequenceSvg(positioned, colors, font, transparent)
-    case .class:
+    case .classDiagram:
         let diagram = try parseClassDiagram(lines)
         let positioned = try layoutClassDiagramSync(diagram, options: options)
         return try renderClassSvg(positioned, colors, font, transparent)
-    case .er:
+    case .erDiagram:
         let diagram = try parseErDiagram(lines)
         let positioned = try layoutErDiagramSync(diagram, options: options)
         return try renderErSvg(positioned, colors, font, transparent)
-    case .xychart:
+    case .xyChart:
         let chart = parseXYChart(lines)
         let positioned = layoutXYChart(chart, options)
         return renderXYChartSvg(positioned, colors, font, transparent, interactive: options.interactive ?? false)
-    case .flowchart:
+    case .flowchart, .stateDiagram:
         let graph = try parseMermaid(decodedText)
         let positioned = try layoutGraphSync(graph, options)
         return try renderSvg(positioned, colors, font, transparent)
+    case .agentflow:
+        let rewritten = rewriteAgentflowAsFlowchart(decodedText)
+        let graph = try parseMermaid(rewritten)
+        let positioned = try layoutGraphSync(graph, options)
+        return try renderSvg(positioned, colors, font, transparent)
+    case .zenuml, .unknown:
+        throw MermaidParserError.unsupportedDiagram(prepared.headerToken)
+    default:
+        let graph = try MermaidParser.parse(decodedText)
+        let positioned = try GraphLayout().layout(graph)
+        guard case .extra(let scene) = positioned.content else {
+            throw MermaidParserError.invalidDiagram("Failed to layout diagram")
+        }
+        return renderExtraSceneSvg(scene, colors, font, transparent)
     }
 }
 

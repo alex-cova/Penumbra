@@ -1,17 +1,102 @@
 import Foundation
 
-/// A single block in the rendered markdown preview.
-public enum MarkdownPreviewBlock: Sendable, Equatable {
-    case heading(level: Int, text: AttributedString)
-    case paragraph(AttributedString)
-    case unorderedList([AttributedString])
-    case orderedList([AttributedString])
-    case blockquote(AttributedString)
-    case thematicBreak
-    case codeBlock(language: String?, source: String)
-    case image(alt: String, reference: String)
-    case mermaid(source: String)
-    case mermaidError(source: String, message: String)
+/// A single, flat block in the rendered markdown preview.
+///
+/// Nesting (blockquote depth, list item depth) is carried as data on the block/item rather than
+/// as recursive structure, so `MarkdownPreviewMetalRenderer`'s tiling — which clips against
+/// absolute block frames keyed by array index — keeps working unmodified.
+public struct MarkdownPreviewBlock: Sendable, Equatable {
+    public var kind: Kind
+    /// `0` when the block is not inside a blockquote; `2` for a block inside `>>`, etc.
+    public var quoteDepth: Int
+
+    public init(kind: Kind, quoteDepth: Int = 0) {
+        self.kind = kind
+        self.quoteDepth = quoteDepth
+    }
+
+    public enum Kind: Sendable, Equatable {
+        case heading(level: Int, text: AttributedString)
+        case paragraph(AttributedString)
+        case list(MarkdownPreviewList)
+        case table(MarkdownPreviewTable)
+        case thematicBreak
+        case codeBlock(language: String?, source: String)
+        case image(alt: String, reference: String)
+        case mermaid(source: String)
+        case mermaidError(source: String, message: String)
+        case footnotes([MarkdownPreviewFootnote])
+    }
+}
+
+/// A flat, possibly-nested list. `Item.level` (0-based) carries nesting depth instead of the list
+/// recursing into sub-lists, matching `MarkdownPreviewBlock`'s flat-block design.
+public struct MarkdownPreviewList: Sendable, Equatable {
+    public var items: [Item]
+
+    public init(items: [Item] = []) {
+        self.items = items
+    }
+
+    public struct Item: Sendable, Equatable {
+        public var text: AttributedString
+        public var level: Int
+        public var marker: Marker
+
+        public init(text: AttributedString, level: Int, marker: Marker) {
+            self.text = text
+            self.level = level
+            self.marker = marker
+        }
+    }
+
+    public enum Marker: Sendable, Equatable {
+        case bullet
+        case ordered(Int)
+        case task(checked: Bool)
+    }
+}
+
+/// One entry in the trailing "Footnotes" section: `number` is the resolved, first-reference-order
+/// display number (not necessarily the source order of `[^label]:` definitions), `label` is the
+/// original `[^label]` text for diagnostics, and `text` is the parsed, inline-styled body with any
+/// footnote references it itself contains already substituted.
+public struct MarkdownPreviewFootnote: Sendable, Equatable {
+    public var number: Int
+    public var label: String
+    public var text: AttributedString
+
+    public init(number: Int, label: String, text: AttributedString) {
+        self.number = number
+        self.label = label
+        self.text = text
+    }
+}
+
+/// A GFM pipe table with per-column alignment. Rows are padded to `columns.count` so a ragged
+/// source row never produces an out-of-bounds cell lookup at layout/paint time.
+public struct MarkdownPreviewTable: Sendable, Equatable {
+    public var columns: [Column]
+    public var header: [AttributedString]
+    public var rows: [[AttributedString]]
+
+    public init(columns: [Column] = [], header: [AttributedString] = [], rows: [[AttributedString]] = []) {
+        self.columns = columns
+        self.header = header
+        self.rows = rows
+    }
+
+    public struct Column: Sendable, Equatable {
+        public enum Alignment: Sendable, Equatable {
+            case leading, center, trailing
+        }
+
+        public var alignment: Alignment
+
+        public init(alignment: Alignment) {
+            self.alignment = alignment
+        }
+    }
 }
 
 /// Parsed markdown ready for layout and painting.
@@ -22,121 +107,62 @@ public struct MarkdownPreviewDocument: Sendable, Equatable {
         self.blocks = blocks
     }
 
-    /// Parses CommonMark-ish markdown into preview blocks. Mermaid fences are extracted first.
+    /// Parses GFM-ish markdown into preview blocks. Footnote definitions (`[^1]: ...`) are
+    /// extracted first, from the raw source, since Foundation's markdown parser has no concept of
+    /// footnotes at all and would otherwise mangle them (see ``MarkdownPreviewFootnotes``). Mermaid
+    /// fences are extracted next (so they never reach Foundation's parser, which would otherwise
+    /// just see an ordinary code fence); everything else is walked from Foundation's
+    /// `PresentationIntent` tree by ``MarkdownPreviewIntentWalker``. Once every block is built,
+    /// inline `[^1]` references are renumbered by first-reference order and a trailing
+    /// `.footnotes` block is appended if any definitions were found.
     public static func parse(_ source: String) -> MarkdownPreviewDocument {
+        let (strippedSource, footnoteDefinitions) = MarkdownPreviewFootnotes.extract(from: source)
+        let linkDefinitions = MarkdownPreviewIntentWalker.linkReferenceDefinitions(in: strippedSource)
         var blocks: [MarkdownPreviewBlock] = []
-        for segment in MermaidFenceExtractor.segments(in: source) {
+        for segment in MermaidFenceExtractor.segments(in: strippedSource) {
             switch segment {
             case .prose(let prose):
-                blocks.append(contentsOf: parseProse(prose))
+                blocks.append(contentsOf: MarkdownPreviewIntentWalker.blocks(in: prose, linkDefinitions: linkDefinitions))
             case .fencedCode(let language, let body):
                 if MermaidFenceExtractor.isMermaidFence(language) {
-                    blocks.append(.mermaid(source: body))
+                    blocks.append(MarkdownPreviewBlock(kind: .mermaid(source: body)))
                 } else {
-                    blocks.append(.codeBlock(language: language, source: body))
+                    blocks.append(MarkdownPreviewBlock(kind: .codeBlock(language: language, source: body)))
                 }
             }
+        }
+
+        let (numberedBlocks, footnotes) = MarkdownPreviewFootnotes.numberReferences(in: blocks, definitions: footnoteDefinitions)
+        blocks = numberedBlocks
+        if !footnotes.isEmpty {
+            blocks.append(MarkdownPreviewBlock(kind: .thematicBreak))
+            blocks.append(MarkdownPreviewBlock(kind: .footnotes(footnotes)))
         }
         return MarkdownPreviewDocument(blocks: blocks)
-    }
-
-    private static func parseProse(_ prose: String) -> [MarkdownPreviewBlock] {
-        let trimmed = prose.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        var blocks: [MarkdownPreviewBlock] = []
-        let paragraphs = trimmed.components(separatedBy: "\n\n")
-
-        for paragraph in paragraphs {
-            let lines = paragraph.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            guard !lines.isEmpty else { continue }
-
-            if lines.count == 1, lines[0].trimmingCharacters(in: .whitespaces) == "---" {
-                blocks.append(.thematicBreak)
-                continue
-            }
-
-            if lines.count == 1, let image = parseImageLine(lines[0]) {
-                blocks.append(.image(alt: image.alt, reference: image.reference))
-                continue
-            }
-
-            if let heading = parseHeading(lines[0]) {
-                blocks.append(.heading(level: heading.level, text: inlineMarkdown(heading.text)))
-                if lines.count > 1 {
-                    let tail = lines.dropFirst().joined(separator: "\n")
-                    blocks.append(.paragraph(inlineMarkdown(tail)))
-                }
-                continue
-            }
-
-            if lines.allSatisfy({ $0.hasPrefix("> ") || $0 == ">" }) {
-                let quote = lines.map { line in
-                    line.hasPrefix("> ") ? String(line.dropFirst(2)) : ""
-                }.joined(separator: "\n")
-                blocks.append(.blockquote(inlineMarkdown(quote)))
-                continue
-            }
-
-            if lines.allSatisfy({ $0.hasPrefix("- ") || $0.hasPrefix("* ") || $0.hasPrefix("+ ") }) {
-                let items = lines.map { inlineMarkdown(String($0.dropFirst(2))) }
-                blocks.append(.unorderedList(items))
-                continue
-            }
-
-            if lines.allSatisfy({ $0.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil }) {
-                let items = lines.map { line in
-                    let stripped = line.replacingOccurrences(of: #"^\d+\.\s"#, with: "", options: .regularExpression)
-                    return inlineMarkdown(stripped)
-                }
-                blocks.append(.orderedList(items))
-                continue
-            }
-
-            blocks.append(.paragraph(inlineMarkdown(paragraph)))
-        }
-
-        return blocks
-    }
-
-    private static func parseHeading(_ line: String) -> (level: Int, text: String)? {
-        var level = 0
-        for character in line {
-            if character == "#" {
-                level += 1
-            } else {
-                break
-            }
-        }
-        guard level > 0, level <= 6, line.count > level else { return nil }
-        let index = line.index(line.startIndex, offsetBy: level)
-        guard line[index] == " " else { return nil }
-        return (level, String(line[line.index(after: index)...]))
-    }
-
-    private static func parseImageLine(_ line: String) -> (alt: String, reference: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("!["),
-              let closeAlt = trimmed.firstIndex(of: "]"),
-              trimmed[trimmed.index(after: closeAlt)] == "(",
-              let closeRef = trimmed.lastIndex(of: ")") else { return nil }
-        let altStart = trimmed.index(trimmed.startIndex, offsetBy: 2)
-        let alt = String(trimmed[altStart..<closeAlt])
-        let refStart = trimmed.index(after: closeAlt)
-        let reference = String(trimmed[trimmed.index(after: refStart)..<closeRef])
-        return (alt, reference)
     }
 
     /// Accessibility text for each block, in document order.
     public var accessibilityDescriptions: [String] {
         blocks.map { block in
-            switch block {
+            let prefix = block.quoteDepth > 0 ? "Quote level \(block.quoteDepth): " : ""
+            switch block.kind {
             case .heading(let level, let text):
-                return "Heading \(level): \(String(text.characters))"
-            case .paragraph(let text), .blockquote(let text):
-                return String(text.characters)
-            case .unorderedList(let items), .orderedList(let items):
-                return items.map { String($0.characters) }.joined(separator: ", ")
+                return "\(prefix)Heading \(level): \(String(text.characters))"
+            case .paragraph(let text):
+                return "\(prefix)\(String(text.characters))"
+            case .list(let list):
+                let items = list.items.map { item -> String in
+                    switch item.marker {
+                    case .task(let checked):
+                        return "\(checked ? "Checked" : "Unchecked"): \(String(item.text.characters))"
+                    case .bullet, .ordered:
+                        return String(item.text.characters)
+                    }
+                }
+                return "\(prefix)\(items.joined(separator: ", "))"
+            case .table(let table):
+                let header = table.header.map { String($0.characters) }.joined(separator: ", ")
+                return "\(prefix)Table: \(header)"
             case .thematicBreak:
                 return "Thematic break"
             case .codeBlock(_, let source):
@@ -145,13 +171,10 @@ public struct MarkdownPreviewDocument: Sendable, Equatable {
                 return alt.isEmpty ? "Image: \(reference)" : alt
             case .mermaid(let source), .mermaidError(let source, _):
                 return "Mermaid diagram: \(source)"
+            case .footnotes(let footnotes):
+                let entries = footnotes.map { "\($0.number). \(String($0.text.characters))" }
+                return "Footnotes: \(entries.joined(separator: ", "))"
             }
         }
-    }
-
-    private static func inlineMarkdown(_ source: String) -> AttributedString {
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-        return (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
     }
 }

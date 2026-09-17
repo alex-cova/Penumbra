@@ -144,7 +144,6 @@ final class IDEWindowConfiguratorView: NSView {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.backgroundColor = IDEAppearance.NSToken.workbench
         if activate {
             window.makeKeyAndOrderFront(nil)
         }

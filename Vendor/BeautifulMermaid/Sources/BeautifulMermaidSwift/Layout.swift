@@ -69,6 +69,22 @@ public struct GraphLayout {
                 height: positioned.height,
                 content: .xyChart(positioned)
             )
+        case .agentflow:
+            return try layoutGraphSync(graph, config: config)
+        default:
+            let extra: ExtraParsed
+            if let parsed = graph.payload as? ExtraParsed {
+                extra = parsed
+            } else {
+                return PositionedGraph(diagram: graph, content: .extra(.empty))
+            }
+            let scene = layoutExtraParsed(extra)
+            return PositionedGraph(
+                diagram: graph,
+                width: scene.width,
+                height: scene.height,
+                content: .extra(scene)
+            )
         }
     }
 }

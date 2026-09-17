@@ -8,6 +8,31 @@ public enum DiagramType: String, CaseIterable, Sendable {
     case classDiagram
     case erDiagram
     case xyChart
+    case pie
+    case gantt
+    case gitGraph
+    case journey
+    case mindmap
+    case timeline
+    case quadrantChart
+    case sankey
+    case radar
+    case treemap
+    case venn
+    case packet
+    case block
+    case requirement
+    case architecture
+    case c4
+    case kanban
+    case usecase
+    case treeView
+    case ishikawa
+    case cynefin
+    case wardley
+    case eventmodeling
+    case railroad
+    case agentflow
 }
 
 /// The parsed graph model for flowcharts and state diagrams.
@@ -21,6 +46,7 @@ public enum DiagramPayload: Sendable {
     case classDiagram(ClassDiagram)
     case erDiagram(ErDiagram)
     case xyChart(XYChart)
+    case extra(ExtraParsed)
 }
 
 public struct MermaidGraph: @unchecked Sendable {
@@ -50,6 +76,13 @@ public struct MermaidGraph: @unchecked Sendable {
             return (payload as? ErDiagram).map { .erDiagram($0) }
         case .xyChart:
             return (payload as? XYChart).map { .xyChart($0) }
+        case .agentflow:
+            return (payload as? ParsedGraphModel).map { .flowchart($0) }
+        default:
+            if let extra = payload as? ExtraParsed {
+                return .extra(extra)
+            }
+            return nil
         }
     }
 
@@ -99,6 +132,7 @@ public enum PositionedContent: Sendable {
         relationships: [PositionedErRelationship]
     )
     case xyChart(PositionedXYChart)
+    case extra(ExtraScene)
 }
 
 public struct PositionedGraph: Sendable {
@@ -142,6 +176,10 @@ public struct PositionedGraph: Sendable {
             self.content = .erDiagram(entities: [], relationships: [])
         case .xyChart:
             self.content = .xyChart(.empty)
+        case .agentflow:
+            self.content = .flowchart(nodes: [], edges: [], groups: [])
+        default:
+            self.content = .extra(ExtraScene.empty)
         }
     }
 
@@ -235,6 +273,13 @@ public struct PositionedGraph: Sendable {
     public var xyChartData: PositionedXYChart? {
         switch content {
         case .xyChart(let chart): return chart
+        default: return nil
+        }
+    }
+
+    public var extraScene: ExtraScene? {
+        switch content {
+        case .extra(let scene): return scene
         default: return nil
         }
     }

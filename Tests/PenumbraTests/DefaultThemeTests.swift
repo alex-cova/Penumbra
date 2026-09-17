@@ -30,6 +30,20 @@ final class DefaultThemeTests: XCTestCase {
         XCTAssertNotNil(theme.textColor(for: "variable.parameter"))
     }
 
+    func testDiffCaptureNamesResolveToDistinctColors() {
+        let theme = DefaultTheme()
+        XCTAssertNotNil(theme.textColor(for: "constant"))
+        let plus = theme.textColor(for: "diff.plus")
+        let minus = theme.textColor(for: "diff.minus")
+        let delta = theme.textColor(for: "diff.delta")
+        XCTAssertNotNil(plus)
+        XCTAssertNotNil(minus)
+        XCTAssertNotNil(delta)
+        XCTAssertNotEqual(plus?.cgColor.components, minus?.cgColor.components)
+        XCTAssertNotEqual(plus?.cgColor.components, delta?.cgColor.components)
+        XCTAssertNotEqual(minus?.cgColor.components, delta?.cgColor.components)
+    }
+
     func testRelatedTokensIntentionallyShareAColor() {
         let theme = DefaultTheme()
         XCTAssertEqual(theme.textColor(for: "property")?.cgColor.components, theme.textColor(for: "constant.builtin")?.cgColor.components)

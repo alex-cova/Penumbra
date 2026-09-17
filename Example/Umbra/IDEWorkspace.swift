@@ -54,12 +54,9 @@ final class IDEWorkspace: ObservableObject {
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
-    /// Whether there's anything for the sidebar to show — the same condition that dismisses the
-    /// Welcome screen. On a workspace with neither a folder nor a loose file open, the sidebar
-    /// would just be its own empty state sitting next to the Welcome screen's, so it collapses.
-    var isSidebarAvailable: Bool { hasProjectRoot || hasOpenDocuments }
-    /// What `IDERootView` should actually render — the user's toggle, gated by availability.
-    var showsSidebar: Bool { isSidebarVisible && isSidebarAvailable }
+    /// What `IDERootView` should actually render — just the user's sidebar toggle. The Explorer
+    /// stays visible even with no folder or documents open, showing its own empty state.
+    var showsSidebar: Bool { isSidebarVisible }
 
     init() {
         project.$rootURL

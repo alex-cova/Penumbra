@@ -21,6 +21,13 @@ public final class MarkdownPreviewView: NSView {
         didSet { scheduleRelayout() }
     }
 
+    /// Natural (unscaled) point size of each raster image, when known — lets `rasterHeights(for:)`
+    /// size a mermaid/image block to its own natural extent instead of always stretching it to
+    /// the full content width.
+    public var rasterNaturalSizes: [Int: CGSize] = [:] {
+        didSet { scheduleRelayout() }
+    }
+
     public var highlightedCode: [Int: NSAttributedString] = [:] {
         didSet { scheduleRelayout() }
     }
@@ -208,9 +215,16 @@ public final class MarkdownPreviewView: NSView {
         let contentWidth = max(bounds.width - style.contentInset * 2, 1)
         for (index, block) in document.blocks.enumerated() {
             guard let image = rasterImages[index] else { continue }
-            let aspect = CGFloat(image.height) / CGFloat(max(image.width, 1))
-            let height = max(contentWidth * aspect, 80)
-            switch block {
+            let height: CGFloat
+            if let natural = rasterNaturalSizes[index], natural.width > 0 {
+                // Never upscale past the natural size: display width only shrinks to fit.
+                let displayWidth = min(contentWidth, natural.width)
+                height = max(displayWidth * (natural.height / natural.width), 80)
+            } else {
+                let aspect = CGFloat(image.height) / CGFloat(max(image.width, 1))
+                height = max(contentWidth * aspect, 80)
+            }
+            switch block.kind {
             case .mermaid, .mermaidError:
                 mermaid[index] = height
             case .image:

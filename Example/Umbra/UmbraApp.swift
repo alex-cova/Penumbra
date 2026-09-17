@@ -73,7 +73,6 @@ struct UmbraApp: App {
                 Divider()
                 Button("Toggle Sidebar", systemImage: "sidebar.leading", action: workspace.toggleSidebar)
                     .keyboardShortcut("0", modifiers: .command)
-                    .disabled(!workspace.isSidebarAvailable)
                 Button("Markdown Preview", systemImage: "doc.richtext", action: workspace.toggleMarkdownPreview)
                     .keyboardShortcut("b", modifiers: .command)
                 Toggle("Line Numbers", isOn: workspace.showLineNumbersBinding)

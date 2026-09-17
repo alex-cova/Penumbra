@@ -226,6 +226,16 @@ let package = Package(
             dependencies: ["Penumbra", "TreeSitterRust", "TreeSitterRustQueries"],
             swiftSettings: swift6
         ),
+        .target(name: "TreeSitterDiff", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterDiffQueries",
+            resources: [.copy("highlights.scm")]
+        ),
+        .target(
+            name: "TreeSitterDiffPenumbra",
+            dependencies: ["Penumbra", "TreeSitterDiff", "TreeSitterDiffQueries"],
+            swiftSettings: swift6
+        ),
         .target(name: "TreeSitterC", cSettings: [.headerSearchPath("src")]),
         .target(
             name: "TreeSitterCQueries",
@@ -266,7 +276,8 @@ let package = Package(
                 "TreeSitterMermaidPenumbra",
                 "TreeSitterRustPenumbra",
                 "TreeSitterCPenumbra",
-                "TreeSitterCppPenumbra"
+                "TreeSitterCppPenumbra",
+                "TreeSitterDiffPenumbra"
             ],
             resources: [
                 .copy("Queries")
@@ -293,6 +304,7 @@ let package = Package(
             "PenumbraGraphQLLanguage",
             "PenumbraMarkdownLanguage",
             "PenumbraLanguages",
+            "PenumbraBeautifulMermaid",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], swiftSettings: swift6)
     ]
