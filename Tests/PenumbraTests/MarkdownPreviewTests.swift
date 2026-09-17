@@ -185,6 +185,111 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(metalView?.isHidden == true, "Metal canvas should stay hidden when the document is too wide to tile")
     }
 
+    /// Regression test for the blank-preview-pane bug: `MarkdownPreviewMetalCanvasView` sets
+    /// `layerContentsRedrawPolicy = .never`, which means `needsDisplay = true` alone never reaches
+    /// `updateLayer()`/`present()` — the canvas could stay hidden-behind-a-clear-color forever
+    /// while every higher-level flag (`isHidden`, `usesMetalRendering`) looked correct. This drives
+    /// a full layout pass in a real window and asserts a drawable was actually presented with tiles.
+    @MainActor
+    func testMetalPreviewActuallyPresents() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        window.contentView = preview
+        window.makeKeyAndOrderFront(nil)
+
+        preview.usesMetalRendering = true
+        preview.document = MarkdownPreviewDocument.parse("# Metal\n\nHello, this is a preview paragraph.")
+        preview.layoutSubtreeIfNeeded()
+        pumpMainRunLoop()
+
+        XCTAssertTrue(preview.usesMetalRendering)
+        XCTAssertGreaterThan(
+            preview.debugMetalPresentedTileCount, 0,
+            "The Metal canvas must actually present at least one tile, not just clear to the background color"
+        )
+    }
+
+    /// Regression test for the stale-`visibleRect` bug: rasterizing against a leftover rect from a
+    /// taller previous document (or none at all) could select zero tiles for the new, shorter
+    /// document — `update()` would still report success, silently presenting an empty frame.
+    /// Exercises `MarkdownPreviewMetalRenderer` directly (no window needed) since tile *selection*
+    /// is independent of whether the canvas can currently present.
+    @MainActor
+    func testMetalRendererClampsStaleVisibleRectOnShorterDocument() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+
+        let renderer = MarkdownPreviewMetalRenderer()
+        let style = MarkdownPreviewStyle()
+
+        let tallLayout = MarkdownPreviewLayout(blockLayouts: [], contentSize: CGSize(width: 320, height: 5000))
+        XCTAssertTrue(renderer.update(layout: tallLayout, style: style, rasterImages: [:]))
+        renderer.setVisibleRect(CGRect(x: 0, y: 4500, width: 320, height: 240))
+        XCTAssertGreaterThan(renderer.lastRequestedTileCount, 0)
+
+        // Swap in a much shorter document without ever explicitly resetting the visible rect —
+        // the scenario that used to leave `visibleRect.minY` past the new document's height.
+        let shortLayout = MarkdownPreviewLayout(blockLayouts: [], contentSize: CGSize(width: 320, height: 400))
+        XCTAssertTrue(renderer.update(layout: shortLayout, style: style, rasterImages: [:]))
+        XCTAssertGreaterThan(
+            renderer.lastRequestedTileCount, 0,
+            "A stale visible rect from a taller previous document must not leave the renderer selecting zero tiles"
+        )
+    }
+
+    /// Guards the ambiguous-layout fix: `documentView`/`contentView` are frame-driven (sized by
+    /// `applyLayout`), not Auto Layout participants with no width/height constraint of their own.
+    @MainActor
+    func testCGPreviewContentViewHasNonZeroSize() {
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        preview.usesMetalRendering = false
+        preview.document = MarkdownPreviewDocument.parse(
+            "# Heading\n\nA paragraph long enough to produce a reasonably tall layout for this assertion."
+        )
+        preview.layoutSubtreeIfNeeded()
+
+        guard let size = preview.debugDocumentView?.frame.size else {
+            XCTFail("Expected a document view")
+            return
+        }
+        XCTAssertGreaterThan(size.width, 0)
+        XCTAssertGreaterThan(size.height, 0)
+    }
+
+    /// Guards the scroll-geometry fix: the document view must be flipped so it agrees with
+    /// `MarkdownPreviewContentView` (also flipped) and with the tile grid's top-down indexing —
+    /// otherwise the pane opens scrolled to the bottom and `documentVisibleRect` is measured from
+    /// the wrong end.
+    @MainActor
+    func testPreviewDocumentViewIsFlipped() {
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        preview.document = MarkdownPreviewDocument.parse("# Heading")
+        preview.layoutSubtreeIfNeeded()
+
+        guard let documentView = preview.debugDocumentView else {
+            XCTFail("Expected a document view")
+            return
+        }
+        XCTAssertTrue(
+            documentView.isFlipped,
+            "Document view must be flipped to open scrolled to the top and agree with the tile grid's coordinate space"
+        )
+    }
+
     /// Regression test for the flip fix in `MarkdownPreviewMetalRenderer.makeTileImage`: without
     /// it, block frames are rasterized against a native (bottom-up) `CGContext`, and the document
     /// ends up mirrored top-to-bottom once uploaded to a texture and presented.

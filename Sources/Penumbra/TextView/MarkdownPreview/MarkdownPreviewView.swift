@@ -46,11 +46,20 @@ public final class MarkdownPreviewView: NSView {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
 
-        contentView.translatesAutoresizingMaskIntoConstraints = false
         metalRenderer.isActive = false
 
-        let documentView = NSView()
-        documentView.translatesAutoresizingMaskIntoConstraints = false
+        // Both this container and `contentView` size themselves via explicit `frame`/
+        // `setFrameSize` assignments in `applyLayout`, not Auto Layout — leave them
+        // frame-driven (the default `translatesAutoresizingMaskIntoConstraints = true`)
+        // rather than declaring them as constraint participants with no width/height
+        // constraint to actually give them a size.
+        //
+        // Flipped to match `MarkdownPreviewContentView.isFlipped == true`: the tile grid
+        // (`MarkdownPreviewTileGrid.contentRect(for:)`) and `scrollView.documentVisibleRect`
+        // both need to agree on "top of document" meaning the same thing, and an unflipped
+        // `NSView` document view would otherwise open the scroll view at the bottom of the
+        // document and measure scroll position from the bottom.
+        let documentView = MarkdownPreviewDocumentContainerView()
         documentView.addSubview(contentView)
         scrollView.documentView = documentView
 
@@ -64,9 +73,7 @@ public final class MarkdownPreviewView: NSView {
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            contentView.topAnchor.constraint(equalTo: documentView.topAnchor),
-            contentView.leadingAnchor.constraint(equalTo: documentView.leadingAnchor)
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         let clipView = scrollView.contentView
@@ -98,6 +105,13 @@ public final class MarkdownPreviewView: NSView {
 
     public override var acceptsFirstResponder: Bool { false }
 
+    /// Test-only hooks (`@testable import` visibility): expose otherwise-private scroll/render
+    /// internals so tests can assert on actual presentation and layout geometry rather than only
+    /// on `isHidden`/`usesMetalRendering` flags.
+    var debugMetalPresentedTileCount: Int { metalRenderer.presentedTileCount }
+    var debugMetalRequestedTileCount: Int { metalRenderer.lastRequestedTileCount }
+    var debugDocumentView: NSView? { scrollView.documentView }
+
     func applyLayout(_ layout: MarkdownPreviewLayout) {
         guard let documentView = scrollView.documentView else { return }
         let size = layout.contentSize
@@ -120,15 +134,18 @@ public final class MarkdownPreviewView: NSView {
         metalRenderer.isActive = shouldUseMetal
 
         if shouldUseMetal {
+            // Prime the renderer's visible rect *before* `update()` rebuilds the tile grid: it
+            // guards a same-rect no-op and otherwise seeds the very first raster pass with a
+            // leftover (or zero) rect that may not intersect the new document at all, presenting
+            // zero tiles — a "successful" frame that is nonetheless blank.
+            metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
             let succeeded = metalRenderer.update(
                 layout: layout,
                 style: style,
                 rasterImages: rasterImages,
                 highlightedCode: highlightedCode
             )
-            if succeeded {
-                metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
-            } else {
+            if !succeeded {
                 useMetal = false
                 contentView.isHidden = false
                 metalRenderer.isActive = false
@@ -154,6 +171,9 @@ public final class MarkdownPreviewView: NSView {
         layoutMetalCanvasFrame()
         guard let document = document else {
             contentView.layout = MarkdownPreviewLayout(blockLayouts: [], contentSize: .zero)
+            contentView.isHidden = false
+            useMetal = false
+            metalRenderer.isActive = false
             metalRenderer.clear()
             return
         }
@@ -168,12 +188,18 @@ public final class MarkdownPreviewView: NSView {
             highlightedCode: highlightedCode
         )
         applyLayout(layout)
+        // `layerContentsRedrawPolicy = .never` on the Metal canvas means `setNeedsDisplay` alone
+        // (from `applyLayout`/`metalRenderer.update`) never reaches `updateLayer()`. This layout
+        // pass is the reliable synchronous trigger; scroll/async-raster updates outside of layout
+        // fall back to the canvas's own deferred present.
+        metalRenderer.presentIfNeeded()
     }
 
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         metalRenderer.invalidateForScaleChange()
         metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
+        metalRenderer.presentIfNeeded()
     }
 
     private func rasterHeights(for document: MarkdownPreviewDocument) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
@@ -195,6 +221,15 @@ public final class MarkdownPreviewView: NSView {
         }
         return (mermaid, images)
     }
+}
+
+/// `NSScrollView.documentView` container. Flipped to agree with `MarkdownPreviewContentView`
+/// (also flipped) and with `MarkdownPreviewTileGrid`'s top-down tile indexing — an unflipped
+/// document view would otherwise open the scroll view at the bottom of the document and measure
+/// `documentVisibleRect` from the bottom, handing the Metal renderer the wrong tiles.
+@MainActor
+private final class MarkdownPreviewDocumentContainerView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 @MainActor
