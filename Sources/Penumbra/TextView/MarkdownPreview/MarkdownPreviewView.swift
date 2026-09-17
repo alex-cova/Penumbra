@@ -47,30 +47,48 @@ public final class MarkdownPreviewView: NSView {
         scrollView.drawsBackground = false
 
         contentView.translatesAutoresizingMaskIntoConstraints = false
-        metalRenderer.view.translatesAutoresizingMaskIntoConstraints = false
         metalRenderer.isActive = false
 
         let documentView = NSView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
         documentView.addSubview(contentView)
-        documentView.addSubview(metalRenderer.view)
         scrollView.documentView = documentView
 
         addSubview(scrollView)
+        // The Metal canvas is a fixed viewport-sized overlay (not part of the scrolling document
+        // view) — its drawable stays viewport-sized no matter how tall the document is; scrolling
+        // is handled by re-rasterizing/re-blitting tiles for the new visible rect instead of
+        // moving the canvas itself.
+        addSubview(metalRenderer.view)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             contentView.topAnchor.constraint(equalTo: documentView.topAnchor),
-            contentView.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
-            metalRenderer.view.topAnchor.constraint(equalTo: documentView.topAnchor),
-            metalRenderer.view.leadingAnchor.constraint(equalTo: documentView.leadingAnchor)
+            contentView.leadingAnchor.constraint(equalTo: documentView.leadingAnchor)
         ])
+
+        let clipView = scrollView.contentView
+        clipView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewDidScroll),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
 
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Markdown Preview")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func scrollViewDidScroll() {
+        metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
     }
 
     @available(*, unavailable)
@@ -85,22 +103,18 @@ public final class MarkdownPreviewView: NSView {
         let size = layout.contentSize
         documentView.setFrameSize(size)
         contentView.frame = CGRect(origin: .zero, size: size)
-        metalRenderer.view.frame = CGRect(origin: .zero, size: size)
         contentView.layout = layout
         contentView.style = style
         contentView.rasterImages = rasterImages
         contentView.highlightedCode = highlightedCode
         contentView.needsDisplay = true
+        layoutMetalCanvasFrame()
 
         if let document = document {
             setAccessibilityValue(document.accessibilityDescriptions.joined(separator: "\n\n"))
         }
 
-        let scale = metalRenderer.backingScaleFactor
-        let shouldUseMetal = prefersMetal && MarkdownPreviewMetalRenderer.canRasterize(
-            contentSize: size,
-            scale: scale
-        )
+        let shouldUseMetal = prefersMetal && MetalContext.isAvailable
         useMetal = shouldUseMetal
         contentView.isHidden = shouldUseMetal
         metalRenderer.isActive = shouldUseMetal
@@ -112,12 +126,22 @@ public final class MarkdownPreviewView: NSView {
                 rasterImages: rasterImages,
                 highlightedCode: highlightedCode
             )
-            if !succeeded {
+            if succeeded {
+                metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
+            } else {
                 useMetal = false
                 contentView.isHidden = false
                 metalRenderer.isActive = false
             }
         }
+    }
+
+    /// Sizes the Metal overlay to the scroll view's clip view (the visible viewport), never the
+    /// full document — tall documents stay on Metal via tile re-rasterization instead of a
+    /// full-content-height drawable.
+    private func layoutMetalCanvasFrame() {
+        let clipView = scrollView.contentView
+        metalRenderer.view.frame = convert(clipView.bounds, from: clipView)
     }
 
     private func scheduleRelayout() {
@@ -127,6 +151,7 @@ public final class MarkdownPreviewView: NSView {
     public override func layout() {
         super.layout()
         layer?.backgroundColor = style.backgroundColor.cgColor
+        layoutMetalCanvasFrame()
         guard let document = document else {
             contentView.layout = MarkdownPreviewLayout(blockLayouts: [], contentSize: .zero)
             metalRenderer.clear()
@@ -143,6 +168,12 @@ public final class MarkdownPreviewView: NSView {
             highlightedCode: highlightedCode
         )
         applyLayout(layout)
+    }
+
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        metalRenderer.invalidateForScaleChange()
+        metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
     }
 
     private func rasterHeights(for document: MarkdownPreviewDocument) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
@@ -183,7 +214,8 @@ private final class MarkdownPreviewContentView: NSView {
             rasterImages: rasterImages,
             highlightedCode: highlightedCode,
             in: context,
-            bounds: bounds
+            bounds: bounds,
+            clip: dirtyRect
         )
     }
 }

@@ -137,7 +137,7 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     @MainActor
-    func testMetalPreviewFallsBackWhenLayoutExceedsTextureLimits() throws {
+    func testMetalPreviewTilesOversizedLayout() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")
         }
@@ -145,6 +145,8 @@ final class MarkdownPreviewTests: XCTestCase {
         let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
         preview.usesMetalRendering = true
 
+        // Taller than a single Metal texture could ever hold — the tile cache must keep Metal
+        // active rather than falling back to Core Graphics.
         let maxDimension = MetalTextureUpload.maxTextureDimension
         let tallHeight = CGFloat(maxDimension + 100)
         let layout = MarkdownPreviewLayout(
@@ -153,9 +155,120 @@ final class MarkdownPreviewTests: XCTestCase {
         )
         preview.applyLayout(layout)
 
+        XCTAssertTrue(preview.usesMetalRendering, "Metal should stay active for an oversized layout via tiling")
+        let metalView = findMetalCanvasView(in: preview)
+        XCTAssertNotNil(metalView)
+        XCTAssertFalse(metalView?.isHidden == true, "Metal canvas should stay visible for an oversized layout")
+    }
+
+    @MainActor
+    func testMetalPreviewFallsBackWhenDocumentIsTooWideToTile() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        preview.usesMetalRendering = true
+
+        // Wider than a single tile row could ever hold at 2x — horizontal tiling is out of scope,
+        // so this is the one remaining legitimate CG fallback for preview size.
+        let scale = preview.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let tooWide = CGFloat(MetalTextureUpload.maxTextureDimension) / scale + 100
+        let layout = MarkdownPreviewLayout(
+            blockLayouts: [],
+            contentSize: CGSize(width: tooWide, height: 200)
+        )
+        preview.applyLayout(layout)
+
         XCTAssertFalse(preview.usesMetalRendering)
         let metalView = findMetalCanvasView(in: preview)
-        XCTAssertTrue(metalView?.isHidden == true, "Metal canvas should stay hidden when layout exceeds texture limits")
+        XCTAssertTrue(metalView?.isHidden == true, "Metal canvas should stay hidden when the document is too wide to tile")
+    }
+
+    /// Regression test for the flip fix in `MarkdownPreviewMetalRenderer.makeTileImage`: without
+    /// it, block frames are rasterized against a native (bottom-up) `CGContext`, and the document
+    /// ends up mirrored top-to-bottom once uploaded to a texture and presented.
+    ///
+    /// Does not require a live `MTLDevice` — `makeTileImage` only touches Core Graphics.
+    @MainActor
+    func testTileRasterOrientationMatchesTopDownDocumentOrder() throws {
+        // Explicit, fully-opaque, maximally distinct colors — unlike the semantic system
+        // defaults (`.textBackgroundColor` / `.quaternaryLabelColor`), these give a
+        // deterministic signal regardless of the test run's light/dark appearance.
+        var style = MarkdownPreviewStyle()
+        style.backgroundColor = .white
+        style.codeBackgroundColor = .black
+        // A code block always paints an unconditional `codeBackgroundColor` fill for its frame,
+        // regardless of highlighted/plain text — an unambiguous, easy-to-detect fill. Starts
+        // right at the document/tile top and is tall enough that a sample well inside it is
+        // insensitive to the exact flip-formula rounding.
+        let blockFrame = CGRect(x: 0, y: 0, width: 200, height: 100) // document TOP
+        let blockLayout = MarkdownPreviewBlockLayout(
+            block: .codeBlock(language: nil, source: "x"),
+            frame: blockFrame,
+            textFrames: [blockFrame]
+        )
+        let contentSize = CGSize(width: 200, height: 2000)
+        let layout = MarkdownPreviewLayout(blockLayouts: [blockLayout], contentSize: contentSize)
+
+        let renderer = MarkdownPreviewMetalRenderer()
+        // Sets the renderer's stored layout/style/raster inputs; the Bool result (needs a live
+        // Metal device) is irrelevant here — only `makeTileImage`'s CG output is under test.
+        _ = renderer.update(layout: layout, style: style, rasterImages: [:], highlightedCode: [:])
+
+        guard let grid = MarkdownPreviewTileGrid(contentSize: contentSize, scale: 2, maxTilePixelHeight: 1024) else {
+            XCTFail("Expected a valid tile grid")
+            return
+        }
+        guard let tileImage = renderer.makeTileImage(index: 0, grid: grid) else {
+            XCTFail("Expected tile 0 to rasterize")
+            return
+        }
+
+        // Mirrors `MarkdownPreviewMetalRenderer.uploadTexture`'s own "redraw into a plain
+        // context, inspect the raw buffer directly" step: buffer row 0 after this redraw is
+        // exactly what `texture.replace` hands to texture row 0, i.e. what `CAMetalLayer`
+        // presents at the top of the screen.
+        let width = tileImage.width
+        let height = tileImage.height
+        let bytesPerRow = width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let uploadContext = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            XCTFail("Expected an upload-style context")
+            return
+        }
+        uploadContext.draw(tileImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        func isBackground(rowIndex: Int) -> Bool {
+            let offset = rowIndex * bytesPerRow + (width / 2) * 4
+            let bg = rgb255(style.backgroundColor)
+            return abs(Int(bytes[offset]) - bg.0) <= 10
+                && abs(Int(bytes[offset + 1]) - bg.1) <= 10
+                && abs(Int(bytes[offset + 2]) - bg.2) <= 10
+        }
+
+        // The 100pt-tall (200px at 2x) block occupies roughly texture rows 0–199; sample well
+        // inside that with margin for the flip formula's rounding, and well outside it near the
+        // tile's far (empty) end.
+        XCTAssertFalse(isBackground(rowIndex: 50), "Document-top content should land near texture row 0 (screen top), not be mirrored to the bottom")
+        XCTAssertTrue(isBackground(rowIndex: height - 50), "Nothing is drawn near this tile's bottom; it must stay background, not show the top block")
+    }
+
+    private func rgb255(_ color: NSColor) -> (Int, Int, Int) {
+        let converted = color.usingColorSpace(.deviceRGB) ?? color
+        return (
+            Int((converted.redComponent * 255).rounded()),
+            Int((converted.greenComponent * 255).rounded()),
+            Int((converted.blueComponent * 255).rounded())
+        )
     }
 
     func testMermaidErrorForInvalidDiagram() async {

@@ -8,13 +8,19 @@ enum MarkdownPreviewCGRenderer {
         rasterImages: [Int: CGImage],
         highlightedCode: [Int: NSAttributedString] = [:],
         in context: CGContext,
-        bounds: CGRect
+        bounds: CGRect,
+        clip: CGRect? = nil
     ) {
         context.saveGState()
         context.setFillColor(style.backgroundColor.cgColor)
         context.fill(bounds)
 
         for (index, blockLayout) in layout.blockLayouts.enumerated() {
+            // Decorations (e.g. the blockquote fill) can extend a few points outside `frame`;
+            // inflate before testing so a block right at the tile/dirty-rect edge still paints.
+            if let clip, !blockLayout.frame.insetBy(dx: -8, dy: -8).intersects(clip) {
+                continue
+            }
             drawBlock(
                 blockLayout: blockLayout,
                 style: style,
