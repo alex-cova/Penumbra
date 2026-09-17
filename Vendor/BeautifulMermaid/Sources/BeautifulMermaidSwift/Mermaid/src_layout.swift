@@ -1,6 +1,6 @@
 // Ported from original/src/layout.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private typealias _ParsedGraph = original_src_types.MermaidGraph
 private typealias _ParsedNode = original_src_types.MermaidNode

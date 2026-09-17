@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/edge-routing.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 // ============================================================================
 // Compatibility helpers shared by ASCII routing/bundling ports

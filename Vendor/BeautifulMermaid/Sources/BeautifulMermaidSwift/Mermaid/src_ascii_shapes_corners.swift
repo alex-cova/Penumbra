@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/corners.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct CornerChars: Sendable {
     public var tl: Character

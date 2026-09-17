@@ -3,6 +3,7 @@ import XCTest
 import RunestoneLanguages
 import TreeSitter
 import TreeSitterCSS
+import TreeSitterCpp
 import TreeSitterTypeScript
 @testable import Runestone
 
@@ -10,14 +11,28 @@ final class LanguagePackTests: XCTestCase {
     func testBundledLanguagesCompileQueries() {
         let languages: [(String, TreeSitterLanguage)] = [
             ("javascript", .javaScript),
+            ("typescript", .typeScript),
             ("json", .json),
             ("python", .python),
             ("yaml", .yaml),
+            ("toml", .toml),
+            ("sql", .sql),
             ("html", .html),
             ("css", .css),
-            ("typescript", .typeScript),
-            ("swift", .swift)
+            ("swift", .swift),
+            ("java", .java),
+            ("kotlin", .kotlin),
+            ("go", .go),
+            ("bash", .bash),
+            ("graphql", .graphQL),
+            ("markdown", .markdown),
+            ("http", .http),
+            ("mermaid", .mermaid),
+            ("rust", .rust),
+            ("c", .c),
+            ("cpp", .cpp)
         ]
+        let languagesWithInjections: Set<String> = ["javascript", "html", "markdown", "cpp"]
         for (name, language) in languages {
             XCTAssertNotNil(language.highlightsQuery, name)
             language.prepare()
@@ -25,7 +40,7 @@ final class LanguagePackTests: XCTestCase {
                 language.internalLanguage.highlightsQuery,
                 "\(name) highlights query failed to compile"
             )
-            if name == "javascript" || name == "html" {
+            if languagesWithInjections.contains(name) {
                 XCTAssertNotNil(
                     language.internalLanguage.injectionsQuery,
                     "\(name) injections query failed to compile"
@@ -53,7 +68,10 @@ final class LanguagePackTests: XCTestCase {
             ("toml", .toml, "#"),
             ("http", .http, "#"),
             ("mermaid", .mermaid, "%%"),
-            ("graphql", .graphQL, "#")
+            ("graphql", .graphQL, "#"),
+            ("rust", .rust, "//"),
+            ("c", .c, "//"),
+            ("cpp", .cpp, "//")
         ]
         for (name, language, expected) in withPrefix {
             XCTAssertEqual(language.lineCommentPrefix, expected, name)
@@ -81,7 +99,14 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "swift"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "http"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "mermaid"))
-        XCTAssertNil(TreeSitterLanguage.bundled(forIdentifier: "markdown"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "markdown"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "sql"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "shell"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "graphql"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "xml"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "rust"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "c"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "cpp"))
     }
 
     func testJavaScriptHighlightCaptures() {
@@ -170,6 +195,41 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertNotNil(provider.treeSitterLanguage(named: "javascript"))
         XCTAssertNotNil(provider.treeSitterLanguage(named: "css"))
         XCTAssertNotNil(provider.treeSitterLanguage(named: "swift"))
+    }
+
+    func testRustHighlightCaptures() {
+        let text = "fn greet(name: &str) -> String {\n    format!(\"hi {}\", name)\n}\n"
+        let captures = captureNames(language: .rust, text: text)
+        XCTAssertTrue(captures.contains("keyword"), "Expected keyword, got \(captures)")
+        XCTAssertTrue(captures.contains("string"), "Expected string, got \(captures)")
+        XCTAssertTrue(captures.contains("type") || captures.contains("type.builtin"),
+                      "Expected type capture, got \(captures)")
+    }
+
+    func testCHighlightCaptures() {
+        let text = "int main(void) {\n    const char *msg = \"hello\";\n    return 0;\n}\n"
+        let captures = captureNames(language: .c, text: text)
+        XCTAssertTrue(captures.contains("keyword"), "Expected keyword, got \(captures)")
+        XCTAssertTrue(captures.contains("string"), "Expected string, got \(captures)")
+        XCTAssertTrue(captures.contains("type") || captures.contains("type.builtin"),
+                      "Expected type capture, got \(captures)")
+    }
+
+    func testCppHighlightCaptures() {
+        let text = "int main() {\n    int count = 1;\n    return count;\n}\n"
+        let captures = captureNames(language: .cpp, text: text)
+        XCTAssertTrue(captures.contains("keyword"), "Expected keyword, got \(captures)")
+        XCTAssertTrue(captures.contains("type") || captures.contains("type.builtin"),
+                      "Expected type capture, got \(captures)")
+    }
+
+    func testCppParserProducesTree() {
+        let text: NSString = "int main() { return 0; }"
+        let parser = TreeSitterParser(encoding: .treeSitterUTF16)
+        parser.language = TreeSitterLanguagePointer(tree_sitter_cpp())
+        let tree = parser.parse(text)
+        XCTAssertNotNil(tree)
+        XCTAssertFalse(tree?.rootNode.expressionString?.isEmpty ?? true)
     }
 
     func testSwiftHighlightCapturesSwiftUI() {

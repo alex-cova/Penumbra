@@ -1,5 +1,5 @@
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 internal enum _ElkBridge {
     // Keeps explicit linkage to ElkSwift runtime.

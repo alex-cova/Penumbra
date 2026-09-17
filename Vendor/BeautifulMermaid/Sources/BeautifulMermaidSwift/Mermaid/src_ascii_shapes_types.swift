@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/types.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct ShapeLabelArea: Sendable {
     public var x: Int

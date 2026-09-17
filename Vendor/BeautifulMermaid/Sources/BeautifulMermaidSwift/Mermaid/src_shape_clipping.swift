@@ -1,6 +1,6 @@
 // Ported from original/src/shape-clipping.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 open class original_src_shape_clipping {
     public init() {}

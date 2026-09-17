@@ -3,6 +3,7 @@
 // factory (`.swift`, `.go`, `.graphQL`, …) alongside the bundled set defined in
 // `TreeSitterLanguage+Bundled.swift`.
 @_exported import RunestoneGraphQLLanguage
+@_exported import RunestoneMarkdownLanguage
 @_exported import TreeSitterBashRunestone
 @_exported import TreeSitterGoRunestone
 @_exported import TreeSitterJavaRunestone
@@ -12,3 +13,6 @@
 @_exported import TreeSitterTOMLRunestone
 @_exported import TreeSitterHTTPRunestone
 @_exported import TreeSitterMermaidRunestone
+@_exported import TreeSitterRustRunestone
+@_exported import TreeSitterCRunestone
+@_exported import TreeSitterCppRunestone

@@ -1,6 +1,6 @@
 // Ported from original/src/sequence/parser.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct SequenceDiagram: Sendable {
     public var actors: [SequenceActor]

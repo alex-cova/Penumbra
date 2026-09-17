@@ -1,6 +1,6 @@
 // Ported from original/src/er/types.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public typealias Entity = ErEntity
 public typealias Attribute = ErAttribute

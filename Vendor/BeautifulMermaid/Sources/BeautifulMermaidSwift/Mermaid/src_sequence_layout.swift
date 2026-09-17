@@ -1,6 +1,6 @@
 // Ported from original/src/sequence/layout.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private enum _SEQ {
     static let padding: Double = 30

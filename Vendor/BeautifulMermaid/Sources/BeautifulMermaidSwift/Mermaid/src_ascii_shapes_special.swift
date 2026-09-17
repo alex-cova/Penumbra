@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/special.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private func _shapeBaseBoxDimensions(_ label: String, _ options: ShapeRenderOptions) -> ShapeDimensions {
     let lines = splitLines(label)

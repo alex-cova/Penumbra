@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/hexagon.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct HexagonRenderer: ShapeRenderer {
     public init() {}

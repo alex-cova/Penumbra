@@ -1,6 +1,6 @@
 // Ported from original/src/class/parser.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct ClassDiagram: Sendable {
     public var classes: [ClassNode]

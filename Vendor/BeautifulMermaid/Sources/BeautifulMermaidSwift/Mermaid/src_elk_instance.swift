@@ -1,6 +1,6 @@
 // Ported from original/src/elk-instance.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public typealias ElkNode = [String: Any]
 

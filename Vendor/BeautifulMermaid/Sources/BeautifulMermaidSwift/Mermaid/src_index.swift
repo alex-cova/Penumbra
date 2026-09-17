@@ -1,6 +1,6 @@
 // Ported from original/src/index.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct RenderOptions: Sendable {
     public var bg: String?

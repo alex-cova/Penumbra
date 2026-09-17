@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/edge-bundling.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private func nodeBundleKey(_ node: AsciiNode) -> String {
     "\(node.name)#\(node.index)"

@@ -1,6 +1,6 @@
 // Ported from original/src/multiline-utils.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 open class original_src_multiline_utils {
     public init() {}

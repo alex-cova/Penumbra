@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/grid.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 open class original_src_ascii_grid {
     public init() {}

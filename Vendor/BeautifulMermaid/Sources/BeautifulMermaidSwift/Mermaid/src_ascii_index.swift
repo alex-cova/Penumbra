@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/index.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private func _bmParseMermaid(_ text: String) throws -> MermaidGraph {
     try original_src_parser.parseMermaid(text)
@@ -508,12 +508,12 @@ open class original_src_ascii_index {
     private static func flipCanvasVertically(_ canvas: inout [[Character]]) {
         // Reverse each column array (Y-axis flip in column-major layout)
         // then remap directional characters that change meaning after flip
-        BeautifulMermaid.flipCanvasVertically(&canvas)
+        RunestoneBeautifulMermaid.flipCanvasVertically(&canvas)
     }
 
     private static func flipRoleCanvasVertically(_ roleCanvas: inout RoleCanvas) {
         // Reverse each column array to match the canvas flip
-        BeautifulMermaid.flipRoleCanvasVertically(&roleCanvas)
+        RunestoneBeautifulMermaid.flipRoleCanvasVertically(&roleCanvas)
     }
 
     private static func canvasToString(

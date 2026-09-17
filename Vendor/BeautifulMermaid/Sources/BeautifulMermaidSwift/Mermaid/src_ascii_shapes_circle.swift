@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/circle.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct CircleRenderer: ShapeRenderer {
     public init() {}

@@ -1,6 +1,6 @@
 // Ported from original/src/types.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 open class original_src_types {
     public init() {}

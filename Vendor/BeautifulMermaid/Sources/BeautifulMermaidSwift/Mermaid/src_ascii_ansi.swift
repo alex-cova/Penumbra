@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/ansi.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)

@@ -6,7 +6,7 @@ public final class BundledLanguageProvider: TreeSitterLanguageProvider, @uncheck
     public init() {}
 
     public func treeSitterLanguage(named languageName: String) -> TreeSitterLanguage? {
-        TreeSitterLanguage.bundled(forIdentifier: languageName)
+        BundledLanguages.language(forIdentifier: languageName)
     }
 }
 

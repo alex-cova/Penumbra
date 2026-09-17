@@ -84,7 +84,6 @@ public extension TreeSitterLanguage {
     }
 
     /// Prepared language for a ``LanguageIdentifier`` string (`"javascript"`, `"python"`, …).
-    /// GraphQL and Markdown stay in their own modules.
     static func bundled(forIdentifier identifier: String) -> TreeSitterLanguage? {
         switch identifier {
         case "javascript":
@@ -97,16 +96,40 @@ public extension TreeSitterLanguage {
             return .python
         case "yaml":
             return .yaml
-        case "html":
+        case "toml":
+            return .toml
+        case "sql":
+            return .sql
+        case "html", "xml":
             return .html
         case "css", "scss":
             return .css
         case "swift":
             return .swift
+        case "java", "groovy":
+            return .java
+        case "kotlin":
+            return .kotlin
+        case "go":
+            return .go
+        case "shell":
+            return .bash
+        case "graphql":
+            return .graphQL
+        case "markdown":
+            return .markdown
         case "http":
             return .http
         case "mermaid":
             return .mermaid
+        case "rust":
+            return .rust
+        case "c":
+            return .c
+        case "cpp":
+            return .cpp
+        case "plain":
+            return nil
         default:
             return nil
         }

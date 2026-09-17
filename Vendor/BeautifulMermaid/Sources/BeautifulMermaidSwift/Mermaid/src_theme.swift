@@ -1,6 +1,6 @@
 // Ported from original/src/theme.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 open class original_src_theme {
     public init() {}

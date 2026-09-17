@@ -48,13 +48,13 @@ let package = Package(
             ]
         ),
         .target(
-            name: "ElkSwift",
+            name: "RunestoneElkSwift",
             path: "Vendor/ElkSwift/Sources/ElkSwift",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
-            name: "BeautifulMermaid",
-            dependencies: ["ElkSwift"],
+            name: "RunestoneBeautifulMermaid",
+            dependencies: ["RunestoneElkSwift"],
             path: "Vendor/BeautifulMermaid/Sources/BeautifulMermaidSwift",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -70,7 +70,7 @@ let package = Package(
         ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
-            "BeautifulMermaid",
+            "RunestoneBeautifulMermaid",
             "TreeSitter",
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
@@ -214,6 +214,36 @@ let package = Package(
             dependencies: ["Runestone", "TreeSitterMermaid", "TreeSitterMermaidQueries"],
             swiftSettings: swift6
         ),
+        .target(name: "TreeSitterRust", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterRustQueries",
+            resources: [.copy("highlights.scm")]
+        ),
+        .target(
+            name: "TreeSitterRustRunestone",
+            dependencies: ["Runestone", "TreeSitterRust", "TreeSitterRustQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterC", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterCQueries",
+            resources: [.copy("highlights.scm")]
+        ),
+        .target(
+            name: "TreeSitterCRunestone",
+            dependencies: ["Runestone", "TreeSitterC", "TreeSitterCQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterCpp", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterCppQueries",
+            resources: [.copy("highlights.scm"), .copy("injections.scm")]
+        ),
+        .target(
+            name: "TreeSitterCppRunestone",
+            dependencies: ["Runestone", "TreeSitterCpp", "TreeSitterCppQueries", "TreeSitterCQueries"],
+            swiftSettings: swift6
+        ),
         .target(
             name: "RunestoneLanguages",
             dependencies: [
@@ -222,6 +252,7 @@ let package = Package(
                 "TreeSitterCSS",
                 "TreeSitterTypeScript",
                 "RunestoneGraphQLLanguage",
+                "RunestoneMarkdownLanguage",
                 "TreeSitterTOMLRunestone",
                 "TreeSitterSQLRunestone",
                 "TreeSitterSwiftRunestone",
@@ -230,7 +261,10 @@ let package = Package(
                 "TreeSitterGoRunestone",
                 "TreeSitterBashRunestone",
                 "TreeSitterHTTPRunestone",
-                "TreeSitterMermaidRunestone"
+                "TreeSitterMermaidRunestone",
+                "TreeSitterRustRunestone",
+                "TreeSitterCRunestone",
+                "TreeSitterCppRunestone"
             ],
             resources: [
                 .copy("Queries")

@@ -1,6 +1,6 @@
 // Ported from original/src/er/renderer.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 private enum ERFont {
     static let attrSize: Double = 11

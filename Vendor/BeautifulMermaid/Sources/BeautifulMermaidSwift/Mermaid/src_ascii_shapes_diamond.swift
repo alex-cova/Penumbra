@@ -1,6 +1,6 @@
 // Ported from original/src/ascii/shapes/diamond.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct DiamondRenderer: ShapeRenderer {
     public init() {}

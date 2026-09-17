@@ -1,4 +1,4 @@
-import BeautifulMermaid
+import RunestoneBeautifulMermaid
 @preconcurrency import AppKit
 import CoreGraphics
 import Metal

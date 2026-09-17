@@ -1,6 +1,6 @@
 // Ported from original/src/er/parser.ts
 import Foundation
-import ElkSwift
+import RunestoneElkSwift
 
 public struct ErDiagram: Sendable {
     public var entities: [ErEntity]
