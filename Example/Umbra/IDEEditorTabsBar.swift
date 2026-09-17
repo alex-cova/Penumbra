@@ -2,37 +2,32 @@ import SwiftUI
 
 struct IDEEditorTabsBar: View {
     let paneID: UUID
-    var leadingInset: CGFloat = 0
-    /// Shows the sidebar collapse/expand affordance at the leading edge — only the top-leading
-    /// pane's tab bar carries it, since that's the one adjacent to where the sidebar lives.
-    var showsSidebarToggle: Bool = false
     @EnvironmentObject private var workspace: IDEWorkspace
 
     private var tabs: [IDETabRow] {
         workspace.tabsByPane[paneID] ?? []
     }
 
+    private var isActivePane: Bool {
+        workspace.activePaneID == paneID
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            if showsSidebarToggle {
-                sidebarToggleButton
-                    .padding(.leading, leadingInset + IDEAppearance.Spacing.xs)
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(tabs) { tab in
-                        IDEEditorTabItem(tab: tab) {
-                            workspace.selectTab(tab.id, in: paneID)
-                        } onClose: {
-                            workspace.closeTab(tab.id, in: paneID)
-                        }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(tabs) { tab in
+                    IDEEditorTabItem(tab: tab) {
+                        workspace.selectTab(tab.id, in: paneID)
+                    } onClose: {
+                        workspace.closeTab(tab.id, in: paneID)
                     }
                 }
-                .padding(.leading, showsSidebarToggle ? IDEAppearance.Spacing.xs : leadingInset)
-                .padding(.horizontal, IDEAppearance.Spacing.sm)
             }
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
         }
+        .opacity(isActivePane ? 1 : 0.55)
         .frame(height: IDEAppearance.Spacing.tabHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(IDEAppearance.ColorToken.tabBar)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -40,22 +35,6 @@ struct IDEEditorTabsBar: View {
                 .frame(height: 1)
         }
         .focusable(false)
-    }
-
-    private var sidebarToggleButton: some View {
-        Button {
-            workspace.toggleSidebar()
-        } label: {
-            Image(systemName: "sidebar.leading")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(workspace.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-        .accessibilityLabel(workspace.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -73,6 +52,11 @@ private struct IDEEditorTabItem: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            Image(systemName: IDEFileIcon.systemName(forFilename: tab.title))
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 12)
+
             Text(tab.title)
                 .foregroundStyle(tab.isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
@@ -84,6 +68,14 @@ private struct IDEEditorTabItem: View {
         .padding(.vertical, 5)
         .background(backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .overlay(alignment: .top) {
+            if tab.isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 6)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }

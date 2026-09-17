@@ -13,6 +13,12 @@ struct IDETabRow: Identifiable, Equatable {
     let isSelected: Bool
 }
 
+/// Path breadcrumb for the active document, shown in the toolbar. Empty when nothing is open.
+struct IDEHeaderContext: Equatable {
+    var components: [String] = []
+    var isDirty = false
+}
+
 @MainActor
 final class IDEWorkspace: ObservableObject {
     private static let languageProvider = BundledLanguageProvider()
@@ -41,6 +47,7 @@ final class IDEWorkspace: ObservableObject {
     @Published private(set) var hasProjectRoot = false
 
     @Published var windowTitle = "Umbra"
+    @Published var headerContext = IDEHeaderContext()
     @Published var statusLine = 1
     @Published var statusColumn = 1
     @Published var statusLanguage = ""
@@ -702,9 +709,35 @@ final class IDEWorkspace: ObservableObject {
         tabsByPane = tabs
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · Umbra"
+            let newContext = IDEHeaderContext(
+                components: breadcrumbComponents(for: document),
+                isDirty: document.isDirty
+            )
+            if headerContext != newContext {
+                headerContext = newContext
+            }
         } else {
             windowTitle = "Umbra"
+            if headerContext != IDEHeaderContext() {
+                headerContext = IDEHeaderContext()
+            }
         }
+    }
+
+    /// Project-relative path components for the breadcrumb, e.g. `["src", "ui", "Editor.swift"]`.
+    /// Falls back to just the display name when the document has no URL or sits outside the
+    /// open project root.
+    private func breadcrumbComponents(for document: WorkbenchDocument) -> [String] {
+        guard let url = document.url else { return [document.displayName] }
+        guard let rootURL = project.rootURL else { return [url.lastPathComponent] }
+
+        let rootPath = rootURL.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(rootPath) else { return [url.lastPathComponent] }
+
+        let relative = filePath.dropFirst(rootPath.count)
+        let components = relative.split(separator: "/").map(String.init)
+        return components.isEmpty ? [url.lastPathComponent] : components
     }
 
     private func applyLaunchConfiguration() {

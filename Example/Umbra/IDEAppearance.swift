@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Shared design tokens for the Umbra shell.
-/// VARIANCE 7 · MOTION 3 · DENSITY 8
+/// VARIANCE 7 · DENSITY 8
 enum IDEAppearance {
     enum Spacing {
         static let xs = 4.0
@@ -14,18 +14,29 @@ enum IDEAppearance {
         static let sidebarWidth = 220.0
         static let sidebarMinWidth = 160.0
         static let sidebarMaxWidth = 420.0
-        static let tabHeight = 36.0
+        static let toolbarHeight = 38.0
+        static let tabHeight = 32.0
+        static let iconButton = 26.0
         static let statusBarHeight = 24.0
         static let welcomeMaxWidth = 520.0
         static let settingsWidth = 480.0
         static let settingsMinHeight = 460.0
-        /// Space reserved so traffic lights do not overlap the first chrome row.
+        /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
+        static let dirtyDotSize = 5.0
+        static let searchFieldWidth = 260.0
+        static let searchFieldHeight = 24.0
     }
 
     enum Radius {
         static let control = 6.0
         static let card = 8.0
+    }
+
+    enum IconSize {
+        static let breadcrumbChevron = 8.0
+        static let searchGlyph = 11.0
+        static let toolbarGlyph = 12.0
     }
 
     enum Typography {
@@ -39,18 +50,16 @@ enum IDEAppearance {
         static let sidebarHeader = Font.system(size: 11, weight: .semibold)
     }
 
-    enum Motion {
-        static let spring = Animation.spring(duration: 0.35, bounce: 0.15)
-    }
-
     enum ColorToken {
         static let workbench = Color(hex: 0x101012)
         static let sidebar = Color(hex: 0x18181B)
         static let editor = Color(hex: 0x101012)
+        static let toolbar = Color(hex: 0x1B1B1F)
         static let tabBar = Color(hex: 0x18181B)
-        static let tabActive = Color(hex: 0x222226)
+        static let tabActive = Color(hex: 0x2A2A30)
         static let tabInactive = Color.clear
         static let tabHover = Color(hex: 0x1C1C20)
+        static let controlHover = Color.white.opacity(0.06)
         static let statusBar = Color(hex: 0x18181B)
         static let border = Color.white.opacity(0.08)
         static let accent = Color(hex: 0x74ADE8)

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct IDESidebarPanel: View {
-    var leadingInset: CGFloat = 0
     @EnvironmentObject private var workspace: IDEWorkspace
 
     var body: some View {
@@ -9,7 +8,7 @@ struct IDESidebarPanel: View {
             Text("Explorer")
                 .font(IDEAppearance.Typography.sidebarHeader)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .padding(.leading, leadingInset + IDEAppearance.Spacing.lg)
+                .padding(.leading, IDEAppearance.Spacing.lg)
                 .padding(.trailing, IDEAppearance.Spacing.lg)
                 .frame(height: IDEAppearance.Spacing.tabHeight, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)

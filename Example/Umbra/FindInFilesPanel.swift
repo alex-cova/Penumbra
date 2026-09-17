@@ -3,11 +3,9 @@ import SwiftUI
 
 /// Project-wide search drawer, docked to the top of the editor column (see `IDERootView`) so it
 /// reads as part of the same "find" system as the in-editor bar rather than a separate bottom
-/// panel. `leadingInset` mirrors `IDEEditorTabsBar`'s: only set when this is the top-leading
-/// chrome row and needs to clear the window's traffic lights.
+/// panel.
 struct FindInFilesPanel: View {
     @EnvironmentObject private var workspace: IDEWorkspace
-    var leadingInset: CGFloat = 0
     @FocusState private var queryFocused: Bool
 
     var body: some View {
@@ -33,7 +31,7 @@ struct FindInFilesPanel: View {
                 .help("Close")
                 .accessibilityLabel("Close")
             }
-            .padding(.leading, leadingInset + IDEAppearance.Spacing.md)
+            .padding(.leading, IDEAppearance.Spacing.md)
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.sm)
 
@@ -43,7 +41,7 @@ struct FindInFilesPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Spacer()
             }
-            .padding(.leading, leadingInset + IDEAppearance.Spacing.md)
+            .padding(.leading, IDEAppearance.Spacing.md)
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.bottom, IDEAppearance.Spacing.xs)
 

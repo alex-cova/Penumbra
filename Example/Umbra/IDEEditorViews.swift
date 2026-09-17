@@ -95,26 +95,19 @@ struct IDETextViewRepresentable: NSViewRepresentable {
 struct IDEEditorLayoutNode: View {
     @EnvironmentObject private var workspace: IDEWorkspace
     let layout: EditorLayout
-    var isTopLeading: Bool = true
 
     var body: some View {
         switch layout {
         case .pane(let pane):
-            IDEEditorPaneView(paneID: pane.id, isTopLeading: isTopLeading)
+            IDEEditorPaneView(paneID: pane.id)
                 .id(pane.id)
         case .vertical(let data):
             IDESplitStack(axis: .horizontal, childCount: data.children.count) { index in
-                IDEEditorLayoutNode(
-                    layout: data.children[index],
-                    isTopLeading: isTopLeading && index == 0
-                )
+                IDEEditorLayoutNode(layout: data.children[index])
             }
         case .horizontal(let data):
             IDESplitStack(axis: .vertical, childCount: data.children.count) { index in
-                IDEEditorLayoutNode(
-                    layout: data.children[index],
-                    isTopLeading: isTopLeading && index == 0
-                )
+                IDEEditorLayoutNode(layout: data.children[index])
             }
         }
     }
@@ -123,23 +116,11 @@ struct IDEEditorLayoutNode: View {
 struct IDEEditorPaneView: View {
     @EnvironmentObject private var workspace: IDEWorkspace
     let paneID: UUID
-    var isTopLeading: Bool = false
-
-    /// Whether this pane's tab bar needs to reserve room for the traffic lights itself. When the
-    /// sidebar is showing, or the Find in Files drawer is up, one of those already claims the
-    /// inset (see `IDESidebarPanel`/`IDERootView`), so the tab bar underneath must not also claim it.
-    private var padTrafficLights: Bool {
-        isTopLeading && !workspace.showsSidebar && !workspace.isFindInFilesVisible
-    }
 
     var body: some View {
         VStack(spacing: 0) {
-            IDEEditorTabsBar(
-                paneID: paneID,
-                leadingInset: padTrafficLights ? IDEAppearance.Spacing.trafficLightsInset : 0,
-                showsSidebarToggle: isTopLeading
-            )
-            .opacity(workspace.chromeOpacity)
+            IDEEditorTabsBar(paneID: paneID)
+                .opacity(workspace.chromeOpacity)
 
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
                 .overlay {

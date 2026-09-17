@@ -10,22 +10,24 @@ struct IDERootView: View {
     var body: some View {
         let _ = workspace.layoutEpoch
         VStack(spacing: 0) {
+            IDEToolbarPanel()
+                .opacity(workspace.chromeOpacity)
+                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+
             HStack(spacing: 0) {
                 if workspace.showsSidebar {
-                    IDESidebarPanel(leadingInset: IDEAppearance.Spacing.trafficLightsInset)
+                    IDESidebarPanel()
                         .frame(width: sidebarWidth)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
 
                     IDESidebarResizeHandle(width: $sidebarWidth)
                         .opacity(workspace.chromeOpacity)
-                        .transition(.opacity)
                 }
 
                 VStack(spacing: 0) {
                     if workspace.isFindInFilesVisible {
-                        FindInFilesPanel(leadingInset: workspace.showsSidebar ? 0 : IDEAppearance.Spacing.trafficLightsInset)
+                        FindInFilesPanel()
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
@@ -41,7 +43,6 @@ struct IDERootView: View {
                     .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
                 }
             }
-            .animation(IDEAppearance.Motion.spring, value: workspace.showsSidebar)
 
             IDEStatusBarPanel()
                 .opacity(workspace.chromeOpacity)
