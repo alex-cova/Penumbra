@@ -109,6 +109,15 @@ public final class MarkdownPreviewController: NSObject {
         scheduleParse()
     }
 
+    /// Re-parses the current buffer when the preview is visible. Document text installed via
+    /// `TextView.setState` (e.g. switching tabs) does not route through `textViewDidChange`, so
+    /// the host must call this explicitly after loading a different document into `textView` —
+    /// otherwise the preview keeps showing the previous file's content until the next keystroke.
+    public func refresh() {
+        guard isPreviewVisible else { return }
+        scheduleParse()
+    }
+
     private func showPreview() {
         isPreviewVisible = true
         previewView.isHidden = false

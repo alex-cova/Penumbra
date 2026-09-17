@@ -77,6 +77,15 @@ final class MarkdownPreviewMetalRenderer {
         }
         self.grid = grid
 
+        // A leftover `visibleRect` from a previous (taller, or absent) document can sit entirely
+        // past the new content height, which would make `rasterizeAndPresent` hand the canvas
+        // zero tiles — a "successful" present of just the background color. Clamp it back onto
+        // the new document, defaulting to the top when there is no overlap at all.
+        if visibleRect.minY >= layout.contentSize.height || visibleRect == .zero {
+            let height = min(visibleRect.height > 0 ? visibleRect.height : layout.contentSize.height, layout.contentSize.height)
+            visibleRect = CGRect(x: 0, y: 0, width: layout.contentSize.width, height: height)
+        }
+
         guard rasterizeAndPresent(device: device) else {
             self.grid = nil
             presentFailure()
@@ -92,6 +101,27 @@ final class MarkdownPreviewMetalRenderer {
         visibleRect = rect
         guard grid != nil, let device = MetalContext.shared.device else { return }
         _ = rasterizeAndPresent(device: device)
+    }
+
+    /// Number of tiles actually blitted into a real `CAMetalLayer` drawable on the last present.
+    /// Requires the canvas to be in a window; stays `0` off-screen even when tile selection is
+    /// working correctly. Exposed for tests to assert the pane is not silently presenting nothing.
+    var presentedTileCount: Int {
+        metalView.presentedTileCount
+    }
+
+    /// Number of tiles selected for the visible rect on the last `update()`/`setVisibleRect()`
+    /// call, independent of whether the canvas is actually in a window to present them. Exposed
+    /// for tests that check tile *selection* (e.g. a stale visible rect from a taller previous
+    /// document not going empty) without needing a hosted `NSWindow`.
+    private(set) var lastRequestedTileCount = 0
+
+    /// Forces an immediate present if the canvas has pending tile/background changes.
+    /// `layerContentsRedrawPolicy = .never` does not drive `updateLayer()` from `setNeedsDisplay`
+    /// alone, so `MarkdownPreviewView.layout()` calls this once per layout pass as the primary
+    /// trigger; the canvas's own deferred fallback covers everything else (scroll, async raster).
+    func presentIfNeeded() {
+        metalView.presentIfDirty()
     }
 
     /// Drops all cached tiles and re-derives the grid — call when `backingScaleFactor` changes.
@@ -142,6 +172,7 @@ final class MarkdownPreviewMetalRenderer {
                 MarkdownPreviewMetalCanvasView.Tile(texture: texture, destOriginPx: CGPoint(x: 0, y: destOriginYPx))
             )
         }
+        lastRequestedTileCount = presented.count
         metalView.setTiles(presented, backgroundColor: style.backgroundColor)
         metalView.setNeedsDisplay()
         return true
@@ -271,13 +302,31 @@ final class MarkdownPreviewMetalCanvasView: NSView {
     private var tiles: [Tile] = []
     private var backgroundColor: NSColor = .white
 
+    /// Set on every successful `presentIfDirty()` — the regression guard for a canvas that stays
+    /// `needsDisplay` forever without ever reaching a real `CAMetalLayer` present.
+    private(set) var presentedTileCount = 0
+
+    private var isDisplayDirty = false
+    private var drawableRetryCount = 0
+    private var presentRetryScheduled = false
+    private var deferredPresentScheduled = false
+    private static let maxDrawableRetries = 3
+
+    /// Backing scale of the window this canvas is on (not `NSScreen.main`, which would be wrong
+    /// for a window on a secondary display) — matches `MetalTextCanvasView.effectiveBackingScale`.
     var backingScaleFactor: CGFloat {
-        window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        window?.backingScaleFactor
+            ?? window?.screen?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
     }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // AppKit does not drive `updateLayer` from `layerContentsRedrawPolicy = .never` on its
+        // own (see `MetalTextCanvasView`'s note on the same policy) — `presentIfDirty()` is
+        // invoked explicitly by layout, plus a deferred/coalesced fallback below.
         layerContentsRedrawPolicy = .never
         isHidden = true
     }
@@ -303,16 +352,29 @@ final class MarkdownPreviewMetalCanvasView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        present()
+        presentIfDirty()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        if let metalLayer = layer as? CAMetalLayer {
-            let scale = backingScaleFactor
-            metalLayer.drawableSize = CGSize(width: max(newSize.width * scale, 1), height: max(newSize.height * scale, 1))
-        }
+        updateMetalLayerGeometry()
         setNeedsDisplay()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        updateMetalLayerGeometry()
+        if !isHidden {
+            setNeedsDisplay()
+        }
+    }
+
+    private func updateMetalLayerGeometry() {
+        guard let metalLayer = layer as? CAMetalLayer else { return }
+        let scale = backingScaleFactor
+        metalLayer.contentsScale = scale
+        metalLayer.drawableSize = CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
     }
 
     /// The canvas is a fixed overlay in front of the scroll view; it must not intercept
@@ -327,15 +389,60 @@ final class MarkdownPreviewMetalCanvasView: NSView {
     }
 
     func setNeedsDisplay() {
+        isDisplayDirty = true
         needsDisplay = true
+        scheduleDeferredPresentIfNeeded()
     }
 
-    private func present() {
+    /// `layerContentsRedrawPolicy = .never` means `needsDisplay = true` alone never reaches
+    /// `updateLayer()`. Layout calls `presentIfDirty()` synchronously after it changes tiles; this
+    /// covers callers that only invalidate (scroll, async raster completion) without a layout pass.
+    private func scheduleDeferredPresentIfNeeded() {
+        guard !deferredPresentScheduled else { return }
+        deferredPresentScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.deferredPresentScheduled = false
+            self.presentIfDirty()
+        }
+    }
+
+    /// Encode + present now if a display is pending. Safe to call redundantly (from layout, from
+    /// the deferred fallback, and from `updateLayer()`) — a no-op once the frame is clean.
+    func presentIfDirty() {
+        guard window != nil, !isHidden, isDisplayDirty else { return }
+        guard let metalLayer = layer as? CAMetalLayer else { return }
+        updateMetalLayerGeometry()
+        guard bounds.width > 0, bounds.height > 0,
+              metalLayer.drawableSize.width > 1, metalLayer.drawableSize.height > 1 else {
+            schedulePresentRetry()
+            return
+        }
+        guard MetalContext.shared.isAvailable else { return }
+        if present(on: metalLayer) {
+            isDisplayDirty = false
+            drawableRetryCount = 0
+        } else {
+            schedulePresentRetry()
+        }
+    }
+
+    private func schedulePresentRetry() {
+        guard !presentRetryScheduled, drawableRetryCount < Self.maxDrawableRetries else { return }
+        presentRetryScheduled = true
+        drawableRetryCount += 1
+        DispatchQueue.main.async { [weak self] in
+            self?.presentRetryScheduled = false
+            self?.presentIfDirty()
+        }
+    }
+
+    @discardableResult
+    private func present(on metalLayer: CAMetalLayer) -> Bool {
         guard MetalContext.shared.isAvailable,
-              let metalLayer = layer as? CAMetalLayer,
               let drawable = metalLayer.nextDrawable(),
               let commandQueue = MetalContext.shared.commandQueue,
-              let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+              let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
 
         let clearColor = MetalColor.premultiplied(backgroundColor, appearance: effectiveAppearance, colorSpace: .sRGB)
         let alpha = max(clearColor.w, 0.0001)
@@ -349,7 +456,7 @@ final class MarkdownPreviewMetalCanvasView: NSView {
             blue: Double(clearColor.z / alpha),
             alpha: 1
         )
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return false }
         encoder.endEncoding()
 
         if !tiles.isEmpty, let blit = commandBuffer.makeBlitCommandEncoder() {
@@ -361,6 +468,8 @@ final class MarkdownPreviewMetalCanvasView: NSView {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        presentedTileCount = tiles.count
+        return true
     }
 
     private func blitTile(_ tile: Tile, into destination: MTLTexture, using blit: MTLBlitCommandEncoder) {

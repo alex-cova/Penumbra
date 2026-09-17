@@ -797,6 +797,10 @@ final class IDEWorkspace: ObservableObject {
         preferences.apply(to: host.textView)
         host.loadedDocumentID = document.id
         host.textView.layoutSubtreeIfNeeded()
+        // `setState` above does not route through `textViewDidChange`, so a preview left open
+        // from the previous document in this pane would otherwise keep showing stale content
+        // until the next keystroke.
+        host.markdownPreviewController.refresh()
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()
