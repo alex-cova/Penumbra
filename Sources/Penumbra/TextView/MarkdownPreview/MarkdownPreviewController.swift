@@ -32,6 +32,13 @@ public final class MarkdownPreviewController: NSObject {
     /// Debounce interval before re-parsing after a buffer edit. Tests may shorten this.
     var parseDebounceNanoseconds: UInt64 = 200_000_000
 
+    /// Awaits the debounced parse and the raster/highlight pass currently in flight.
+    /// Tests use this instead of sleeping for a fixed interval.
+    func waitForPendingWork() async {
+        await parseTask?.value
+        await mermaidTask?.value
+    }
+
     public var isVisible: Bool { isPreviewVisible }
 
     public init(textView: TextView) {
@@ -186,6 +193,7 @@ public final class MarkdownPreviewController: NSObject {
         }
 
         if mermaidBlocks.isEmpty, imageBlocks.isEmpty, codeBlocks.isEmpty {
+            mermaidTask = nil
             rasterImages = [:]
             highlightedCode = [:]
             previewView.rasterImages = [:]
