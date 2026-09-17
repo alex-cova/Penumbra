@@ -44,7 +44,6 @@ private struct IDEEditorTabItem: View {
     let onClose: () -> Void
 
     @State private var isHovering = false
-    @State private var isCloseHovered = false
 
     /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
     /// crosses it — only what's drawn inside this slot changes.
@@ -62,7 +61,7 @@ private struct IDEEditorTabItem: View {
                 .lineLimit(1)
                 .font(IDEAppearance.Typography.tabLabel.weight(tab.isSelected ? .medium : .regular))
 
-            trailingSlot
+            IDEEditorTabCloseButton(isDirty: tab.isDirty, side: trailingSlotSide, onClose: onClose)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -84,30 +83,6 @@ private struct IDEEditorTabItem: View {
         .focusable(false)
     }
 
-    /// Always shows a close button — the dirty dot only takes over the same slot while it isn't
-    /// hovered, and swaps back to the "x" the moment the pointer lands on it.
-    private var trailingSlot: some View {
-        Button(action: onClose) {
-            ZStack {
-                if tab.isDirty && !isCloseHovered {
-                    Circle()
-                        .fill(IDEAppearance.ColorToken.accent)
-                        .frame(width: 6, height: 6)
-                } else {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(isCloseHovered ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                }
-            }
-            .frame(width: trailingSlotSide, height: trailingSlotSide)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isCloseHovered = $0 }
-        .accessibilityLabel(tab.isDirty ? "Close Tab (Edited)" : "Close Tab")
-        .accessibilityAddTraits(.isButton)
-    }
-
     private var backgroundColor: Color {
         if tab.isSelected {
             return IDEAppearance.ColorToken.tabActive
@@ -116,6 +91,38 @@ private struct IDEEditorTabItem: View {
             return IDEAppearance.ColorToken.tabHover
         }
         return IDEAppearance.ColorToken.tabInactive
+    }
+}
+
+/// Always shows a close button — the dirty dot only takes over the same slot while it isn't
+/// hovered, and swaps back to the "x" the moment the pointer lands on it.
+private struct IDEEditorTabCloseButton: View {
+    let isDirty: Bool
+    let side: CGFloat
+    let onClose: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onClose) {
+            ZStack {
+                if isDirty && !isHovering {
+                    Circle()
+                        .fill(IDEAppearance.ColorToken.accent)
+                        .frame(width: 6, height: 6)
+                } else {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                }
+            }
+            .frame(width: side, height: side)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(isDirty ? "Close Tab (Edited)" : "Close Tab")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

@@ -12,18 +12,27 @@ struct IDEToolbarPanel: View {
             Spacer()
                 .frame(width: IDEAppearance.Spacing.trafficLightsInset)
 
-            sidebarToggleButton
+            IDEToolbarSidebarToggle(
+                isSidebarVisible: workspace.isSidebarVisible,
+                action: workspace.toggleSidebar
+            )
 
-            breadcrumb
+            IDEToolbarBreadcrumb(headerContext: workspace.headerContext)
                 .padding(.leading, IDEAppearance.Spacing.xs)
 
             Spacer(minLength: IDEAppearance.Spacing.sm)
 
-            paletteField
+            IDEToolbarPaletteField(action: workspace.showQuickOpen)
 
             Spacer(minLength: IDEAppearance.Spacing.sm)
 
-            actionCluster
+            IDEToolbarActionCluster(
+                showsCloseGroup: workspace.tabsByPane.count > 1,
+                toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                splitRight: workspace.splitRight,
+                splitDown: workspace.splitDown,
+                closeActivePane: workspace.closeActivePane
+            )
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(height: IDEAppearance.Spacing.toolbarHeight)
@@ -36,19 +45,27 @@ struct IDEToolbarPanel: View {
         }
         .focusable(false)
     }
+}
 
-    private var sidebarToggleButton: some View {
+private struct IDEToolbarSidebarToggle: View {
+    let isSidebarVisible: Bool
+    let action: () -> Void
+
+    var body: some View {
         IDEToolbarIconButton(
             systemName: "sidebar.leading",
-            isActive: workspace.isSidebarVisible,
-            help: workspace.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
-            action: workspace.toggleSidebar
+            isActive: isSidebarVisible,
+            help: isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
+            action: action
         )
     }
+}
 
-    @ViewBuilder
-    private var breadcrumb: some View {
-        let components = workspace.headerContext.components
+private struct IDEToolbarBreadcrumb: View {
+    let headerContext: IDEHeaderContext
+
+    var body: some View {
+        let components = headerContext.components
         if !components.isEmpty {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 ForEach(Array(components.enumerated()), id: \.offset) { index, component in
@@ -63,7 +80,7 @@ struct IDEToolbarPanel: View {
                         .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
                         .foregroundStyle(isLast ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 }
-                if workspace.headerContext.isDirty {
+                if headerContext.isDirty {
                     Circle()
                         .fill(IDEAppearance.ColorToken.accent)
                         .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)
@@ -73,17 +90,21 @@ struct IDEToolbarPanel: View {
             .lineLimit(1)
             .truncationMode(.head)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(breadcrumbAccessibilityLabel(components: components, isDirty: workspace.headerContext.isDirty))
+            .accessibilityLabel(accessibilityLabel)
         }
     }
 
-    private func breadcrumbAccessibilityLabel(components: [String], isDirty: Bool) -> String {
-        let path = components.joined(separator: ", ")
-        return isDirty ? "\(path), edited" : path
+    private var accessibilityLabel: String {
+        let path = headerContext.components.joined(separator: ", ")
+        return headerContext.isDirty ? "\(path), edited" : path
     }
+}
 
-    private var paletteField: some View {
-        Button(action: workspace.showQuickOpen) {
+private struct IDEToolbarPaletteField: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: IDEAppearance.IconSize.searchGlyph))
@@ -107,29 +128,37 @@ struct IDEToolbarPanel: View {
         .help("Go to File")
         .accessibilityLabel("Search")
     }
+}
 
-    private var actionCluster: some View {
+private struct IDEToolbarActionCluster: View {
+    let showsCloseGroup: Bool
+    let toggleMarkdownPreview: () -> Void
+    let splitRight: () -> Void
+    let splitDown: () -> Void
+    let closeActivePane: () -> Void
+
+    var body: some View {
         HStack(spacing: 2) {
             IDEToolbarIconButton(
                 systemName: "doc.richtext",
                 help: "Toggle Markdown Preview",
-                action: workspace.toggleMarkdownPreview
+                action: toggleMarkdownPreview
             )
             IDEToolbarIconButton(
                 systemName: "rectangle.split.2x1",
                 help: "Split Editor Right",
-                action: workspace.splitRight
+                action: splitRight
             )
             IDEToolbarIconButton(
                 systemName: "rectangle.split.1x2",
                 help: "Split Editor Down",
-                action: workspace.splitDown
+                action: splitDown
             )
-            if workspace.tabsByPane.count > 1 {
+            if showsCloseGroup {
                 IDEToolbarIconButton(
                     systemName: "rectangle.slash",
                     help: "Close Editor Group",
-                    action: workspace.closeActivePane
+                    action: closeActivePane
                 )
             }
         }
