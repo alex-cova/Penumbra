@@ -32,6 +32,18 @@ final class MarkdownPreviewMetalRenderer {
         set { metalView.isHidden = !newValue }
     }
 
+    var backingScaleFactor: CGFloat {
+        metalView.backingScaleFactor
+    }
+
+    /// Whether the layout fits in a single Metal texture at the given scale.
+    static func canRasterize(contentSize: CGSize, scale: CGFloat) -> Bool {
+        let pixelWidth = Int(max(contentSize.width, 1) * scale)
+        let pixelHeight = Int(max(contentSize.height, 1) * scale)
+        guard let device = MetalContext.shared.device else { return false }
+        return MetalTextureUpload.canAllocate(width: pixelWidth, height: pixelHeight, device: device)
+    }
+
     /// Returns `false` when the layout cannot be uploaded as a single Metal texture (caller should
     /// fall back to the Core Graphics scroll path).
     @discardableResult

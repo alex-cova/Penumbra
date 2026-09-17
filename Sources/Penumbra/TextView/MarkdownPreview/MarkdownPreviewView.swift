@@ -6,6 +6,7 @@ public final class MarkdownPreviewView: NSView {
     private let scrollView = NSScrollView()
     private let contentView = MarkdownPreviewContentView()
     private let metalRenderer = MarkdownPreviewMetalRenderer()
+    private var prefersMetal = false
     private var useMetal = false
 
     public var document: MarkdownPreviewDocument? {
@@ -27,16 +28,11 @@ public final class MarkdownPreviewView: NSView {
     public var usesMetalRendering: Bool {
         get { useMetal }
         set {
-            guard useMetal != newValue else { return }
-            useMetal = newValue
-            contentView.isHidden = newValue
-            metalRenderer.isActive = newValue
+            guard prefersMetal != newValue else { return }
+            prefersMetal = newValue
             scheduleRelayout()
         }
     }
-
-    /// Invoked when the Metal path cannot rasterize the current layout (e.g. texture too large).
-    public var onMetalRenderingFailure: ((String) -> Void)?
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -100,7 +96,16 @@ public final class MarkdownPreviewView: NSView {
             setAccessibilityValue(document.accessibilityDescriptions.joined(separator: "\n\n"))
         }
 
-        if useMetal {
+        let scale = metalRenderer.backingScaleFactor
+        let shouldUseMetal = prefersMetal && MarkdownPreviewMetalRenderer.canRasterize(
+            contentSize: size,
+            scale: scale
+        )
+        useMetal = shouldUseMetal
+        contentView.isHidden = shouldUseMetal
+        metalRenderer.isActive = shouldUseMetal
+
+        if shouldUseMetal {
             let succeeded = metalRenderer.update(
                 layout: layout,
                 style: style,
@@ -108,11 +113,9 @@ public final class MarkdownPreviewView: NSView {
                 highlightedCode: highlightedCode
             )
             if !succeeded {
-                let size = layout.contentSize
-                onMetalRenderingFailure?(
-                    "Markdown preview is too large for a Metal texture (\(Int(size.width))×\(Int(size.height)) pt)"
-                )
-                usesMetalRendering = false
+                useMetal = false
+                contentView.isHidden = false
+                metalRenderer.isActive = false
             }
         }
     }

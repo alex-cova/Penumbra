@@ -54,13 +54,13 @@ public final class MarkdownPreviewController: NSObject {
         textView?.editorDelegate = chained
     }
 
-    /// Chains preview Metal fallback ahead of an existing host handler.
+    /// Chains editor Metal fallback ahead of an existing host handler.
+    ///
+    /// Oversized preview layouts fall back to Core Graphics locally without invoking the host
+    /// handler — only the editor's Metal path should disable rendering workspace-wide.
     public func installMetalFailureHandler(chaining handler: ((String) -> Void)?) {
         textView?.onMetalRenderingFailure = { [weak self] reason in
             self?.previewView.usesMetalRendering = false
-            handler?(reason)
-        }
-        previewView.onMetalRenderingFailure = { reason in
             handler?(reason)
         }
     }

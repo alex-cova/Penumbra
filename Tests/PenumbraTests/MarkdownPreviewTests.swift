@@ -143,8 +143,6 @@ final class MarkdownPreviewTests: XCTestCase {
         }
 
         let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
-        var failureReason: String?
-        preview.onMetalRenderingFailure = { failureReason = $0 }
         preview.usesMetalRendering = true
 
         let maxDimension = MetalTextureUpload.maxTextureDimension
@@ -156,7 +154,8 @@ final class MarkdownPreviewTests: XCTestCase {
         preview.applyLayout(layout)
 
         XCTAssertFalse(preview.usesMetalRendering)
-        XCTAssertNotNil(failureReason)
+        let metalView = findMetalCanvasView(in: preview)
+        XCTAssertTrue(metalView?.isHidden == true, "Metal canvas should stay hidden when layout exceeds texture limits")
     }
 
     func testMermaidErrorForInvalidDiagram() async {
