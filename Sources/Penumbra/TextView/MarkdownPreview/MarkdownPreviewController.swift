@@ -157,11 +157,7 @@ public final class MarkdownPreviewController: NSObject {
     }
 
     private static func sleepForDebounce(_ nanoseconds: UInt64) async throws {
-        if #available(macOS 13.0, *) {
-            try await Task.sleep(for: .nanoseconds(Int64(nanoseconds)))
-        } else {
-            try await Task.sleep(nanoseconds: nanoseconds)
-        }
+        try await Task.sleep(for: .nanoseconds(Int64(nanoseconds)))
     }
 
     private func scheduleParse() {

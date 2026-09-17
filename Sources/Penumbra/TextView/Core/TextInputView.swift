@@ -2639,11 +2639,7 @@ extension TextInputView {
         var preparedText = text
         let lineEndingsToReplace: [LineEnding] = [.crlf, .cr, .lf].filter { $0 != lineEndings }
         for lineEnding in lineEndingsToReplace {
-            if #available(macOS 13.0, iOS 16.0, *) {
-                preparedText = preparedText.replacing(lineEnding.symbol, with: lineEndings.symbol)
-            } else {
-                preparedText = preparedText.replacingOccurrences(of: lineEnding.symbol, with: lineEndings.symbol)
-            }
+            preparedText = preparedText.replacing(lineEnding.symbol, with: lineEndings.symbol)
         }
         return preparedText
     }

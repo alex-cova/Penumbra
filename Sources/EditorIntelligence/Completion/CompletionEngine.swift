@@ -28,11 +28,7 @@ public actor CompletionEngine {
     public func complete(context: CompletionContext) async throws -> [CompletionItem] {
         currentTask?.cancel()
         let task = Task { [providers, ranker, debounceInterval] in
-            if #available(macOS 13.0, iOS 16.0, *) {
-                try await Task.sleep(for: .seconds(debounceInterval))
-            } else {
-                try await Task.sleep(nanoseconds: UInt64(debounceInterval * 1_000_000_000))
-            }
+            try await Task.sleep(for: .seconds(debounceInterval))
             try Task.checkCancellation()
             return try await performComplete(context: context, providers: providers, ranker: ranker)
         }

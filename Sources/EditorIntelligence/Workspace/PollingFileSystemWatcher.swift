@@ -30,11 +30,7 @@ public actor PollingFileSystemWatcher: FileSystemWatcher {
         task = Task {
             while !Task.isCancelled {
                 self.scan(root: root)
-                if #available(macOS 13.0, iOS 16.0, *) {
-                    try? await Task.sleep(for: .seconds(pollInterval))
-                } else {
-                    try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-                }
+                try? await Task.sleep(for: .seconds(pollInterval))
             }
         }
     }

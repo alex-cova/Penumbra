@@ -85,13 +85,6 @@ struct UmbraApp: App {
                 Toggle("Use Metal Renderer", isOn: workspace.isMetalRenderingEnabledBinding)
             }
 
-            CommandGroup(after: .appInfo) {
-                if #unavailable(macOS 13) {
-                    Button("Settings…", action: showSettings)
-                        .keyboardShortcut(",", modifiers: .command)
-                }
-            }
-
             CommandGroup(replacing: .help) {
                 Button("Umbra on GitHub") {
                     if let url = URL(string: "https://github.com/alex-cova/Penumbra") {
@@ -101,35 +94,9 @@ struct UmbraApp: App {
             }
         }
 
-        settingsScene
-    }
-
-    @SceneBuilder
-    private var settingsScene: some Scene {
-        if #available(macOS 13, *) {
-            Settings {
-                IDEPreferencesView(preferences: workspace.preferences)
-                    .environment(workspace)
-            }
-        }
-    }
-
-    private func showSettings() {
-        let controller = NSHostingController(
-            rootView: IDEPreferencesView(preferences: workspace.preferences)
+        Settings {
+            IDEPreferencesView(preferences: workspace.preferences)
                 .environment(workspace)
-        )
-        let window = NSWindow(contentViewController: controller)
-        window.title = "Umbra Settings"
-        window.styleMask = [.titled, .closable]
-        window.backgroundColor = IDEAppearance.NSToken.workbench
-        window.setContentSize(
-            NSSize(
-                width: IDEAppearance.Spacing.settingsWidth,
-                height: IDEAppearance.Spacing.settingsMinHeight
-            )
-        )
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        }
     }
 }
