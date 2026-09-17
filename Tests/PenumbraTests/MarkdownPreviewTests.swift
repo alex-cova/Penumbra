@@ -78,7 +78,7 @@ final class MarkdownPreviewTests: XCTestCase {
         textView.text = "# Updated"
         controller.noteTextDidChange()
 
-        try? await Task.sleep(nanoseconds: 30_000_000)
+        await controller.waitForPendingWork()
         let hasHeading = controller.previewView.document?.blocks.contains(where: {
             if case .heading(let level, let text) = $0 {
                 return level == 1 && String(text.characters).contains("Updated")
@@ -395,7 +395,7 @@ final class MarkdownPreviewTests: XCTestCase {
         controller.codeBlockLanguageResolver = { TreeSitterLanguage.bundled(forIdentifier: $0) }
         XCTAssertTrue(controller.toggle())
 
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await controller.waitForPendingWork()
         XCTAssertFalse(controller.previewView.highlightedCode.isEmpty)
     }
 
