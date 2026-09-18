@@ -335,42 +335,322 @@ func layoutJourney(_ chart: JourneyChart) -> ExtraScene {
     return ExtraScene(width: 40 + Double(max(sections.count, 1)) * colW + 20, height: height, items: items)
 }
 
-func layoutMindmap(_ chart: MindmapChart) -> ExtraScene {
-    var items: [ExtraItem] = []
+private struct MindmapNodeSize {
+    var width: Double
+    var height: Double
+}
+
+private final class MindmapSceneBuilder {
+    private(set) var items: [ExtraItem] = []
+    private(set) var maxX = 0.0
+    private(set) var maxY = 0.0
+
+    private func extend(_ x: Double, _ y: Double) {
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+    }
+
+    func polyline(
+        _ points: [ExtraPoint],
+        fill: ExtraFill = .none,
+        stroke: ExtraFill,
+        width: Double,
+        closed: Bool = false
+    ) {
+        items.append(.polyline(points: points, fill: fill, stroke: stroke, width: width, closed: closed))
+        for point in points { extend(point.x, point.y) }
+    }
+
+    func ellipse(x: Double, y: Double, width: Double, height: Double, fill: ExtraFill, stroke: ExtraFill) {
+        items.append(.ellipse(x: x, y: y, width: width, height: height, fill: fill, stroke: stroke))
+        extend(x + width, y + height)
+    }
+
+    func rect(x: Double, y: Double, width: Double, height: Double, fill: ExtraFill, stroke: ExtraFill, corner: Double = 0) {
+        items.append(.rect(x: x, y: y, width: width, height: height, fill: fill, stroke: stroke, corner: corner, dashed: false))
+        extend(x + width, y + height)
+    }
+
+    func text(_ string: String, x: Double, y: Double, size: Double, fill: ExtraFill, anchor: ExtraAnchor, weight: Int = 400) {
+        items.append(.text(string, x: x, y: y, size: size, fill: fill, anchor: anchor, weight: weight))
+        let measured = ExtraText.width(string, size: size, weight: weight)
+        let rightEdge: Double
+        switch anchor {
+        case .start: rightEdge = x + measured
+        case .middle: rightEdge = x + measured / 2
+        case .end: rightEdge = x
+        }
+        extend(rightEdge, y + size)
+    }
+}
+
+private func mindmapNodeSize(_ node: MindmapNode) -> MindmapNodeSize {
+    let weight = node.depth == 0 ? 600 : 400
+    let width = min(max(ExtraText.width(node.text, size: 12, weight: weight) + 24, 56), 240)
+    let height = node.depth == 0 ? 32.0 : 28.0
+    return MindmapNodeSize(width: width, height: height)
+}
+
+private func mindmapIndex(chart: MindmapChart) -> (
+    byParent: [Int: [MindmapNode]],
+    nodeByID: [Int: MindmapNode],
+    sizes: [Int: MindmapNodeSize]
+) {
     let byParent = Dictionary(grouping: chart.nodes.filter { $0.parent != nil }, by: { $0.parent! })
     let nodeByID = Dictionary(uniqueKeysWithValues: chart.nodes.map { ($0.id, $0) })
+    let sizes = Dictionary(uniqueKeysWithValues: chart.nodes.map { ($0.id, mindmapNodeSize($0)) })
+    return (byParent, nodeByID, sizes)
+}
+
+private func appendMindmapNode(
+    _ node: MindmapNode,
+    center: ExtraPoint,
+    size: MindmapNodeSize,
+    to scene: MindmapSceneBuilder
+) {
+    let x = center.x - size.width / 2
+    let y = center.y - size.height / 2
+    let fill: ExtraFill = node.depth == 0 ? .accent : .series(node.depth - 1)
+    let textFill: ExtraFill = node.depth == 0 ? .background : .foreground
+    let weight = node.depth == 0 ? 600 : 400
+
+    switch node.shape {
+    case .circle, .stadium:
+        scene.ellipse(x: x, y: y, width: size.width, height: size.height, fill: fill, stroke: .border)
+    case .rect:
+        scene.rect(x: x, y: y, width: size.width, height: size.height, fill: fill, stroke: .border, corner: 0)
+    case .roundedRect:
+        scene.rect(x: x, y: y, width: size.width, height: size.height, fill: fill, stroke: .border, corner: 8)
+    case .diamond:
+        let cx = center.x
+        let cy = center.y
+        let hw = size.width / 2
+        let hh = size.height / 2
+        scene.polyline(
+            [
+                ExtraPoint(x: cx, y: cy - hh),
+                ExtraPoint(x: cx + hw, y: cy),
+                ExtraPoint(x: cx, y: cy + hh),
+                ExtraPoint(x: cx - hw, y: cy),
+            ],
+            fill: fill,
+            stroke: .border,
+            width: 1,
+            closed: true
+        )
+    case .hexagon:
+        let cx = center.x
+        let cy = center.y
+        let radius = min(size.width, size.height) / 2
+        let points = (0..<6).map { index in
+            let angle = Double.pi / 3 * Double(index) - Double.pi / 2
+            return ExtraPoint(x: cx + cos(angle) * radius, y: cy + sin(angle) * radius)
+        }
+        scene.polyline(points, fill: fill, stroke: .border, width: 1, closed: true)
+    }
+
+    scene.text(node.text, x: center.x, y: center.y, size: 12, fill: textFill, anchor: .middle, weight: weight)
+}
+
+private func mindmapConnectorPoints(
+    parentCenter: ExtraPoint,
+    childCenter: ExtraPoint,
+    parentSize: MindmapNodeSize,
+    childSize: MindmapNodeSize,
+    horizontal: Bool
+) -> [ExtraPoint] {
+    if horizontal {
+        let parentRight = ExtraPoint(x: parentCenter.x + parentSize.width / 2, y: parentCenter.y)
+        let childLeft = ExtraPoint(x: childCenter.x - childSize.width / 2, y: childCenter.y)
+        let midX = (parentRight.x + childLeft.x) / 2
+        return [
+            parentRight,
+            ExtraPoint(x: midX, y: parentRight.y),
+            ExtraPoint(x: midX, y: childLeft.y),
+            childLeft,
+        ]
+    }
+    return mindmapRadialConnector(from: parentCenter, to: childCenter)
+}
+
+private func mindmapRadialConnector(from: ExtraPoint, to: ExtraPoint, samples: Int = 14) -> [ExtraPoint] {
+    let midX = (from.x + to.x) / 2
+    let midY = (from.y + to.y) / 2
+    let dx = midX - from.x
+    let dy = midY - from.y
+    let length = max(sqrt(dx * dx + dy * dy), 1)
+    let bulge = 18.0
+    let control = ExtraPoint(x: midX + dx / length * bulge, y: midY + dy / length * bulge)
+    var points: [ExtraPoint] = []
+    for index in 0...samples {
+        let t = Double(index) / Double(samples)
+        let u = 1 - t
+        let x = u * u * from.x + 2 * u * t * control.x + t * t * to.x
+        let y = u * u * from.y + 2 * u * t * control.y + t * t * to.y
+        points.append(ExtraPoint(x: x, y: y))
+    }
+    return points
+}
+
+func layoutMindmap(_ chart: MindmapChart) -> ExtraScene {
+    switch chart.layout {
+    case .treeLR:
+        return layoutMindmapTreeLR(chart)
+    case .radial:
+        return layoutMindmapRadial(chart)
+    }
+}
+
+private func layoutMindmapTreeLR(_ chart: MindmapChart) -> ExtraScene {
+    let (byParent, nodeByID, sizes) = mindmapIndex(chart: chart)
+    let pad = 40.0
+    let columnGap = 40.0
+    let siblingGap = 12.0
+
+    var maxWidthAtDepth: [Int: Double] = [:]
+    for node in chart.nodes {
+        let size = sizes[node.id]!
+        maxWidthAtDepth[node.depth] = max(maxWidthAtDepth[node.depth] ?? 0, size.width)
+    }
+
+    func columnX(_ depth: Int) -> Double {
+        var x = pad
+        for depthIndex in 0..<depth {
+            x += (maxWidthAtDepth[depthIndex] ?? 80) + columnGap
+        }
+        return x
+    }
+
     var positions: [Int: ExtraPoint] = [:]
-    var leafY = 40.0
+    var nextLeafY = pad
+
     func place(_ id: Int) -> ExtraPoint {
         if let existing = positions[id] { return existing }
+        let node = nodeByID[id]!
         let children = byParent[id] ?? []
-        let x = 40 + Double(nodeByID[id]?.depth ?? 0) * 160
+        let size = sizes[id]!
+        let x = columnX(node.depth) + size.width / 2
+
         let y: Double
         if children.isEmpty {
-            y = leafY
-            leafY += 36
+            y = nextLeafY + size.height / 2
+            nextLeafY += size.height + siblingGap
         } else {
-            let childPts = children.map { place($0.id) }
-            y = (childPts.map(\.y).min()! + childPts.map(\.y).max()!) / 2
+            let childPoints = children.map { place($0.id) }
+            y = (childPoints.map(\.y).min()! + childPoints.map(\.y).max()!) / 2
         }
-        let pt = ExtraPoint(x: x, y: y)
-        positions[id] = pt
-        return pt
+
+        let point = ExtraPoint(x: x, y: y)
+        positions[id] = point
+        return point
     }
-    for node in chart.nodes { _ = place(node.id) }
+
+    if let root = chart.nodes.first(where: { $0.parent == nil }) {
+        _ = place(root.id)
+    }
+
+    let scene = MindmapSceneBuilder()
     for node in chart.nodes {
-        guard let pt = positions[node.id] else { continue }
-        let w = min(max(ExtraText.width(node.text) + 20, 60), 150)
-        items.append(.rect(x: pt.x, y: pt.y - 12, width: w, height: 24, fill: node.depth == 0 ? .accent : .surface, stroke: .border, corner: 8, dashed: false))
-        items.append(.text(node.text, x: pt.x + w / 2, y: pt.y, size: 12, fill: .foreground, anchor: .middle, weight: node.depth == 0 ? 600 : 400))
-        if let parent = node.parent, let ppt = positions[parent] {
-            let pw = min(max(ExtraText.width(nodeByID[parent]?.text ?? "") + 20, 60), 150)
-            items.append(.line(x1: ppt.x + pw, y1: ppt.y, x2: pt.x, y2: pt.y, stroke: .muted, width: 1.2, dashed: false))
+        guard let parentID = node.parent,
+              let parentCenter = positions[parentID],
+              let childCenter = positions[node.id] else {
+            continue
+        }
+        let points = mindmapConnectorPoints(
+            parentCenter: parentCenter,
+            childCenter: childCenter,
+            parentSize: sizes[parentID]!,
+            childSize: sizes[node.id]!,
+            horizontal: true
+        )
+        scene.polyline(points, stroke: .muted, width: 1.5)
+    }
+
+    for node in chart.nodes {
+        guard let center = positions[node.id] else { continue }
+        appendMindmapNode(node, center: center, size: sizes[node.id]!, to: scene)
+    }
+
+    return ExtraScene(
+        width: max(scene.maxX + pad, 120),
+        height: max(scene.maxY + pad, 120),
+        items: scene.items
+    )
+}
+
+private func layoutMindmapRadial(_ chart: MindmapChart) -> ExtraScene {
+    let (byParent, nodeByID, sizes) = mindmapIndex(chart: chart)
+    guard let root = chart.nodes.first(where: { $0.parent == nil }) else {
+        return ExtraScene(width: 120, height: 120, items: [])
+    }
+
+    let pad = 40.0
+    let ringGap = 100.0
+    let centerX = 280.0
+    let centerY = 280.0
+    var positions: [Int: ExtraPoint] = [:]
+
+    func leafCount(_ id: Int) -> Int {
+        let children = byParent[id] ?? []
+        if children.isEmpty { return 1 }
+        return children.map { leafCount($0.id) }.reduce(0, +)
+    }
+
+    func assignAngles(_ id: Int, startAngle: Double, endAngle: Double) {
+        let node = nodeByID[id]!
+        let children = byParent[id] ?? []
+        let midAngle = (startAngle + endAngle) / 2
+
+        if node.depth == 0 {
+            positions[id] = ExtraPoint(x: centerX, y: centerY)
+        } else {
+            let radius = Double(node.depth) * ringGap
+            positions[id] = ExtraPoint(
+                x: centerX + cos(midAngle) * radius,
+                y: centerY + sin(midAngle) * radius
+            )
+        }
+
+        guard !children.isEmpty else { return }
+        let totalLeaves = children.map { leafCount($0.id) }.reduce(0, +)
+        var angle = startAngle
+        for child in children {
+            let childLeaves = leafCount(child.id)
+            let sweep = (endAngle - startAngle) * Double(childLeaves) / Double(totalLeaves)
+            assignAngles(child.id, startAngle: angle, endAngle: angle + sweep)
+            angle += sweep
         }
     }
-    let width = (positions.values.map(\.x).max() ?? 200) + 180
-    let height = max(leafY + 20, 120)
-    return ExtraScene(width: width, height: height, items: items)
+
+    assignAngles(root.id, startAngle: 0, endAngle: 2 * Double.pi)
+
+    let scene = MindmapSceneBuilder()
+    for node in chart.nodes {
+        guard let parentID = node.parent,
+              let parentCenter = positions[parentID],
+              let childCenter = positions[node.id] else {
+            continue
+        }
+        let points = mindmapConnectorPoints(
+            parentCenter: parentCenter,
+            childCenter: childCenter,
+            parentSize: sizes[parentID]!,
+            childSize: sizes[node.id]!,
+            horizontal: false
+        )
+        scene.polyline(points, stroke: .muted, width: 1.5)
+    }
+
+    for node in chart.nodes {
+        guard let center = positions[node.id] else { continue }
+        appendMindmapNode(node, center: center, size: sizes[node.id]!, to: scene)
+    }
+
+    return ExtraScene(
+        width: max(scene.maxX + pad, 360),
+        height: max(scene.maxY + pad, 360),
+        items: scene.items
+    )
 }
 
 func layoutTimeline(_ chart: TimelineChart) -> ExtraScene {

@@ -59,6 +59,7 @@ public struct PreparedMermaidSource: Sendable {
     public var headerToken: String
     public var source: String
     public var lines: [String]
+    public var mindmapLayout: MindmapLayoutMode?
 }
 
 public enum DiagramKindDetector {
@@ -91,6 +92,60 @@ public enum DiagramKindDetector {
         return rawLines[index...].joined(separator: "\n")
     }
 
+    /// Reads `layout:` from a leading `---` frontmatter block (supports nested `config:`).
+    public static func parseFrontmatterLayout(_ source: String) -> MindmapLayoutMode? {
+        let rawLines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let firstNonEmpty = rawLines.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              firstNonEmpty == "---"
+        else {
+            return nil
+        }
+
+        var index = 0
+        while index < rawLines.count,
+              rawLines[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            index += 1
+        }
+        guard index < rawLines.count,
+              rawLines[index].trimmingCharacters(in: .whitespacesAndNewlines) == "---"
+        else {
+            return nil
+        }
+        index += 1
+
+        while index < rawLines.count {
+            let trimmed = rawLines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "---" { break }
+            if let mode = mindmapLayoutMode(fromFrontmatterLine: trimmed) {
+                return mode
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func mindmapLayoutMode(fromFrontmatterLine line: String) -> MindmapLayoutMode? {
+        guard let match = line.range(
+            of: #"(?i)layout:\s*(\S+)"#,
+            options: .regularExpression
+        ) else {
+            return nil
+        }
+        let value = String(line[match])
+            .replacingOccurrences(of: #"(?i)^.*layout:\s*"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch value {
+        case "radial", "circle":
+            return .radial
+        case "tidy-tree", "tree", "lr", "default":
+            return .treeLR
+        default:
+            return nil
+        }
+    }
+
     public static func diagramLines(from source: String) -> [String] {
         stripFrontmatter(source)
             .components(separatedBy: .newlines)
@@ -99,6 +154,7 @@ public enum DiagramKindDetector {
     }
 
     public static func prepare(_ source: String) -> PreparedMermaidSource {
+        let mindmapLayout = parseFrontmatterLayout(source)
         let stripped = stripFrontmatter(source)
         let lines = diagramLines(from: stripped)
         let header = lines.first ?? ""
@@ -109,7 +165,8 @@ public enum DiagramKindDetector {
             kind: kind,
             headerToken: token.isEmpty ? "unknown" : token,
             source: stripped,
-            lines: lines
+            lines: lines,
+            mindmapLayout: mindmapLayout
         )
     }
 

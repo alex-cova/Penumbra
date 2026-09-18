@@ -1,3 +1,4 @@
+import Penumbra
 import SwiftUI
 
 public struct IDEPreferencesView: View {
@@ -13,20 +14,33 @@ public struct IDEPreferencesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {
                     IDESettingsSection(title: "Editor") {
+                        IDESettingsRow(title: "Font") {
+                            Picker("Font", selection: $preferences.fontName) {
+                                ForEach(IDEEditorFonts.choices(including: preferences.fontName), id: \.self) { familyName in
+                                    Text(familyName).tag(familyName)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 200)
+                        }
+
+                        IDESettingsSeparator()
+
                         IDESettingsRow(title: "Font Size") {
-                            HStack(spacing: IDEAppearance.Spacing.sm) {
-                                Slider(value: $preferences.fontSize, in: 9...32, step: 1)
-                                    .frame(width: 160)
-                                    .accessibilityLabel("Font Size")
-                                    .accessibilityValue(
-                                        Text(preferences.fontSize, format: .number.precision(.fractionLength(0)))
-                                    )
+                            HStack(spacing: IDEAppearance.Spacing.xs) {
                                 Text(preferences.fontSize, format: .number.precision(.fractionLength(0)))
                                     .font(IDEAppearance.Typography.monoCaption)
                                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                                     .monospacedDigit()
                                     .frame(width: 24, alignment: .trailing)
                                     .accessibilityHidden(true)
+                                Stepper("Font Size", value: $preferences.fontSize, in: 9...32, step: 1)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .accessibilityLabel("Font Size")
+                                    .accessibilityValue(
+                                        Text(preferences.fontSize, format: .number.precision(.fractionLength(0)))
+                                    )
                             }
                         }
 
@@ -67,6 +81,18 @@ public struct IDEPreferencesView: View {
                     }
 
                     IDESettingsSection(title: "Display") {
+                        IDESettingsRow(title: "Color Theme") {
+                            Picker("Color Theme", selection: $preferences.themeID) {
+                                ForEach(ThemeCatalog.palettes(preferring: true)) { palette in
+                                    Text(palette.name).tag(palette.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 200)
+                        }
+
+                        IDESettingsSeparator()
+
                         IDESettingsToggleRow(title: "Line Numbers", isOn: $preferences.showLineNumbers)
                         IDESettingsSeparator()
                         IDESettingsToggleRow(title: "Code Folding", isOn: $preferences.isLineFoldingEnabled)
@@ -80,12 +106,83 @@ public struct IDEPreferencesView: View {
                             caption: "Paints large files on the GPU.",
                             isOn: $preferences.isMetalRenderingEnabled
                         )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Method Separators",
+                            caption: "Hairlines between function declarations.",
+                            isOn: $preferences.showMethodSeparators
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Highlight Occurrences",
+                            caption: "Emphasize other matches for the selection.",
+                            isOn: $preferences.highlightsOccurrencesOfSelection
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Invisible Characters",
+                            caption: "Show tabs and spaces.",
+                            isOn: $preferences.showInvisibleCharacters
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(title: "Page Guide", isOn: $preferences.showPageGuide)
+                        IDESettingsSeparator()
+                        IDESettingsRow(title: "Guide Column") {
+                            HStack(spacing: IDEAppearance.Spacing.xs) {
+                                Text(preferences.pageGuideColumn, format: .number)
+                                    .font(IDEAppearance.Typography.monoCaption)
+                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    .monospacedDigit()
+                                    .frame(width: 28, alignment: .trailing)
+                                    .accessibilityHidden(true)
+                                Stepper("Guide Column", value: $preferences.pageGuideColumn, in: 40...200)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .disabled(!preferences.showPageGuide)
+                            }
+                        }
+                        IDESettingsSeparator()
+                        IDESettingsRow(title: "Line Height") {
+                            HStack(spacing: IDEAppearance.Spacing.xs) {
+                                Text(preferences.lineHeightMultiplier, format: .number.precision(.fractionLength(1)))
+                                    .font(IDEAppearance.Typography.monoCaption)
+                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    .monospacedDigit()
+                                    .frame(width: 28, alignment: .trailing)
+                                    .accessibilityHidden(true)
+                                Stepper("Line Height", value: $preferences.lineHeightMultiplier, in: 0.8...2.0, step: 0.1)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+
+                    IDESettingsSection(title: "View Modes") {
+                        IDESettingsToggleRow(
+                            title: "Typewriter Scrolling",
+                            caption: "Keep the active line vertically centered.",
+                            isOn: $preferences.isTypewriterScrollingEnabled
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Distraction Free",
+                            caption: "Fade chrome after a short idle period.",
+                            isOn: $preferences.isDistractionFreeModeEnabled
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Focus Mode",
+                            caption: "Dim text outside the current sentence or paragraph.",
+                            isOn: $preferences.isFocusModeEnabled
+                        )
                     }
                 }
                 .padding(IDEAppearance.Spacing.lg)
             }
 
             IDESettingsTypePreview(
+                themeID: preferences.themeID,
+                fontName: preferences.fontName,
                 fontSize: preferences.fontSize,
                 tabWidth: preferences.tabWidth,
                 useSpacesForTab: preferences.useSpacesForTab
@@ -99,13 +196,26 @@ public struct IDEPreferencesView: View {
         .background(IDEAppearance.ColorToken.workbench)
         .preferredColorScheme(.dark)
         .tint(IDEAppearance.ColorToken.accent)
+        .onChange(of: preferences.fontName) { applyLivePreferences() }
         .onChange(of: preferences.fontSize) { applyLivePreferences() }
+        .onChange(of: preferences.themeID) { applyLivePreferences() }
         .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
+        .onChange(of: preferences.tabWidth) { applyLivePreferences() }
+        .onChange(of: preferences.useSpacesForTab) { applyLivePreferences() }
         .onChange(of: preferences.showLineNumbers) { applyLivePreferences() }
         .onChange(of: preferences.isLineFoldingEnabled) { applyLivePreferences() }
         .onChange(of: preferences.wrapLines) { applyLivePreferences() }
         .onChange(of: preferences.showMinimap) { applyLivePreferences() }
         .onChange(of: preferences.isMetalRenderingEnabled) { applyLivePreferences() }
+        .onChange(of: preferences.showMethodSeparators) { applyLivePreferences() }
+        .onChange(of: preferences.highlightsOccurrencesOfSelection) { applyLivePreferences() }
+        .onChange(of: preferences.showInvisibleCharacters) { applyLivePreferences() }
+        .onChange(of: preferences.showPageGuide) { applyLivePreferences() }
+        .onChange(of: preferences.pageGuideColumn) { applyLivePreferences() }
+        .onChange(of: preferences.lineHeightMultiplier) { applyLivePreferences() }
+        .onChange(of: preferences.isTypewriterScrollingEnabled) { applyLivePreferences() }
+        .onChange(of: preferences.isDistractionFreeModeEnabled) { applyLivePreferences() }
+        .onChange(of: preferences.isFocusModeEnabled) { applyLivePreferences() }
     }
 
     private func applyLivePreferences() {
@@ -191,9 +301,15 @@ private struct IDESettingsSeparator: View {
 }
 
 private struct IDESettingsTypePreview: View {
+    let themeID: String
+    let fontName: String
     let fontSize: Double
     let tabWidth: Int
     let useSpacesForTab: Bool
+
+    private var palette: ThemePalette {
+        ThemeCatalog.palette(id: themeID, fallbackDark: true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
@@ -203,12 +319,11 @@ private struct IDESettingsTypePreview: View {
                 .textCase(.uppercase)
                 .accessibilityHidden(true)
 
-            Text(previewSource)
-                .font(.custom("Menlo", size: fontSize))
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            previewSourceView
+                .font(Font(IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(IDEAppearance.Spacing.md)
-                .background(IDEAppearance.ColorToken.editor)
+                .background(Color(hex: palette.background))
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                 .accessibilityLabel(accessibilityPreview)
         }
@@ -222,17 +337,31 @@ private struct IDESettingsTypePreview: View {
         .background(IDEAppearance.ColorToken.sidebar)
     }
 
-    private var previewSource: String {
+    private var previewSourceView: Text {
         let indent = useSpacesForTab
             ? String(repeating: " ", count: tabWidth)
             : "\t"
-        return "func greet(name: String) {\n\(indent)print(name)\n}"
+        return Text("func ")
+            .foregroundColor(Color(hex: palette.keyword))
+        + Text("greet")
+            .foregroundColor(Color(hex: palette.function))
+        + Text("(name: ")
+            .foregroundColor(Color(hex: palette.text))
+        + Text("String")
+            .foregroundColor(Color(hex: palette.type))
+        + Text(") {\n")
+            .foregroundColor(Color(hex: palette.text))
+        + Text("\(indent)print")
+            .foregroundColor(Color(hex: palette.function))
+        + Text("(name)\n}")
+            .foregroundColor(Color(hex: palette.text))
     }
 
     private var accessibilityPreview: String {
         let indent = useSpacesForTab ? "spaces" : "tabs"
         let size = fontSize.formatted(.number.precision(.fractionLength(0)))
-        return "Preview at \(size) points, indenting with \(indent), tab width \(tabWidth)"
+        let themeName = palette.name
+        return "Preview using \(themeName) in \(fontName) at \(size) points, indenting with \(indent), tab width \(tabWidth)"
     }
 }
 

@@ -41,10 +41,15 @@ final class KeymapTests: XCTestCase {
     }
 
     func testIntelliJKeymapRebindsConflictingShortcuts() {
-        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("l", .command))), .selectLines)
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("l", .command))), .goToLine)
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("l", .command))), .goToLine)
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x7E, .option))), .expandSelection)
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("g", .control))), .selectNextOccurrence)
+    }
+
+    func testSublimeKeymapBindsGoToLineOnCommandGAndCommandL() {
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("g", .command))), .goToLine)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("l", .command))), .goToLine)
     }
 
     func testMarkdownPreviewShortcutOnShippedPresets() {

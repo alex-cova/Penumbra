@@ -322,6 +322,21 @@ mindmap
     Tile
 ```
 
+Radial layout (via frontmatter):
+
+```mermaid
+---
+config:
+  layout: radial
+---
+mindmap
+  root((Preview))
+    Parse
+    Layout
+    Tile
+    Metal
+```
+
 ## Horizontal rules
 
 Above the rule.

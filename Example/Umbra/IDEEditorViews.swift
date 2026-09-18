@@ -31,10 +31,8 @@ final class IDEEditorPaneHost: NSView {
         self.pane = pane
         textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
-        textView.theme = IDEEditorTheme.shared
+        textView.theme = IDEEditorTheme.shared.current
         textView.backgroundColor = IDEAppearance.NSToken.editor
-        textView.showMethodSeparators = true
-        textView.highlightsOccurrencesOfSelection = true
         textView.keymap = preferences.keymap
         markdownPreviewController = MarkdownPreviewController(textView: textView)
         super.init(frame: .zero)

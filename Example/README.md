@@ -46,7 +46,7 @@ Umbra uses the **Sublime** keymap by default (change in Settings → Keymap).
 | ⌘W | Close tab |
 | ⌘P | Go to file |
 | ⌘⇧P | Command palette |
-| ⌘G | Go to line |
+| ⌘L | Go to line |
 | ⌘R | Go to symbol |
 | ⌘F / ⌘⌥F | Find / Replace |
 | ⌘\\ | Split editor right |

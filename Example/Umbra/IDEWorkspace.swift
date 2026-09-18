@@ -13,6 +13,24 @@ struct IDETabRow: Identifiable, Equatable {
     let isSelected: Bool
 }
 
+struct IDETerminalTab: Identifiable, Equatable {
+    let id: UUID
+    var title: String
+    var workingDirectory: URL
+    var restartRequestID: UInt64 = 0
+
+    static func defaultTitle(for directory: URL) -> String {
+        let base = directory.lastPathComponent
+        return base.isEmpty ? "Terminal" : base
+    }
+}
+
+extension IDETerminalTab: Codable {
+    enum CodingKeys: String, CodingKey {
+        case id, title, workingDirectory
+    }
+}
+
 /// One segment in the toolbar breadcrumb. Folders reveal in the Explorer; symbols jump in-file.
 struct IDEBreadcrumbItem: Equatable, Identifiable {
     enum Target: Equatable {
@@ -83,8 +101,8 @@ public final class IDEWorkspace {
     var isTerminalVisible = false
     var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
     var terminalFocusRequestID: UInt64 = 0
-    var terminalRestartRequestID: UInt64 = 0
-    private(set) var terminalWorkingDirectory: URL?
+    var terminalTabs: [IDETerminalTab] = []
+    var selectedTerminalTabID: UUID?
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
@@ -309,7 +327,9 @@ public final class IDEWorkspace {
     public func toggleTerminal() {
         isTerminalVisible.toggle()
         if isTerminalVisible {
-            syncTerminalWorkingDirectory()
+            if terminalTabs.isEmpty {
+                addTerminalTab(saveSession: false)
+            }
             requestTerminalFocus()
         } else {
             focusActiveEditor()
@@ -330,12 +350,95 @@ public final class IDEWorkspace {
     }
 
     func syncTerminalWorkingDirectory() {
-        terminalWorkingDirectory = project.rootURL
+        // New tabs use `defaultTerminalDirectory()`; existing tabs keep their cwd.
+    }
+
+    func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
+        let tab = makeTerminalTab(cwd: cwd)
+        terminalTabs.append(tab)
+        selectedTerminalTabID = tab.id
+        if !isTerminalVisible {
+            isTerminalVisible = true
+        }
+        requestTerminalFocus()
+        if saveSession {
+            self.saveSession()
+        }
+    }
+
+    func closeTerminalTab(_ id: UUID) {
+        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+
+        if terminalTabs.count == 1 {
+            terminalTabs.removeAll()
+            selectedTerminalTabID = nil
+            hideTerminal()
+            return
+        }
+
+        let selectedIndex = terminalTabs.firstIndex(where: { $0.id == selectedTerminalTabID }) ?? 0
+        let countBeforeRemoval = terminalTabs.count
+        terminalTabs.remove(at: index)
+
+        if let newIndex = TabListEngine.selectionIndexAfterClose(
+            closing: index,
+            selected: selectedIndex,
+            count: countBeforeRemoval
+        ) {
+            selectedTerminalTabID = terminalTabs[newIndex].id
+        } else {
+            selectedTerminalTabID = terminalTabs.first?.id
+        }
+        requestTerminalFocus()
+        saveSession()
+    }
+
+    func selectTerminalTab(_ id: UUID) {
+        guard terminalTabs.contains(where: { $0.id == id }) else { return }
+        selectedTerminalTabID = id
+        requestTerminalFocus()
+        saveSession()
     }
 
     func restartTerminal() {
-        terminalRestartRequestID += 1
+        restartTerminalTab(selectedTerminalTabID)
+    }
+
+    func restartTerminalTab(_ id: UUID?) {
+        guard let id = id ?? selectedTerminalTabID,
+              let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        terminalTabs[index].restartRequestID += 1
+        selectedTerminalTabID = id
         requestTerminalFocus()
+    }
+
+    func selectNextTerminalTab() {
+        guard isTerminalVisible, !terminalTabs.isEmpty,
+              let selectedID = selectedTerminalTabID,
+              let currentIndex = terminalTabs.firstIndex(where: { $0.id == selectedID }),
+              let nextIndex = TabListEngine.nextIndex(after: currentIndex, count: terminalTabs.count) else { return }
+        selectTerminalTab(terminalTabs[nextIndex].id)
+    }
+
+    func selectPreviousTerminalTab() {
+        guard isTerminalVisible, !terminalTabs.isEmpty,
+              let selectedID = selectedTerminalTabID,
+              let currentIndex = terminalTabs.firstIndex(where: { $0.id == selectedID }),
+              let previousIndex = TabListEngine.previousIndex(before: currentIndex, count: terminalTabs.count) else { return }
+        selectTerminalTab(terminalTabs[previousIndex].id)
+    }
+
+    func updateTerminalTabTitle(_ id: UUID, title: String) {
+        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, terminalTabs[index].title != trimmed else { return }
+        terminalTabs[index].title = trimmed
+    }
+
+    func updateTerminalTabDirectory(_ id: UUID, url: URL) {
+        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        guard terminalTabs[index].workingDirectory.path != url.path else { return }
+        terminalTabs[index].workingDirectory = url
     }
 
     func requestTerminalFocus() {
@@ -483,16 +586,20 @@ public final class IDEWorkspace {
     }
 
     public func toggleTypewriterScrolling() {
-        guard let textView = adapter.textView else { return }
-        textView.isTypewriterScrollingEnabled.toggle()
-        if textView.isTypewriterScrollingEnabled {
-            textView.isAutomaticScrollEnabled = true
-        }
+        preferences.isTypewriterScrollingEnabled.toggle()
+        applyPreferencesToAllHosts()
         focusActiveEditor()
     }
 
     public func toggleDistractionFreeMode() {
-        adapter.textView?.isDistractionFreeModeEnabled.toggle()
+        preferences.isDistractionFreeModeEnabled.toggle()
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
+    public func toggleFocusMode() {
+        preferences.isFocusModeEnabled.toggle()
+        applyPreferencesToAllHosts()
         focusActiveEditor()
     }
 
@@ -520,6 +627,18 @@ public final class IDEWorkspace {
 
     public var isMetalRenderingEnabledBinding: Binding<Bool> {
         preferenceBinding(\.isMetalRenderingEnabled)
+    }
+
+    public var isTypewriterScrollingEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isTypewriterScrollingEnabled)
+    }
+
+    public var isDistractionFreeModeEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isDistractionFreeModeEnabled)
+    }
+
+    public var isFocusModeEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isFocusModeEnabled)
     }
 
     private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<IDEPreferences, Bool>) -> Binding<Bool> {
@@ -676,7 +795,9 @@ public final class IDEWorkspace {
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
             isTerminalVisible: isTerminalVisible,
-            terminalHeight: terminalHeight ?? self.terminalHeight
+            terminalHeight: terminalHeight ?? self.terminalHeight,
+            terminalTabs: terminalTabs.isEmpty ? nil : terminalTabs,
+            selectedTerminalTabID: selectedTerminalTabID
         )
     }
 
@@ -689,6 +810,19 @@ public final class IDEWorkspace {
 
     // MARK: - Private
 
+    private func defaultTerminalDirectory() -> URL {
+        project.rootURL ?? FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    private func makeTerminalTab(cwd: URL? = nil) -> IDETerminalTab {
+        let directory = cwd ?? defaultTerminalDirectory()
+        return IDETerminalTab(
+            id: UUID(),
+            title: IDETerminalTab.defaultTitle(for: directory),
+            workingDirectory: directory
+        )
+    }
+
     private func loadSession() {
         let session = IDESessionStore.load()
         preferences.restore(from: session.preferences)
@@ -696,8 +830,16 @@ public final class IDEWorkspace {
         isSidebarVisible = session.isSidebarVisible
         isTerminalVisible = session.isTerminalVisible
         terminalHeight = session.terminalHeight
+        terminalTabs = session.terminalTabs ?? []
+        selectedTerminalTabID = session.selectedTerminalTabID
+        if let selectedID = selectedTerminalTabID,
+           !terminalTabs.contains(where: { $0.id == selectedID }) {
+            selectedTerminalTabID = terminalTabs.first?.id
+        }
         project.restoreRoot(from: session.projectRootBookmark)
-        syncTerminalWorkingDirectory()
+        if isTerminalVisible && terminalTabs.isEmpty {
+            addTerminalTab(saveSession: false)
+        }
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
@@ -782,7 +924,7 @@ public final class IDEWorkspace {
             let language = IDELanguageSupport.language(forIdentifier: identifier)
             let document = try await WorkbenchDocument.load(
                 contentsOf: url,
-                theme: IDEEditorTheme.shared,
+                theme: IDEEditorTheme.shared.current,
                 language: language,
                 languageIdentifier: identifier,
                 languageProvider: Self.languageProvider
@@ -926,10 +1068,25 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleWordWrap() }),
             EditorCommand(id: "app.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
                           action: { [weak self] in self?.toggleTypewriterScrolling() }),
+            EditorCommand(id: "app.toggleDistractionFree", title: "Toggle Distraction Free", group: "View",
+                          action: { [weak self] in self?.toggleDistractionFreeMode() }),
+            EditorCommand(id: "app.toggleFocusMode", title: "Toggle Focus Mode", group: "View",
+                          action: { [weak self] in self?.toggleFocusMode() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
                           action: { [weak self] in self?.toggleMetalRendering() }),
             EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
-                          action: { [weak self] in self?.toggleTerminal() })
+                          action: { [weak self] in self?.toggleTerminal() }),
+            EditorCommand(id: "app.newTerminalTab", title: "New Terminal Tab", group: "View",
+                          action: { [weak self] in self?.addTerminalTab() }),
+            EditorCommand(id: "app.closeTerminalTab", title: "Close Terminal Tab", group: "View",
+                          action: { [weak self] in
+                              guard let self, let id = self.selectedTerminalTabID else { return }
+                              self.closeTerminalTab(id)
+                          }),
+            EditorCommand(id: "app.nextTerminalTab", title: "Next Terminal Tab", group: "View",
+                          action: { [weak self] in self?.selectNextTerminalTab() }),
+            EditorCommand(id: "app.previousTerminalTab", title: "Previous Terminal Tab", group: "View",
+                          action: { [weak self] in self?.selectPreviousTerminalTab() })
         ])
     }
 
@@ -1200,7 +1357,7 @@ public final class IDEWorkspace {
         if !document.isFileBacked, document.text.isEmpty {
             host.applyGate.bump()
             applyState(
-                TextViewState(text: "", theme: IDEEditorTheme.shared),
+                TextViewState(text: "", theme: IDEEditorTheme.shared.current),
                 for: document,
                 in: pane,
                 host: host
@@ -1210,7 +1367,7 @@ public final class IDEWorkspace {
         let generation = host.applyGate.bump()
         PenumbraStateBuilder.prepareAndApply(
             text: sourceText(for: document),
-            theme: IDEEditorTheme.shared,
+            theme: IDEEditorTheme.shared.current,
             language: document.language,
             languageProvider: Self.languageProvider,
             generation: generation,

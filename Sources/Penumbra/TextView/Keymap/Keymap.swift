@@ -65,7 +65,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("f", [.command, .option])), to: .toggleReplacePanel)
         map.bind(KeyStroke(KeyChord("l", [.command, .shift])), to: .selectAllOccurrences)
         map.bind(KeyStroke(KeyChord("l", [.command, .option])), to: .addCaretsToLineEnds)
-        map.bind(KeyStroke(KeyChord("l", .command)), to: .selectLines)
+        map.bind(KeyStroke(KeyChord("l", .command)), to: .goToLine)
         map.bind(KeyStroke(KeyChord("d", [.command, .shift])), to: .selectNextOccurrence)
         map.bind(KeyStroke(KeyChord("d", .command)), to: .duplicateLines)
         map.bind(KeyStroke(KeyChord("u", .command)), to: .undoLastCaretChange)
@@ -85,7 +85,7 @@ public extension Keymap {
     }()
 
     /// IntelliJ IDEA's macOS keymap for the actions Penumbra implements. Starts from
-    /// ``default_`` and overrides the conflicting bindings (⌘L, ⌥↑/↓, ⌘⇧L).
+    /// ``default_`` and overrides the conflicting bindings (⌥↑/↓, ⌘⇧L, …).
     static let intelliJ: Keymap = {
         var map = Keymap.default_
 
@@ -130,9 +130,9 @@ public extension Keymap {
     }()
 
     /// Sublime Text-style macOS keymap. Starts from ``default_`` and adds palette/navigation
-    /// shortcuts familiar to Sublime users (⌘P quick open, ⌘⇧P command palette, ⌘G go to line,
-    /// ⌘R go to symbol), then corrects ⌘D / ⌘⇧D to Sublime's semantics (`default_`'s pair is
-    /// inverted) and adds ⌘⇧F for Find in Files.
+    /// shortcuts familiar to Sublime users (⌘P quick open, ⌘⇧P command palette, ⌘G/⌘L go to
+    /// line, ⌘R go to symbol), then corrects ⌘D / ⌘⇧D to Sublime's semantics (`default_`'s pair
+    /// is inverted) and adds ⌘⇧F for Find in Files.
     static let sublime: Keymap = {
         var map = Keymap.default_
 
@@ -147,6 +147,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord(code: 0x1E /* ] */, .command)), to: .navigateForward)
 
         map.unbindAll(.selectLines)
+        map.bind(KeyStroke(KeyChord("l", .command)), to: .goToLine)
         map.bind(KeyStroke(KeyChord("l", [.command, .shift])), to: .selectAllOccurrences)
 
         // Sublime Text binds ⌘D to Select Next Occurrence and ⌘⇧D to Duplicate Line — the

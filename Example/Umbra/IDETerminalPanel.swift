@@ -44,6 +44,8 @@ final class IDETerminalHostView: NSView {
     private var pendingFocus = false
 
     var workingDirectory: URL?
+    var onTitleUpdate: ((String) -> Void)?
+    var onDirectoryUpdate: ((URL) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -56,7 +58,10 @@ final class IDETerminalHostView: NSView {
         terminalView.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         terminalView.getTerminal().setCursorStyle(.steadyBar)
         terminalView.optionAsMetaKey = true
-        applyFontSize(IDEPreferences.shared.fontSize)
+        applyEditorFont(
+            name: IDEPreferences.shared.fontName,
+            size: IDEPreferences.shared.fontSize
+        )
         addSubview(terminalView)
         NSLayoutConstraint.activate([
             terminalView.topAnchor.constraint(equalTo: topAnchor),
@@ -94,9 +99,8 @@ final class IDETerminalHostView: NSView {
         }
     }
 
-    func applyFontSize(_ size: Double) {
-        terminalView.font = NSFont(name: "Menlo", size: size)
-            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    func applyEditorFont(name: String, size: Double) {
+        terminalView.font = IDEEditorFonts.nsFont(familyName: name, size: CGFloat(size))
     }
 
     func requestFocus() {
@@ -113,11 +117,8 @@ final class IDETerminalHostView: NSView {
         }
     }
 
-    func updateWorkingDirectory(_ url: URL?) {
-        let resolved = url ?? FileManager.default.homeDirectoryForCurrentUser
-        guard workingDirectory?.path != resolved.path else { return }
-        workingDirectory = resolved
-        restartProcess()
+    func syncWorkingDirectory(_ url: URL?) {
+        workingDirectory = url ?? FileManager.default.homeDirectoryForCurrentUser
     }
 
     func restartProcess() {
@@ -125,6 +126,13 @@ final class IDETerminalHostView: NSView {
             terminalView.terminate()
         }
         startProcessIfNeeded()
+    }
+
+    func terminateProcess() {
+        isActive = false
+        if terminalView.process.running {
+            terminalView.terminate()
+        }
     }
 
     func startProcessIfNeeded() {
@@ -155,9 +163,19 @@ final class IDETerminalHostView: NSView {
 
         nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
 
-        nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+        nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+            Task { @MainActor [weak host] in
+                host?.onTitleUpdate?(title)
+            }
+        }
 
-        nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+        nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+            guard let directory, !directory.isEmpty else { return }
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            Task { @MainActor [weak host] in
+                host?.onDirectoryUpdate?(url)
+            }
+        }
 
         nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
             Task { @MainActor [weak host] in
@@ -170,19 +188,26 @@ final class IDETerminalHostView: NSView {
 // MARK: - Representable
 
 private struct IDETerminalHostRepresentable: NSViewRepresentable {
+    let tabID: UUID
     let workingDirectory: URL?
     let isActive: Bool
+    let fontName: String
     let fontSize: Double
     let focusRequestID: UInt64
     let restartRequestID: UInt64
+    let onTitleUpdate: (String) -> Void
+    let onDirectoryUpdate: (URL) -> Void
 
     func makeNSView(context: Context) -> IDETerminalHostView {
         let view = IDETerminalHostView(frame: .zero)
         view.workingDirectory = workingDirectory
+        view.onTitleUpdate = onTitleUpdate
+        view.onDirectoryUpdate = onDirectoryUpdate
         view.setActive(isActive)
-        view.applyFontSize(fontSize)
+        view.applyEditorFont(name: fontName, size: fontSize)
         context.coordinator.hostView = view
         context.coordinator.lastFocusRequestID = focusRequestID
+        context.coordinator.lastRestartRequestID = restartRequestID
         if isActive {
             view.scheduleFocus()
         }
@@ -190,8 +215,10 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ view: IDETerminalHostView, context: Context) {
-        view.applyFontSize(fontSize)
-        view.updateWorkingDirectory(workingDirectory)
+        view.onTitleUpdate = onTitleUpdate
+        view.onDirectoryUpdate = onDirectoryUpdate
+        view.applyEditorFont(name: fontName, size: fontSize)
+        view.syncWorkingDirectory(workingDirectory)
         let wasActive = context.coordinator.wasActive
         view.setActive(isActive)
         context.coordinator.wasActive = isActive
@@ -202,13 +229,21 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
 
         if context.coordinator.lastFocusRequestID != focusRequestID {
             context.coordinator.lastFocusRequestID = focusRequestID
-            view.scheduleFocus()
+            if isActive {
+                view.scheduleFocus()
+            }
         }
 
         if context.coordinator.lastRestartRequestID != restartRequestID {
             context.coordinator.lastRestartRequestID = restartRequestID
-            view.restartProcess()
+            if isActive {
+                view.restartProcess()
+            }
         }
+    }
+
+    func dismantleNSView(_ nsView: IDETerminalHostView, coordinator: Coordinator) {
+        nsView.terminateProcess()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -231,10 +266,14 @@ struct IDETerminalPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                Text("Terminal")
-                    .font(IDEAppearance.Typography.sidebarHeader)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Spacer()
+                IDETerminalTabsBar()
+                Button(action: { workspace.addTerminalTab() }) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .help("New Terminal Tab")
+                .accessibilityLabel("New Terminal Tab")
                 Button(action: workspace.restartTerminal) {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -253,13 +292,25 @@ struct IDETerminalPanel: View {
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.xs)
 
-            IDETerminalHostRepresentable(
-                workingDirectory: workspace.terminalWorkingDirectory,
-                isActive: workspace.isTerminalVisible,
-                fontSize: workspace.preferences.fontSize,
-                focusRequestID: workspace.terminalFocusRequestID,
-                restartRequestID: workspace.terminalRestartRequestID
-            )
+            ZStack {
+                ForEach(workspace.terminalTabs) { tab in
+                    let isSelected = tab.id == workspace.selectedTerminalTabID
+                    IDETerminalHostRepresentable(
+                        tabID: tab.id,
+                        workingDirectory: tab.workingDirectory,
+                        isActive: workspace.isTerminalVisible && isSelected,
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize,
+                        focusRequestID: workspace.terminalFocusRequestID,
+                        restartRequestID: tab.restartRequestID,
+                        onTitleUpdate: { workspace.updateTerminalTabTitle(tab.id, title: $0) },
+                        onDirectoryUpdate: { workspace.updateTerminalTabDirectory(tab.id, url: $0) }
+                    )
+                    .id(tab.id)
+                    .opacity(isSelected ? 1 : 0)
+                    .allowsHitTesting(isSelected)
+                }
+            }
         }
         .background(IDEAppearance.ColorToken.sidebar)
         .overlay(alignment: .top) {

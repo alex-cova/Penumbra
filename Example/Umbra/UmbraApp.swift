@@ -60,7 +60,7 @@ struct UmbraApp: App {
                 Button("Go to Symbol…", action: workspace.showGoToSymbol)
                     .keyboardShortcut("r")
                 Button("Go to Line…", action: workspace.showGoToLine)
-                    .keyboardShortcut("g")
+                    .keyboardShortcut("l")
                 Button("Command Palette…", action: workspace.showCommandPalette)
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }
@@ -78,6 +78,19 @@ struct UmbraApp: App {
                     .keyboardShortcut("b", modifiers: .command)
                 Button("Toggle Terminal", systemImage: "terminal", action: workspace.toggleTerminal)
                     .keyboardShortcut("`", modifiers: .control)
+                Button("New Terminal Tab", systemImage: "plus.rectangle.on.rectangle") {
+                    workspace.addTerminalTab()
+                }
+                    .keyboardShortcut("`", modifiers: [.control, .shift])
+                Button("Close Terminal Tab", systemImage: "xmark.rectangle", action: {
+                    if let id = workspace.selectedTerminalTabID {
+                        workspace.closeTerminalTab(id)
+                    }
+                })
+                Button("Next Terminal Tab", action: workspace.selectNextTerminalTab)
+                    .keyboardShortcut(.rightArrow, modifiers: [.control, .option])
+                Button("Previous Terminal Tab", action: workspace.selectPreviousTerminalTab)
+                    .keyboardShortcut(.leftArrow, modifiers: [.control, .option])
                 Toggle("Line Numbers", isOn: workspace.showLineNumbersBinding)
                 Toggle("Code Folding", isOn: workspace.isLineFoldingEnabledBinding)
                 Toggle("Word Wrap", isOn: workspace.wrapLinesBinding)
@@ -91,8 +104,9 @@ struct UmbraApp: App {
                     }
                 }
                 Divider()
-                Button("Toggle Typewriter Scrolling", action: workspace.toggleTypewriterScrolling)
-                Button("Toggle Distraction Free", action: workspace.toggleDistractionFreeMode)
+                Toggle("Typewriter Scrolling", isOn: workspace.isTypewriterScrollingEnabledBinding)
+                Toggle("Distraction Free", isOn: workspace.isDistractionFreeModeEnabledBinding)
+                Toggle("Focus Mode", isOn: workspace.isFocusModeEnabledBinding)
                 Toggle("Use Metal Renderer", isOn: workspace.isMetalRenderingEnabledBinding)
             }
 

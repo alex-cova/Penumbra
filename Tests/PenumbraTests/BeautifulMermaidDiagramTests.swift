@@ -223,4 +223,133 @@ final class BeautifulMermaidDiagramTests: XCTestCase {
             XCTAssertNil(result.errorMessage, expected.rawValue)
         }
     }
+
+    func testMindmapCircleShapeRendersEllipse() throws {
+        let source = """
+        mindmap
+          ((Root))
+            Child
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        XCTAssertTrue(scene.items.contains { item in
+            if case .ellipse = item { return true }
+            return false
+        })
+    }
+
+    func testMindmapUsesElbowConnectors() throws {
+        let source = """
+        mindmap
+          root
+            A
+            B
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let elbowConnectors = scene.items.filter { item in
+            if case .polyline(let points, _, _, _, _) = item {
+                return points.count == 4
+            }
+            return false
+        }
+        XCTAssertGreaterThan(elbowConnectors.count, 0)
+    }
+
+    func testMindmapLongLabelExpandsWidth() throws {
+        let source = """
+        mindmap
+          root
+            This is a deliberately very long mindmap node label for width testing
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let wideRects = scene.items.compactMap { item -> Double? in
+            if case .rect(_, _, let width, _, _, _, _, _) = item, width > 150 { return width }
+            return nil
+        }
+        XCTAssertGreaterThan(wideRects.count, 0)
+    }
+
+    func testMindmapRadialFrontmatter() throws {
+        let source = """
+        ---
+        config:
+          layout: radial
+        ---
+        mindmap
+          root
+            North
+            East
+            South
+            West
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .mindmap)
+        guard let extra = graph.payload as? ExtraParsed, case .mindmap(let chart) = extra else {
+            XCTFail("Expected mindmap payload")
+            return
+        }
+        XCTAssertEqual(chart.layout, .radial)
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let textPositions = scene.items.compactMap { item -> (Double, Double)? in
+            if case .text(_, let x, let y, _, _, _, _) = item { return (x, y) }
+            return nil
+        }
+        XCTAssertGreaterThan(textPositions.count, 4)
+
+        let xs = textPositions.map(\.0)
+        let ys = textPositions.map(\.1)
+        XCTAssertGreaterThan(xs.max()! - xs.min()!, 50)
+        XCTAssertGreaterThan(ys.max()! - ys.min()!, 50)
+
+        let meanX = xs.reduce(0, +) / Double(xs.count)
+        let meanY = ys.reduce(0, +) / Double(ys.count)
+        XCTAssertTrue(xs.contains { $0 < meanX })
+        XCTAssertTrue(xs.contains { $0 > meanX })
+        XCTAssertTrue(ys.contains { $0 < meanY })
+        XCTAssertTrue(ys.contains { $0 > meanY })
+    }
+
+    func testMindmapRadialAndTreeBothRasterize() async {
+        let treeSource = """
+        mindmap
+          root((Tree))
+            Alpha
+            Beta
+        """
+        let radialSource = """
+        ---
+        config:
+          layout: radial
+        ---
+        mindmap
+          root((Radial))
+            Alpha
+            Beta
+        """
+        for source in [treeSource, radialSource] {
+            let result = await MermaidPaintAdapter.render(
+                source: source,
+                mermaidStyle: MarkdownPreviewStyle().mermaidRenderingContext,
+                contentWidth: 360
+            )
+            XCTAssertNotNil(result.image, result.errorMessage ?? "missing image")
+            XCTAssertNil(result.errorMessage)
+        }
+    }
 }

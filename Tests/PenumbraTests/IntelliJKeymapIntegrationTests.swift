@@ -63,11 +63,15 @@ final class IntelliJKeymapIntegrationTests: XCTestCase {
         XCTAssertEqual(received, .goToLine)
     }
 
-    func testCommandLStillSelectsLineUnderDefaultKeymap() {
-        let textView = makeFocusedTextView(text: "abc\ndef")
-        textView.selectedRange = NSRange(location: 1, length: 0)
+    func testCommandLInvokesGoToLineUnderDefaultKeymap() {
+        let textView = makeFocusedTextView(text: "a\nb\nc")
+        var received: EditorActionID?
+        textView.editorActionHandler = { action in
+            received = action
+            return true
+        }
         send(keyEvent(keyCode: TestKeyCode.letterL, characters: "l", flags: .command), to: textView)
-        XCTAssertEqual(textView.selectedRange, NSRange(location: 0, length: 4))
+        XCTAssertEqual(received, .goToLine)
     }
 
     func testCommandDStillDuplicatesUnderIntelliJKeymap() {

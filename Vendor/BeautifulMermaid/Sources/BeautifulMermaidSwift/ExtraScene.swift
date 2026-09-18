@@ -181,15 +181,50 @@ public struct JourneyChart: Sendable {
     public var tasks: [JourneyTask]
 }
 
+public enum MindmapNodeShape: Sendable {
+    case roundedRect
+    case rect
+    case circle
+    case stadium
+    case diamond
+    case hexagon
+}
+
+public enum MindmapLayoutMode: Sendable {
+    case treeLR
+    case radial
+}
+
 public struct MindmapNode: Sendable {
     public var id: Int
     public var text: String
     public var parent: Int?
     public var depth: Int
+    public var shape: MindmapNodeShape
+
+    public init(
+        id: Int,
+        text: String,
+        parent: Int?,
+        depth: Int,
+        shape: MindmapNodeShape = .roundedRect
+    ) {
+        self.id = id
+        self.text = text
+        self.parent = parent
+        self.depth = depth
+        self.shape = shape
+    }
 }
 
 public struct MindmapChart: Sendable {
     public var nodes: [MindmapNode]
+    public var layout: MindmapLayoutMode
+
+    public init(nodes: [MindmapNode], layout: MindmapLayoutMode = .treeLR) {
+        self.nodes = nodes
+        self.layout = layout
+    }
 }
 
 public struct TimelineEvent: Sendable {

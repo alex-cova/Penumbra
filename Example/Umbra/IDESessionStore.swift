@@ -10,6 +10,8 @@ struct AppSession: Codable {
     var isSidebarVisible: Bool
     var isTerminalVisible: Bool
     var terminalHeight: Double
+    var terminalTabs: [IDETerminalTab]?
+    var selectedTerminalTabID: UUID?
 
     static let empty = AppSession(
         restoration: nil,
@@ -17,6 +19,7 @@ struct AppSession: Codable {
         recentFiles: [],
         preferences: IDEPreferencesSnapshot(
             fontSize: 13,
+            themeID: ThemeCatalog.defaultDarkID,
             tabWidth: 4,
             useSpacesForTab: true,
             wrapLines: false,
@@ -29,7 +32,9 @@ struct AppSession: Codable {
         sidebarWidth: IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: true,
         isTerminalVisible: false,
-        terminalHeight: IDEAppearance.Spacing.terminalDefaultHeight
+        terminalHeight: IDEAppearance.Spacing.terminalDefaultHeight,
+        terminalTabs: nil,
+        selectedTerminalTabID: nil
     )
 
     init(
@@ -40,7 +45,9 @@ struct AppSession: Codable {
         sidebarWidth: Double,
         isSidebarVisible: Bool,
         isTerminalVisible: Bool,
-        terminalHeight: Double
+        terminalHeight: Double,
+        terminalTabs: [IDETerminalTab]? = nil,
+        selectedTerminalTabID: UUID? = nil
     ) {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
@@ -50,6 +57,8 @@ struct AppSession: Codable {
         self.isSidebarVisible = isSidebarVisible
         self.isTerminalVisible = isTerminalVisible
         self.terminalHeight = terminalHeight
+        self.terminalTabs = terminalTabs
+        self.selectedTerminalTabID = selectedTerminalTabID
     }
 
     init(from decoder: Decoder) throws {
@@ -63,6 +72,8 @@ struct AppSession: Codable {
         isTerminalVisible = try container.decodeIfPresent(Bool.self, forKey: .isTerminalVisible) ?? false
         terminalHeight = try container.decodeIfPresent(Double.self, forKey: .terminalHeight)
             ?? IDEAppearance.Spacing.terminalDefaultHeight
+        terminalTabs = try container.decodeIfPresent([IDETerminalTab].self, forKey: .terminalTabs)
+        selectedTerminalTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTerminalTabID)
     }
 }
 

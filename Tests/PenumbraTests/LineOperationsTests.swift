@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 @testable import Penumbra
 
-/// Covers the line-level editor commands added alongside move-line/indent: `selectLines()` (⌘L),
+/// Covers the line-level editor commands added alongside move-line/indent: `selectLines()`,
 /// `duplicateSelectedLines()` (⌘D), and `deleteSelectedLines()` (⌘⌫). Each is multi-caret aware,
 /// applies as a single undo step, and has to handle the final-line-without-a-trailing-newline
 /// case. The keyboard section also pins the ⌘D → duplicate / ⌘⇧D → select-next-occurrence split.

@@ -1,12 +1,17 @@
 import Foundation
 
-func parseExtra(kind: DiagramKind, lines: [String], source: String) throws -> ExtraParsed {
+func parseExtra(
+    kind: DiagramKind,
+    lines: [String],
+    source: String,
+    mindmapLayout: MindmapLayoutMode? = nil
+) throws -> ExtraParsed {
     switch kind {
     case .pie: return .pie(parsePieChart(lines))
     case .gantt: return .gantt(parseGanttChart(lines))
     case .gitGraph: return .gitGraph(parseGitGraph(lines))
     case .journey: return .journey(parseJourney(lines))
-    case .mindmap: return .mindmap(parseMindmap(source))
+    case .mindmap: return .mindmap(parseMindmap(source, layout: mindmapLayout))
     case .timeline: return .timeline(parseTimeline(lines))
     case .quadrantChart: return .quadrant(parseQuadrant(lines))
     case .sankey: return .sankey(parseSankey(lines))
@@ -20,7 +25,7 @@ func parseExtra(kind: DiagramKind, lines: [String], source: String) throws -> Ex
     case .c4: return .c4(parseC4(lines))
     case .kanban: return .kanban(parseKanban(source))
     case .usecase: return .usecase(parseUseCase(lines))
-    case .treeView: return .treeView(TreeViewChart(nodes: parseMindmap(source).nodes))
+    case .treeView: return .treeView(TreeViewChart(nodes: parseMindmap(source, layout: mindmapLayout).nodes))
     case .ishikawa: return .ishikawa(parseIshikawa(lines))
     case .cynefin: return .cynefin(parseCynefin(lines))
     case .wardley: return .wardley(parseWardley(lines))
@@ -342,7 +347,8 @@ func parseJourney(_ lines: [String]) -> JourneyChart {
 
 // MARK: - Mindmap / tree (indent)
 
-func parseMindmap(_ source: String) -> MindmapChart {
+func parseMindmap(_ source: String, layout: MindmapLayoutMode? = nil) -> MindmapChart {
+    let layout = layout ?? .treeLR
     var nodes: [MindmapNode] = []
     var stack: [(indent: Int, id: Int)] = []
     var nextID = 0
@@ -352,36 +358,53 @@ func parseMindmap(_ source: String) -> MindmapChart {
     for rawLine in raw {
         if rawLine.trimmingCharacters(in: .whitespaces).hasPrefix("%%") { continue }
         let indent = rawLine.prefix { $0 == " " || $0 == "\t" }.reduce(0) { acc, ch in acc + (ch == "\t" ? 4 : 1) }
-        var text = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { continue }
         let lower = text.lowercased()
         if lower.hasPrefix("mindmap") || lower.hasPrefix("treeview") { continue }
-        text = stripMindmapShape(text)
+        let parsed = parseMindmapNode(text)
         while let last = stack.last, last.indent >= indent {
             stack.removeLast()
         }
         let parent = stack.last?.id
-        nodes.append(MindmapNode(id: nextID, text: text, parent: parent, depth: stack.count))
+        nodes.append(MindmapNode(
+            id: nextID,
+            text: parsed.text,
+            parent: parent,
+            depth: stack.count,
+            shape: parsed.shape
+        ))
         stack.append((indent, nextID))
         nextID += 1
     }
     if nodes.isEmpty {
         nodes.append(MindmapNode(id: 0, text: "root", parent: nil, depth: 0))
     }
-    return MindmapChart(nodes: nodes)
+    return MindmapChart(nodes: nodes, layout: layout)
 }
 
-private func stripMindmapShape(_ text: String) -> String {
-    var t = text
-    let patterns = [#"^\(\((.+)\)\)$"#, #"^\[\[(.+)\]\]$"#, #"^\[(.+)\]$"#, #"^\((.+)\)$"#, #"^\{\{(.+)\}\}$"#, #"^\{(.+)\}$"#]
-    for pattern in patterns {
-        if let match = t.range(of: pattern, options: .regularExpression) {
-            t = String(t[match])
-            t = t.replacingOccurrences(of: #"^\(+|\)+$|^\[+|\]+$|^\{+|\}$+"#, with: "", options: .regularExpression)
-            break
+private func parseMindmapNode(_ text: String) -> (text: String, shape: MindmapNodeShape) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let patterns: [(String, MindmapNodeShape)] = [
+        (#"^\(\((.+)\)\)$"#, .circle),
+        (#"^\[\[(.+)\]\]$"#, .roundedRect),
+        (#"^\[(.+)\]$"#, .rect),
+        (#"^\((.+)\)$"#, .stadium),
+        (#"^\{\{(.+)\}\}$"#, .hexagon),
+        (#"^\{(.+)\}$"#, .diamond),
+    ]
+    for (pattern, shape) in patterns {
+        if let match = trimmed.range(of: pattern, options: .regularExpression) {
+            var inner = String(trimmed[match])
+            inner = inner.replacingOccurrences(
+                of: #"^\(+|\)+$|^\[+|\]+$|^\{+|\}$+"#,
+                with: "",
+                options: .regularExpression
+            )
+            return (ExtraText.unquote(inner), shape)
         }
     }
-    return ExtraText.unquote(t)
+    return (ExtraText.unquote(trimmed), .roundedRect)
 }
 
 // MARK: - Timeline

@@ -132,7 +132,7 @@ private struct IDEWelcomeShortcutsGrid: View {
             ) {
                 IDEWelcomeShortcutCell(keys: "⌘P", action: "Go to File")
                 IDEWelcomeShortcutCell(keys: "⌘⇧P", action: "Command Palette")
-                IDEWelcomeShortcutCell(keys: "⌘G", action: "Go to Line")
+                IDEWelcomeShortcutCell(keys: "⌘L", action: "Go to Line")
                 IDEWelcomeShortcutCell(keys: "⌘R", action: "Go to Symbol")
                 IDEWelcomeShortcutCell(keys: "⌘F", action: "Find")
                 IDEWelcomeShortcutCell(keys: "⌘⇧F", action: "Find in Files")

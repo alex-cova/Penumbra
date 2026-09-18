@@ -51,7 +51,12 @@ public enum MermaidParser {
         case .unknown:
             throw MermaidParserError.unsupportedDiagram(prepared.headerToken)
         default:
-            let extra = try parseExtra(kind: prepared.kind, lines: prepared.lines, source: prepared.source)
+            let extra = try parseExtra(
+                kind: prepared.kind,
+                lines: prepared.lines,
+                source: prepared.source,
+                mindmapLayout: prepared.mindmapLayout
+            )
             guard let type = DiagramKindDetector.diagramType(for: prepared.kind) else {
                 throw MermaidParserError.unsupportedDiagram(prepared.headerToken)
             }

@@ -26,7 +26,7 @@ enum IDEAppearance {
         static let firstRunGuideHeight = 428.0
         static let firstRunGuideRailWidth = 168.0
         static let settingsWidth = 480.0
-        static let settingsMinHeight = 460.0
+        static let settingsMinHeight = 520.0
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
         static let dirtyDotSize = 5.0
