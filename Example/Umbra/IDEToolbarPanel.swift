@@ -28,8 +28,10 @@ struct IDEToolbarPanel: View {
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                isTerminalVisible: workspace.isTerminalVisible,
                 showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
             )
@@ -133,8 +135,10 @@ private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
+    let isTerminalVisible: Bool
     let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
+    let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
 
@@ -145,20 +149,13 @@ private struct IDEToolbarActionCluster: View {
                 help: "Go to File",
                 action: showQuickOpen
             )
-            if isMarkdownFile {
-                IDEToolbarIconButton(
-                    systemName: "play.fill",
-                    help: "Toggle Markdown Preview",
-                    action: toggleMarkdownPreview
-                )
-                if isMarkdownPreviewVisible {
-                    IDEToolbarIconButton(
-                        systemName: "square.and.arrow.down",
-                        help: "Export Markdown Preview to PDF",
-                        action: exportMarkdownPreviewToPDF
-                    )
-                }
-            }
+            IDEToolbarIconButton(
+                systemName: "terminal",
+                isActive: isTerminalVisible,
+                help: "Toggle Terminal",
+                action: toggleTerminal
+            )
+            
             if showsCloseGroup {
                 IDEToolbarIconButton(
                     systemName: "rectangle.slash",
@@ -166,6 +163,23 @@ private struct IDEToolbarActionCluster: View {
                     action: closeActivePane
                 )
             }
+            
+            if isMarkdownFile {
+                if isMarkdownPreviewVisible {
+                    IDEToolbarIconButton(
+                        systemName: "square.and.arrow.down",
+                        help: "Export Markdown Preview to PDF",
+                        action: exportMarkdownPreviewToPDF
+                    )
+                }
+                IDEToolbarIconButton(
+                    systemName: isMarkdownPreviewVisible ? "stop.fill" : "play.fill",
+                    isActive: isMarkdownPreviewVisible,
+                    help: "Toggle Markdown Preview",
+                    action: toggleMarkdownPreview
+                )
+            }
+           
         }
     }
 }

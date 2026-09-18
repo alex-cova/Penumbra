@@ -26,7 +26,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
-        .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0")
+        .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0")
     ],
     targets: [
         .target(
@@ -92,7 +93,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "Umbra",
-            dependencies: ["Penumbra", "PenumbraLanguages", "PenumbraMarkdownLanguage"],
+            dependencies: [
+                "Penumbra",
+                "PenumbraLanguages",
+                "PenumbraMarkdownLanguage",
+                .product(name: "SwiftTerm", package: "SwiftTerm")
+            ],
             path: "Example/Umbra",
             swiftSettings: swift6
         ),

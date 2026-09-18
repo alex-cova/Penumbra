@@ -56,7 +56,13 @@ struct IDEStatusBarPanel: View {
     }
 
     private var trailingSummary: String {
-        "UTF-8  ·  LF  ·  \(workspace.statusRenderer)  ·  Umbra"
+        var parts = ["UTF-8", "LF"]
+        if workspace.isTerminalVisible {
+            parts.append("Terminal")
+        }
+        parts.append(workspace.statusRenderer)
+        parts.append("Umbra")
+        return parts.joined(separator: "  ·  ")
     }
 }
 

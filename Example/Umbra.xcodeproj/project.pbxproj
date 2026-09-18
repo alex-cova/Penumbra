@@ -29,6 +29,7 @@
 		000000000000000000000069 /* IDEWorkbenchLanguageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */; };
 		000000000000000000000070 /* IDEWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000050 /* IDEWorkspace.swift */; };
 		000000000000000000000072 /* IDEFirstRunGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000071 /* IDEFirstRunGuideView.swift */; };
+		000000000000000000000073 /* IDETerminalPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000074 /* IDETerminalPanel.swift */; };
 		000000000000000000000028 /* Penumbra in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000025 /* Penumbra */; };
 		000000000000000000000029 /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000026 /* PenumbraLanguages */; };
 		000000000000000000000030 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000027 /* PenumbraMarkdownLanguage */; };
@@ -60,6 +61,7 @@
 		000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWorkbenchLanguageParser.swift; sourceTree = "<group>"; };
 		000000000000000000000050 /* IDEWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWorkspace.swift; sourceTree = "<group>"; };
 		000000000000000000000071 /* IDEFirstRunGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFirstRunGuideView.swift; sourceTree = "<group>"; };
+		000000000000000000000074 /* IDETerminalPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDETerminalPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,6 +120,7 @@
 				000000000000000000000048 /* IDEWelcomeView.swift */,
 				000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */,
 				000000000000000000000050 /* IDEWorkspace.swift */,
+				000000000000000000000074 /* IDETerminalPanel.swift */,
 			);
 			name = Umbra;
 			path = Umbra;
@@ -230,6 +233,7 @@
 				000000000000000000000068 /* IDEWelcomeView.swift in Sources */,
 				000000000000000000000069 /* IDEWorkbenchLanguageParser.swift in Sources */,
 				000000000000000000000070 /* IDEWorkspace.swift in Sources */,
+				000000000000000000000073 /* IDETerminalPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

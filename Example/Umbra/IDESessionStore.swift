@@ -8,6 +8,8 @@ struct AppSession: Codable {
     var preferences: IDEPreferencesSnapshot
     var sidebarWidth: Double
     var isSidebarVisible: Bool
+    var isTerminalVisible: Bool
+    var terminalHeight: Double
 
     static let empty = AppSession(
         restoration: nil,
@@ -25,8 +27,43 @@ struct AppSession: Codable {
             keymapPreset: .sublime
         ),
         sidebarWidth: IDEAppearance.Spacing.sidebarWidth,
-        isSidebarVisible: true
+        isSidebarVisible: true,
+        isTerminalVisible: false,
+        terminalHeight: IDEAppearance.Spacing.terminalDefaultHeight
     )
+
+    init(
+        restoration: EditorRestorationState?,
+        projectRootBookmark: Data?,
+        recentFiles: [URL],
+        preferences: IDEPreferencesSnapshot,
+        sidebarWidth: Double,
+        isSidebarVisible: Bool,
+        isTerminalVisible: Bool,
+        terminalHeight: Double
+    ) {
+        self.restoration = restoration
+        self.projectRootBookmark = projectRootBookmark
+        self.recentFiles = recentFiles
+        self.preferences = preferences
+        self.sidebarWidth = sidebarWidth
+        self.isSidebarVisible = isSidebarVisible
+        self.isTerminalVisible = isTerminalVisible
+        self.terminalHeight = terminalHeight
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
+        projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
+        recentFiles = try container.decode([URL].self, forKey: .recentFiles)
+        preferences = try container.decode(IDEPreferencesSnapshot.self, forKey: .preferences)
+        sidebarWidth = try container.decode(Double.self, forKey: .sidebarWidth)
+        isSidebarVisible = try container.decode(Bool.self, forKey: .isSidebarVisible)
+        isTerminalVisible = try container.decodeIfPresent(Bool.self, forKey: .isTerminalVisible) ?? false
+        terminalHeight = try container.decodeIfPresent(Double.self, forKey: .terminalHeight)
+            ?? IDEAppearance.Spacing.terminalDefaultHeight
+    }
 }
 
 enum IDESessionStore {

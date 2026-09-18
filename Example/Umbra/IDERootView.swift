@@ -42,7 +42,23 @@ public struct IDERootView: View {
                                 .id("editor-layout")
                         }
                     }
+                    .frame(maxHeight: .infinity)
                     .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
+
+                    if workspace.isTerminalVisible {
+                        IDETerminalResizeHandle(height: Binding(
+                            get: { workspace.terminalHeight },
+                            set: { workspace.terminalHeight = $0 }
+                        ))
+                        .opacity(workspace.chromeOpacity)
+                    }
+
+                    if workspace.isTerminalVisible {
+                        IDETerminalPanel()
+                            .frame(height: workspace.terminalHeight)
+                            .opacity(workspace.chromeOpacity)
+                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                    }
                 }
             }
 
@@ -72,6 +88,9 @@ public struct IDERootView: View {
         .onChange(of: sidebarWidth) { _, newWidth in
             workspace.saveSession(sidebarWidth: newWidth)
         }
+        .onChange(of: workspace.terminalHeight) { _, newHeight in
+            workspace.saveSession(terminalHeight: newHeight)
+        }
         .focusable(false)
     }
 
@@ -93,6 +112,43 @@ public struct IDERootView: View {
     IDERootView()
         .environment(IDEWorkspace())
         .frame(width: 1100, height: 700)
+}
+
+private struct IDETerminalResizeHandle: View {
+    @Binding var height: Double
+    @State private var lastTranslation: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            Color.clear.frame(height: 6)
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let delta = lastTranslation - value.translation.height
+                    lastTranslation = value.translation.height
+                    height = min(
+                        max(height + delta, IDEAppearance.Spacing.terminalMinHeight),
+                        IDEAppearance.Spacing.terminalMaxHeight
+                    )
+                }
+                .onEnded { _ in
+                    lastTranslation = 0
+                }
+        )
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
 }
 
 private struct IDESidebarResizeHandle: View {

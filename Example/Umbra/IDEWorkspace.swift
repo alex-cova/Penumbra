@@ -80,6 +80,11 @@ public final class IDEWorkspace {
     var findInFilesQuery = ""
     var findInFilesHits: [ProjectSearchResult] = []
     var findInFilesStatus = ""
+    var isTerminalVisible = false
+    var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
+    var terminalFocusRequestID: UInt64 = 0
+    var terminalRestartRequestID: UInt64 = 0
+    private(set) var terminalWorkingDirectory: URL?
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
@@ -204,7 +209,7 @@ public final class IDEWorkspace {
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url, let self else { return }
-            self.project.setRoot(url)
+            self.applyProjectRoot(url)
             self.showsWelcome = false
             self.refreshPresentation()
         }
@@ -299,6 +304,42 @@ public final class IDEWorkspace {
     func hideFindInFiles() {
         isFindInFilesVisible = false
         focusActiveEditor()
+    }
+
+    public func toggleTerminal() {
+        isTerminalVisible.toggle()
+        if isTerminalVisible {
+            syncTerminalWorkingDirectory()
+            requestTerminalFocus()
+        } else {
+            focusActiveEditor()
+        }
+        saveSession()
+    }
+
+    public func showTerminal() {
+        if !isTerminalVisible {
+            toggleTerminal()
+        }
+    }
+
+    func hideTerminal() {
+        if isTerminalVisible {
+            toggleTerminal()
+        }
+    }
+
+    func syncTerminalWorkingDirectory() {
+        terminalWorkingDirectory = project.rootURL
+    }
+
+    func restartTerminal() {
+        terminalRestartRequestID += 1
+        requestTerminalFocus()
+    }
+
+    func requestTerminalFocus() {
+        terminalFocusRequestID += 1
     }
 
     func runFindInFiles() {
@@ -509,7 +550,7 @@ public final class IDEWorkspace {
                     continue
                 }
                 if isDirectory.boolValue {
-                    project.setRoot(url)
+                    applyProjectRoot(url)
                     showsWelcome = false
                 } else {
                     await openDocument(from: url)
@@ -626,19 +667,24 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
-    func makeSession(sidebarWidth: Double) -> AppSession {
+    func makeSession(sidebarWidth: Double, terminalHeight: Double? = nil) -> AppSession {
         AppSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             recentFiles: recentFiles,
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
-            isSidebarVisible: isSidebarVisible
+            isSidebarVisible: isSidebarVisible,
+            isTerminalVisible: isTerminalVisible,
+            terminalHeight: terminalHeight ?? self.terminalHeight
         )
     }
 
-    func saveSession(sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth) {
-        IDESessionStore.save(makeSession(sidebarWidth: sidebarWidth))
+    func saveSession(
+        sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
+        terminalHeight: Double? = nil
+    ) {
+        IDESessionStore.save(makeSession(sidebarWidth: sidebarWidth, terminalHeight: terminalHeight))
     }
 
     // MARK: - Private
@@ -648,7 +694,10 @@ public final class IDEWorkspace {
         preferences.restore(from: session.preferences)
         recentFiles = session.recentFiles
         isSidebarVisible = session.isSidebarVisible
+        isTerminalVisible = session.isTerminalVisible
+        terminalHeight = session.terminalHeight
         project.restoreRoot(from: session.projectRootBookmark)
+        syncTerminalWorkingDirectory()
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
@@ -878,8 +927,15 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
                           action: { [weak self] in self?.toggleTypewriterScrolling() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
-                          action: { [weak self] in self?.toggleMetalRendering() })
+                          action: { [weak self] in self?.toggleMetalRendering() }),
+            EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
+                          action: { [weak self] in self?.toggleTerminal() })
         ])
+    }
+
+    private func applyProjectRoot(_ url: URL?) {
+        project.setRoot(url)
+        syncTerminalWorkingDirectory()
     }
 
     private func activatePane(_ paneID: UUID) {

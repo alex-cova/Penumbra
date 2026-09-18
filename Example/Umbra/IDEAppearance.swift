@@ -18,6 +18,9 @@ enum IDEAppearance {
         static let tabHeight = 32.0
         static let iconButton = 26.0
         static let statusBarHeight = 24.0
+        static let terminalDefaultHeight = 220.0
+        static let terminalMinHeight = 120.0
+        static let terminalMaxHeight = 600.0
         static let welcomeMaxWidth = 520.0
         static let firstRunGuideWidth = 640.0
         static let firstRunGuideHeight = 428.0

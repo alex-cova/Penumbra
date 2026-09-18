@@ -76,6 +76,8 @@ struct UmbraApp: App {
                     .keyboardShortcut("0", modifiers: .command)
                 Button("Markdown Preview", systemImage: "doc.richtext", action: workspace.toggleMarkdownPreview)
                     .keyboardShortcut("b", modifiers: .command)
+                Button("Toggle Terminal", systemImage: "terminal", action: workspace.toggleTerminal)
+                    .keyboardShortcut("`", modifiers: .control)
                 Toggle("Line Numbers", isOn: workspace.showLineNumbersBinding)
                 Toggle("Code Folding", isOn: workspace.isLineFoldingEnabledBinding)
                 Toggle("Word Wrap", isOn: workspace.wrapLinesBinding)
