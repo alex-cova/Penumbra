@@ -21,6 +21,7 @@ public final class MarkdownPreviewController: NSObject {
     private var highlightedCode: [Int: NSAttributedString] = [:]
     private var previewDelegate: PreviewTextViewDelegate?
     private var chainedTextViewDelegate: ChainedTextViewDelegate?
+    private var editorWasSelectableBeforePreview = true
 
     /// Base URL for resolving relative markdown image paths (typically the open document's file URL).
     public var documentBaseURL: URL?
@@ -132,6 +133,13 @@ public final class MarkdownPreviewController: NSObject {
 
     private func showPreview() {
         isPreviewVisible = true
+        // The preview is layered directly on top of the editor in the same frame, but the
+        // editor underneath stays live unless we explicitly disable it here — otherwise its
+        // (invisible) text remains selectable/focusable while the rendered preview covers it.
+        if let textView {
+            editorWasSelectableBeforePreview = textView.isSelectable
+            textView.isSelectable = false
+        }
         previewView.isHidden = false
         refreshStyle()
         scheduleParse()
@@ -140,6 +148,7 @@ public final class MarkdownPreviewController: NSObject {
     private func hidePreview() {
         isPreviewVisible = false
         previewView.isHidden = true
+        textView?.isSelectable = editorWasSelectableBeforePreview
         parseTask?.cancel()
         mermaidTask?.cancel()
     }
