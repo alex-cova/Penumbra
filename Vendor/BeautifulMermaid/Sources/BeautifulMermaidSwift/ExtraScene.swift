@@ -105,18 +105,68 @@ public struct GanttChart: Sendable {
     public var markers: [Double]
 }
 
+public enum GitCommitKind: Sendable {
+    case normal
+    case reverse
+    case highlight
+    case merge
+    case cherryPick
+}
+
 public struct GitCommit: Sendable {
     public var id: String
+    /// Text drawn under/beside the node. `nil` when the author gave no `id:`/`msg:`,
+    /// so bare `commit` lines don't render the literal word "commit".
+    public var label: String?
+    public var tag: String?
+    public var kind: GitCommitKind
     public var branch: String
-    public var message: String
+    /// Global slot along the main axis (0-based, in commit-creation order).
     public var order: Int
+    /// `[primaryParentId]` for a normal commit, `[primaryParentId, mergedTipId]`
+    /// for a merge commit, `[]` for the very first commit on a branch with no parent.
+    public var parents: [String]
+    public var cherryPickSource: String?
+
+    public init(
+        id: String,
+        label: String?,
+        tag: String? = nil,
+        kind: GitCommitKind = .normal,
+        branch: String,
+        order: Int,
+        parents: [String],
+        cherryPickSource: String? = nil
+    ) {
+        self.id = id
+        self.label = label
+        self.tag = tag
+        self.kind = kind
+        self.branch = branch
+        self.order = order
+        self.parents = parents
+        self.cherryPickSource = cherryPickSource
+    }
+}
+
+public struct GitBranchInfo: Sendable {
+    public var name: String
+    /// Explicit `branch X order: N`, else nil (falls back to declaration order).
+    public var order: Int?
+    /// The commit id this branch was created from (its parent's HEAD at `branch` time).
+    public var forkParent: String?
+
+    public init(name: String, order: Int? = nil, forkParent: String? = nil) {
+        self.name = name
+        self.order = order
+        self.forkParent = forkParent
+    }
 }
 
 public struct GitGraphChart: Sendable {
     public var direction: String
     public var commits: [GitCommit]
-    public var branches: [String]
-    public var merges: [(from: String, to: String, at: Int)]
+    public var branches: [GitBranchInfo]
 }
 
 public struct JourneyTask: Sendable {

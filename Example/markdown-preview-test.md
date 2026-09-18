@@ -202,6 +202,21 @@ Alignment test:
 
 ## Mermaid diagrams
 
+Git graph:
+
+```mermaid
+gitGraph
+    commit id: "Init"
+    commit
+    branch feature
+    checkout feature
+    commit id: "Add tiling" tag: "v0.1"
+    checkout main
+    commit type: HIGHLIGHT
+    merge feature
+    cherry-pick id: "Add tiling"
+```
+
 Flowchart:
 
 ```mermaid

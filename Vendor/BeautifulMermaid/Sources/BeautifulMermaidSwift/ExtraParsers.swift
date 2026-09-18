@@ -183,59 +183,133 @@ private func parseDayOffset(_ token: String) -> Double? {
 
 // MARK: - Git graph
 
+/// Extracts `key: value` attributes from a gitGraph command line, e.g.
+/// `commit id: "Alpha" tag: "v1.0" type: HIGHLIGHT`. Values may be double- or
+/// single-quoted (kept whole, colons and all) or a single bare token.
+private func gitAttributes(_ line: String) -> [String: String] {
+    guard let regex = try? NSRegularExpression(pattern: #"([A-Za-z_-]+)\s*:\s*("[^"]*"|'[^']*'|\S+)"#) else {
+        return [:]
+    }
+    let ns = line as NSString
+    var result: [String: String] = [:]
+    regex.enumerateMatches(in: line, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+        guard let match, match.numberOfRanges == 3 else { return }
+        let key = ns.substring(with: match.range(at: 1)).lowercased()
+        let value = ExtraText.unquote(ns.substring(with: match.range(at: 2)))
+        result[key] = value
+    }
+    return result
+}
+
 func parseGitGraph(_ lines: [String]) -> GitGraphChart {
     var direction = "LR"
     var current = "main"
-    var branches = ["main"]
+    var branchOrder = ["main"]
+    var branchInfo: [String: GitBranchInfo] = ["main": GitBranchInfo(name: "main")]
+    var heads: [String: String] = [:]
     var commits: [GitCommit] = []
-    var merges: [(from: String, to: String, at: Int)] = []
     var order = 0
+
+    func ensureBranch(_ name: String, forkParent: String?) {
+        guard branchInfo[name] == nil else { return }
+        branchOrder.append(name)
+        branchInfo[name] = GitBranchInfo(name: name, forkParent: forkParent)
+    }
 
     for line in lines {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("gitgraph") {
-            if lower.contains("tb") { direction = "TB" }
-            else if lower.contains("bt") { direction = "BT" }
+            if let range = lower.range(of: #"\b(lr|tb|bt)\b"#, options: .regularExpression) {
+                direction = lower[range].uppercased()
+            }
             continue
         }
         if lower.hasPrefix("commit") {
-            var message = "commit"
-            if let idRange = trimmed.range(of: #"id:\s*"([^"]+)""#, options: .regularExpression) {
-                message = ExtraText.unquote(String(trimmed[idRange]).replacingOccurrences(of: #"^id:\s*"#, with: "", options: .regularExpression))
+            let attrs = gitAttributes(trimmed)
+            let id = attrs["id"] ?? "c\(order)"
+            let kind: GitCommitKind
+            switch attrs["type"]?.uppercased() {
+            case "REVERSE": kind = .reverse
+            case "HIGHLIGHT": kind = .highlight
+            default: kind = .normal
             }
-            commits.append(GitCommit(id: "c\(order)", branch: current, message: message, order: order))
+            let parent = heads[current]
+            commits.append(GitCommit(
+                id: id,
+                label: attrs["id"] ?? attrs["msg"],
+                tag: attrs["tag"],
+                kind: kind,
+                branch: current,
+                order: order,
+                parents: parent.map { [$0] } ?? []
+            ))
+            heads[current] = id
             order += 1
             continue
         }
         if lower.hasPrefix("branch ") {
+            let attrs = gitAttributes(trimmed)
             let name = ExtraText.unquote(String(trimmed.dropFirst(7)).split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? "branch")
-            if !branches.contains(name) { branches.append(name) }
+            if branchInfo[name] == nil {
+                branchOrder.append(name)
+                let explicitOrder = attrs["order"].flatMap { Int($0) }
+                branchInfo[name] = GitBranchInfo(name: name, order: explicitOrder, forkParent: heads[current])
+            }
+            heads[name] = heads[current]
             current = name
             continue
         }
         if lower.hasPrefix("checkout ") || lower.hasPrefix("switch ") {
             let name = ExtraText.unquote(String(trimmed.split(whereSeparator: { $0.isWhitespace }).dropFirst().first.map(String.init) ?? current))
+            ensureBranch(name, forkParent: heads[current])
             current = name
-            if !branches.contains(name) { branches.append(name) }
             continue
         }
         if lower.hasPrefix("merge ") {
-            let name = ExtraText.unquote(String(trimmed.dropFirst(6)).split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? current)
-            merges.append((from: name, to: current, at: order))
-            commits.append(GitCommit(id: "m\(order)", branch: current, message: "merge", order: order))
+            let attrs = gitAttributes(trimmed)
+            let sourceBranch = ExtraText.unquote(String(trimmed.dropFirst(6)).split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? current)
+            let id = attrs["id"] ?? "m\(order)"
+            let primary = heads[current]
+            let merged = heads[sourceBranch]
+            var parents: [String] = []
+            if let primary { parents.append(primary) }
+            if let merged, merged != primary { parents.append(merged) }
+            commits.append(GitCommit(
+                id: id,
+                label: attrs["id"] ?? attrs["msg"],
+                tag: attrs["tag"],
+                kind: .merge,
+                branch: current,
+                order: order,
+                parents: parents
+            ))
+            heads[current] = id
             order += 1
             continue
         }
         if lower.hasPrefix("cherry-pick") {
-            commits.append(GitCommit(id: "p\(order)", branch: current, message: "cherry-pick", order: order))
+            let attrs = gitAttributes(trimmed)
+            let id = "p\(order)"
+            let parent = heads[current]
+            commits.append(GitCommit(
+                id: id,
+                label: attrs["id"],
+                kind: .cherryPick,
+                branch: current,
+                order: order,
+                parents: parent.map { [$0] } ?? [],
+                cherryPickSource: attrs["id"]
+            ))
+            heads[current] = id
             order += 1
         }
     }
     if commits.isEmpty {
-        commits.append(GitCommit(id: "c0", branch: "main", message: "commit", order: 0))
+        commits.append(GitCommit(id: "c0", label: nil, branch: "main", order: 0, parents: []))
     }
-    return GitGraphChart(direction: direction, commits: commits, branches: branches, merges: merges)
+    let branches = branchOrder.compactMap { branchInfo[$0] }
+    return GitGraphChart(direction: direction, commits: commits, branches: branches)
 }
 
 // MARK: - Journey

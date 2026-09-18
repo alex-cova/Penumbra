@@ -22,13 +22,15 @@ final class BeautifulMermaidDiagramTests: XCTestCase {
         """),
         (.gitGraph, """
         gitGraph
-            commit
+            commit id: "Init"
             commit
             branch develop
             checkout develop
-            commit
+            commit id: "Feature" tag: "v0.1"
             checkout main
+            commit type: HIGHLIGHT
             merge develop
+            cherry-pick id: "Feature"
         """),
         (.journey, """
         journey

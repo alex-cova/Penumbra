@@ -99,58 +99,214 @@ func layoutGantt(_ chart: GanttChart) -> ExtraScene {
     return ExtraScene(width: left + plotW + 40, height: y + 24, items: items)
 }
 
-func layoutGitGraph(_ chart: GitGraphChart) -> ExtraScene {
-    let branchIndex = Dictionary(uniqueKeysWithValues: chart.branches.enumerated().map { ($0.element, $0.offset) })
-    let vertical = chart.direction == "TB" || chart.direction == "BT"
-    let step = 56.0
-    let lane = 48.0
-    let pad = 40.0
-    var items: [ExtraItem] = []
-    if vertical {
-        for commit in chart.commits {
-            let laneI = Double(branchIndex[commit.branch] ?? 0)
-            let x = pad + laneI * lane
-            let y = pad + Double(commit.order) * step
-            items.append(.ellipse(x: x - 8, y: y - 8, width: 16, height: 16, fill: .series(Int(laneI)), stroke: .border))
-            items.append(.text(commit.message, x: x + 16, y: y, size: 11, fill: .foreground, anchor: .start, weight: 400))
+/// Accumulates `ExtraItem`s for the git graph while tracking the emitted
+/// content's bounding box, so the final scene is sized to fit (rather than
+/// guessed from commit/branch counts, which clips long labels).
+private final class GitGraphSceneBuilder {
+    private(set) var items: [ExtraItem] = []
+    private(set) var maxX = 0.0
+    private(set) var maxY = 0.0
+
+    private func extend(_ x: Double, _ y: Double) {
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+    }
+
+    func line(x1: Double, y1: Double, x2: Double, y2: Double, stroke: ExtraFill, width: Double, dashed: Bool = false) {
+        items.append(.line(x1: x1, y1: y1, x2: x2, y2: y2, stroke: stroke, width: width, dashed: dashed))
+        extend(max(x1, x2), max(y1, y2))
+    }
+
+    func polyline(_ points: [ExtraPoint], fill: ExtraFill = .none, stroke: ExtraFill, width: Double, closed: Bool = false) {
+        items.append(.polyline(points: points, fill: fill, stroke: stroke, width: width, closed: closed))
+        for point in points { extend(point.x, point.y) }
+    }
+
+    func ellipse(x: Double, y: Double, width: Double, height: Double, fill: ExtraFill, stroke: ExtraFill) {
+        items.append(.ellipse(x: x, y: y, width: width, height: height, fill: fill, stroke: stroke))
+        extend(x + width, y + height)
+    }
+
+    func rect(x: Double, y: Double, width: Double, height: Double, fill: ExtraFill, stroke: ExtraFill, corner: Double = 0) {
+        items.append(.rect(x: x, y: y, width: width, height: height, fill: fill, stroke: stroke, corner: corner, dashed: false))
+        extend(x + width, y + height)
+    }
+
+    func text(_ string: String, x: Double, y: Double, size: Double, fill: ExtraFill, anchor: ExtraAnchor, weight: Int = 400) {
+        items.append(.text(string, x: x, y: y, size: size, fill: fill, anchor: anchor, weight: weight))
+        let measured = ExtraText.width(string, size: size, weight: weight)
+        let rightEdge: Double
+        switch anchor {
+        case .start: rightEdge = x + measured
+        case .middle: rightEdge = x + measured / 2
+        case .end: rightEdge = x
         }
-        for branch in chart.branches {
-            let laneI = Double(branchIndex[branch] ?? 0)
-            let x = pad + laneI * lane
-            let ys = chart.commits.filter { $0.branch == branch }.map { pad + Double($0.order) * step }
-            if let minY = ys.min(), let maxY = ys.max() {
-                items.append(.line(x1: x, y1: minY, x2: x, y2: maxY, stroke: .series(Int(laneI)), width: 2, dashed: false))
+        extend(rightEdge, y + size)
+    }
+}
+
+/// Samples a cubic bezier between two lane positions into a polyline, used for
+/// fork/merge/cherry-pick connectors that cross lanes (a straight line would
+/// visually cut across intervening lanes at a sharp angle).
+private func gitGraphCurve(from: ExtraPoint, to: ExtraPoint, vertical: Bool, samples: Int = 16) -> [ExtraPoint] {
+    let c1: ExtraPoint
+    let c2: ExtraPoint
+    if vertical {
+        let midY = (from.y + to.y) / 2
+        c1 = ExtraPoint(x: from.x, y: midY)
+        c2 = ExtraPoint(x: to.x, y: midY)
+    } else {
+        let midX = (from.x + to.x) / 2
+        c1 = ExtraPoint(x: midX, y: from.y)
+        c2 = ExtraPoint(x: midX, y: to.y)
+    }
+    var points: [ExtraPoint] = []
+    points.reserveCapacity(samples + 1)
+    for i in 0...samples {
+        let t = Double(i) / Double(samples)
+        let mt = 1 - t
+        let x = mt * mt * mt * from.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * to.x
+        let y = mt * mt * mt * from.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * to.y
+        points.append(ExtraPoint(x: x, y: y))
+    }
+    return points
+}
+
+func layoutGitGraph(_ chart: GitGraphChart) -> ExtraScene {
+    let vertical = chart.direction == "TB" || chart.direction == "BT"
+    let reversed = chart.direction == "BT"
+    let nodeRadius = 9.0
+    let step = 60.0
+    let laneSpan = 56.0
+    let pad = 24.0
+
+    // Explicit `branch X order: N` wins; otherwise branches keep declaration order.
+    // On a tie (an explicit order collides with another branch's declaration-index
+    // fallback), the explicit one sorts first — that's the whole point of asking.
+    let laneAssignment = chart.branches.enumerated().sorted { lhs, rhs in
+        let lhsRank = (lhs.element.order ?? lhs.offset, lhs.element.order == nil ? 1 : 0)
+        let rhsRank = (rhs.element.order ?? rhs.offset, rhs.element.order == nil ? 1 : 0)
+        return lhsRank < rhsRank
+    }
+    var laneOf: [String: Int] = [:]
+    for (lane, entry) in laneAssignment.enumerated() {
+        laneOf[entry.element.name] = lane
+    }
+    let commitByID = Dictionary(uniqueKeysWithValues: chart.commits.map { ($0.id, $0) })
+    let maxOrder = chart.commits.map(\.order).max() ?? 0
+
+    func chipWidth(_ name: String) -> Double {
+        ExtraText.width(name, size: 11, weight: 600) + 16
+    }
+    let leadingLR = pad + (chart.branches.map { chipWidth($0.name) }.max() ?? 40) + 16
+    let topTB = pad + 28
+
+    func point(order: Int, lane: Int) -> ExtraPoint {
+        if vertical {
+            let x = pad + Double(lane) * laneSpan + laneSpan / 2
+            let effectiveOrder = reversed ? (maxOrder - order) : order
+            let y = topTB + Double(effectiveOrder) * step
+            return ExtraPoint(x: x, y: y)
+        } else {
+            let x = leadingLR + Double(order) * step
+            let y = pad + Double(lane) * laneSpan + laneSpan / 2
+            return ExtraPoint(x: x, y: y)
+        }
+    }
+    func commitPoint(_ commit: GitCommit) -> ExtraPoint {
+        point(order: commit.order, lane: laneOf[commit.branch] ?? 0)
+    }
+
+    let scene = GitGraphSceneBuilder()
+
+    // Connectors first so nodes paint on top of them. Each commit draws an
+    // edge to each of its real parents: same-branch consecutive commits get a
+    // straight lane line, a branch's first commit gets a curved fork edge back
+    // to the commit it forked from, and a merge commit's second parent gets a
+    // curved merge edge from the merged branch's tip.
+    for commit in chart.commits {
+        let to = commitPoint(commit)
+        let lane = laneOf[commit.branch] ?? 0
+        for (index, parentID) in commit.parents.enumerated() {
+            guard let parent = commitByID[parentID] else { continue }
+            let from = commitPoint(parent)
+            if parent.branch == commit.branch {
+                scene.line(x1: from.x, y1: from.y, x2: to.x, y2: to.y, stroke: .series(lane), width: 2)
+            } else {
+                let strokeLane = index == 0 ? lane : (laneOf[parent.branch] ?? lane)
+                scene.polyline(gitGraphCurve(from: from, to: to, vertical: vertical), stroke: .series(strokeLane), width: 2)
             }
         }
-        let width = pad * 2 + Double(max(chart.branches.count, 1)) * lane + 120
-        let height = pad * 2 + Double(max(chart.commits.count, 1)) * step
-        return ExtraScene(width: width, height: height, items: items)
-    }
-    for commit in chart.commits {
-        let laneI = Double(branchIndex[commit.branch] ?? 0)
-        let x = pad + Double(commit.order) * step
-        let y = pad + laneI * lane
-        items.append(.ellipse(x: x - 8, y: y - 8, width: 16, height: 16, fill: .series(Int(laneI)), stroke: .border))
-        items.append(.text(commit.message, x: x, y: y + 18, size: 10, fill: .muted, anchor: .middle, weight: 400))
-    }
-    for branch in chart.branches {
-        let laneI = Double(branchIndex[branch] ?? 0)
-        let y = pad + laneI * lane
-        items.append(.text(branch, x: 8, y: y, size: 11, fill: .foreground, anchor: .start, weight: 500))
-        let xs = chart.commits.filter { $0.branch == branch }.map { pad + Double($0.order) * step }
-        if let minX = xs.min(), let maxX = xs.max() {
-            items.append(.line(x1: minX, y1: y, x2: maxX, y2: y, stroke: .series(Int(laneI)), width: 2, dashed: false))
+        if commit.kind == .cherryPick, let sourceID = commit.cherryPickSource, let source = commitByID[sourceID] {
+            let from = commitPoint(source)
+            scene.line(x1: from.x, y1: from.y, x2: to.x, y2: to.y, stroke: .series(lane), width: 1.5, dashed: true)
         }
     }
-    for merge in chart.merges {
-        let fromY = pad + Double(branchIndex[merge.from] ?? 0) * lane
-        let toY = pad + Double(branchIndex[merge.to] ?? 0) * lane
-        let x = pad + Double(max(merge.at - 1, 0)) * step
-        items.append(.line(x1: x, y1: fromY, x2: x + step, y2: toY, stroke: .accent, width: 1.5, dashed: false))
+
+    // Nodes, labels, and tag banners.
+    for commit in chart.commits {
+        let p = commitPoint(commit)
+        let lane = laneOf[commit.branch] ?? 0
+        switch commit.kind {
+        case .normal, .cherryPick:
+            scene.ellipse(x: p.x - nodeRadius, y: p.y - nodeRadius, width: nodeRadius * 2, height: nodeRadius * 2, fill: .series(lane), stroke: .background)
+        case .merge:
+            scene.ellipse(x: p.x - nodeRadius, y: p.y - nodeRadius, width: nodeRadius * 2, height: nodeRadius * 2, fill: .series(lane), stroke: .background)
+            let inner = nodeRadius * 0.45
+            scene.ellipse(x: p.x - inner, y: p.y - inner, width: inner * 2, height: inner * 2, fill: .background, stroke: .none)
+        case .reverse:
+            scene.ellipse(x: p.x - nodeRadius, y: p.y - nodeRadius, width: nodeRadius * 2, height: nodeRadius * 2, fill: .series(lane), stroke: .background)
+            let r = nodeRadius * 0.55
+            scene.line(x1: p.x - r, y1: p.y - r, x2: p.x + r, y2: p.y + r, stroke: .background, width: 1.5)
+            scene.line(x1: p.x - r, y1: p.y + r, x2: p.x + r, y2: p.y - r, stroke: .background, width: 1.5)
+        case .highlight:
+            let side = nodeRadius * 1.6
+            scene.rect(x: p.x - side / 2, y: p.y - side / 2, width: side, height: side, fill: .series(lane), stroke: .foreground, corner: 3)
+        }
+
+        if let label = commit.label {
+            if vertical {
+                scene.text(label, x: p.x + nodeRadius + 8, y: p.y + 4, size: 11, fill: .foreground, anchor: .start)
+            } else {
+                scene.text(label, x: p.x, y: p.y + nodeRadius + 16, size: 10, fill: .muted, anchor: .middle)
+            }
+        }
+
+        if let tag = commit.tag {
+            let tagWidth = ExtraText.width(tag, size: 10, weight: 600) + 14
+            let bannerHeight = 20.0
+            let notch = 6.0
+            let bx = vertical ? p.x + nodeRadius + 8 : p.x - tagWidth / 2
+            let by = vertical ? p.y - bannerHeight - 6 : p.y - nodeRadius - bannerHeight - 8
+            let banner = [
+                ExtraPoint(x: bx, y: by + bannerHeight / 2),
+                ExtraPoint(x: bx + notch, y: by),
+                ExtraPoint(x: bx + notch + tagWidth, y: by),
+                ExtraPoint(x: bx + notch + tagWidth, y: by + bannerHeight),
+                ExtraPoint(x: bx + notch, y: by + bannerHeight)
+            ]
+            scene.polyline(banner, fill: .surface, stroke: .border, width: 1, closed: true)
+            scene.text(tag, x: bx + notch + tagWidth / 2, y: by + bannerHeight / 2 + 3, size: 10, fill: .foreground, anchor: .middle, weight: 600)
+        }
     }
-    let width = pad * 2 + Double(max(chart.commits.count, 1)) * step
-    let height = pad * 2 + Double(max(chart.branches.count, 1)) * lane
-    return ExtraScene(width: width, height: height, items: items)
+
+    // Branch chips: a small pill with the branch name, in its own lane color.
+    for branch in chart.branches {
+        let lane = laneOf[branch.name] ?? 0
+        let width = chipWidth(branch.name)
+        let height = 20.0
+        if vertical {
+            let x = pad + Double(lane) * laneSpan + laneSpan / 2
+            scene.rect(x: x - width / 2, y: pad, width: width, height: height, fill: .series(lane), stroke: .none, corner: 4)
+            scene.text(branch.name, x: x, y: pad + height / 2 + 3, size: 11, fill: .background, anchor: .middle, weight: 600)
+        } else {
+            let y = pad + Double(lane) * laneSpan + laneSpan / 2
+            scene.rect(x: 8, y: y - height / 2, width: width, height: height, fill: .series(lane), stroke: .none, corner: 4)
+            scene.text(branch.name, x: 8 + width / 2, y: y + 3, size: 11, fill: .background, anchor: .middle, weight: 600)
+        }
+    }
+
+    return ExtraScene(width: max(scene.maxX + pad, 120), height: max(scene.maxY + pad, 80), items: scene.items)
 }
 
 func layoutJourney(_ chart: JourneyChart) -> ExtraScene {
