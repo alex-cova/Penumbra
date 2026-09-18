@@ -2,12 +2,14 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct IDERootView: View {
+public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
     @State private var didBootstrap = false
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         let _ = workspace.layoutEpoch
         VStack(spacing: 0) {
             IDEToolbarPanel()
@@ -75,6 +77,12 @@ struct IDERootView: View {
         }
         return !providers.isEmpty
     }
+}
+
+#Preview {
+    IDERootView()
+        .environment(IDEWorkspace())
+        .frame(width: 1100, height: 700)
 }
 
 private struct IDESidebarResizeHandle: View {

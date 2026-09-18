@@ -1,10 +1,14 @@
 import SwiftUI
 
-struct IDEPreferencesView: View {
+public struct IDEPreferencesView: View {
     @Bindable var preferences: IDEPreferences
     @Environment(IDEWorkspace.self) private var workspace
 
-    var body: some View {
+    public init(preferences: IDEPreferences) {
+        self.preferences = preferences
+    }
+
+    public var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {

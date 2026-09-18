@@ -175,7 +175,7 @@ swift test --filter ClassName/testMethodName  # run one test method
 
 There is no separate lint/format script wired into SPM; SwiftLint config lives at `.swiftlint.yml` (run `swiftlint` directly if installed). `swiftgen.yml` regenerates `Sources/Penumbra/Library/L10n.swift` from `Localizable.strings` — don't hand-edit that generated file.
 
-**Umbra** (`swift run Umbra`, `Scripts/build-app.sh`) is the Sublime Text–style editor product; `Example/Umbra` is its SPM executable target and source tree.
+**Umbra** (`swift run Umbra`, `Scripts/build-app.sh`) is the Sublime Text–style editor product; `Example/Umbra` is its SPM executable target and source tree (app shell, views, `IDEWorkspace`, and `UmbraApp.swift`/`@main`). `Example/Umbra.xcodeproj` is a thin, separately maintained Xcode app project that compiles the same source files directly as a native app target — needed because a SwiftPM executable target can't host SwiftUI Previews (`ENABLE_DEBUG_DYLIB`); it's a dev convenience for Previews/Run/Debug only and isn't used for release builds. See `Example/README.md` for details.
 
 ## Architecture
 

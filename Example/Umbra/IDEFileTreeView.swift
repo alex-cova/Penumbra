@@ -121,3 +121,24 @@ private struct IDEFileTreeRow: View {
         node.isDirectory && depth == 0 ? node.url.lastPathComponent : node.name
     }
 }
+
+#Preview {
+    IDEFileTreeView(
+        project: {
+            let project = IDEProjectModel()
+            project.setRoot(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
+            return project
+        }(),
+        onOpenFile: { _ in }
+    )
+    .frame(width: 240, height: 320)
+    .background(IDEAppearance.ColorToken.sidebar)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Empty") {
+    IDEFileTreeView(project: IDEProjectModel(), onOpenFile: { _ in })
+        .frame(width: 240, height: 320)
+        .background(IDEAppearance.ColorToken.sidebar)
+        .preferredColorScheme(.dark)
+}

@@ -5,8 +5,8 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class IDEPreferences {
-    static let shared = IDEPreferences()
+public final class IDEPreferences {
+    public static let shared = IDEPreferences()
 
     private enum Keys {
         static let fontSize = "com.umbra.editor.fontSize"

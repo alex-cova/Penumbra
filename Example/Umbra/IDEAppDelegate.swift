@@ -4,19 +4,23 @@ import AppKit
 /// `.prohibited` activation policy, so windows can appear but never become key.
 /// Restore `.regular` before activation, then key the windows after SwiftUI creates them.
 @MainActor
-final class IDEAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationWillFinishLaunching(_ notification: Notification) {
+public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
+    public override init() {
+        super.init()
+    }
+
+    public func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         Task { @MainActor in
             Self.activateAndKeyWindows()
         }
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Self.activateAndKeyWindows()
         return true
     }

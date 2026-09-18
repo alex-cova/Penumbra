@@ -5,3 +5,9 @@
 Tools/PerfHarness/Fixtures/
 Example/Umbra/.build
 dist
+
+# Xcode user-specific state (shared schemes/workspace data are tracked)
+.swiftpm/xcode/**/xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Example/Umbra.xcodeproj/xcuserdata/
+Example/Umbra.xcodeproj/project.xcworkspace/xcuserdata/

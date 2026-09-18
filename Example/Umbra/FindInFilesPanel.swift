@@ -174,3 +174,36 @@ private struct FindInFilesEmptyState: View {
         .padding(.horizontal, IDEAppearance.Spacing.md)
     }
 }
+
+#Preview {
+    FindInFilesPanel()
+        .environment({
+            let workspace = IDEWorkspace()
+            workspace.findInFilesQuery = "TODO"
+            workspace.findInFilesStatus = "2 results"
+            workspace.findInFilesHits = [
+                ProjectSearchResult(
+                    url: URL(fileURLWithPath: "/project/src/ui/Editor.swift"),
+                    line: 41,
+                    column: 4,
+                    preview: "    // TODO: handle multi-caret paste",
+                    range: TextRange(
+                        start: TextPosition(line: 41, column: 4, utf16Offset: 0),
+                        end: TextPosition(line: 41, column: 8, utf16Offset: 4)
+                    )
+                ),
+                ProjectSearchResult(
+                    url: URL(fileURLWithPath: "/project/src/ui/Sidebar.swift"),
+                    line: 12,
+                    column: 8,
+                    preview: "        // TODO: restore scroll position",
+                    range: TextRange(
+                        start: TextPosition(line: 12, column: 8, utf16Offset: 0),
+                        end: TextPosition(line: 12, column: 12, utf16Offset: 4)
+                    )
+                )
+            ]
+            return workspace
+        }())
+        .preferredColorScheme(.dark)
+}

@@ -70,12 +70,27 @@ swift run Umbra --open path/to/file.swift
 
 ```
 Example/
-├── Umbra/               # Umbra app source (SwiftUI shell + IDEWorkspace)
-├── umbra.icon/          # App icon (Icon Composer); compiled at build time
-└── Resources/           # Info.plist, entitlements
+├── Umbra/               # App source — SwiftUI shell, views, IDEWorkspace, and UmbraApp.swift (@main)
+├── Umbra.xcodeproj/      # Thin Xcode project for Previews/Run/Debug (dev convenience, not for release)
+├── umbra.icon/           # App icon (Icon Composer); compiled at build time
+└── Resources/             # Info.plist, entitlements
 ```
 
-The SPM executable target is named `Umbra` in the root `Package.swift`.
+The SPM executable target is named `Umbra` in the root `Package.swift`; it's what
+`Scripts/build-app.sh` and CI build for release.
+
+### SwiftUI Previews
+
+A SwiftUI Preview hosted inside a SwiftPM executable target fails with *"needs the build setting
+`ENABLE_DEBUG_DYLIB` set to `YES`"*, because SwiftPM executables can't produce the debug-dylib split
+Previews require — regardless of which file you're previewing. To preview any view in `Example/Umbra/`
+(e.g. `IDEPreferencesView.swift`), open **`Example/Umbra.xcodeproj`** and select the `Umbra` scheme —
+a thin Xcode app project that compiles the same source files directly as a real app target, which gets
+`ENABLE_DEBUG_DYLIB` for free. It also gives you ⌘R to run/debug a real bundle. It's a dev convenience
+only — it doesn't build or ship the release `.app`.
+
+Previews fail under the package's `Umbra` or `Penumbra-Package` schemes by design — both run the
+SwiftPM executable.
 
 ## Building `Umbra.app`
 

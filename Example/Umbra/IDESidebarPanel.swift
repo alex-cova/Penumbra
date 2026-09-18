@@ -29,3 +29,14 @@ struct IDESidebarPanel: View {
         .focusable(false)
     }
 }
+
+#Preview {
+    IDESidebarPanel()
+        .environment({
+            let workspace = IDEWorkspace()
+            workspace.project.setRoot(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
+            return workspace
+        }())
+        .frame(width: 240, height: 480)
+        .preferredColorScheme(.dark)
+}

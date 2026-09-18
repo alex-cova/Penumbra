@@ -269,3 +269,15 @@ private struct IDESplitHandle: View {
         }
     }
 }
+
+#Preview("Split Stack") {
+    IDESplitStack(axis: .horizontal, childCount: 3) { index in
+        Color(hue: Double(index) / 3, saturation: 0.4, brightness: 0.6)
+            .overlay {
+                Text("Pane \(index)")
+                    .foregroundStyle(.white)
+            }
+    }
+    .frame(width: 640, height: 360)
+    .preferredColorScheme(.dark)
+}

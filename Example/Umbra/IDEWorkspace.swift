@@ -21,7 +21,7 @@ struct IDEHeaderContext: Equatable {
 
 @MainActor
 @Observable
-final class IDEWorkspace {
+public final class IDEWorkspace {
     private static let languageProvider = BundledLanguageProvider()
 
     private let workbench = EditorWorkbench()
@@ -34,8 +34,10 @@ final class IDEWorkspace {
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
 
-    let preferences = IDEPreferences.shared
+    public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
+
+    public init() {}
 
     var isSidebarVisible = true
     var chromeOpacity = 1.0
@@ -107,7 +109,7 @@ final class IDEWorkspace {
 
     // MARK: - Commands
 
-    func newFile() {
+    public func newFile() {
         let document = WorkbenchDocument(
             displayName: "Untitled",
             text: "",
@@ -122,7 +124,7 @@ final class IDEWorkspace {
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
-    func openFile() {
+    public func openFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -133,7 +135,7 @@ final class IDEWorkspace {
         }
     }
 
-    func openFolder() {
+    public func openFolder() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -145,15 +147,15 @@ final class IDEWorkspace {
         }
     }
 
-    func openRecentFile(_ url: URL) {
+    public func openRecentFile(_ url: URL) {
         Task { await openDocument(from: url) }
     }
 
-    var recentFileURLs: [URL] {
+    public var recentFileURLs: [URL] {
         recentFiles
     }
 
-    func saveActiveDocument() async {
+    public func saveActiveDocument() async {
         let pane = workbench.activePane
         guard let document = pane.selectedDocument else { return }
         let textView = host(for: pane.id).textView
@@ -174,7 +176,7 @@ final class IDEWorkspace {
         }
     }
 
-    func saveActiveDocumentAs() async {
+    public func saveActiveDocumentAs() async {
         let pane = workbench.activePane
         guard let document = pane.selectedDocument else { return }
         let textView = host(for: pane.id).textView
@@ -191,42 +193,42 @@ final class IDEWorkspace {
         }
     }
 
-    func closeActiveTab() {
+    public func closeActiveTab() {
         guard let document = workbench.activePane.selectedDocument else { return }
         closeDocument(document.id, in: workbench.activePane)
     }
 
-    func showCommandPalette() {
+    public func showCommandPalette() {
         host(for: workbench.activePaneID).paletteController.presentFindAction()
         focusActiveEditor()
     }
 
-    func showQuickOpen() {
+    public func showQuickOpen() {
         host(for: workbench.activePaneID).paletteController.presentQuickOpen()
         focusActiveEditor()
     }
 
-    func showGoToSymbol() {
+    public func showGoToSymbol() {
         host(for: workbench.activePaneID).paletteController.presentSymbols()
         focusActiveEditor()
     }
 
-    func showGoToLine() {
+    public func showGoToLine() {
         host(for: workbench.activePaneID).paletteController.presentGoToLine()
         focusActiveEditor()
     }
 
-    func showFind() {
+    public func showFind() {
         adapter.textView?.perform(.toggleFindPanel)
         focusActiveEditor()
     }
 
-    func showReplace() {
+    public func showReplace() {
         adapter.textView?.perform(.toggleReplacePanel)
         focusActiveEditor()
     }
 
-    func showFindInFiles() {
+    public func showFindInFiles() {
         isFindInFilesVisible = true
         if findInFilesStatus.isEmpty {
             findInFilesStatus = project.rootURL == nil
@@ -276,30 +278,30 @@ final class IDEWorkspace {
         Task { await openDocument(from: hit.url, selecting: range) }
     }
 
-    func splitRight() {
+    public func splitRight() {
         workbench.splitActivePane(edge: .trailing)
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
-    func splitDown() {
+    public func splitDown() {
         workbench.splitActivePane(edge: .bottom)
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
-    func closeActivePane() {
+    public func closeActivePane() {
         closePane(workbench.activePaneID)
     }
 
-    func toggleSidebar() {
+    public func toggleSidebar() {
         isSidebarVisible.toggle()
         focusActiveEditor()
     }
 
-    func toggleMarkdownPreview() {
+    public func toggleMarkdownPreview() {
         adapter.textView?.perform(.toggleMarkdownPreview)
         focusActiveEditor()
     }
@@ -328,7 +330,7 @@ final class IDEWorkspace {
         focusActiveEditor()
     }
 
-    func toggleTypewriterScrolling() {
+    public func toggleTypewriterScrolling() {
         guard let textView = adapter.textView else { return }
         textView.isTypewriterScrollingEnabled.toggle()
         if textView.isTypewriterScrollingEnabled {
@@ -337,7 +339,7 @@ final class IDEWorkspace {
         focusActiveEditor()
     }
 
-    func toggleDistractionFreeMode() {
+    public func toggleDistractionFreeMode() {
         adapter.textView?.isDistractionFreeModeEnabled.toggle()
         focusActiveEditor()
     }
@@ -348,23 +350,23 @@ final class IDEWorkspace {
         focusActiveEditor()
     }
 
-    var showLineNumbersBinding: Binding<Bool> {
+    public var showLineNumbersBinding: Binding<Bool> {
         preferenceBinding(\.showLineNumbers)
     }
 
-    var isLineFoldingEnabledBinding: Binding<Bool> {
+    public var isLineFoldingEnabledBinding: Binding<Bool> {
         preferenceBinding(\.isLineFoldingEnabled)
     }
 
-    var wrapLinesBinding: Binding<Bool> {
+    public var wrapLinesBinding: Binding<Bool> {
         preferenceBinding(\.wrapLines)
     }
 
-    var showMinimapBinding: Binding<Bool> {
+    public var showMinimapBinding: Binding<Bool> {
         preferenceBinding(\.showMinimap)
     }
 
-    var isMetalRenderingEnabledBinding: Binding<Bool> {
+    public var isMetalRenderingEnabledBinding: Binding<Bool> {
         preferenceBinding(\.isMetalRenderingEnabled)
     }
 
@@ -849,15 +851,15 @@ final class IDEWorkspace {
 }
 
 extension IDEWorkspace: TextViewDelegate {
-    func textViewDidChangeSelection(_ textView: TextView) {
+    public func textViewDidChangeSelection(_ textView: TextView) {
         updateStatus(from: textView)
     }
 
-    func textViewDidChange(_ textView: TextView) {
+    public func textViewDidChange(_ textView: TextView) {
         refreshPresentation()
     }
 
-    func textView(
+    public func textView(
         _ textView: TextView,
         didChangeDistractionFreeChromeVisibility isVisible: Bool,
         transitionDuration: TimeInterval
