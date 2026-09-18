@@ -50,6 +50,7 @@ public final class IDEWorkspace {
     var statusLine = 1
     var statusColumn = 1
     var statusLanguage = ""
+    var isMarkdownPreviewVisible = false
     var statusSelectionLength = 0
     var statusRenderer = "Core Graphics"
     var tabsByPane: [UUID: [IDETabRow]] = [:]
@@ -118,10 +119,39 @@ public final class IDEWorkspace {
         )
         workbench.openDocument(document)
         showsWelcome = false
-        rebuildLayoutHosts()
+        // Layout is unchanged — only the active pane's selected document is. Reloading every
+        // pane here used to bump a file-backed document's `contentGeneration` and then rebuild
+        // sibling split panes from empty `document.text`, blanking both editors.
+        let pane = workbench.activePane
+        showDocument(in: pane, host: host(for: pane.id))
         activatePane(workbench.activePaneID)
+        layoutEpoch += 1
         refreshPresentation()
         Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    /// Sets the syntax highlighting language for the given pane's selected document (the active
+    /// pane by default), the way Sublime Text's "View > Syntax" / status bar syntax picker does.
+    /// `identifier` is a ``LanguageIdentifier`` string, or `nil` for plain text — needed since
+    /// `newFile()` opens documents with no language and today gives the user no way to pick one.
+    public func setLanguage(identifier: String?, in pane: EditorPane? = nil) {
+        let targetPane = pane ?? workbench.activePane
+        guard let document = targetPane.selectedDocument else { return }
+        document.languageIdentifier = identifier
+        document.language = IDELanguageSupport.language(forIdentifier: identifier)
+
+        let languageMode: LanguageMode
+        if let language = document.language {
+            languageMode = TreeSitterLanguageMode(language: language, languageProvider: Self.languageProvider)
+        } else {
+            languageMode = PlainTextLanguageMode()
+        }
+        host(for: targetPane.id).textView.setLanguageMode(languageMode)
+
+        if targetPane.id == workbench.activePaneID {
+            statusLanguage = identifier ?? ""
+        }
+        Task { await workspaceBridge.syncPane(targetPane) }
     }
 
     public func openFile() {
@@ -286,6 +316,24 @@ public final class IDEWorkspace {
         split(edge: .bottom)
     }
 
+    /// Pane-scoped variants for the tab context menu, so right-clicking a tab in a pane that
+    /// isn't currently active still splits that pane rather than whichever one is.
+    func splitRight(in paneID: UUID) {
+        guard workbench.layout.findPane(id: paneID) != nil else { return }
+        if paneID != workbench.activePaneID {
+            activatePane(paneID)
+        }
+        splitRight()
+    }
+
+    func splitDown(in paneID: UUID) {
+        guard workbench.layout.findPane(id: paneID) != nil else { return }
+        if paneID != workbench.activePaneID {
+            activatePane(paneID)
+        }
+        splitDown()
+    }
+
     /// Splits the active pane, opening its currently selected document into the new pane too —
     /// two views on the same file, like Sublime Text/VS Code. The two panes reconcile on focus
     /// switch (`activatePane`'s outgoing sync + `showDocument`'s same-document refresh) rather
@@ -319,7 +367,25 @@ public final class IDEWorkspace {
 
     public func toggleMarkdownPreview() {
         adapter.textView?.perform(.toggleMarkdownPreview)
+        isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
         focusActiveEditor()
+    }
+
+    /// Exports the currently visible markdown preview to a PDF the user picks a location for.
+    /// No-op when the preview isn't shown (there's nothing rendered to export yet).
+    public func exportMarkdownPreviewToPDF() {
+        guard let host = hostCache.peek(workbench.activePaneID),
+              let data = host.markdownPreviewController.exportPDFData(),
+              let document = workbench.activePane.selectedDocument else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = (document.displayName as NSString).deletingPathExtension
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? data.write(to: url)
+        }
     }
 
     func toggleMinimap() {
@@ -455,6 +521,80 @@ public final class IDEWorkspace {
             pane = workbench.activePane
         }
         closeDocument(id, in: pane)
+    }
+
+    /// Closes every tab in `paneID` except `id`.
+    func closeOtherTabs(_ id: UUID, in paneID: UUID) {
+        guard let pane = workbench.layout.findPane(id: paneID) else { return }
+        for document in pane.documents where document.id != id {
+            closeDocument(document.id, in: pane)
+        }
+    }
+
+    /// Closes every tab to the right of `id` within `paneID`, tab-order matching `pane.documents`.
+    func closeTabsToRight(_ id: UUID, in paneID: UUID) {
+        guard let pane = workbench.layout.findPane(id: paneID),
+              let index = pane.documents.firstIndex(where: { $0.id == id }) else { return }
+        for document in pane.documents[(index + 1)...] {
+            closeDocument(document.id, in: pane)
+        }
+    }
+
+    /// Closes every tab in `paneID`, which in turn closes the pane itself once it's empty.
+    func closeAllTabs(in paneID: UUID) {
+        guard let pane = workbench.layout.findPane(id: paneID) else { return }
+        for document in pane.documents {
+            closeDocument(document.id, in: pane)
+        }
+    }
+
+    /// Collapses the split layout back to a single pane by closing every pane except `paneID`.
+    func unsplit(from paneID: UUID) {
+        let otherPaneIDs = workbench.panes.map(\.id).filter { $0 != paneID }
+        guard !otherPaneIDs.isEmpty else { return }
+        for otherPaneID in otherPaneIDs {
+            workbench.closePane(otherPaneID)
+            hostCache.remove(otherPaneID)
+            hostedPaneIDs.remove(otherPaneID)
+        }
+        workbench.activatePane(paneID)
+        rebuildLayoutHosts()
+        activatePane(workbench.activePaneID)
+        showsWelcome = !hasOpenDocuments
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    /// Renames the tab's underlying file on disk (or, for an unsaved document, just its
+    /// in-memory display name) via a simple name-prompt alert.
+    func renameTab(_ id: UUID, in paneID: UUID) {
+        guard let pane = workbench.layout.findPane(id: paneID),
+              let document = pane.documents.first(where: { $0.id == id }) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename File"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(string: document.displayName)
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, newName != document.displayName else { return }
+
+        if let currentURL = document.url {
+            let destination = currentURL.deletingLastPathComponent().appendingPathComponent(newName)
+            do {
+                try FileManager.default.moveItem(at: currentURL, to: destination)
+            } catch {
+                presentError(error)
+                return
+            }
+            document.url = destination
+        }
+        document.displayName = newName
+        refreshPresentation()
     }
 
     func makeSession(sidebarWidth: Double) -> AppSession {
@@ -727,6 +867,7 @@ public final class IDEWorkspace {
             }
         }
         tabsByPane = tabs
+        isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · Umbra"
             let newContext = IDEHeaderContext(
@@ -790,9 +931,9 @@ public final class IDEWorkspace {
     private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument, from host: IDEEditorPaneHost) {
         var changed = false
         if document.isFileBacked {
-            // No single comparable value to check inexpensively (`document.text` stays empty by
-            // design); treat every sync of a file-backed document as a potential change.
-            changed = true
+            // File-backed `document.text` is empty by design, so compare the live buffer's
+            // generation rather than treating every sync (tab switch, ⌘N) as an edit.
+            changed = host.loadedBufferGeneration != textView.contentGeneration
         } else {
             let newText = textView.text
             if newText != document.text {
@@ -802,6 +943,7 @@ public final class IDEWorkspace {
         }
         document.selectedRange = textView.selectedRange
         document.scrollOffset = textView.contentOffset
+        host.loadedBufferGeneration = textView.contentGeneration
         if changed {
             document.contentGeneration &+= 1
             host.loadedGeneration = document.contentGeneration
@@ -809,19 +951,25 @@ public final class IDEWorkspace {
     }
 
     /// The freshest known text for `document`: the live content of whichever open pane's host is
-    /// currently caught up with `document.contentGeneration`, falling back to `document.text` when
-    /// no host has this document loaded yet (a genuinely new document) or is up to date (a
-    /// file-backed document whose content only lives in the loaded host's `TextView`, never in
-    /// `document.text`).
+    /// currently caught up with `document.contentGeneration`, then any host still showing this
+    /// document (its buffer is valid even if a sibling just bumped generation), then
+    /// `document.text`. File-backed documents keep `text` empty, so the host fallbacks are what
+    /// stop a tab/split switch from rebuilding an empty editor.
     private func sourceText(for document: WorkbenchDocument) -> String {
+        var staleHostText: String?
         for pane in workbench.panes {
             guard let host = hostCache.peek(pane.id),
-                  host.loadedDocumentID == document.id,
-                  host.loadedGeneration == document.contentGeneration
+                  host.loadedDocumentID == document.id
             else { continue }
-            return host.textView.text
+            let text = host.textView.text
+            if host.loadedGeneration == document.contentGeneration {
+                return text
+            }
+            if staleHostText == nil {
+                staleHostText = text
+            }
         }
-        return document.text
+        return staleHostText ?? document.text
     }
 
     private func showDocument(
@@ -833,8 +981,8 @@ public final class IDEWorkspace {
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
         adapter.bindNavigationHistory(to: host.textView, document: document)
-        let isSameDocument = host.loadedDocumentID == document.id && document.pendingState == nil
-        if isSameDocument, host.loadedGeneration == document.contentGeneration {
+        let isSameDocument = host.loadedDocumentID == document.id
+        if isSameDocument, document.pendingState == nil, host.loadedGeneration == document.contentGeneration {
             return
         }
         if isSameDocument {
@@ -848,11 +996,28 @@ public final class IDEWorkspace {
            previousID != document.id,
            let previous = pane.documents.first(where: { $0.id == previousID }) {
             syncTextViewToDocument(host.textView, document: previous, from: host)
+            // File-backed documents don't store text on the model. Snapshot the live buffer
+            // before this TextView is overwritten so switching back (or a sibling pane
+            // picking up edits) can restore it instead of rebuilding from empty `text`.
+            previous.pendingState = host.textView.makeCapturedState()
         }
         if let state = document.pendingState {
             document.pendingState = nil
             host.applyGate.bump()
             applyState(state, for: document, in: pane, host: host)
+            return
+        }
+        // Untitled / empty in-memory buffers can apply on the main queue immediately. Doing
+        // this through `prepareAndApply` raced sibling panes: they would reload from empty
+        // `document.text` while this pane still held the previous file's buffer.
+        if !document.isFileBacked, document.text.isEmpty {
+            host.applyGate.bump()
+            applyState(
+                TextViewState(text: "", theme: IDEEditorTheme.shared),
+                for: document,
+                in: pane,
+                host: host
+            )
             return
         }
         let generation = host.applyGate.bump()
@@ -896,6 +1061,7 @@ public final class IDEWorkspace {
         preferences.apply(to: host.textView)
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration
+        host.loadedBufferGeneration = host.textView.contentGeneration
         host.textView.layoutSubtreeIfNeeded()
         // `setState` above does not route through `textViewDidChange`, so a preview left open
         // from the previous document in this pane would otherwise keep showing stale content

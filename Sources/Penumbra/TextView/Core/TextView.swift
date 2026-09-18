@@ -100,7 +100,9 @@ public struct MetalPerformanceStats: Sendable {
         return StringFindTextSource(textInputView.string as String)
     }
 
-    var contentGeneration: UInt64 {
+    /// Bumped on every mutation of the live buffer. Hosts can compare this across tab switches
+    /// to detect edits without reading ``text`` (which materializes file-backed documents).
+    public var contentGeneration: UInt64 {
         textInputView.stringView.contentGeneration
     }
 
@@ -1373,6 +1375,16 @@ public struct MetalPerformanceStats: Sendable {
         textInputView.setState(state, addUndoAction: addUndoAction)
         hasPendingContentSizeUpdate = true
         setNeedsLayout()
+    }
+
+    /// Snapshots the live buffer, line index, and language mode without copying document text.
+    ///
+    /// The returned state aliases the objects currently installed on this view. After a subsequent
+    /// ``setState(_:addUndoAction:)``, those objects are no longer used here and the snapshot is
+    /// their unique owner — safe to re-apply to restore this document (tab switch, split-pane
+    /// handoff) without going through empty ``WorkbenchDocument/text`` on a file-backed buffer.
+    public func makeCapturedState() -> TextViewState {
+        textInputView.makeCapturedState()
     }
 
     /// Whether the current language mode has finished its initial syntax parse.

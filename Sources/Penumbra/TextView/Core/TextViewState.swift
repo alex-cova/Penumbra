@@ -162,6 +162,30 @@ public final class TextViewState: @unchecked Sendable {
         detectedIndentStrategy = languageMode.detectIndentStrategy()
     }
 
+    /// Wraps a text view's currently installed buffer without copying text or rebuilding the line
+    /// index. After a later ``TextView/setState(_:addUndoAction:)`` on that view, these objects are
+    /// no longer installed there and this state is their unique owner — safe to re-apply to restore
+    /// the document (e.g. switching back from a new untitled tab).
+    init(
+        transferringStringView stringView: StringView,
+        lineManager: LineManager,
+        languageMode: InternalLanguageMode,
+        theme: Theme,
+        parsePolicy: SyntaxParsePolicy,
+        detectedIndentStrategy: DetectedIndentStrategy,
+        detectedLineEndings: LineEnding?,
+        lengthOfLongestLine: Int?
+    ) {
+        self.stringView = stringView
+        self.lineManager = lineManager
+        self.languageMode = languageMode
+        self.theme = theme
+        self.parsePolicy = parsePolicy
+        self.detectedIndentStrategy = detectedIndentStrategy
+        self.detectedLineEndings = detectedLineEndings
+        self.lengthOfLongestLine = lengthOfLongestLine
+    }
+
     private init(
         stringView: StringView,
         theme: Theme,

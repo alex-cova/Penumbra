@@ -1361,6 +1361,19 @@ final class TextInputView: UIView, UITextInput {
         startDeferredParseIfNeeded(for: state, generation: parseGeneration)
     }
 
+    func makeCapturedState() -> TextViewState {
+        TextViewState(
+            transferringStringView: stringView,
+            lineManager: lineManager,
+            languageMode: languageMode,
+            theme: theme,
+            parsePolicy: syntaxParsePolicy,
+            detectedIndentStrategy: detectIndentStrategy(),
+            detectedLineEndings: lineEndings,
+            lengthOfLongestLine: lineManager.initialLongestLine?.data.totalLength
+        )
+    }
+
     func clearSelection() {
         selection = nil
     }

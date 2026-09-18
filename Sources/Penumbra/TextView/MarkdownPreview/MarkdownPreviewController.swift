@@ -110,6 +110,13 @@ public final class MarkdownPreviewController: NSObject {
         return true
     }
 
+    /// Renders the currently visible preview into PDF data. Returns `nil` when the preview isn't
+    /// shown (nothing rendered to export) or the buffer hasn't parsed yet.
+    public func exportPDFData() -> Data? {
+        guard isPreviewVisible else { return nil }
+        return previewView.renderedDocumentPDFData()
+    }
+
     public func closeIfNotMarkdown() {
         guard textView?.languageIdentifier != "markdown" else { return }
         hidePreview()

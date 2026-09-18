@@ -17,6 +17,10 @@ final class IDEEditorPaneHost: NSView {
     /// lets two panes sharing one document (from a split) tell a same-document refresh (this
     /// pane's own edits reapplied) apart from picking up an edit made in the *other* pane.
     var loadedGeneration: UInt64 = 0
+    /// `TextView.contentGeneration` as of the last load/sync. Compared on the next sync so a
+    /// file-backed document (whose `text` is empty by design) is only treated as edited when
+    /// the live buffer actually changed — not on every tab switch or ⌘N.
+    var loadedBufferGeneration: UInt64 = 0
     /// This pane's own scroll/selection, captured just before a reload triggered by the shared
     /// document changing underneath it. Preferred over `document.selectedRange`/`scrollOffset`
     /// on that reload so one pane's edits don't yank the other pane's viewport around.

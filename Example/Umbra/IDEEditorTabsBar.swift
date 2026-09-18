@@ -16,7 +16,7 @@ struct IDEEditorTabsBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(tabs) { tab in
-                    IDEEditorTabItem(tab: tab) {
+                    IDEEditorTabItem(tab: tab, paneID: paneID) {
                         workspace.selectTab(tab.id, in: paneID)
                     } onClose: {
                         workspace.closeTab(tab.id, in: paneID)
@@ -40,9 +40,11 @@ struct IDEEditorTabsBar: View {
 
 private struct IDEEditorTabItem: View {
     let tab: IDETabRow
+    let paneID: UUID
     let onSelect: () -> Void
     let onClose: () -> Void
 
+    @Environment(IDEWorkspace.self) private var workspace
     @State private var isHovering = false
 
     /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
@@ -78,6 +80,22 @@ private struct IDEEditorTabItem: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Split Editor Right") { workspace.splitRight(in: paneID) }
+            Button("Split Editor Down") { workspace.splitDown(in: paneID) }
+            Divider()
+            Button("Rename File…") { workspace.renameTab(tab.id, in: paneID) }
+            Divider()
+            Button("Close") { workspace.closeTab(tab.id, in: paneID) }
+            Button("Close Other Tabs") { workspace.closeOtherTabs(tab.id, in: paneID) }
+                .disabled(!hasOtherTabs)
+            Button("Close Tabs to the Right") { workspace.closeTabsToRight(tab.id, in: paneID) }
+                .disabled(!hasTabsToRight)
+            Button("Close All") { workspace.closeAllTabs(in: paneID) }
+            Divider()
+            Button("Unsplit") { workspace.unsplit(from: paneID) }
+                .disabled(!hasMultiplePanes)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .focusable(false)
@@ -91,6 +109,23 @@ private struct IDEEditorTabItem: View {
             return IDEAppearance.ColorToken.tabHover
         }
         return IDEAppearance.ColorToken.tabInactive
+    }
+
+    private var paneTabs: [IDETabRow] {
+        workspace.tabsByPane[paneID] ?? []
+    }
+
+    private var hasOtherTabs: Bool {
+        paneTabs.count > 1
+    }
+
+    private var hasTabsToRight: Bool {
+        guard let index = paneTabs.firstIndex(where: { $0.id == tab.id }) else { return false }
+        return index < paneTabs.count - 1
+    }
+
+    private var hasMultiplePanes: Bool {
+        workspace.tabsByPane.count > 1
     }
 }
 

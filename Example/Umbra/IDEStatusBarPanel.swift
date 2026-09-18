@@ -4,10 +4,19 @@ struct IDEStatusBarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(statusSummary)
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Text(leadingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("·")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            syntaxPicker
+            if workspace.statusSelectionLength > 0 {
+                Text("·  \(workspace.statusSelectionLength) selected")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
             Spacer()
             Text(trailingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
@@ -24,18 +33,26 @@ struct IDEStatusBarPanel: View {
         .focusable(false)
     }
 
-    private var statusSummary: String {
-        var parts = [
-            "Ln \(workspace.statusLine)",
-            "Col \(workspace.statusColumn)"
-        ]
-        if !workspace.statusLanguage.isEmpty {
-            parts.append(workspace.statusLanguage.capitalized)
+    /// Sublime-style clickable syntax name — the only way to set a language on a document that
+    /// doesn't have one yet (e.g. a freshly created "Untitled" file from Cmd+N).
+    private var syntaxPicker: some View {
+        Menu {
+            ForEach(IDELanguageSupport.selectableSyntaxes) { option in
+                Button(option.displayName) {
+                    workspace.setLanguage(identifier: option.id)
+                }
+            }
+        } label: {
+            Text(IDELanguageSupport.displayName(forIdentifier: workspace.statusLanguage.isEmpty ? nil : workspace.statusLanguage))
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
-        if workspace.statusSelectionLength > 0 {
-            parts.append("\(workspace.statusSelectionLength) selected")
-        }
-        return parts.joined(separator: "  ·  ")
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var leadingSummary: String {
+        "Ln \(workspace.statusLine)  ·  Col \(workspace.statusColumn)"
     }
 
     private var trailingSummary: String {

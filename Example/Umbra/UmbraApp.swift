@@ -81,6 +81,14 @@ struct UmbraApp: App {
                 Toggle("Word Wrap", isOn: workspace.wrapLinesBinding)
                 Toggle("Minimap", isOn: workspace.showMinimapBinding)
                 Divider()
+                Menu("Syntax") {
+                    ForEach(IDELanguageSupport.selectableSyntaxes) { option in
+                        Button(option.displayName) {
+                            workspace.setLanguage(identifier: option.id)
+                        }
+                    }
+                }
+                Divider()
                 Button("Toggle Typewriter Scrolling", action: workspace.toggleTypewriterScrolling)
                 Button("Toggle Distraction Free", action: workspace.toggleDistractionFreeMode)
                 Toggle("Use Metal Renderer", isOn: workspace.isMetalRenderingEnabledBinding)

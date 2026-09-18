@@ -209,6 +209,15 @@ public final class MarkdownPreviewView: NSView {
         metalRenderer.presentIfNeeded()
     }
 
+    /// Renders the full (unclipped) document into a single-page PDF via the same CG drawing path
+    /// used on screen, so this reflects what's currently shown regardless of whether the Metal
+    /// path is active for live display. `nil` when nothing has been parsed yet.
+    func renderedDocumentPDFData() -> Data? {
+        guard document != nil else { return nil }
+        layoutSubtreeIfNeeded()
+        return contentView.dataWithPDF(inside: contentView.bounds)
+    }
+
     private func rasterHeights(for document: MarkdownPreviewDocument) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
         var mermaid: [Int: CGFloat] = [:]
         var images: [Int: CGFloat] = [:]

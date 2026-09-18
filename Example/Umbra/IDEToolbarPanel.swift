@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Full-width chrome row above the sidebar/editor split. Owns the traffic-light gutter, the
 /// sidebar toggle, a breadcrumb for the active document, the Goto Anything field, and pane
-/// actions (split/preview/close) — the one place in the window that reserves
-/// `Spacing.trafficLightsInset`, so nothing below it needs to.
+/// actions (preview/close; split lives in the tab's right-click menu) — the one place in the
+/// window that reserves `Spacing.trafficLightsInset`, so nothing below it needs to.
 struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -25,9 +25,10 @@ struct IDEToolbarPanel: View {
 
             IDEToolbarActionCluster(
                 showsCloseGroup: workspace.tabsByPane.count > 1,
+                isMarkdownFile: workspace.statusLanguage == "markdown",
+                isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
-                splitRight: workspace.splitRight,
-                splitDown: workspace.splitDown,
+                exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
             )
         }
@@ -128,28 +129,28 @@ private struct IDEToolbarPaletteField: View {
 
 private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
+    let isMarkdownFile: Bool
+    let isMarkdownPreviewVisible: Bool
     let toggleMarkdownPreview: () -> Void
-    let splitRight: () -> Void
-    let splitDown: () -> Void
+    let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
-            IDEToolbarIconButton(
-                systemName: "doc.richtext",
-                help: "Toggle Markdown Preview",
-                action: toggleMarkdownPreview
-            )
-            IDEToolbarIconButton(
-                systemName: "rectangle.split.2x1",
-                help: "Split Editor Right",
-                action: splitRight
-            )
-            IDEToolbarIconButton(
-                systemName: "rectangle.split.1x2",
-                help: "Split Editor Down",
-                action: splitDown
-            )
+            if isMarkdownFile {
+                IDEToolbarIconButton(
+                    systemName: "play.fill",
+                    help: "Toggle Markdown Preview",
+                    action: toggleMarkdownPreview
+                )
+                if isMarkdownPreviewVisible {
+                    IDEToolbarIconButton(
+                        systemName: "square.and.arrow.down",
+                        help: "Export Markdown Preview to PDF",
+                        action: exportMarkdownPreviewToPDF
+                    )
+                }
+            }
             if showsCloseGroup {
                 IDEToolbarIconButton(
                     systemName: "rectangle.slash",
