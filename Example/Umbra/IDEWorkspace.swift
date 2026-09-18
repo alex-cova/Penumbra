@@ -279,14 +279,30 @@ public final class IDEWorkspace {
     }
 
     public func splitRight() {
-        workbench.splitActivePane(edge: .trailing)
-        rebuildLayoutHosts()
-        activatePane(workbench.activePaneID)
-        Task { await workspaceBridge.syncWorkbench(workbench) }
+        split(edge: .trailing)
     }
 
     public func splitDown() {
-        workbench.splitActivePane(edge: .bottom)
+        split(edge: .bottom)
+    }
+
+    /// Splits the active pane, opening its currently selected document into the new pane too —
+    /// two views on the same file, like Sublime Text/VS Code. The two panes reconcile on focus
+    /// switch (`activatePane`'s outgoing sync + `showDocument`'s same-document refresh) rather
+    /// than mirroring edits live.
+    private func split(edge: EditorSplitEdge) {
+        let sourcePane = workbench.activePane
+        let sourceHost = host(for: sourcePane.id)
+        let document = sourcePane.selectedDocument
+        if let document {
+            // Flush the active pane's current selection/scroll into the document so the new pane
+            // starts at the same spot, not wherever it was last explicitly synced.
+            syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
+        }
+        let newPane = workbench.splitActivePane(edge: edge)
+        if let document {
+            workbench.openDocument(document, in: newPane)
+        }
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -608,7 +624,7 @@ public final class IDEWorkspace {
         for pane in panes {
             let host = host(for: pane.id)
             if pane.selectedDocument != nil {
-                showDocument(in: pane, host: host, reloadOnlyIfNeeded: true)
+                showDocument(in: pane, host: host)
             }
         }
         layoutEpoch += 1
@@ -649,6 +665,8 @@ public final class IDEWorkspace {
         palette.commandRegistry.register([
             EditorCommand(id: "app.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
+            EditorCommand(id: "app.splitDown", title: "Split Editor Down", group: "View",
+                          action: { [weak self] in self?.splitDown() }),
             EditorCommand(id: "app.toggleSidebar", title: "Toggle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleSidebar() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
@@ -672,6 +690,16 @@ public final class IDEWorkspace {
         let sameDocument = host.loadedDocumentID == workbench.activePane.selectedDocumentID
         if alreadyActive && sameDocument {
             return
+        }
+        // Sync whichever pane is currently wired up (identified by `adapter.textView`, not
+        // `workbench.activePaneID` — a caller such as `split(edge:)` may have already moved that
+        // forward) into its document before switching away, so a second pane on the same document
+        // picks up these edits instead of showing stale content.
+        if let outgoingTextView = adapter.textView, outgoingTextView !== host.textView,
+           let outgoingPane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === outgoingTextView }),
+           let outgoingHost = hostCache.peek(outgoingPane.id),
+           let outgoingDocument = outgoingPane.selectedDocument {
+            syncTextViewToDocument(outgoingTextView, document: outgoingDocument, from: outgoingHost)
         }
         workbench.activatePane(paneID)
         activePaneID = workbench.activePaneID
@@ -755,34 +783,71 @@ public final class IDEWorkspace {
         statusRenderer = textView.isMetalRenderingActive ? "Metal" : "Core Graphics"
     }
 
-    private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument) {
-        if !document.isFileBacked {
-            document.text = textView.text
+    /// Writes `textView`'s live content back into `document` and bumps `document.contentGeneration`
+    /// when the content actually changed, so another pane showing the same document (from a split)
+    /// can tell its own loaded content is now stale. `host` is the pane host `textView` belongs to:
+    /// its own content already reflects this generation, so it needs no reload for itself.
+    private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument, from host: IDEEditorPaneHost) {
+        var changed = false
+        if document.isFileBacked {
+            // No single comparable value to check inexpensively (`document.text` stays empty by
+            // design); treat every sync of a file-backed document as a potential change.
+            changed = true
+        } else {
+            let newText = textView.text
+            if newText != document.text {
+                document.text = newText
+                changed = true
+            }
         }
         document.selectedRange = textView.selectedRange
         document.scrollOffset = textView.contentOffset
+        if changed {
+            document.contentGeneration &+= 1
+            host.loadedGeneration = document.contentGeneration
+        }
+    }
+
+    /// The freshest known text for `document`: the live content of whichever open pane's host is
+    /// currently caught up with `document.contentGeneration`, falling back to `document.text` when
+    /// no host has this document loaded yet (a genuinely new document) or is up to date (a
+    /// file-backed document whose content only lives in the loaded host's `TextView`, never in
+    /// `document.text`).
+    private func sourceText(for document: WorkbenchDocument) -> String {
+        for pane in workbench.panes {
+            guard let host = hostCache.peek(pane.id),
+                  host.loadedDocumentID == document.id,
+                  host.loadedGeneration == document.contentGeneration
+            else { continue }
+            return host.textView.text
+        }
+        return document.text
     }
 
     private func showDocument(
         in pane: EditorPane,
-        host: IDEEditorPaneHost,
-        reloadOnlyIfNeeded: Bool = false
+        host: IDEEditorPaneHost
     ) {
         guard let document = pane.selectedDocument else { return }
         host.textView.languageIdentifier = document.languageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
         adapter.bindNavigationHistory(to: host.textView, document: document)
-        if reloadOnlyIfNeeded, host.loadedDocumentID == document.id, document.pendingState == nil {
+        let isSameDocument = host.loadedDocumentID == document.id && document.pendingState == nil
+        if isSameDocument, host.loadedGeneration == document.contentGeneration {
             return
         }
-        if host.loadedDocumentID == document.id, document.pendingState == nil {
-            return
-        }
-        if let previousID = host.loadedDocumentID,
+        if isSameDocument {
+            // A different pane showing this same document (from a split) just synced newer
+            // content into it. Capture this pane's own scroll/selection before reloading so
+            // `applyState` can restore them instead of jumping to wherever the other pane's
+            // cursor happens to be.
+            host.lastSelectedRange = host.textView.selectedRange
+            host.lastScrollOffset = host.textView.contentOffset
+        } else if let previousID = host.loadedDocumentID,
            previousID != document.id,
            let previous = pane.documents.first(where: { $0.id == previousID }) {
-            syncTextViewToDocument(host.textView, document: previous)
+            syncTextViewToDocument(host.textView, document: previous, from: host)
         }
         if let state = document.pendingState {
             document.pendingState = nil
@@ -792,7 +857,7 @@ public final class IDEWorkspace {
         }
         let generation = host.applyGate.bump()
         PenumbraStateBuilder.prepareAndApply(
-            text: document.text,
+            text: sourceText(for: document),
             theme: IDEEditorTheme.shared,
             language: document.language,
             languageProvider: Self.languageProvider,
@@ -811,13 +876,26 @@ public final class IDEWorkspace {
         in pane: EditorPane,
         host: IDEEditorPaneHost
     ) {
+        // A same-document refresh (another pane on the same document just synced newer content)
+        // restores this pane's own captured position; a genuine switch to a different document
+        // uses that document's last-known position instead.
+        let isSameDocumentRefresh = host.loadedDocumentID == document.id
         host.textView.setState(state)
-        host.textView.selectedRange = document.selectedRange
-        if document.scrollOffset != .zero {
+        if isSameDocumentRefresh, let lastSelectedRange = host.lastSelectedRange {
+            host.textView.selectedRange = lastSelectedRange
+        } else {
+            host.textView.selectedRange = document.selectedRange
+        }
+        if isSameDocumentRefresh, let lastScrollOffset = host.lastScrollOffset {
+            host.textView.contentOffset = lastScrollOffset
+        } else if document.scrollOffset != .zero {
             host.textView.contentOffset = document.scrollOffset
         }
+        host.lastSelectedRange = nil
+        host.lastScrollOffset = nil
         preferences.apply(to: host.textView)
         host.loadedDocumentID = document.id
+        host.loadedGeneration = document.contentGeneration
         host.textView.layoutSubtreeIfNeeded()
         // `setState` above does not route through `textViewDidChange`, so a preview left open
         // from the previous document in this pane would otherwise keep showing stale content

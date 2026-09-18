@@ -69,6 +69,7 @@ struct UmbraApp: App {
                 Button("Split Editor Right", systemImage: "rectangle.split.2x1", action: workspace.splitRight)
                     .keyboardShortcut("\\", modifiers: .command)
                 Button("Split Editor Down", systemImage: "rectangle.split.1x2", action: workspace.splitDown)
+                    .keyboardShortcut("\\", modifiers: [.command, .shift])
                 Button("Close Editor Group", systemImage: "rectangle.slash", action: workspace.closeActivePane)
                 Divider()
                 Button("Toggle Sidebar", systemImage: "sidebar.leading", action: workspace.toggleSidebar)

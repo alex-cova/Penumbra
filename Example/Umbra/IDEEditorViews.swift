@@ -13,6 +13,15 @@ final class IDEEditorPaneHost: NSView {
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
+    /// `WorkbenchDocument.contentGeneration` as of the last `setState`/reload into this host —
+    /// lets two panes sharing one document (from a split) tell a same-document refresh (this
+    /// pane's own edits reapplied) apart from picking up an edit made in the *other* pane.
+    var loadedGeneration: UInt64 = 0
+    /// This pane's own scroll/selection, captured just before a reload triggered by the shared
+    /// document changing underneath it. Preferred over `document.selectedRange`/`scrollOffset`
+    /// on that reload so one pane's edits don't yank the other pane's viewport around.
+    var lastSelectedRange: NSRange?
+    var lastScrollOffset: CGPoint?
     var onActivated: (() -> Void)?
 
     init(pane: EditorPane, preferences: IDEPreferences) {
@@ -101,12 +110,16 @@ struct IDEEditorLayoutNode: View {
         case .pane(let pane):
             IDEEditorPaneView(paneID: pane.id)
                 .id(pane.id)
-        case .vertical(let data):
-            IDESplitStack(axis: .horizontal, childCount: data.children.count) { index in
+        case .horizontal(let data):
+            // `.horizontal` means children sit left/right (see `EditorSplitData.split`), i.e. an
+            // HStack. Switch on `data.axis` rather than the enum case so a case/axis mismatch
+            // (the two are always constructed together, but round-trip independently through
+            // `EditorRestorationState`) can't silently invert the split again.
+            IDESplitStack(axis: data.axis == .horizontal ? .horizontal : .vertical, childCount: data.children.count) { index in
                 IDEEditorLayoutNode(layout: data.children[index])
             }
-        case .horizontal(let data):
-            IDESplitStack(axis: .vertical, childCount: data.children.count) { index in
+        case .vertical(let data):
+            IDESplitStack(axis: data.axis == .horizontal ? .horizontal : .vertical, childCount: data.children.count) { index in
                 IDEEditorLayoutNode(layout: data.children[index])
             }
         }
@@ -190,7 +203,7 @@ struct IDESplitStack<Content: View>: View {
 
     private func splitSizes(in size: CGSize) -> [CGFloat] {
         let handleCount = CGFloat(max(childCount - 1, 0))
-        let available = axisLength(size) - handleCount
+        let available = axisLength(size) - handleCount * IDESplitHandle.thickness
         let values = normalizedFractions()
         var result = values.map { ($0 * available).rounded() }
         if let last = result.indices.last {
@@ -229,6 +242,11 @@ struct IDESplitStack<Content: View>: View {
 }
 
 private struct IDESplitHandle: View {
+    /// Total space this handle occupies along the split axis. `splitSizes(in:)` must subtract
+    /// this per divider, not an arbitrary smaller amount, or panes are over-allocated and the
+    /// last one overflows the stack.
+    static let thickness: CGFloat = 6
+
     let axis: Axis
     let onDrag: (CGFloat) -> Void
 
@@ -238,8 +256,8 @@ private struct IDESplitHandle: View {
         ZStack {
             Color.clear
                 .frame(
-                    width: axis == .horizontal ? 6 : nil,
-                    height: axis == .vertical ? 6 : nil
+                    width: axis == .horizontal ? Self.thickness : nil,
+                    height: axis == .vertical ? Self.thickness : nil
                 )
             Rectangle()
                 .fill(IDEAppearance.ColorToken.border)

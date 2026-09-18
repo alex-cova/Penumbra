@@ -51,10 +51,14 @@ public enum EditorLayout: Equatable, Sendable {
         case .pane(let pane) where pane.id == paneID:
             let existing = EditorLayout.pane(pane)
             switch edge {
-            case .leading, .top:
+            case .leading:
                 self = .horizontal(EditorSplitData(axis: .horizontal, children: [.pane(newPane), existing]))
-            case .trailing, .bottom:
+            case .trailing:
                 self = .horizontal(EditorSplitData(axis: .horizontal, children: [existing, .pane(newPane)]))
+            case .top:
+                self = .vertical(EditorSplitData(axis: .vertical, children: [.pane(newPane), existing]))
+            case .bottom:
+                self = .vertical(EditorSplitData(axis: .vertical, children: [existing, .pane(newPane)]))
             }
         case .vertical(let data), .horizontal(let data):
             for index in data.children.indices {

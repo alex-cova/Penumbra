@@ -9,9 +9,6 @@ struct IDEToolbarPanel: View {
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            Spacer()
-                .frame(width: IDEAppearance.Spacing.trafficLightsInset)
-
             IDEToolbarSidebarToggle(
                 isSidebarVisible: workspace.isSidebarVisible,
                 action: workspace.toggleSidebar

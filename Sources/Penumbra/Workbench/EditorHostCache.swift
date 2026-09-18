@@ -72,6 +72,13 @@ public final class EditorHostCache<Key: Hashable, Host: AnyObject> {
         entries[key] != nil
     }
 
+    /// Returns the cached host for `key` without creating one on a miss and without affecting
+    /// LRU order — for callers that want to inspect another pane's host opportunistically (e.g.
+    /// reading its live text) rather than establish that pane as in use.
+    public func peek(_ key: Key) -> Host? {
+        entries[key]?.host
+    }
+
     /// Re-clamps capacity, evicting the oldest-accessed entries first until back within the new
     /// limit. Unlike a "keep this one key safe" reconfigure, this has no protected key — there's
     /// no single "current" entry to pin when simply lowering the cap.

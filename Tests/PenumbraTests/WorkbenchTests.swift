@@ -128,6 +128,146 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.activePaneID, firstPaneID)
     }
 
+    /// A workbench closed back down to a single pane: `closePane`'s `flatten()` collapses the
+    /// single-child container `EditorWorkbench.init` wraps a lone pane in down to a bare `.pane`
+    /// case, which is the root shape `EditorLayout.splitPane`'s root-pane branch handles — a fresh
+    /// `EditorWorkbench` never exercises that branch on its very first split, since its initial
+    /// layout is already a one-child container.
+    private func makeBareRootBench() -> EditorWorkbench {
+        let bench = EditorWorkbench()
+        let second = bench.splitActivePane(edge: .trailing)
+        bench.closePane(second.id)
+        return bench
+    }
+
+    private func paneID(of layout: EditorLayout) -> UUID? {
+        if case .pane(let pane) = layout { return pane.id }
+        return nil
+    }
+
+    func testSplitFromBareRootProducesCorrectAxisForAllEdges() {
+        // .leading/.trailing on a bare-pane root must produce a `.horizontal` container (children
+        // side by side); .top/.bottom must produce `.vertical` (children stacked). All four edges
+        // collapsing to the same `.horizontal` container regardless was the bug.
+        do {
+            let bench = makeBareRootBench()
+            let original = bench.panes[0]
+            let newPane = bench.splitActivePane(edge: .leading)
+            guard case .horizontal(let data) = bench.layout else {
+                return XCTFail("expected a .horizontal container for a .leading split")
+            }
+            XCTAssertEqual(data.axis, .horizontal)
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [newPane.id, original.id])
+        }
+        do {
+            let bench = makeBareRootBench()
+            let original = bench.panes[0]
+            let newPane = bench.splitActivePane(edge: .trailing)
+            guard case .horizontal(let data) = bench.layout else {
+                return XCTFail("expected a .horizontal container for a .trailing split")
+            }
+            XCTAssertEqual(data.axis, .horizontal)
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [original.id, newPane.id])
+        }
+        do {
+            let bench = makeBareRootBench()
+            let original = bench.panes[0]
+            let newPane = bench.splitActivePane(edge: .top)
+            guard case .vertical(let data) = bench.layout else {
+                return XCTFail("expected a .vertical container for a .top split")
+            }
+            XCTAssertEqual(data.axis, .vertical)
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [newPane.id, original.id])
+        }
+        do {
+            let bench = makeBareRootBench()
+            let original = bench.panes[0]
+            let newPane = bench.splitActivePane(edge: .bottom)
+            guard case .vertical(let data) = bench.layout else {
+                return XCTFail("expected a .vertical container for a .bottom split")
+            }
+            XCTAssertEqual(data.axis, .vertical)
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [original.id, newPane.id])
+        }
+    }
+
+    func testSplitFromContainerRootHandlesSiblingAndOrthogonalCases() {
+        // Same-axis edge: a plain sibling insert into the existing container.
+        do {
+            let bench = EditorWorkbench()
+            let paneA = bench.activePane
+            let paneB = bench.splitActivePane(edge: .trailing) // root: .horizontal([A, B]), active = B
+            let paneC = bench.splitActivePane(edge: .trailing)
+            guard case .horizontal(let data) = bench.layout else {
+                return XCTFail("expected a .horizontal root")
+            }
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [paneA.id, paneB.id, paneC.id])
+        }
+        do {
+            let bench = EditorWorkbench()
+            let paneA = bench.activePane
+            let paneB = bench.splitActivePane(edge: .trailing)
+            let paneC = bench.splitActivePane(edge: .leading)
+            guard case .horizontal(let data) = bench.layout else {
+                return XCTFail("expected a .horizontal root")
+            }
+            XCTAssertEqual(data.children.compactMap(paneID(of:)), [paneA.id, paneC.id, paneB.id])
+        }
+        // Orthogonal edge: wraps the target child in a new container of the other axis instead of
+        // inserting a sibling into the existing one.
+        do {
+            let bench = EditorWorkbench()
+            let paneA = bench.activePane
+            let paneB = bench.splitActivePane(edge: .trailing)
+            let paneC = bench.splitActivePane(edge: .bottom)
+            guard case .horizontal(let outer) = bench.layout else {
+                return XCTFail("expected a .horizontal root")
+            }
+            XCTAssertEqual(outer.children.count, 2)
+            XCTAssertEqual(paneID(of: outer.children[0]), paneA.id)
+            guard case .vertical(let inner) = outer.children[1] else {
+                return XCTFail("expected a nested .vertical container for a .bottom split")
+            }
+            XCTAssertEqual(inner.children.compactMap(paneID(of:)), [paneB.id, paneC.id])
+        }
+        do {
+            let bench = EditorWorkbench()
+            let paneA = bench.activePane
+            let paneB = bench.splitActivePane(edge: .trailing)
+            let paneC = bench.splitActivePane(edge: .top)
+            guard case .horizontal(let outer) = bench.layout else {
+                return XCTFail("expected a .horizontal root")
+            }
+            XCTAssertEqual(outer.children.count, 2)
+            XCTAssertEqual(paneID(of: outer.children[0]), paneA.id)
+            guard case .vertical(let inner) = outer.children[1] else {
+                return XCTFail("expected a nested .vertical container for a .top split")
+            }
+            XCTAssertEqual(inner.children.compactMap(paneID(of:)), [paneC.id, paneB.id])
+        }
+    }
+
+    func testNestedSplitWritesBackThroughRecursion() {
+        let bench = EditorWorkbench()
+        let paneA = bench.activePane
+        let paneB = bench.splitActivePane(edge: .trailing) // root: .horizontal([A, B])
+        let paneC = bench.splitActivePane(edge: .bottom)   // root: .horizontal([A, .vertical([B, C])])
+        // Split C again along the nested container's own axis, two levels deep — exercises the
+        // recursive write-back in `EditorLayout.splitPane`'s container branch
+        // (`child.splitPane(...); data.children[index] = child`).
+        let paneD = bench.splitActivePane(edge: .bottom)
+        guard case .horizontal(let outer) = bench.layout else {
+            return XCTFail("expected the outer .horizontal container to survive the nested split")
+        }
+        XCTAssertEqual(outer.children.count, 2)
+        XCTAssertEqual(paneID(of: outer.children[0]), paneA.id)
+        guard case .vertical(let inner) = outer.children[1] else {
+            return XCTFail("expected the nested .vertical container to survive the nested split")
+        }
+        XCTAssertEqual(inner.children.compactMap(paneID(of:)), [paneB.id, paneC.id, paneD.id])
+        XCTAssertEqual(bench.panes.count, 4)
+    }
+
     func testRestorationRoundTripPreservesTabsAndSelection() throws {
         let bench = EditorWorkbench()
         let docA = WorkbenchDocument(displayName: "a.txt", text: "alpha")
@@ -222,6 +362,32 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(restored.activePane.selectedDocument?.displayName, "right")
         let leftPane = restored.panes.first { $0.id != restored.activePaneID }
         XCTAssertEqual(leftPane?.selectedDocument?.displayName, "left")
+    }
+
+    func testRestorationPreservesSplitAxis() throws {
+        // A fresh `EditorWorkbench` always wraps its lone pane in a one-child `.horizontal`
+        // container, so its very first split never reaches a top-level `.vertical` case
+        // regardless of edge. Split from a bare-pane root (see `makeBareRootBench`) so `.bottom`
+        // actually produces a top-level `.vertical` container worth round-tripping.
+        let bench = makeBareRootBench()
+        bench.openDocument(WorkbenchDocument(displayName: "top", text: "T"))
+        let bottomPane = bench.splitActivePane(edge: .bottom)
+        bench.openDocument(WorkbenchDocument(displayName: "bottom", text: "B"), in: bottomPane)
+        guard case .vertical(let data) = bench.layout else {
+            return XCTFail("expected a top-level .vertical split for a .bottom edge from a bare-pane root")
+        }
+        XCTAssertEqual(data.axis, .vertical)
+
+        let encoded = try JSONEncoder().encode(bench.makeRestorationState())
+        let decoded = try JSONDecoder().decode(EditorRestorationState.self, from: encoded)
+
+        let restored = EditorWorkbench()
+        restored.restore(from: decoded)
+        guard case .vertical(let restoredData) = restored.layout else {
+            return XCTFail("expected the restored layout to still be a top-level .vertical split")
+        }
+        XCTAssertEqual(restoredData.axis, .vertical)
+        XCTAssertEqual(restored.panes.count, 2)
     }
 
     func testConcurrentPaneSyncDoesNotRaceVersions() async {

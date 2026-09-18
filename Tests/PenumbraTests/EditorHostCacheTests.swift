@@ -83,4 +83,31 @@ final class EditorHostCacheTests: XCTestCase {
         XCTAssertEqual(remaining.count, 1, "Only the most recently accessed entry should remain")
         XCTAssertEqual(remaining.first, "c")
     }
+
+    func testPeekReturnsNilOnMissWithoutCreatingAnEntry() {
+        let cache = EditorHostCache<UUID, DummyHost>()
+        let key = UUID()
+        XCTAssertNil(cache.peek(key))
+        XCTAssertFalse(cache.contains(key), "peek must not create an entry on a miss")
+    }
+
+    func testPeekReturnsTheCachedHostOnAHit() {
+        let cache = EditorHostCache<UUID, DummyHost>()
+        let key = UUID()
+        let host = cache.host(for: key) { DummyHost() }
+        XCTAssertTrue(cache.peek(key) === host)
+    }
+
+    func testPeekDoesNotAffectLRUOrder() {
+        let cache = EditorHostCache<String, DummyHost>(maxEntries: 2)
+        _ = cache.host(for: "a") { DummyHost() }
+        _ = cache.host(for: "b") { DummyHost() }
+        // Peeking "a" should not protect it from eviction the way `host(for:)` would.
+        _ = cache.peek("a")
+        _ = cache.host(for: "c") { DummyHost() }
+
+        XCTAssertFalse(cache.contains("a"), "peek must not count as an access for LRU purposes")
+        XCTAssertTrue(cache.contains("b"))
+        XCTAssertTrue(cache.contains("c"))
+    }
 }

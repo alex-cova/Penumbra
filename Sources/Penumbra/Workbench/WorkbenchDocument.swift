@@ -24,6 +24,12 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     public var isFileBacked: Bool
     /// Ranged reader for file-backed buffers so EIP snapshots can substring without full text.
     public var rangeReader: TextRangeReader?
+    /// Bumped whenever this document's content is written back from a `TextView` (e.g. on
+    /// switching away from the pane showing it). Lets a second pane showing the same document
+    /// (from a split) tell whether its own loaded content is stale and needs reloading, instead
+    /// of relying on `loadedDocumentID` alone, which can't distinguish "same document, unchanged"
+    /// from "same document, edited elsewhere."
+    public var contentGeneration: UInt64 = 0
 
     public init(
         id: UUID = UUID(),
