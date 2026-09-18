@@ -129,4 +129,29 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertNotNil(sortAscending)
         XCTAssertNil(sortAscending?.shortcutDisplay)
     }
+
+    func testOverlayInstallsOnProvidedContainerRatherThanTextView() {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+
+        XCTAssertTrue(textView.perform(.findAction))
+        XCTAssertTrue(controller.isPresented)
+        XCTAssertTrue(
+            container.subviews.contains { $0.subviews.contains { $0 is CommandPaletteView } },
+            "Backdrop + CommandPaletteView should live on the overlay container"
+        )
+    }
+
+    func testBindActionsOnASecondTextViewPresentsTheSharedPalette() {
+        let first = makeFocusedTextView(text: "one")
+        let second = makeFocusedTextView(text: "two")
+        let controller = CommandPaletteController(textView: first)
+        controller.bindActions(to: second)
+
+        XCTAssertTrue(second.perform(.findAction))
+        XCTAssertTrue(controller.isPresented)
+        controller.dismiss()
+        XCTAssertFalse(controller.isPresented)
+    }
 }

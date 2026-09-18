@@ -52,6 +52,16 @@ public struct IDERootView: View {
         }
         .background(IDEAppearance.ColorToken.workbench)
         .background(IDEWindowConfigurator(title: workspace.windowTitle))
+        .overlay {
+            IDEPaletteOverlayHost(workspace: workspace)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(true)
+        }
+        .overlay {
+            if workspace.showsFirstRunGuide {
+                IDEFirstRunGuideOverlay()
+            }
+        }
         .preferredColorScheme(.dark)
         .task {
             guard !didBootstrap else { return }
@@ -159,4 +169,42 @@ final class IDEWindowConfiguratorView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { false }
+}
+
+/// Full-window AppKit host for the command palette. Clicks pass through while the palette is
+/// hidden; `CommandPaletteController` installs its dimmed backdrop as a subview.
+private struct IDEPaletteOverlayHost: NSViewRepresentable {
+    let workspace: IDEWorkspace
+
+    func makeNSView(context: Context) -> IDEPaletteHostView {
+        let view = IDEPaletteHostView()
+        view.workspace = workspace
+        return view
+    }
+
+    func updateNSView(_ view: IDEPaletteHostView, context: Context) {
+        view.workspace = workspace
+        view.installIfNeeded()
+    }
+}
+
+private final class IDEPaletteHostView: NSView {
+    weak var workspace: IDEWorkspace?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installIfNeeded()
+    }
+
+    func installIfNeeded() {
+        workspace?.attachPaletteOverlay(to: self)
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        if hit === self { return nil }
+        return hit
+    }
 }

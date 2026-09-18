@@ -1,9 +1,11 @@
+import EditorIntelligence
 import SwiftUI
 
 /// Full-width chrome row above the sidebar/editor split. Owns the traffic-light gutter, the
-/// sidebar toggle, a breadcrumb for the active document, the Goto Anything field, and pane
-/// actions (preview/close; split lives in the tab's right-click menu) — the one place in the
-/// window that reserves `Spacing.trafficLightsInset`, so nothing below it needs to.
+/// sidebar toggle, a path-and-symbol breadcrumb for the active document (the tab already shows
+/// the filename), and pane actions (search, preview, close; split lives in the tab's right-click
+/// menu) — the one place in the window that reserves `Spacing.trafficLightsInset`, so nothing
+/// below it needs to.
 struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -14,12 +16,11 @@ struct IDEToolbarPanel: View {
                 action: workspace.toggleSidebar
             )
 
-            IDEToolbarBreadcrumb(headerContext: workspace.headerContext)
-                .padding(.leading, IDEAppearance.Spacing.xs)
-
-            Spacer(minLength: IDEAppearance.Spacing.sm)
-
-            IDEToolbarPaletteField(action: workspace.showQuickOpen)
+            IDEToolbarBreadcrumb(
+                headerContext: workspace.headerContext,
+                onSelect: workspace.selectBreadcrumb
+            )
+            .padding(.leading, IDEAppearance.Spacing.xs)
 
             Spacer(minLength: IDEAppearance.Spacing.sm)
 
@@ -27,6 +28,7 @@ struct IDEToolbarPanel: View {
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
@@ -61,22 +63,24 @@ private struct IDEToolbarSidebarToggle: View {
 
 private struct IDEToolbarBreadcrumb: View {
     let headerContext: IDEHeaderContext
+    let onSelect: (IDEBreadcrumbItem) -> Void
 
     var body: some View {
-        let components = headerContext.components
-        if !components.isEmpty {
+        let items = headerContext.items
+        if !items.isEmpty {
             HStack(spacing: IDEAppearance.Spacing.xs) {
-                ForEach(Array(components.enumerated()), id: \.offset) { index, component in
-                    let isLast = index == components.count - 1
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     if index > 0 {
                         Image(systemName: "chevron.compact.right")
                             .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .medium))
                             .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(0.6))
                             .accessibilityHidden(true)
                     }
-                    Text(component)
-                        .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
-                        .foregroundStyle(isLast ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                    IDEToolbarBreadcrumbSegment(
+                        item: item,
+                        isLast: index == items.count - 1,
+                        action: { onSelect(item) }
+                    )
                 }
                 if headerContext.isDirty {
                     Circle()
@@ -87,43 +91,41 @@ private struct IDEToolbarBreadcrumb: View {
             }
             .lineLimit(1)
             .truncationMode(.head)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityLabel)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Breadcrumb")
         }
-    }
-
-    private var accessibilityLabel: String {
-        let path = headerContext.components.joined(separator: ", ")
-        return headerContext.isDirty ? "\(path), edited" : path
     }
 }
 
-private struct IDEToolbarPaletteField: View {
+private struct IDEToolbarBreadcrumbSegment: View {
+    let item: IDEBreadcrumbItem
+    let isLast: Bool
     let action: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: IDEAppearance.IconSize.searchGlyph))
-                Text("Search")
-                    .font(IDEAppearance.Typography.caption)
-                Spacer()
-                Text("⌘P")
-                    .font(IDEAppearance.Typography.caption)
-            }
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .frame(width: IDEAppearance.Spacing.searchFieldWidth, height: IDEAppearance.Spacing.searchFieldHeight)
-            .background {
-                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
-                    .fill(IDEAppearance.ColorToken.controlHover)
-                    .stroke(IDEAppearance.ColorToken.border, lineWidth: 1)
-            }
+            Text(item.title)
+                .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
+                .foregroundStyle(isLast || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
         }
         .buttonStyle(.plain)
-        .help("Go to File")
-        .accessibilityLabel("Search")
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(item.title)
+        .accessibilityHint(help)
+        .accessibilityAddTraits(.isButton)
+        .focusable(false)
+    }
+
+    private var help: String {
+        switch item.target {
+        case .folder:
+            "Reveal \(item.title) in Explorer"
+        case .symbol:
+            "Go to \(item.title)"
+        }
     }
 }
 
@@ -131,12 +133,18 @@ private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
+    let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
+            IDEToolbarIconButton(
+                systemName: "magnifyingglass",
+                help: "Go to File",
+                action: showQuickOpen
+            )
             if isMarkdownFile {
                 IDEToolbarIconButton(
                     systemName: "play.fill",
@@ -202,7 +210,20 @@ private struct IDEToolbarIconButton: View {
                 ]
             ]
             workspace.headerContext = IDEHeaderContext(
-                components: ["src", "ui", "Editor.swift"],
+                pathItems: [
+                    IDEBreadcrumbItem(id: "folder:src", title: "src", target: .folder(URL(fileURLWithPath: "/src"))),
+                    IDEBreadcrumbItem(id: "folder:ui", title: "ui", target: .folder(URL(fileURLWithPath: "/src/ui")))
+                ],
+                symbolItems: [
+                    IDEBreadcrumbItem(
+                        id: "symbol:Editor",
+                        title: "IDEToolbarPanel",
+                        target: .symbol(EditorIntelligence.TextRange(
+                            start: EditorIntelligence.TextPosition(line: 0, column: 0, utf16Offset: 0),
+                            end: EditorIntelligence.TextPosition(line: 0, column: 0, utf16Offset: 0)
+                        ))
+                    )
+                ],
                 isDirty: true
             )
             return workspace

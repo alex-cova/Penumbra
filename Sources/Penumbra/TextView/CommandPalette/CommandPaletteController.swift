@@ -8,6 +8,10 @@ import EditorIntelligence
 /// Wire the data sources you have — `fileEntriesProvider`, `recentFileEntriesProvider`,
 /// `symbolIndex`, `onOpenFile`, `extraProviders` — then bind the keymap actions (they arrive
 /// automatically once this controller is constructed with `bindActions: true`).
+///
+/// By default the overlay is pinned to `textView`. Pass `overlayContainer` (or call
+/// ``installOverlay(in:)`` later) to present it in a window-level host instead; ``attach(to:)``
+/// and ``bindActions(to:)`` retarget a shared controller at additional editors.
 @MainActor
 public final class CommandPaletteController {
     public let commandRegistry = CommandRegistry()
@@ -44,7 +48,7 @@ public final class CommandPaletteController {
     private weak var textView: TextView?
     private let paletteView = CommandPaletteView()
     private let backdrop = PaletteBackdropView()
-    private var previousActionHandler: ((EditorActionID) -> Bool)?
+    private let boundTextViews = NSHashTable<TextView>.weakObjects()
     private var currentSections: [PaletteSection] = []
     /// Set while presenting a fixed list (`.locations` / surround templates) that bypasses the engine.
     private var isStaticList = false
@@ -53,18 +57,63 @@ public final class CommandPaletteController {
 
     public var isPresented: Bool { paletteModel.isPresented }
 
-    public init(textView: TextView, bindActions: Bool = true) {
+    public init(textView: TextView, overlayContainer: NSView? = nil, bindActions: Bool = true) {
         self.textView = textView
         commandRegistry.registerBuiltInActions(for: textView)
-        installOverlay(on: textView)
         wirePaletteView()
+        installOverlay(in: overlayContainer ?? textView)
         if bindActions {
-            let previous = textView.editorActionHandler
-            previousActionHandler = previous
-            textView.editorActionHandler = { [weak self] action in
-                if self?.handle(action) == true { return true }
-                return previous?(action) ?? false
+            self.bindActions(to: textView)
+        }
+    }
+
+    /// Points go-to-line, in-buffer search, surround-with, and dismiss-restore-focus at
+    /// `textView`. Re-registers Find Action commands so they run on this editor.
+    public func attach(to textView: TextView) {
+        guard self.textView !== textView else { return }
+        self.textView = textView
+        commandRegistry.registerBuiltInActions(for: textView)
+    }
+
+    /// Chains this controller into `textView.editorActionHandler`. Safe to call more than once
+    /// for the same view. The triggering editor becomes the attached target before the action
+    /// runs, so a shared controller stays aimed at the pane that invoked it.
+    public func bindActions(to textView: TextView) {
+        guard !boundTextViews.contains(textView) else { return }
+        boundTextViews.add(textView)
+        let previous = textView.editorActionHandler
+        textView.editorActionHandler = { [weak self, weak textView] action in
+            guard let self else { return previous?(action) ?? false }
+            if let textView {
+                self.attach(to: textView)
             }
+            if self.handle(action) == true { return true }
+            return previous?(action) ?? false
+        }
+    }
+
+    /// Moves the dimmed backdrop + palette onto `container` (full bounds). No-op when the
+    /// overlay is already installed there.
+    public func installOverlay(in container: NSView) {
+        if backdrop.superview === container { return }
+        backdrop.removeFromSuperview()
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.isHidden = !paletteModel.isPresented
+        backdrop.paletteView = paletteView
+        if paletteView.superview !== backdrop {
+            paletteView.removeFromSuperview()
+            backdrop.addSubview(paletteView)
+        }
+        container.addSubview(backdrop, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            backdrop.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            backdrop.topAnchor.constraint(equalTo: container.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        if paletteModel.isPresented {
+            layoutPalette(in: container)
+            paletteView.focusQueryField()
         }
     }
 
@@ -332,29 +381,26 @@ public final class CommandPaletteController {
             self.activateSelection()
         }
         backdrop.onClickOutsidePalette = { [weak self] in self?.dismiss() }
-    }
-
-    private func installOverlay(on textView: TextView) {
-        backdrop.translatesAutoresizingMaskIntoConstraints = false
-        backdrop.isHidden = true
-        backdrop.paletteView = paletteView
-        backdrop.addSubview(paletteView)
-        textView.addSubview(backdrop)
-        NSLayoutConstraint.activate([
-            backdrop.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: textView.trailingAnchor),
-            backdrop.topAnchor.constraint(equalTo: textView.topAnchor),
-            backdrop.bottomAnchor.constraint(equalTo: textView.bottomAnchor)
-        ])
+        backdrop.onLayout = { [weak self, weak backdrop] in
+            guard let self, let backdrop, !backdrop.isHidden, let container = backdrop.superview else {
+                return
+            }
+            self.layoutPalette(in: container)
+        }
     }
 
     private func layoutPalette(in container: NSView) {
         let width = min(640, max(360, container.bounds.width - 80))
         let height: CGFloat = min(440, max(180, container.bounds.height * 0.55))
         let originX = ((container.bounds.width - width) / 2).rounded()
-        let originY = (container.bounds.height - height - 28).rounded()
-        paletteView.frame = CGRect(x: originX, y: max(originY, 12), width: width, height: height)
-        paletteView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+        // AppKit Y grows upward. Extra leftover below the panel sits it slightly above center.
+        let leftover = container.bounds.height - height
+        let originY = max((leftover * 0.58).rounded(), 12)
+        let frame = CGRect(x: originX, y: originY, width: width, height: height)
+        if paletteView.frame != frame {
+            paletteView.frame = frame
+        }
+        paletteView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
     }
 }
 
@@ -362,12 +408,18 @@ public final class CommandPaletteController {
 /// while the palette is visible.
 private final class PaletteBackdropView: NSView {
     var onClickOutsidePalette: (() -> Void)?
+    var onLayout: (() -> Void)?
     weak var paletteView: NSView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+    }
+
+    override func layout() {
+        super.layout()
+        onLayout?()
     }
 
     @available(*, unavailable)

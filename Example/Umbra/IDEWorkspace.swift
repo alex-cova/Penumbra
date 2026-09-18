@@ -13,10 +13,27 @@ struct IDETabRow: Identifiable, Equatable {
     let isSelected: Bool
 }
 
-/// Path breadcrumb for the active document, shown in the toolbar. Empty when nothing is open.
+/// One segment in the toolbar breadcrumb. Folders reveal in the Explorer; symbols jump in-file.
+struct IDEBreadcrumbItem: Equatable, Identifiable {
+    enum Target: Equatable {
+        case folder(URL)
+        case symbol(EditorIntelligence.TextRange)
+    }
+
+    let id: String
+    let title: String
+    let target: Target
+}
+
+/// Folder path plus enclosing symbols for the active document. Empty when nothing is open.
+/// The filename is omitted: the tab already shows it.
 struct IDEHeaderContext: Equatable {
-    var components: [String] = []
+    var documentID: UUID?
+    var pathItems: [IDEBreadcrumbItem] = []
+    var symbolItems: [IDEBreadcrumbItem] = []
     var isDirty = false
+
+    var items: [IDEBreadcrumbItem] { pathItems + symbolItems }
 }
 
 @MainActor
@@ -29,6 +46,10 @@ public final class IDEWorkspace {
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
     private var adapter: PenumbraWorkbenchEditorAdapter!
+    @ObservationIgnored
+    private var paletteController: CommandPaletteController?
+    @ObservationIgnored
+    private weak var paletteOverlayContainer: NSView?
     @ObservationIgnored
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
@@ -44,6 +65,7 @@ public final class IDEWorkspace {
     private(set) var layoutEpoch: UInt64 = 0
     private(set) var activePaneID = UUID()
     var showsWelcome = true
+    var showsFirstRunGuide = false
 
     var windowTitle = "Umbra"
     var headerContext = IDEHeaderContext()
@@ -84,6 +106,7 @@ public final class IDEWorkspace {
         activatePane(workbench.activePaneID)
         refreshPresentation()
         showsWelcome = !hasOpenDocuments
+        showsFirstRunGuide = !preferences.hasCompletedFirstRunGuide
 
         if let index = CommandLine.arguments.firstIndex(of: "--open"),
            index + 1 < CommandLine.arguments.count {
@@ -109,6 +132,15 @@ public final class IDEWorkspace {
     }
 
     // MARK: - Commands
+
+    public func showFirstRunGuide() {
+        showsFirstRunGuide = true
+    }
+
+    public func dismissFirstRunGuide() {
+        showsFirstRunGuide = false
+        preferences.hasCompletedFirstRunGuide = true
+    }
 
     public func newFile() {
         let document = WorkbenchDocument(
@@ -174,6 +206,7 @@ public final class IDEWorkspace {
             guard result == .OK, let url = panel.url, let self else { return }
             self.project.setRoot(url)
             self.showsWelcome = false
+            self.refreshPresentation()
         }
     }
 
@@ -229,23 +262,19 @@ public final class IDEWorkspace {
     }
 
     public func showCommandPalette() {
-        host(for: workbench.activePaneID).paletteController.presentFindAction()
-        focusActiveEditor()
+        sharedPalette(for: host(for: workbench.activePaneID)).presentFindAction()
     }
 
     public func showQuickOpen() {
-        host(for: workbench.activePaneID).paletteController.presentQuickOpen()
-        focusActiveEditor()
+        sharedPalette(for: host(for: workbench.activePaneID)).presentQuickOpen()
     }
 
     public func showGoToSymbol() {
-        host(for: workbench.activePaneID).paletteController.presentSymbols()
-        focusActiveEditor()
+        sharedPalette(for: host(for: workbench.activePaneID)).presentSymbols()
     }
 
     public func showGoToLine() {
-        host(for: workbench.activePaneID).paletteController.presentGoToLine()
-        focusActiveEditor()
+        sharedPalette(for: host(for: workbench.activePaneID)).presentGoToLine()
     }
 
     public func showFind() {
@@ -664,9 +693,38 @@ public final class IDEWorkspace {
             self?.showFindInFiles()
             return true
         }
-        configurePalette(host.paletteController)
+        host.intelligenceController?.onBreadcrumbsUpdated = { [weak self] segments in
+            self?.applySymbolBreadcrumbs(segments)
+        }
+        _ = sharedPalette(for: host)
         preferences.apply(to: host.textView)
         return host
+    }
+
+    /// Installs the Spotlight-style palette overlay on a window-level host view. Clicks pass
+    /// through that host while the palette is hidden.
+    func attachPaletteOverlay(to container: NSView) {
+        paletteOverlayContainer = container
+        paletteController?.installOverlay(in: container)
+    }
+
+    /// One palette for the window: created against the first pane, then retargeted as panes
+    /// activate so go-to-line / in-buffer search / Find Action run on the focused editor.
+    private func sharedPalette(for host: IDEEditorPaneHost) -> CommandPaletteController {
+        if let existing = paletteController {
+            existing.attach(to: host.textView)
+            existing.bindActions(to: host.textView)
+            existing.workspaceRoot = project.rootURL
+            return existing
+        }
+        let controller = CommandPaletteController(
+            textView: host.textView,
+            overlayContainer: paletteOverlayContainer,
+            bindActions: true
+        )
+        configurePalette(controller)
+        paletteController = controller
+        return controller
     }
 
     func openDocument(from url: URL, selecting range: NSRange? = nil) async {
@@ -845,9 +903,12 @@ public final class IDEWorkspace {
         activePaneID = workbench.activePaneID
         adapter.textView = host.textView
         host.textView.editorDelegate = adapter
+        paletteController?.attach(to: host.textView)
+        paletteController?.workspaceRoot = project.rootURL
         showDocument(in: workbench.activePane, host: host)
         adapter.refreshCachedDocuments()
         host.intelligenceController?.refreshDiagnostics()
+        host.intelligenceController?.refreshBreadcrumbs()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
@@ -870,8 +931,12 @@ public final class IDEWorkspace {
         isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · Umbra"
+            let pathItems = pathBreadcrumbItems(for: document)
+            let symbolItems = headerContext.documentID == document.id ? headerContext.symbolItems : []
             let newContext = IDEHeaderContext(
-                components: breadcrumbComponents(for: document),
+                documentID: document.id,
+                pathItems: pathItems,
+                symbolItems: symbolItems,
                 isDirty: document.isDirty
             )
             if headerContext != newContext {
@@ -885,20 +950,86 @@ public final class IDEWorkspace {
         }
     }
 
-    /// Project-relative path components for the breadcrumb, e.g. `["src", "ui", "Editor.swift"]`.
-    /// Falls back to just the display name when the document has no URL or sits outside the
-    /// open project root.
-    private func breadcrumbComponents(for document: WorkbenchDocument) -> [String] {
-        guard let url = document.url else { return [document.displayName] }
-        guard let rootURL = project.rootURL else { return [url.lastPathComponent] }
+    func selectBreadcrumb(_ item: IDEBreadcrumbItem) {
+        switch item.target {
+        case .folder(let url):
+            revealInSidebar(url)
+        case .symbol(let range):
+            jumpToSymbol(range)
+        }
+    }
 
-        let rootPath = rootURL.standardizedFileURL.path
-        let filePath = url.standardizedFileURL.path
-        guard filePath.hasPrefix(rootPath) else { return [url.lastPathComponent] }
+    private func applySymbolBreadcrumbs(_ segments: [BreadcrumbSegment]) {
+        let items = segments.map { segment in
+            IDEBreadcrumbItem(
+                id: "symbol:\(segment.range.start.utf16Offset)-\(segment.range.end.utf16Offset):\(segment.title)",
+                title: segment.title,
+                target: .symbol(segment.range)
+            )
+        }
+        guard headerContext.symbolItems != items else { return }
+        headerContext.symbolItems = items
+    }
 
-        let relative = filePath.dropFirst(rootPath.count)
-        let components = relative.split(separator: "/").map(String.init)
-        return components.isEmpty ? [url.lastPathComponent] : components
+    private func revealInSidebar(_ url: URL) {
+        if project.rootURL != nil {
+            isSidebarVisible = true
+            project.reveal(url: url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+
+    private func jumpToSymbol(_ range: EditorIntelligence.TextRange) {
+        let textView = host(for: workbench.activePaneID).textView
+        textView.recordNavigationCheckpoint()
+        let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
+        textView.selectedRanges = [nsRange]
+        textView.scrollRangeToVisible(nsRange)
+        _ = textView.focusTextInput()
+    }
+
+    /// Folder crumbs leading to the active file, excluding the filename (the tab already shows
+    /// that). Project-relative when a folder is open; otherwise the last few parent directories.
+    private func pathBreadcrumbItems(for document: WorkbenchDocument) -> [IDEBreadcrumbItem] {
+        guard let url = document.url else { return [] }
+        let directory = url.standardizedFileURL.deletingLastPathComponent()
+        if let rootURL = project.rootURL {
+            let root = rootURL.standardizedFileURL
+            let directoryPath = directory.path
+            let rootPath = root.path
+            guard directoryPath == rootPath || directoryPath.hasPrefix(rootPath + "/") else {
+                return ancestorFolderItems(from: directory)
+            }
+            var items = [folderItem(root)]
+            var current = root
+            let relative = directoryPath.dropFirst(rootPath.count)
+            for component in relative.split(separator: "/") where !component.isEmpty {
+                current.appendPathComponent(String(component))
+                items.append(folderItem(current))
+            }
+            return items
+        }
+        return ancestorFolderItems(from: directory)
+    }
+
+    private func ancestorFolderItems(from directory: URL, limit: Int = 3) -> [IDEBreadcrumbItem] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        var folders: [URL] = []
+        var current = directory.standardizedFileURL
+        while folders.count < limit {
+            let path = current.path
+            if path == "/" || path == home || path.isEmpty { break }
+            folders.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == path { break }
+            current = parent
+        }
+        return folders.reversed().map(folderItem)
+    }
+
+    private func folderItem(_ url: URL) -> IDEBreadcrumbItem {
+        IDEBreadcrumbItem(id: "folder:\(url.path)", title: url.lastPathComponent, target: .folder(url))
     }
 
     private func applyLaunchConfiguration() {

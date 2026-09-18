@@ -9,7 +9,6 @@ final class IDEEditorPaneHost: NSView {
     let pane: EditorPane
     let textView: TextView
     let markdownPreviewController: MarkdownPreviewController
-    let paletteController: CommandPaletteController
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
@@ -38,7 +37,6 @@ final class IDEEditorPaneHost: NSView {
         textView.highlightsOccurrencesOfSelection = true
         textView.keymap = preferences.keymap
         markdownPreviewController = MarkdownPreviewController(textView: textView)
-        paletteController = CommandPaletteController(textView: textView)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor

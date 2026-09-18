@@ -19,6 +19,7 @@ public final class CommandPaletteView: NSView {
     }
 
     private let queryField = PaletteQueryField()
+    private let materialView = NSVisualEffectView()
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
     private var rows: [Row] = []
@@ -88,13 +89,34 @@ public final class CommandPaletteView: NSView {
     private func configure() {
         wantsLayer = true
         layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
         layer?.masksToBounds = false
         layer?.borderWidth = 1
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.45
         layer?.shadowRadius = 24
         layer?.shadowOffset = .zero
+
+        materialView.material = .hudWindow
+        materialView.blendingMode = .withinWindow
+        materialView.state = .active
+        materialView.wantsLayer = true
+        materialView.layer?.cornerRadius = 12
+        materialView.layer?.cornerCurve = .continuous
+        materialView.layer?.masksToBounds = true
+        materialView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(materialView)
+
         applyChromeColors()
+        NotificationCenter.default.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyChromeColors()
+            }
+        }
 
         queryField.translatesAutoresizingMaskIntoConstraints = false
         queryField.font = .systemFont(ofSize: 17, weight: .regular)
@@ -136,6 +158,11 @@ public final class CommandPaletteView: NSView {
         scrollView.documentView = tableView
 
         NSLayoutConstraint.activate([
+            materialView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            materialView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            materialView.topAnchor.constraint(equalTo: topAnchor),
+            materialView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             queryField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             queryField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             queryField.topAnchor.constraint(equalTo: topAnchor, constant: 14),
@@ -153,12 +180,21 @@ public final class CommandPaletteView: NSView {
     }
 
     private func applyChromeColors() {
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        materialView.isHidden = reduceTransparency
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if reduceTransparency {
+            if isDark {
+                layer?.backgroundColor = NSColor(srgbRed: 0.118, green: 0.118, blue: 0.133, alpha: 1).cgColor
+            } else {
+                layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            }
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+        }
         if isDark {
-            layer?.backgroundColor = NSColor(srgbRed: 0.118, green: 0.118, blue: 0.133, alpha: 1).cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
         } else {
-            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
             layer?.borderColor = NSColor.separatorColor.cgColor
         }
     }

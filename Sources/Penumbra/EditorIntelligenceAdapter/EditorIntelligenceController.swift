@@ -171,6 +171,9 @@ public final class EditorIntelligenceController {
     /// `true` once handled. Left `nil`, the action falls through to the command palette's own
     /// `.findInFiles` handling instead.
     public var onRequestProjectSearch: (() -> Bool)?
+    /// Invoked whenever enclosing-symbol breadcrumbs are recomputed. Hosts that render their own
+    /// trail (rather than ``breadcrumbBarView``) should assign this and ignore the AppKit bar.
+    public var onBreadcrumbsUpdated: (([BreadcrumbSegment]) -> Void)?
 
     private func handleEditorAction(_ action: EditorActionID) -> Bool {
         switch action {
@@ -401,10 +404,11 @@ public final class EditorIntelligenceController {
     /// Refresh breadcrumb segments for the current cursor.
     public func refreshBreadcrumbs() {
         guard let document = adapter.currentDocument, let symbolIndex else {
+            publishBreadcrumbs([])
             return
         }
         guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
-            breadcrumbBarView.update(model: BreadcrumbBarModel(segments: []))
+            publishBreadcrumbs([])
             return
         }
         breadcrumbTask?.cancel()
@@ -416,9 +420,14 @@ public final class EditorIntelligenceController {
             let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
             let segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
             await MainActor.run {
-                self.breadcrumbBarView.update(model: BreadcrumbBarModel(segments: segments))
+                self.publishBreadcrumbs(segments)
             }
         }
+    }
+
+    private func publishBreadcrumbs(_ segments: [BreadcrumbSegment]) {
+        breadcrumbBarView.update(model: BreadcrumbBarModel(segments: segments))
+        onBreadcrumbsUpdated?(segments)
     }
 
     /// Search all open workspace documents and present results.

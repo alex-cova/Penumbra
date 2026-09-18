@@ -18,6 +18,7 @@ public final class IDEPreferences {
         static let showMinimap = "com.umbra.editor.showMinimap"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
+        static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
     }
 
     var fontSize: Double {
@@ -58,6 +59,10 @@ public final class IDEPreferences {
 
     var keymap: Keymap { keymapPreset.keymap }
 
+    var hasCompletedFirstRunGuide: Bool {
+        didSet { UserDefaults.standard.set(hasCompletedFirstRunGuide, forKey: Keys.hasCompletedFirstRunGuide) }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
@@ -70,6 +75,7 @@ public final class IDEPreferences {
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
+        hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         applyTheme()
     }
 

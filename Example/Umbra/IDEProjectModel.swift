@@ -86,6 +86,25 @@ final class IDEProjectModel {
         expandedPaths.contains(node.id)
     }
 
+    /// Expands every ancestor from the project root down to `url` so the Explorer shows that
+    /// folder. No-op when no project is open or `url` sits outside the root.
+    func reveal(url: URL) {
+        guard let rootURL else { return }
+        let root = rootURL.standardizedFileURL
+        let target = url.standardizedFileURL
+        let rootPath = root.path
+        let targetPath = target.path
+        guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else { return }
+
+        var current = root
+        expandedPaths.insert(current.path)
+        let relative = targetPath.dropFirst(rootPath.count)
+        for component in relative.split(separator: "/") where !component.isEmpty {
+            current.appendPathComponent(String(component))
+            expandedPaths.insert(current.path)
+        }
+    }
+
     func allProjectFiles() -> [URL] {
         guard let rootURL else { return [] }
         var files: [URL] = []

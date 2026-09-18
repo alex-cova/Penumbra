@@ -19,13 +19,14 @@ enum IDEAppearance {
         static let iconButton = 26.0
         static let statusBarHeight = 24.0
         static let welcomeMaxWidth = 520.0
+        static let firstRunGuideWidth = 640.0
+        static let firstRunGuideHeight = 428.0
+        static let firstRunGuideRailWidth = 168.0
         static let settingsWidth = 480.0
         static let settingsMinHeight = 460.0
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
         static let dirtyDotSize = 5.0
-        static let searchFieldWidth = 260.0
-        static let searchFieldHeight = 24.0
     }
 
     enum Radius {
@@ -35,7 +36,6 @@ enum IDEAppearance {
 
     enum IconSize {
         static let breadcrumbChevron = 8.0
-        static let searchGlyph = 11.0
         static let toolbarGlyph = 12.0
     }
 
