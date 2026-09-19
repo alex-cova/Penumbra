@@ -93,6 +93,12 @@ public struct IDEPreferencesView: View {
 
                         IDESettingsSeparator()
 
+                        IDESettingsToggleRow(
+                            title: "Scale Markdown Headings",
+                            caption: "Shows # headings at larger sizes in the editor.",
+                            isOn: $preferences.scaleMarkdownHeadings
+                        )
+                        IDESettingsSeparator()
                         IDESettingsToggleRow(title: "Line Numbers", isOn: $preferences.showLineNumbers)
                         IDESettingsSeparator()
                         IDESettingsToggleRow(title: "Code Folding", isOn: $preferences.isLineFoldingEnabled)
@@ -199,6 +205,7 @@ public struct IDEPreferencesView: View {
         .onChange(of: preferences.fontName) { applyLivePreferences() }
         .onChange(of: preferences.fontSize) { applyLivePreferences() }
         .onChange(of: preferences.themeID) { applyLivePreferences() }
+        .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
         .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
         .onChange(of: preferences.tabWidth) { applyLivePreferences() }
         .onChange(of: preferences.useSpacesForTab) { applyLivePreferences() }

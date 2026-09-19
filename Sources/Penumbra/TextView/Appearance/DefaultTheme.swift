@@ -82,7 +82,8 @@ public final class DefaultTheme: Penumbra.Theme {
         }
         let traits: FontTraits
         switch resolved {
-        case .keyword, .markupHeading, .markupBold:
+        case .keyword, .markupHeading, .markupHeading1, .markupHeading2, .markupHeading3,
+             .markupHeading4, .markupHeading5, .markupHeading6, .markupBold, .markupTable:
             traits = .bold
         case .markupItalic:
             traits = .italic
@@ -142,14 +143,21 @@ public final class DefaultTheme: Penumbra.Theme {
             return keywordColor
         case .label:
             return punctuationColor
-        case .markupHeading:
+        case .markupHeading, .markupHeading1, .markupHeading2, .markupHeading3,
+             .markupHeading4, .markupHeading5, .markupHeading6:
             return keywordColor
         case .markupBold, .markupItalic:
             return nil
-        case .markupQuote:
+        case .markupStrikethrough, .markupQuote:
             return commentColor
         case .markupRaw:
             return stringColor
+        case .markupList, .markupListUnchecked:
+            return punctuationColor
+        case .markupListChecked:
+            return functionColor
+        case .markupTable:
+            return propertyColor
         case .markupLinkUrl:
             return stringColor
         case .markupLinkLabel:

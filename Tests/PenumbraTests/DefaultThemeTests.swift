@@ -60,6 +60,19 @@ final class DefaultThemeTests: XCTestCase {
         XCTAssertTrue(theme.fontTraits(for: "keyword").contains(.bold))
     }
 
+    func testMarkdownStructureNamesAreStyled() {
+        let theme = DefaultTheme()
+        for name in ["markup.heading.1", "markup.heading.6", "markup.list", "markup.list.checked", "markup.list.unchecked",
+                     "markup.table.header", "markup.strikethrough"] {
+            XCTAssertNotNil(theme.textColor(for: name), "Expected a color for \(name)")
+        }
+        // Levelled headings share the plain heading style; scaling is a PaletteTheme opt-in.
+        XCTAssertEqual(theme.textColor(for: "markup.heading.2")?.cgColor.components, theme.textColor(for: "markup.heading")?.cgColor.components)
+        XCTAssertTrue(theme.fontTraits(for: "markup.heading.2").contains(.bold))
+        XCTAssertTrue(theme.fontTraits(for: "markup.table.header").contains(.bold))
+        XCTAssertNil(theme.font(for: "markup.heading.1"))
+    }
+
     func testInternedSyntaxColorsAreReusedAcrossLookups() {
         let theme = DefaultTheme()
         let first = theme.textColor(for: "keyword")

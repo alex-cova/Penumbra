@@ -18,12 +18,13 @@ final class IDEEditorTheme: @unchecked Sendable {
         )
     }
 
-    func rebuild(themeID: String, fontSize: Double, fontName: String) {
+    func rebuild(themeID: String, fontSize: Double, fontName: String, scaleMarkdownHeadings: Bool = true) {
         let palette = ThemeCatalog.palette(id: themeID, fallbackDark: true)
         theme = PaletteTheme(
             size: CGFloat(fontSize),
             palette: palette,
-            font: IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))
+            font: IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize)),
+            markupStyle: scaleMarkdownHeadings ? .default : .none
         )
     }
 }

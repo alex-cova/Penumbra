@@ -118,6 +118,11 @@ public extension TreeSitterLanguage {
             return .graphQL
         case "markdown":
             return .markdown
+        // Not a file type: `Block/injections.scm` injects this into every `(inline)` node. This switch
+        // is `BundledLanguageProvider`'s only resolution path, and omitting it silently disabled all
+        // inline highlighting (bold, italic, links, code spans) for hosts using that provider.
+        case "markdown_inline":
+            return .markdownInline
         case "http":
             return .http
         case "mermaid":

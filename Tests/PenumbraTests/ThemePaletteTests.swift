@@ -101,6 +101,78 @@ final class PaletteThemeTests: XCTestCase {
         )
     }
 
+    func testMarkdownNamesResolveColorsAndPeelLevels() {
+        let theme = makeTheme()
+        for name in ["markup.heading", "markup.quote", "markup.raw", "markup.link.url", "markup.link.label",
+                     "markup.list", "markup.list.checked", "markup.table", "markup.strikethrough"] {
+            XCTAssertNotNil(theme.textColor(for: name), "Expected a color for \(name)")
+        }
+        // Levelled/nested names peel to their parent for themes that don't distinguish them.
+        XCTAssertEqual(theme.textColor(for: "markup.heading.3")?.cgColor.components, theme.textColor(for: "markup.heading")?.cgColor.components)
+        XCTAssertEqual(theme.textColor(for: "markup.heading.9")?.cgColor.components, theme.textColor(for: "markup.heading")?.cgColor.components)
+        XCTAssertEqual(theme.textColor(for: "markup.table.header")?.cgColor.components, theme.textColor(for: "markup.table")?.cgColor.components)
+        // Emphasis styles by weight only.
+        XCTAssertNil(theme.textColor(for: "markup.bold"))
+        XCTAssertNil(theme.textColor(for: "markup.italic"))
+    }
+
+    func testMarkdownColorsDeriveFromSyntaxRolesUnlessPaletteOverrides() {
+        // Solarized has no markup overrides: heading follows keyword, quote follows comment.
+        let derived = PaletteTheme(size: 13, palette: ThemeCatalog.palette(id: "solarized-light", fallbackDark: false),
+                                   postscriptName: "Menlo-Regular")
+        XCTAssertEqual(derived.textColor(for: "markup.heading")?.cgColor.components, derived.textColor(for: "keyword")?.cgColor.components)
+        XCTAssertEqual(derived.textColor(for: "markup.quote")?.cgColor.components, derived.textColor(for: "comment")?.cgColor.components)
+        // Hextech ships a tuned heading colour.
+        let tuned = makeTheme()
+        XCTAssertNotEqual(tuned.textColor(for: "markup.heading")?.cgColor.components, tuned.textColor(for: "keyword")?.cgColor.components)
+    }
+
+    func testMarkdownFontTraits() {
+        let theme = makeTheme()
+        XCTAssertTrue(theme.fontTraits(for: "markup.bold").contains(.bold))
+        XCTAssertTrue(theme.fontTraits(for: "markup.italic").contains(.italic))
+        XCTAssertTrue(theme.fontTraits(for: "markup.heading.2").contains(.bold))
+        XCTAssertTrue(theme.fontTraits(for: "markup.table.header").contains(.bold))
+        XCTAssertTrue(theme.fontTraits(for: "markup.raw").isEmpty)
+    }
+
+    func testHeadingFontsScaleMonotonically() throws {
+        let theme = makeTheme()
+        let base = theme.font.pointSize
+        let sizes = (1...6).map { theme.font(for: "markup.heading.\($0)")?.pointSize }
+        let h1 = try XCTUnwrap(sizes[0]), h2 = try XCTUnwrap(sizes[1]), h3 = try XCTUnwrap(sizes[2])
+        XCTAssertGreaterThan(h1, h2)
+        XCTAssertGreaterThan(h2, h3)
+        XCTAssertGreaterThan(h3, base)
+        // H5/H6 sit at the base size, so they get no font and stay on the highlighter's colour-only fast path.
+        XCTAssertNil(sizes[4])
+        XCTAssertNil(sizes[5])
+        // Only levelled headings change size.
+        XCTAssertNil(theme.font(for: "markup.heading"))
+        XCTAssertNil(theme.font(for: "keyword"))
+        XCTAssertNil(theme.font(for: "markup.bold"))
+    }
+
+    func testHeadingFontsAreIdentityStable() {
+        // The highlighter coalesces adjacent tokens by comparing fonts with `===`, and derives
+        // bold/italic variants keyed by font, so the theme must hand back the same instance every time.
+        let theme = makeTheme()
+        XCTAssertTrue(theme.font(for: "markup.heading.1") === theme.font(for: "markup.heading.1"))
+    }
+
+    func testMarkupStyleNoneProducesNoHeadingFonts() {
+        let theme = makeTheme(markupStyle: MarkdownMarkupStyle.none)
+        for level in 1...6 {
+            XCTAssertNil(theme.font(for: "markup.heading.\(level)"))
+        }
+        XCTAssertTrue(theme.fontTraits(for: "markup.heading.1").contains(.bold), "headings stay bold with scaling off")
+    }
+
+    private func makeTheme(markupStyle: MarkdownMarkupStyle = .default) -> PaletteTheme {
+        PaletteTheme(size: 13, palette: ThemeCatalog.palette(id: ThemeCatalog.defaultLightID, fallbackDark: false),
+                     postscriptName: "Menlo-Regular", markupStyle: markupStyle)
+    }
+
     func testKeywordAndIncludeAreBold() {
         let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultLightID, fallbackDark: false)
         let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")

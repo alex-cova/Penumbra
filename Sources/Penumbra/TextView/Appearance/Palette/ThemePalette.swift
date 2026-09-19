@@ -46,6 +46,15 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
     /// Foreground for changed/renamed lines in a diff (`@diff.delta`). Defaults to a neutral amber.
     public let diffDelta: UInt32
 
+    // Markdown roles. Optional: `nil` derives from the syntax roles above (heading → keyword,
+    // quote → comment, raw → string, link URL → string, link label → property), so palettes built
+    // without them still render markdown sensibly and only tuned palettes need to set them.
+    public let markupHeading: UInt32?
+    public let markupQuote: UInt32?
+    public let markupRaw: UInt32?
+    public let markupLinkURL: UInt32?
+    public let markupLinkLabel: UInt32?
+
     public init(
         id: String,
         name: String,
@@ -74,7 +83,12 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         punctuation: UInt32,
         diffPlus: UInt32 = 0x227D34,
         diffMinus: UInt32 = 0xC41E3A,
-        diffDelta: UInt32 = 0xB36B00
+        diffDelta: UInt32 = 0xB36B00,
+        markupHeading: UInt32? = nil,
+        markupQuote: UInt32? = nil,
+        markupRaw: UInt32? = nil,
+        markupLinkURL: UInt32? = nil,
+        markupLinkLabel: UInt32? = nil
     ) {
         self.id = id
         self.name = name
@@ -104,6 +118,11 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         self.diffPlus = diffPlus
         self.diffMinus = diffMinus
         self.diffDelta = diffDelta
+        self.markupHeading = markupHeading
+        self.markupQuote = markupQuote
+        self.markupRaw = markupRaw
+        self.markupLinkURL = markupLinkURL
+        self.markupLinkLabel = markupLinkLabel
     }
 
     /// Text-selection highlight shared by ``PaletteTheme/selectionColor`` and live

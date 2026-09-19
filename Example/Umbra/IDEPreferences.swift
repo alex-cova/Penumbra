@@ -12,6 +12,7 @@ public final class IDEPreferences {
         static let fontSize = "com.umbra.editor.fontSize"
         static let fontName = "com.umbra.editor.fontName"
         static let themeID = "com.umbra.editor.themeID"
+        static let scaleMarkdownHeadings = "com.umbra.editor.scaleMarkdownHeadings"
         static let tabWidth = "com.umbra.editor.tabWidth"
         static let useSpacesForTab = "com.umbra.editor.useSpacesForTab"
         static let wrapLines = "com.umbra.editor.wrapLines"
@@ -42,6 +43,11 @@ public final class IDEPreferences {
 
     var themeID: String {
         didSet { UserDefaults.standard.set(themeID, forKey: Keys.themeID); applyTheme() }
+    }
+
+    /// Renders markdown headings (H1–H6) at progressively larger sizes in the editor.
+    var scaleMarkdownHeadings: Bool {
+        didSet { UserDefaults.standard.set(scaleMarkdownHeadings, forKey: Keys.scaleMarkdownHeadings); applyTheme() }
     }
 
     var tabWidth: Int {
@@ -125,6 +131,7 @@ public final class IDEPreferences {
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
         fontName = defaults.string(forKey: Keys.fontName) ?? IDEEditorFonts.defaultFamilyName
         themeID = defaults.string(forKey: Keys.themeID) ?? ThemeCatalog.defaultDarkID
+        scaleMarkdownHeadings = defaults.object(forKey: Keys.scaleMarkdownHeadings) as? Bool ?? true
         tabWidth = defaults.object(forKey: Keys.tabWidth) as? Int ?? 4
         useSpacesForTab = defaults.object(forKey: Keys.useSpacesForTab) as? Bool ?? true
         wrapLines = defaults.object(forKey: Keys.wrapLines) as? Bool ?? false
@@ -174,7 +181,7 @@ public final class IDEPreferences {
     }
 
     func applyTheme() {
-        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: fontSize, fontName: fontName)
+        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: fontSize, fontName: fontName, scaleMarkdownHeadings: scaleMarkdownHeadings)
     }
 
     func snapshot() -> IDEPreferencesSnapshot {
@@ -182,6 +189,7 @@ public final class IDEPreferences {
             fontSize: fontSize,
             fontName: fontName,
             themeID: themeID,
+            scaleMarkdownHeadings: scaleMarkdownHeadings,
             tabWidth: tabWidth,
             useSpacesForTab: useSpacesForTab,
             wrapLines: wrapLines,
@@ -206,6 +214,7 @@ public final class IDEPreferences {
         fontSize = snapshot.fontSize
         fontName = snapshot.fontName
         themeID = snapshot.themeID
+        scaleMarkdownHeadings = snapshot.scaleMarkdownHeadings
         tabWidth = snapshot.tabWidth
         useSpacesForTab = snapshot.useSpacesForTab
         wrapLines = snapshot.wrapLines
@@ -230,6 +239,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var fontSize: Double
     var fontName: String
     var themeID: String
+    var scaleMarkdownHeadings: Bool
     var tabWidth: Int
     var useSpacesForTab: Bool
     var wrapLines: Bool
@@ -252,6 +262,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         fontSize: Double,
         fontName: String = IDEEditorFonts.defaultFamilyName,
         themeID: String = ThemeCatalog.defaultDarkID,
+        scaleMarkdownHeadings: Bool = true,
         tabWidth: Int,
         useSpacesForTab: Bool,
         wrapLines: Bool,
@@ -273,6 +284,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.fontSize = fontSize
         self.fontName = fontName
         self.themeID = themeID
+        self.scaleMarkdownHeadings = scaleMarkdownHeadings
         self.tabWidth = tabWidth
         self.useSpacesForTab = useSpacesForTab
         self.wrapLines = wrapLines
@@ -299,6 +311,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
             ?? IDEEditorFonts.defaultFamilyName
         themeID = try container.decodeIfPresent(String.self, forKey: .themeID)
             ?? ThemeCatalog.defaultDarkID
+        scaleMarkdownHeadings = try container.decodeIfPresent(Bool.self, forKey: .scaleMarkdownHeadings) ?? true
         tabWidth = try container.decode(Int.self, forKey: .tabWidth)
         useSpacesForTab = try container.decode(Bool.self, forKey: .useSpacesForTab)
         wrapLines = try container.decode(Bool.self, forKey: .wrapLines)

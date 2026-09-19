@@ -7,8 +7,12 @@ public extension TreeSitterLanguage {
     /// The block-level Markdown grammar. Headings, lists, block quotes, code fences, and similar
     /// block structure are parsed by this language; inline content within them (emphasis, links,
     /// code spans, etc.) is highlighted by injecting ``markdownInline`` — supply a
-    /// ``MarkdownLanguageProvider`` as the `languageProvider` of `TreeSitterLanguageMode` for that
-    /// injection to be resolved.
+    /// ``MarkdownLanguageProvider`` (or `BundledLanguageProvider` from `PenumbraLanguages`, which also
+    /// highlights fenced code) as the `languageProvider` of `TreeSitterLanguageMode` for that
+    /// injection to be resolved. Without one, inline emphasis, links, and code spans are not highlighted.
+    ///
+    /// Headings are captured per level (`markup.heading.1` … `.6`); a theme that doesn't distinguish
+    /// levels resolves them to `markup.heading`.
     static var markdown: TreeSitterLanguage {
         let highlightsQuery = TreeSitterLanguage.Query(contentsOf: markdownQueryURL(named: "highlights", in: "Block"))
         let injectionsQuery = TreeSitterLanguage.Query(contentsOf: markdownQueryURL(named: "injections", in: "Block"))

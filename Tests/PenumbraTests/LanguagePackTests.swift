@@ -197,6 +197,40 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertNotNil(provider.treeSitterLanguage(named: "swift"))
     }
 
+    func testBundledLanguageProviderResolvesMarkdownInline() {
+        // `Block/injections.scm` injects `markdown_inline` into every inline node. This provider is what
+        // Umbra uses, and it used to return nil here — silently disabling bold/italic/link/code-span
+        // highlighting in the app.
+        XCTAssertNotNil(BundledLanguageProvider().treeSitterLanguage(named: "markdown_inline"))
+    }
+
+    func testBundledLanguageProviderNormalizesFenceAliases() {
+        let provider = BundledLanguageProvider()
+        for alias in ["js", "jsx", "py", "yml", "Swift", "SWIFT", "c++", "sh", "zsh", "console", "rs", "kt", "golang", "ts",
+                      "python {highlight=1}"] {
+            XCTAssertNotNil(provider.treeSitterLanguage(named: alias), "Expected ```\(alias) to resolve to a grammar")
+        }
+        XCTAssertNil(provider.treeSitterLanguage(named: "xyzzy"))
+        XCTAssertNil(provider.treeSitterLanguage(named: "text"))
+    }
+
+    func testMarkdownFenceInjectsAliasedGrammar() {
+        let text = "```js\nconst x = 1;\n```\n"
+        let stringView = StringView(string: text)
+        let lineManager = LineManager(stringView: stringView)
+        lineManager.rebuild()
+        let languageMode = TreeSitterInternalLanguageMode(
+            language: TreeSitterLanguage.markdown.internalLanguage,
+            languageProvider: BundledLanguageProvider(),
+            stringView: stringView,
+            lineManager: lineManager)
+        languageMode.parse()
+        let captures = languageMode.captures(in: ByteRange(from: 0, to: (text as NSString).byteCount))
+        let names = Set(captures.map(\.name))
+        XCTAssertTrue(names.contains("keyword") || names.contains("number"),
+                      "Expected JavaScript captures from the ```js fence, got \(names)")
+    }
+
     func testRustHighlightCaptures() {
         let text = "fn greet(name: &str) -> String {\n    format!(\"hi {}\", name)\n}\n"
         let captures = captureNames(language: .rust, text: text)

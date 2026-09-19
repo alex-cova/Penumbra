@@ -22,10 +22,21 @@ enum HighlightName: String {
     case keyword
     case label
     case markupHeading = "markup.heading"
+    case markupHeading1 = "markup.heading.1"
+    case markupHeading2 = "markup.heading.2"
+    case markupHeading3 = "markup.heading.3"
+    case markupHeading4 = "markup.heading.4"
+    case markupHeading5 = "markup.heading.5"
+    case markupHeading6 = "markup.heading.6"
     case markupBold = "markup.bold"
     case markupItalic = "markup.italic"
+    case markupStrikethrough = "markup.strikethrough"
     case markupQuote = "markup.quote"
     case markupRaw = "markup.raw"
+    case markupList = "markup.list"
+    case markupListChecked = "markup.list.checked"
+    case markupListUnchecked = "markup.list.unchecked"
+    case markupTable = "markup.table"
     case markupLinkUrl = "markup.link.url"
     case markupLinkLabel = "markup.link.label"
     case number

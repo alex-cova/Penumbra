@@ -90,6 +90,17 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     }
 }
 
+extension TreeSitterSyntaxHighlighter {
+    /// The font a token derives its bold/italic variant from. A token with no font of its own inherits
+    /// whatever is already applied at its location, so a capture nested in a larger one (`**bold**`
+    /// inside a `# heading`) keeps the enclosing size instead of snapping back to the body font.
+    /// Captures arrive outermost-first, and default attributes are reapplied before every pass, so
+    /// `currentFont` is always the enclosing capture's font, never a stale one.
+    static func baseFont(tokenFont: UIFont?, currentFont: UIFont?, defaultFont: UIFont) -> UIFont {
+        tokenFont ?? currentFont ?? defaultFont
+    }
+}
+
 private extension TreeSitterSyntaxHighlighter {
     private func setAttributes(for tokens: [TreeSitterSyntaxHighlightToken], on attributedString: NSMutableAttributedString) {
         attributedString.beginEditing()
@@ -125,7 +136,7 @@ private extension TreeSitterSyntaxHighlighter {
                 symbolicTraits.insert(.italic)
             }
             let currentFont = attributedString.attribute(.font, at: token.range.location, effectiveRange: nil) as? UIFont
-            let baseFont = token.font ?? defaultFont
+            let baseFont = Self.baseFont(tokenFont: token.font, currentFont: currentFont, defaultFont: defaultFont)
             let newFont: UIFont
             if !symbolicTraits.isEmpty {
                 newFont = DerivedFontCache.font(baseFont, traits: symbolicTraits)
@@ -201,8 +212,10 @@ private extension UIFont {
 }
 
 private enum DerivedFontCache {
+    // Keyed by the font itself, not its address: an `ObjectIdentifier` doesn't retain, so a
+    // deallocated font's address could be reused by a different one and return the wrong derivation.
     private struct Key: Hashable {
-        let fontID: ObjectIdentifier
+        let base: UIFont
         let traits: Int
     }
 
@@ -210,7 +223,7 @@ private enum DerivedFontCache {
     nonisolated(unsafe) private static var fonts: [Key: UIFont] = [:]
 
     static func font(_ base: UIFont, traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
-        let key = Key(fontID: ObjectIdentifier(base), traits: Int(traits.rawValue))
+        let key = Key(base: base, traits: Int(traits.rawValue))
         lock.lock()
         if let cached = fonts[key] {
             lock.unlock()

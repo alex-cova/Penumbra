@@ -6,7 +6,9 @@ public final class BundledLanguageProvider: TreeSitterLanguageProvider, @uncheck
     public init() {}
 
     public func treeSitterLanguage(named languageName: String) -> TreeSitterLanguage? {
-        BundledLanguages.language(forIdentifier: languageName)
+        // HTML/JS queries emit canonical names, but markdown fences carry whatever the author typed
+        // (```js, ```Swift, ```yml). Canonical names pass through `normalize` unchanged.
+        BundledLanguages.language(forIdentifier: FenceLanguageName.normalize(languageName) ?? languageName)
     }
 }
 

@@ -14,6 +14,18 @@ final class SyntaxHighlightApplyTests: XCTestCase {
         XCTAssertFalse(token.isEmpty, "markup.bold/italic have no color; dropping them silently skipped emphasis")
     }
 
+    func testNestedTokenInheritsEnclosingFont() {
+        let body = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let heading = NSFont.monospacedSystemFont(ofSize: 21, weight: .regular)
+        // `**bold**` inside `# heading`: the bold token has no font of its own and must derive from the
+        // heading's size, not snap back to the body font.
+        XCTAssertTrue(TreeSitterSyntaxHighlighter.baseFont(tokenFont: nil, currentFont: heading, defaultFont: body) === heading)
+        // A token that carries its own font wins.
+        XCTAssertTrue(TreeSitterSyntaxHighlighter.baseFont(tokenFont: heading, currentFont: body, defaultFont: body) === heading)
+        // Ordinary code: nothing applied yet, so the default font is used.
+        XCTAssertTrue(TreeSitterSyntaxHighlighter.baseFont(tokenFont: nil, currentFont: nil, defaultFont: body) === body)
+    }
+
     func testAdjacentSameStyleTokensMerge() {
         let color = NSColor.red
         let first = TreeSitterSyntaxHighlightToken(

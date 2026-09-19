@@ -11,12 +11,24 @@ import Penumbra
 ///
 /// Fenced code blocks, HTML blocks, and YAML/TOML front matter are also injected by
 /// ``TreeSitterLanguage/markdown`` but are named after the languages they contain (e.g. `"swift"`,
-/// `"html"`, `"yaml"`) rather than `"markdown_inline"`. Wrap this provider in your own
-/// `TreeSitterLanguageProvider` if you also want those highlighted.
-public final class MarkdownLanguageProvider: TreeSitterLanguageProvider {
-    public init() {}
+/// `"html"`, `"yaml"`) rather than `"markdown_inline"`. Pass a `fenceLanguageProvider` (such as
+/// `BundledLanguageProvider` from `PenumbraLanguages`) to have those highlighted too.
+public final class MarkdownLanguageProvider: TreeSitterLanguageProvider, @unchecked Sendable {
+    // `TreeSitterLanguage.markdownInline` is a computed property that re-reads and recompiles two
+    // `.scm` files on every access, and a child layer — hence a provider call — is created for every
+    // `(inline)` node in the document. Without this cache a long document recompiles them per paragraph.
+    private let cache = TreeSitterLanguageCache<String>()
+    private let fenceLanguageProvider: TreeSitterLanguageProvider?
+
+    /// - Parameter fenceLanguageProvider: Consulted for every language other than `markdown_inline`.
+    public init(fenceLanguageProvider: TreeSitterLanguageProvider? = nil) {
+        self.fenceLanguageProvider = fenceLanguageProvider
+    }
 
     public func treeSitterLanguage(named languageName: String) -> TreeSitterLanguage? {
-        languageName == "markdown_inline" ? .markdownInline : nil
+        if languageName == "markdown_inline" {
+            return cache.language(for: languageName) { .markdownInline }
+        }
+        return fenceLanguageProvider?.treeSitterLanguage(named: languageName)
     }
 }
