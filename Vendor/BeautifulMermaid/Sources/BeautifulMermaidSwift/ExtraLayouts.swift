@@ -411,7 +411,7 @@ private func appendMindmapNode(
     let x = center.x - size.width / 2
     let y = center.y - size.height / 2
     let fill: ExtraFill = node.depth == 0 ? .accent : .series(node.depth - 1)
-    let textFill: ExtraFill = node.depth == 0 ? .background : .foreground
+    let textFill: ExtraFill = .contrast(on: fill)
     let weight = node.depth == 0 ? 600 : 400
 
     switch node.shape {

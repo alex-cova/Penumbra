@@ -51,6 +51,7 @@ Requires macOS 14+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 - Customizable themes (`Theme`, `DefaultTheme`, `HighlightName`) with font trait overrides, line height, and kern.
 - Invisible-character rendering (tabs, spaces, non-breaking spaces, line breaks, soft line breaks) with custom symbols.
 - Minimap with viewport indicator and click/drag scrolling (`showMinimap`).
+- Floating overlay scrollers (`showsScrollers`, `Sources/Penumbra/TextView/Scroller/`): `TextView` is a clip-view-backed `UIScrollView` shim, not an `NSScrollView`, so AppKit provides no scrollers — `ScrollerOverlayController` owns a vertical and a horizontal `OverlayScrollerView` (geometry in the pure `ScrollerGeometry`) that fade with scrolling, widen on hover, and honor the system "Show scroll bars: Always" style. The vertical scroller is suppressed while the minimap is shown (its viewport indicator serves that role); the horizontal one is independent. Umbra exposes it as the `showScrollbars` preference.
 - Background document preparation via `TextViewState` (parse + highlight off main thread before `setState`).
 
 **Syntax highlighting**

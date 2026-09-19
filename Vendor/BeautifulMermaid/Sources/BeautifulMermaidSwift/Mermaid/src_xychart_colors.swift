@@ -93,6 +93,27 @@ public func mixHexColors(_ bgHex: String, _ fgHex: String, _ ratio: Double) -> S
     )
 }
 
+private func relativeLuminance(_ hex: String) -> Double {
+    let rgb = hexToRgb(hex)
+    func channel(_ v: Int) -> Double {
+        let c = Double(v) / 255.0
+        return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+}
+
+/// Returns whichever of `candidateA` / `candidateB` has the higher WCAG contrast ratio against
+/// `fillHex`. Falls back to `candidateA` when a colour isn't a valid `#rrggbb` hex.
+public func pickContrastingHex(on fillHex: String, _ candidateA: String, _ candidateB: String) -> String {
+    guard isValidHex(fillHex), isValidHex(candidateA), isValidHex(candidateB) else { return candidateA }
+    let fill = relativeLuminance(fillHex)
+    func ratio(_ hex: String) -> Double {
+        let l = relativeLuminance(hex)
+        return (max(fill, l) + 0.05) / (min(fill, l) + 0.05)
+    }
+    return ratio(candidateB) > ratio(candidateA) ? candidateB : candidateA
+}
+
 public func getSeriesColor(_ index: Int, _ accentColor: String, _ bgColor: String? = nil) -> String {
     if index == 0 { return accentColor }
     let safeAccent = isValidHex(accentColor) ? accentColor : CHART_ACCENT_FALLBACK

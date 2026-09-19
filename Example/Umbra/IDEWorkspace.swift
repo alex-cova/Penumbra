@@ -625,6 +625,10 @@ public final class IDEWorkspace {
         preferenceBinding(\.showMinimap)
     }
 
+    public var showScrollbarsBinding: Binding<Bool> {
+        preferenceBinding(\.showScrollbars)
+    }
+
     public var isMetalRenderingEnabledBinding: Binding<Bool> {
         preferenceBinding(\.isMetalRenderingEnabled)
     }
@@ -920,25 +924,30 @@ public final class IDEWorkspace {
 
     func openDocument(from url: URL, selecting range: NSRange? = nil) async {
         do {
-            let identifier = LanguageIdentifier.identifier(for: url)
-            let language = IDELanguageSupport.language(forIdentifier: identifier)
-            let document = try await WorkbenchDocument.load(
-                contentsOf: url,
-                theme: IDEEditorTheme.shared.current,
-                language: language,
-                languageIdentifier: identifier,
-                languageProvider: Self.languageProvider
-            )
-            document.language = language
+            let document: WorkbenchDocument
+            if ImageContentDetector.isImageFile(url) {
+                document = WorkbenchDocument.loadImage(from: url)
+            } else {
+                let identifier = LanguageIdentifier.identifier(for: url)
+                let language = IDELanguageSupport.language(forIdentifier: identifier)
+                document = try await WorkbenchDocument.load(
+                    contentsOf: url,
+                    theme: IDEEditorTheme.shared.current,
+                    language: language,
+                    languageIdentifier: identifier,
+                    languageProvider: Self.languageProvider
+                )
+                document.language = language
+            }
             workbench.openDocument(document)
-            if let range, let selected = workbench.activePane.selectedDocument {
+            if let range, document.contentKind == .text, let selected = workbench.activePane.selectedDocument {
                 selected.selectedRange = range
             }
             recordRecentFile(url)
             showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)
-            if let range {
+            if let range, document.contentKind == .text {
                 let host = host(for: workbench.activePaneID)
                 if host.loadedDocumentID == workbench.activePane.selectedDocumentID {
                     host.textView.selectedRange = range
@@ -946,7 +955,9 @@ public final class IDEWorkspace {
                     _ = host.textView.focusTextInput()
                 }
             }
-            await workspaceBridge.syncWorkbench(workbench)
+            if document.contentKind == .text {
+                await workspaceBridge.syncWorkbench(workbench)
+            }
             refreshPresentation()
         } catch {
             presentError(error)
@@ -971,6 +982,10 @@ public final class IDEWorkspace {
         pane.selectDocument(documentID)
         showDocument(in: pane, host: host)
         refreshPresentation()
+        guard pane.selectedDocument?.contentKind != .image else {
+            host.imageViewerController.focusForInteraction()
+            return true
+        }
         if let location = host.textView.location(at: entry.location) {
             host.textView.selectedRange = NSRange(location: location, length: 0)
             host.textView.scrollRangeToVisible(NSRange(location: location, length: 0))
@@ -1255,6 +1270,14 @@ public final class IDEWorkspace {
     }
 
     private func updateStatus(from textView: TextView) {
+        if workbench.activePane.selectedDocument?.contentKind == .image {
+            statusLine = 1
+            statusColumn = 1
+            statusLanguage = "Image"
+            statusSelectionLength = 0
+            statusRenderer = ""
+            return
+        }
         let range = textView.selectedRange
         if let textLocation = textView.textLocation(at: range.location) {
             statusLine = textLocation.lineNumber + 1
@@ -1321,6 +1344,11 @@ public final class IDEWorkspace {
         host: IDEEditorPaneHost
     ) {
         guard let document = pane.selectedDocument else { return }
+        if document.contentKind == .image {
+            showImageDocument(document, in: pane, host: host)
+            return
+        }
+        host.imageViewerController.hide()
         host.textView.languageIdentifier = document.languageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
@@ -1338,7 +1366,8 @@ public final class IDEWorkspace {
             host.lastScrollOffset = host.textView.contentOffset
         } else if let previousID = host.loadedDocumentID,
            previousID != document.id,
-           let previous = pane.documents.first(where: { $0.id == previousID }) {
+           let previous = pane.documents.first(where: { $0.id == previousID }),
+           previous.contentKind == .text {
             syncTextViewToDocument(host.textView, document: previous, from: host)
             // File-backed documents don't store text on the model. Snapshot the live buffer
             // before this TextView is overwritten so switching back (or a sibling pane
@@ -1377,6 +1406,33 @@ public final class IDEWorkspace {
                 self.applyState(state, for: document, in: pane, host: host)
             }
         )
+    }
+
+    private func showImageDocument(
+        _ document: WorkbenchDocument,
+        in pane: EditorPane,
+        host: IDEEditorPaneHost
+    ) {
+        guard let url = document.url else { return }
+        let isSameDocument = host.loadedDocumentID == document.id
+        if isSameDocument, host.imageViewerController.isShowing(url: url) {
+            return
+        }
+        if let previousID = host.loadedDocumentID,
+           previousID != document.id,
+           let previous = pane.documents.first(where: { $0.id == previousID }),
+           previous.contentKind == .text {
+            syncTextViewToDocument(host.textView, document: previous, from: host)
+            previous.pendingState = host.textView.makeCapturedState()
+        }
+        host.markdownPreviewController.closeIfNotMarkdown()
+        host.imageViewerController.show(url: url)
+        host.loadedDocumentID = document.id
+        host.loadedGeneration = document.contentGeneration
+        if pane.id == workbench.activePaneID {
+            adapter.refreshCachedDocuments()
+            host.imageViewerController.focusForInteraction()
+        }
     }
 
     private func applyState(

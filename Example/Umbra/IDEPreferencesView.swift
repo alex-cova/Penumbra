@@ -108,6 +108,12 @@ public struct IDEPreferencesView: View {
                         IDESettingsToggleRow(title: "Minimap", isOn: $preferences.showMinimap)
                         IDESettingsSeparator()
                         IDESettingsToggleRow(
+                            title: "Scrollbars",
+                            caption: "The vertical scrollbar appears when the minimap is off.",
+                            isOn: $preferences.showScrollbars
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
                             title: "Metal Renderer",
                             caption: "Paints large files on the GPU.",
                             isOn: $preferences.isMetalRenderingEnabled
@@ -213,6 +219,7 @@ public struct IDEPreferencesView: View {
         .onChange(of: preferences.isLineFoldingEnabled) { applyLivePreferences() }
         .onChange(of: preferences.wrapLines) { applyLivePreferences() }
         .onChange(of: preferences.showMinimap) { applyLivePreferences() }
+        .onChange(of: preferences.showScrollbars) { applyLivePreferences() }
         .onChange(of: preferences.isMetalRenderingEnabled) { applyLivePreferences() }
         .onChange(of: preferences.showMethodSeparators) { applyLivePreferences() }
         .onChange(of: preferences.highlightsOccurrencesOfSelection) { applyLivePreferences() }

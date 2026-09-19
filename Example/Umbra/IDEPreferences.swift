@@ -19,6 +19,7 @@ public final class IDEPreferences {
         static let showLineNumbers = "com.umbra.editor.showLineNumbers"
         static let isLineFoldingEnabled = "com.umbra.editor.isLineFoldingEnabled"
         static let showMinimap = "com.umbra.editor.showMinimap"
+        static let showScrollbars = "com.umbra.editor.showScrollbars"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
@@ -72,6 +73,12 @@ public final class IDEPreferences {
 
     var showMinimap: Bool {
         didSet { UserDefaults.standard.set(showMinimap, forKey: Keys.showMinimap) }
+    }
+
+    /// Floating overlay scrollbars. The vertical one only appears while the minimap is off, since
+    /// the minimap's viewport indicator already serves that role.
+    var showScrollbars: Bool {
+        didSet { UserDefaults.standard.set(showScrollbars, forKey: Keys.showScrollbars) }
     }
 
     var isMetalRenderingEnabled: Bool {
@@ -138,6 +145,7 @@ public final class IDEPreferences {
         showLineNumbers = defaults.object(forKey: Keys.showLineNumbers) as? Bool ?? true
         isLineFoldingEnabled = defaults.object(forKey: Keys.isLineFoldingEnabled) as? Bool ?? true
         showMinimap = defaults.object(forKey: Keys.showMinimap) as? Bool ?? true
+        showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
@@ -160,6 +168,7 @@ public final class IDEPreferences {
         textView.isLineFoldingEnabled = isLineFoldingEnabled
         textView.isLineWrappingEnabled = wrapLines
         textView.showMinimap = showMinimap
+        textView.showsScrollers = showScrollbars
         textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         textView.showMethodSeparators = showMethodSeparators
         textView.highlightsOccurrencesOfSelection = highlightsOccurrencesOfSelection
@@ -206,7 +215,8 @@ public final class IDEPreferences {
             lineHeightMultiplier: lineHeightMultiplier,
             isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
             isDistractionFreeModeEnabled: isDistractionFreeModeEnabled,
-            isFocusModeEnabled: isFocusModeEnabled
+            isFocusModeEnabled: isFocusModeEnabled,
+            showScrollbars: showScrollbars
         )
     }
 
@@ -232,6 +242,7 @@ public final class IDEPreferences {
         isTypewriterScrollingEnabled = snapshot.isTypewriterScrollingEnabled
         isDistractionFreeModeEnabled = snapshot.isDistractionFreeModeEnabled
         isFocusModeEnabled = snapshot.isFocusModeEnabled
+        showScrollbars = snapshot.showScrollbars
     }
 }
 
@@ -257,6 +268,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var isTypewriterScrollingEnabled: Bool
     var isDistractionFreeModeEnabled: Bool
     var isFocusModeEnabled: Bool
+    var showScrollbars: Bool
 
     init(
         fontSize: Double,
@@ -279,7 +291,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         lineHeightMultiplier: Double = 1,
         isTypewriterScrollingEnabled: Bool = false,
         isDistractionFreeModeEnabled: Bool = false,
-        isFocusModeEnabled: Bool = false
+        isFocusModeEnabled: Bool = false,
+        showScrollbars: Bool = true
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
@@ -302,6 +315,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.isTypewriterScrollingEnabled = isTypewriterScrollingEnabled
         self.isDistractionFreeModeEnabled = isDistractionFreeModeEnabled
         self.isFocusModeEnabled = isFocusModeEnabled
+        self.showScrollbars = showScrollbars
     }
 
     init(from decoder: Decoder) throws {
@@ -329,6 +343,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isTypewriterScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isTypewriterScrollingEnabled) ?? false
         isDistractionFreeModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDistractionFreeModeEnabled) ?? false
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false
+        showScrollbars = try container.decodeIfPresent(Bool.self, forKey: .showScrollbars) ?? true
     }
 }
 

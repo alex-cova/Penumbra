@@ -9,6 +9,7 @@ final class IDEEditorPaneHost: NSView {
     let pane: EditorPane
     let textView: TextView
     let markdownPreviewController: MarkdownPreviewController
+    let imageViewerController: ImageViewerController
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
@@ -35,13 +36,15 @@ final class IDEEditorPaneHost: NSView {
         textView.backgroundColor = IDEAppearance.NSToken.editor
         textView.keymap = preferences.keymap
         markdownPreviewController = MarkdownPreviewController(textView: textView)
+        imageViewerController = ImageViewerController()
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         preferences.apply(to: textView)
 
         markdownPreviewController.embed(editorView: textView)
-        let container = markdownPreviewController.containerView
+        imageViewerController.embed(contentView: markdownPreviewController.containerView)
+        let container = imageViewerController.containerView
         container.translatesAutoresizingMaskIntoConstraints = false
         addSubview(container)
         NSLayoutConstraint.activate([

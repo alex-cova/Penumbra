@@ -16,6 +16,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
     public var scrollOffsetX: CGFloat
     public var scrollOffsetY: CGFloat
     public var isFileBacked: Bool
+    public var contentKind: WorkbenchDocumentContentKind
 
     public init(
         id: UUID,
@@ -29,7 +30,8 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         selectedRangeLength: Int = 0,
         scrollOffsetX: CGFloat = 0,
         scrollOffsetY: CGFloat = 0,
-        isFileBacked: Bool = false
+        isFileBacked: Bool = false,
+        contentKind: WorkbenchDocumentContentKind = .text
     ) {
         self.id = id
         self.documentID = documentID
@@ -43,6 +45,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.scrollOffsetX = scrollOffsetX
         self.scrollOffsetY = scrollOffsetY
         self.isFileBacked = isFileBacked
+        self.contentKind = contentKind
     }
 
     public init(document: WorkbenchDocument) {
@@ -58,6 +61,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.scrollOffsetX = document.scrollOffset.x
         self.scrollOffsetY = document.scrollOffset.y
         self.isFileBacked = document.isFileBacked
+        self.contentKind = document.contentKind
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,6 +78,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         scrollOffsetX = try container.decode(CGFloat.self, forKey: .scrollOffsetX)
         scrollOffsetY = try container.decode(CGFloat.self, forKey: .scrollOffsetY)
         isFileBacked = try container.decodeIfPresent(Bool.self, forKey: .isFileBacked) ?? false
+        contentKind = try container.decodeIfPresent(WorkbenchDocumentContentKind.self, forKey: .contentKind) ?? .text
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -90,6 +95,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         try container.encode(scrollOffsetX, forKey: .scrollOffsetX)
         try container.encode(scrollOffsetY, forKey: .scrollOffsetY)
         try container.encode(isFileBacked, forKey: .isFileBacked)
+        try container.encode(contentKind, forKey: .contentKind)
     }
 
     public func makeDocument(language: TreeSitterLanguage? = nil) -> WorkbenchDocument {
@@ -106,6 +112,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
             scrollOffset: CGPoint(x: scrollOffsetX, y: scrollOffsetY)
         )
         document.isFileBacked = isFileBacked
+        document.contentKind = contentKind
         return document
     }
 
@@ -122,6 +129,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         case scrollOffsetX
         case scrollOffsetY
         case isFileBacked
+        case contentKind
     }
 }
 

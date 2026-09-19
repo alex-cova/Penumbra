@@ -172,6 +172,12 @@ extension DiagramRenderer {
                 _hex(theme.background)
             )
             return BMColor(hex: hex)
+        case .contrast(let base):
+            guard let baseHex = _hex(_extraBMColor(base)),
+                  let fgHex = _hex(theme.foreground),
+                  let bgHex = _hex(theme.background)
+            else { return theme.foreground }
+            return BMColor(hex: pickContrastingHex(on: baseHex, fgHex, bgHex))
         }
     }
 
@@ -212,6 +218,8 @@ private func extraFillCss(_ fill: ExtraFill, _ colors: DiagramColors) -> String 
     case .border: return colors.border ?? colors.fg
     case .series(let index):
         return getSeriesColor(index, colors.accent ?? CHART_ACCENT_FALLBACK, colors.bg)
+    case .contrast(let base):
+        return pickContrastingHex(on: extraFillCss(base, colors), colors.fg, colors.bg)
     }
 }
 

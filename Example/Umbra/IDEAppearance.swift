@@ -111,6 +111,8 @@ enum IDEFileIcon {
         case "json": "curlybraces.square"
         case "md", "markdown": "text.book.closed"
         case "py": "chevron.left.forwardslash.chevron.right"
+        case "bmp", "gif", "heic", "heif", "icns", "ico", "jpeg", "jpg", "png", "tiff", "tif", "webp":
+            "photo"
         default: "doc.text"
         }
     }

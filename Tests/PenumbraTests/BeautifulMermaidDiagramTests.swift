@@ -241,6 +241,39 @@ final class BeautifulMermaidDiagramTests: XCTestCase {
         })
     }
 
+    func testMindmapTextContrastsWithNodeFill() throws {
+        let source = """
+        mindmap
+          root
+            A
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let textFills = scene.items.compactMap { item -> ExtraFill? in
+            if case .text(_, _, _, _, let fill, _, _) = item { return fill }
+            return nil
+        }
+        XCTAssertEqual(textFills.count, 2)
+        for fill in textFills {
+            guard case .contrast = fill else {
+                XCTFail("Mindmap text must be chosen by contrast against its node fill, got \(fill)")
+                return
+            }
+        }
+    }
+
+    func testPickContrastingHexChoosesLegibleColor() {
+        // Dark theme: light grey node fill must get the dark (background) text colour.
+        XCTAssertEqual(pickContrastingHex(on: "#e6e6e6", "#f0f0f0", "#101012"), "#101012")
+        // Light theme: dark node fill must get the light text colour.
+        XCTAssertEqual(pickContrastingHex(on: "#1e293b", "#111111", "#ffffff"), "#ffffff")
+        // Invalid input falls back to the first candidate rather than crashing.
+        XCTAssertEqual(pickContrastingHex(on: "not-a-colour", "#111111", "#ffffff"), "#111111")
+    }
+
     func testMindmapUsesElbowConnectors() throws {
         let source = """
         mindmap

@@ -95,6 +95,7 @@ struct UmbraApp: App {
                 Toggle("Code Folding", isOn: workspace.isLineFoldingEnabledBinding)
                 Toggle("Word Wrap", isOn: workspace.wrapLinesBinding)
                 Toggle("Minimap", isOn: workspace.showMinimapBinding)
+                Toggle("Scrollbars", isOn: workspace.showScrollbarsBinding)
                 Divider()
                 Menu("Syntax") {
                     ForEach(IDELanguageSupport.selectableSyntaxes) { option in

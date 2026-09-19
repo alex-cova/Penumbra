@@ -2,6 +2,12 @@ import CoreGraphics
 import EditorIntelligence
 import Foundation
 
+/// How a ``WorkbenchDocument`` is presented in the editor pane.
+public enum WorkbenchDocumentContentKind: String, Codable, Sendable, Equatable {
+    case text
+    case image
+}
+
 /// In-memory document tracked by an ``EditorPane``.
 public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     public let id: UUID
@@ -30,6 +36,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     /// of relying on `loadedDocumentID` alone, which can't distinguish "same document, unchanged"
     /// from "same document, edited elsewhere."
     public var contentGeneration: UInt64 = 0
+    public var contentKind: WorkbenchDocumentContentKind = .text
 
     public init(
         id: UUID = UUID(),
@@ -92,6 +99,19 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
                 snapshot.substring(utf16Offset: offset, length: length)
             }
         }
+        return document
+    }
+
+    /// Creates a read-only image tab backed by a file URL.
+    public static func loadImage(from url: URL) -> WorkbenchDocument {
+        let document = WorkbenchDocument(
+            url: url,
+            displayName: url.lastPathComponent,
+            text: "",
+            language: nil,
+            languageIdentifier: nil
+        )
+        document.contentKind = .image
         return document
     }
 

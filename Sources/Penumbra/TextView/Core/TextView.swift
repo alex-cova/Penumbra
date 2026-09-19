@@ -139,6 +139,7 @@ public struct MetalPerformanceStats: Sendable {
         set {
             textInputView.theme = newValue
             minimapView.applyTheme()
+            scrollerOverlay.applyTheme()
             findPanelController.panelView.apply(theme: newValue)
         }
     }
@@ -939,6 +940,19 @@ public struct MetalPerformanceStats: Sendable {
             }
         }
     }
+    /// Whether floating overlay scrollers are shown when the content overflows. On by default.
+    ///
+    /// The vertical scroller is suppressed while ``showMinimap`` is true, since the minimap's
+    /// viewport indicator already fills that role; the horizontal scroller is unaffected by the
+    /// minimap. Both fade out when idle, or stay visible if the system's "Show scroll bars" setting
+    /// is "Always".
+    public var showsScrollers = true {
+        didSet {
+            if showsScrollers != oldValue {
+                setNeedsLayout()
+            }
+        }
+    }
     /// Width, in points, of the minimap shown when ``showMinimap`` is true.
     public var minimapWidth: CGFloat = 100 {
         didSet {
@@ -1059,7 +1073,10 @@ public struct MetalPerformanceStats: Sendable {
     #if DEBUG
     /// Test hook — the minimap overlay, so tests can render and probe it directly.
     var minimapViewForTesting: MinimapView { minimapView }
+    /// Test hook — the overlay scrollers, so tests can probe and drive them directly.
+    var scrollerOverlayForTesting: ScrollerOverlayController { scrollerOverlay }
     #endif
+    private let scrollerOverlay = ScrollerOverlayController()
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
     private var _inputAccessoryView: UIView?
     private var delegateAllowsEditingToBegin: Bool {
@@ -1156,11 +1173,17 @@ public struct MetalPerformanceStats: Sendable {
         minimapView.applyTheme()
         minimapView.collapseOverlay()
         addFixedOverlaySubview(minimapView)
-        // Keep the minimap's indicator in sync with programmatic and animated scrolls, which
-        // don't necessarily trigger a layout pass (see `scrollWheel`'s note).
+        scrollerOverlay.install(in: self, themeSource: textInputView) { [weak self] in
+            self?.suspendTypewriterScrollingForUserInteraction()
+        }
+        // Keep the minimap's indicator and the scrollers in sync with programmatic and animated
+        // scrolls, which don't necessarily trigger a layout pass (see `scrollWheel`'s note).
         onDidScroll = { [weak self] in
-            guard let self, self.showMinimap else { return }
-            self.minimapView.setNeedsDisplayForContentChange()
+            guard let self else { return }
+            if self.showMinimap {
+                self.minimapView.setNeedsDisplayForContentChange()
+            }
+            self.scrollerOverlay.handleScroll()
         }
         _ = findPanelController.panelView
         tapGestureRecognizer.delegate = self
@@ -1223,7 +1246,10 @@ public struct MetalPerformanceStats: Sendable {
         // reaching it, matching how the gutter's width is already accounted for by
         // constrainingLineWidth on the leading edge.
         let reservedMinimapWidth = showMinimap ? minimapWidth : 0
-        textInputView.scrollViewWidth = frame.width - reservedMinimapWidth
+        // Always-visible (legacy) system scrollers take a permanent strip; overlay scrollers
+        // float over the text and reserve nothing.
+        let reservedScrollerWidth = scrollerOverlay.reservedTrailingWidth(for: self)
+        textInputView.scrollViewWidth = frame.width - reservedMinimapWidth - reservedScrollerWidth
         textInputView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, frame.width), height: max(contentSize.height, frame.height))
         textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
         // UIView.layout does not walk children; explicitly layout the input view
@@ -1251,6 +1277,7 @@ public struct MetalPerformanceStats: Sendable {
             // trailing edge. `isHidden` alone does not always clip a layer-backed child's border.
             minimapView.collapseOverlay()
         }
+        scrollerOverlay.layout(in: self)
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
         findPanelController.panelView.frame = CGRect(x: 0,
                                                      y: 0,
@@ -1273,6 +1300,8 @@ public struct MetalPerformanceStats: Sendable {
         if showMinimap {
             minimapView.setNeedsDisplayForContentChange()
         }
+        // Also covers a wheel event that hit the end of the document and didn't move it.
+        scrollerOverlay.flash()
     }
 
     override open func updateTrackingAreas() {
@@ -1292,6 +1321,7 @@ public struct MetalPerformanceStats: Sendable {
 
     override open func mouseMoved(with event: NSEvent) {
         distractionFreeController.mouseDidMove()
+        scrollerOverlay.mouseMoved(to: convert(event.locationInWindow, from: nil))
         super.mouseMoved(with: event)
     }
 
@@ -2244,6 +2274,9 @@ private extension TextView {
                 view.alphaValue = alpha
             }
         }
+        // The scrollers manage their own auto-hide opacity, so they follow the chrome through a
+        // suppression flag instead of being faded directly.
+        scrollerOverlay.setChromeVisible(isVisible, duration: duration)
         editorDelegate?.textView(
             self,
             didChangeDistractionFreeChromeVisibility: isVisible,

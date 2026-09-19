@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public enum ExtraFill: Equatable, Sendable {
+public indirect enum ExtraFill: Equatable, Sendable {
     case none
     case background
     case foreground
@@ -10,6 +10,8 @@ public enum ExtraFill: Equatable, Sendable {
     case surface
     case border
     case series(Int)
+    /// Theme foreground or background, whichever is more legible on top of the given fill.
+    case contrast(on: ExtraFill)
 }
 
 public enum ExtraAnchor: String, Sendable {

@@ -130,7 +130,7 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     ) async throws {
         var replacements: [UUID: WorkbenchDocument] = [:]
         for document in allDocuments() {
-            guard document.isFileBacked, let url = document.url else {
+            guard document.contentKind == .text, document.isFileBacked, let url = document.url else {
                 continue
             }
             let loaded = try await WorkbenchDocument.load(
@@ -153,6 +153,7 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
             spliced.pendingState = loaded.pendingState
             spliced.isFileBacked = loaded.isFileBacked
             spliced.rangeReader = loaded.rangeReader
+            spliced.contentKind = document.contentKind
             replacements[document.id] = spliced
         }
         guard !replacements.isEmpty else {
