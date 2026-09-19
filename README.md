@@ -8,6 +8,16 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 
 ---
 
+## Screenshots
+
+**Umbra** — the macOS editor app built on Penumbra — with syntax highlighting, minimap, and Markdown preview (including Mermaid diagrams):
+
+| Markdown editing | Mermaid diagrams in preview |
+| :---: | :---: |
+| ![Umbra editing a Markdown file with syntax highlighting and minimap](Screenshots/umbra-markdown-editing.png) | ![Umbra Markdown preview rendering Mermaid sequence and class diagrams](Screenshots/umbra-mermaid-diagrams.png) |
+
+---
+
 ## Key Features
 
 ### 🎨 Native Text Editor Engine (`Penumbra`)
