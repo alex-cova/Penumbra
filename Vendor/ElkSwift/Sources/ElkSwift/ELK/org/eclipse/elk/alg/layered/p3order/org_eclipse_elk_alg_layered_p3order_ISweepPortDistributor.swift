@@ -15,7 +15,7 @@ package protocol org_eclipse_elk_alg_layered_p3order_ISweepPortDistributor: org_
 }
 
 package extension org_eclipse_elk_alg_layered_p3order_ISweepPortDistributor {
-    package static func create<R: RandomNumberGenerator>(
+    static func create<R: RandomNumberGenerator>(
         _ cmt: org_eclipse_elk_alg_layered_p3order_CrossMinType,
         _ r: inout R,
         _ currentOrder: [[org_eclipse_elk_alg_layered_graph_LNode]]

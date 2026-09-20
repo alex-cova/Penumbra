@@ -93,7 +93,7 @@ package class AbstractRandomListAccessor<T> {
      * @param size the list's new size.
      */
     package func ensureListSize(size: Int) {
-        for i in list.count..<size {
+        for _ in list.count..<size {
             list.append(provideDefault())
         }
     }

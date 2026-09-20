@@ -35,14 +35,7 @@ package class org_eclipse_elk_alg_layered_p3order_GreedyPortDistributor:
 
         for node in nodeOrder[currentIndex] {
             let pc = portConstraints(of: node)
-            let sidePorts = node.getPortSideView(side)
-            if sidePorts.count > 1 {
-                let label = node.getLabels().first?.getText() ?? "node\(node.id)"
-            }
             if pc.isOrderFixed() {
-                if sidePorts.count > 1 {
-                    let label = node.getLabels().first?.getText() ?? "node\(node.id)"
-                }
                 continue
             }
 

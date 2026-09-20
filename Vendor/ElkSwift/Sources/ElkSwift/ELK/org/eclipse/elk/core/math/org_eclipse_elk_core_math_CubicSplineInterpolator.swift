@@ -53,7 +53,7 @@ package class CubicSplineInterpolator: ISplineInterpolator {
      * @return piecewise bezier spline
      */
     package func calculateClosedBezierSpline(_ points: [KVector]) -> BezierSpline {
-        var spline = BezierSpline()
+        let spline = BezierSpline()
         
         let n = points.count
         let even = (n % 2 == 0)
@@ -61,7 +61,7 @@ package class CubicSplineInterpolator: ISplineInterpolator {
         let mRaw = even ? (n - 2) / 2 : (n - 1) / 2
         let m = min(mRaw, CubicSplineInterpolator.MAX_K)
         
-        var d: [KVector] = Array(repeating: KVector(), count: n)
+        let d: [KVector] = Array(repeating: KVector(), count: n)
         
         for i in 0..<n {
             // calculate sum for every Di
@@ -120,7 +120,7 @@ package class CubicSplineInterpolator: ISplineInterpolator {
     package func calculateOpenBezierSpline(_ points: [KVector], _ startTan: KVector, _ endTan: KVector, _ tangentScale: Bool) -> BezierSpline {
         // in this case the paper talks about n-1 points, therefore it's kind of inconsistent to the
         // closed approach
-        var spline = BezierSpline()
+        let spline = BezierSpline()
         
         let n = points.count - 1
         // t is the "extended curve" degenerating the points to a closed loop

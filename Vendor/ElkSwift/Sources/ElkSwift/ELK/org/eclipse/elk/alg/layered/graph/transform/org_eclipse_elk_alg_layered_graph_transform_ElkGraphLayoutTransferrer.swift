@@ -20,7 +20,7 @@ package class ElkGraphLayoutTransferrer {
         let parentElkNode = graphOrigin
         let parentLNode = lgraph.getParentNode()
         
-        var offset = KVector(lgraph.getOffset())
+        let offset = KVector(lgraph.getOffset())
         
         let lPadding = lgraph.getPadding()
         offset.x += lPadding.left
@@ -148,8 +148,8 @@ package class ElkGraphLayoutTransferrer {
         }
 
 
-        var bendPoints = ledge.getBendPoints()
-        var edgeOffset = KVector(offset)
+        let bendPoints = ledge.getBendPoints()
+        let edgeOffset = KVector(offset)
         edgeOffset.add(calculateHierarchicalOffset(ledge))
 
         var sourcePoint: KVector
@@ -163,7 +163,7 @@ package class ElkGraphLayoutTransferrer {
         }
         bendPoints.addFirst(sourcePoint)
 
-        var targetPoint = ledge.target?.getAbsoluteAnchor() ?? KVector()
+        let targetPoint = ledge.target?.getAbsoluteAnchor() ?? KVector()
         if let targetOffset = ledge.getProperty(InternalProperties.TARGET_OFFSET) as? KVector {
             targetPoint.add(targetOffset)
         }
@@ -186,7 +186,7 @@ package class ElkGraphLayoutTransferrer {
         }
 
         if let junctionPoints = ledge.getProperty(LayeredOptions.JUNCTION_POINTS) as? KVectorChain {
-            var junctionPointsCopy = junctionPoints
+            let junctionPointsCopy = junctionPoints
             junctionPointsCopy.offset(edgeOffset)
             elkedge.setProperty(LayeredOptions.JUNCTION_POINTS, junctionPointsCopy)
         } else {
@@ -205,7 +205,7 @@ package class ElkGraphLayoutTransferrer {
             return ZERO_OFFSET
         }
 
-        var result = KVector(x: 0.0, y: 0.0)
+        let result = KVector(x: 0.0, y: 0.0)
         var currentGraph: LGraph? = ledge.source?.node?.graph
 
         while let cg = currentGraph, cg !== targetCoordinateSystem {
@@ -270,10 +270,10 @@ package class ElkGraphLayoutTransferrer {
     
     @discardableResult
     package static func applyLayoutNonMutating(_ lgraph: LGraph, _ parentElkNode: ElkNode) -> ElkNode {
-        var parentElkNode = parentElkNode
+        let parentElkNode = parentElkNode
         let parentLNode = lgraph.getParentNode()
         
-        var offset = lgraph.getOffset().clone()
+        let offset = lgraph.getOffset().clone()
         let lPadding = lgraph.getPadding()
         offset.x += lPadding.left
         offset.y += lPadding.top
@@ -421,7 +421,7 @@ package class ElkGraphLayoutTransferrer {
     package static func applyEdgeLayout(_ ledge: LEdge, elkedge: ElkEdge, routing: EdgeRouting, offset: KVector, additionalPadding: LPadding) {
         var bendPoints = ledge.getBendPoints().clone()
 
-        var edgeOffset = KVector(offset)
+        let edgeOffset = KVector(offset)
         edgeOffset.add(calculateHierarchicalOffsetNonMutating(ledge))
 
         var sourcePoint: KVector
@@ -435,7 +435,7 @@ package class ElkGraphLayoutTransferrer {
         }
         bendPoints.addFirst(sourcePoint)
 
-        var targetPoint = ledge.target?.getAbsoluteAnchor() ?? KVector()
+        let targetPoint = ledge.target?.getAbsoluteAnchor() ?? KVector()
         if let targetOffset = ledge.getProperty(InternalProperties.TARGET_OFFSET) as? KVector {
             targetPoint.add(targetOffset)
         }
@@ -473,7 +473,7 @@ package class ElkGraphLayoutTransferrer {
             return ZERO_OFFSET
         }
 
-        var result = KVector(x: 0.0, y: 0.0)
+        let result = KVector(x: 0.0, y: 0.0)
         var currentGraph: LGraph? = ledge.source?.node?.graph
 
         while let cg = currentGraph, cg !== targetCoordinateSystem {

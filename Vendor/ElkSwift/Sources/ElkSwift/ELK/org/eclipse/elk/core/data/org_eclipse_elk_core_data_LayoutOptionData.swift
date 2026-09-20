@@ -158,7 +158,7 @@ package final class LayoutOptionData: ILayoutMetaData, IProperty, Hashable {
 
     /// Tries to turn the given string representation into an enumeration.
     package func enumForString(_ leString: String) -> Any? {
-        guard let clazz = clazz, let enumType = clazz as? AnyEnum.Type else {
+        guard let clazz = clazz, let enumType = clazz as? any AnyEnum.Type else {
             return nil
         }
 
@@ -293,7 +293,7 @@ package final class LayoutOptionData: ILayoutMetaData, IProperty, Hashable {
             switch type {
             case .ENUM, .ENUMSET:
                 checkEnumClass()
-                guard let clazz = clazz, let enumType = clazz as? AnyEnum.Type else {
+                guard let clazz = clazz, let enumType = clazz as? any AnyEnum.Type else {
                     choices = []
                     return []
                 }
@@ -317,7 +317,7 @@ package final class LayoutOptionData: ILayoutMetaData, IProperty, Hashable {
         switch type {
         case .ENUM, .ENUMSET:
             checkEnumClass()
-            guard let clazz = clazz, let enumType = clazz as? AnyEnum.Type else {
+            guard let clazz = clazz, let enumType = clazz as? any AnyEnum.Type else {
                 return 0
             }
 
@@ -334,7 +334,7 @@ package final class LayoutOptionData: ILayoutMetaData, IProperty, Hashable {
         switch type {
         case .ENUM, .ENUMSET:
             checkEnumClass()
-            guard let clazz = clazz, let enumType = clazz as? AnyEnum.Type else {
+            guard let clazz = clazz, let enumType = clazz as? any AnyEnum.Type else {
                 return nil
             }
 

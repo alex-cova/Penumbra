@@ -234,12 +234,10 @@ package class LayoutConfigurator: IGraphElementVisitor {
      * @return the most specific `MapPropertyHolder` fitting the passed `element`'s type.
      */
     package func findClassOptions(for element: ElkGraphElement) -> MapPropertyHolder {
-        var combined = MapPropertyHolder()
-        
-        if element is ElkGraphElement {
-            combined.copyProperties(from: classOptionMap[ObjectIdentifier(ElkGraphElement.self)] ?? MapPropertyHolder())
-        }
-        
+        let combined = MapPropertyHolder()
+
+        combined.copyProperties(from: classOptionMap[ObjectIdentifier(ElkGraphElement.self)] ?? MapPropertyHolder())
+
         if element is ElkShape {
             combined.copyProperties(from: classOptionMap[ObjectIdentifier(ElkShape.self)] ?? MapPropertyHolder())
         }

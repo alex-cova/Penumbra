@@ -655,7 +655,7 @@ package class ElkGraphImporter {
         
         var graphProperties = lgraph.getProperty(InternalProperties.GRAPH_PROPERTIES) as? Set<GraphProperties> ?? []
 
-        var portConstraints = lnode.getProperty(LayeredOptions.PORT_CONSTRAINTS) as? PortConstraints ?? .UNDEFINED
+        let portConstraints = lnode.getProperty(LayeredOptions.PORT_CONSTRAINTS) as? PortConstraints ?? .UNDEFINED
         if portConstraints == .UNDEFINED {
             lnode.setProperty(LayeredOptions.PORT_CONSTRAINTS, PortConstraints.FREE)
         } else if portConstraints != PortConstraints.FREE {
@@ -833,7 +833,7 @@ package class ElkGraphImporter {
         }
 
         if targetLPort == nil {
-            var portType = PortType.INPUT
+            let portType = PortType.INPUT
             var targetPoint: KVector? = nil
 
             if let edgeSection = edgeSection, (targetLNode.getProperty(LayeredOptions.PORT_CONSTRAINTS) as? PortConstraints ?? .UNDEFINED).isSideFixed() {
@@ -881,7 +881,7 @@ package class ElkGraphImporter {
 
         if let edgeSection = edgeSection, !edgeSection.bendPoints.isEmpty && bendPointsRequired {
             let originalBendpoints = ElkUtil.createVectorChain(edgeSection)
-            var importedBendpoints = KVectorChain()
+            let importedBendpoints = KVectorChain()
 
             for point in originalBendpoints {
                 importedBendpoints.add(KVector(point.x, point.y))

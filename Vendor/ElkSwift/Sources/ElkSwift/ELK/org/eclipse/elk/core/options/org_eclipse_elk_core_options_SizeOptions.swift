@@ -95,7 +95,7 @@ package struct SizeOptions: OptionSet, Hashable {
             .outsideNodeLabelsOverhang,
             .portsOverhang,
             .uniformPortSpacing,
-            .spaceEfficientPortLabels,
+            SizeOptions(rawValue: 1 << 6),
             .forceTabularNodeLabels,
             .asymmetrical
         ]

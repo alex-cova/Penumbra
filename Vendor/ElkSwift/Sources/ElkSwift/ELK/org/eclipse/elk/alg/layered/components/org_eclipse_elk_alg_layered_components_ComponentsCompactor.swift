@@ -86,7 +86,7 @@ package class ComponentsCompactor {
         for cc in ccs.components {
             for edge in cc.getExternalEdges() {
                 guard let src = edge.source, let tgt = edge.target else { continue }
-                var vc = KVectorChain(edge.bendPoints.elements)
+                let vc = KVectorChain(edge.bendPoints.elements)
                 vc.insert(src.absoluteAnchor, at: 0)
                 vc.append(tgt.absoluteAnchor)
 
@@ -351,13 +351,13 @@ package class ComponentsCompactor {
             p2 = getExternalPortPosition(p2, externalPortSide)
         }
 
-        var points = KVectorChain(edge.bendPoints.elements)
+        let points = KVectorChain(edge.bendPoints.elements)
         points.insert(p1, at: 0)
         points.append(p2)
 
         let outerSegmentIsFirst = (edgeSource === externalPort)
 
-        var segments = Segments()
+        let segments = Segments()
         for i in 0..<points.count - 1 {
             let segment = (first: points[i], second: points[i + 1])
 
@@ -387,7 +387,7 @@ package class ComponentsCompactor {
     }
 
     package func getPortPositionOnMargin(_ port: LPort) -> KVector {
-        var pos = port.absoluteAnchor.clone()
+        let pos = port.absoluteAnchor.clone()
         guard let portNode = port.node else { return pos }
         let margins = portNode.margin
 

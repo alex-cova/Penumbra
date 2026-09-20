@@ -35,7 +35,7 @@ package final class CommentNodeMarginCalculator: ILayoutProcessor {
      * Make some extra space for comment boxes that are placed near the given node.
      */
     package func processComments(_ node: LNode) {
-        var margin = node.margin
+        let margin = node.margin
 
         let topBoxes: [LNode]? = node.getProperty(InternalProperties.TOP_COMMENTS) as? [LNode]
         let bottomBoxes: [LNode]? = node.getProperty(InternalProperties.BOTTOM_COMMENTS) as? [LNode]

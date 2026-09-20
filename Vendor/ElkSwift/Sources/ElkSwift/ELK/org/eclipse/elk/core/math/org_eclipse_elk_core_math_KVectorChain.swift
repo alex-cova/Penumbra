@@ -108,28 +108,24 @@ package final class KVectorChain: Sequence, IDataObject {
         
         elements.removeAll()
         
-        do {
-            var i = 0
-            var xy = 0
-            var x: Double = 0, y: Double = 0
-            
-            while i < tokens.count {
-                if let token = Double(tokens[i]) {
-                    if xy % 2 == 0 {
-                        x = token
-                    } else {
-                        y = token
-                    }
-                    
-                    if xy > 0 && xy % 2 != 0 {
-                        elements.append(KVector(x: x, y: y))
-                    }
-                    xy += 1
+        var i = 0
+        var xy = 0
+        var x: Double = 0, y: Double = 0
+
+        while i < tokens.count {
+            if let token = Double(tokens[i]) {
+                if xy % 2 == 0 {
+                    x = token
+                } else {
+                    y = token
                 }
-                i += 1
+
+                if xy > 0 && xy % 2 != 0 {
+                    elements.append(KVector(x: x, y: y))
+                }
+                xy += 1
             }
-        } catch {
-            throw ELK.Error.runtimeError("The given string does not match the expected format for vectors.")
+            i += 1
         }
     }
     
@@ -249,6 +245,7 @@ package final class KVectorChain: Sequence, IDataObject {
     // MARK: - Mutation Methods
     
     /// Iterate through all vectors and scale them by the given amount.
+    @discardableResult
     package func scale(_ scale: Double) -> KVectorChain {
         for i in 0..<elements.count {
             elements[i].scale(scale)
@@ -257,6 +254,7 @@ package final class KVectorChain: Sequence, IDataObject {
     }
     
     /// Iterate through all vectors and scale them with different values for X and Y coordinate.
+    @discardableResult
     package func scale(_ scalex: Double, _ scaley: Double) -> KVectorChain {
         for i in 0..<elements.count {
             elements[i].scale(scalex, scaley)
@@ -265,6 +263,7 @@ package final class KVectorChain: Sequence, IDataObject {
     }
     
     /// Iterate through all vectors and add the offset to them.
+    @discardableResult
     package func offset(_ offset: KVector) -> KVectorChain {
         for i in 0..<elements.count {
             elements[i].add(offset)
@@ -282,6 +281,7 @@ package final class KVectorChain: Sequence, IDataObject {
     }
     
     /// Iterate through all vectors and add the offset to them.
+    @discardableResult
     package func offset(_ dx: Double, _ dy: Double) -> KVectorChain {
         for i in 0..<elements.count {
             elements[i].add(dx, dy)

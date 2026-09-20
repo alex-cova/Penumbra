@@ -80,7 +80,7 @@ package class EndLabelPreprocessor {
         }
 
         // Setup the label cell's size
-        var labelCellRect = labelCell.getCellRectangle()
+        let labelCellRect = labelCell.getCellRectangle()
         labelCellRect.height = labelCell.getMinimumHeight()
         labelCellRect.width = labelCell.getMinimumWidth()
 
@@ -178,7 +178,7 @@ package class EndLabelPreprocessor {
      */
     package func placeLabels(port: LPort, labelCell: LabelCell, edgeLabelSpacing: Double) {
         // Some necessary position information
-        var labelCellRect = labelCell.getCellRectangle()
+        let labelCellRect = labelCell.getCellRectangle()
         guard let ownerNode = port.node else { return }
         let nodeSize = ownerNode.size
         let nodeMargin = ownerNode.margin
@@ -277,7 +277,7 @@ package class EndLabelPreprocessor {
         let nodeSize = node.size
 
         // Calculate the rectangle that describes the node's current margin
-        var nodeMarginRectangle = ElkRectangle(
+        let nodeMarginRectangle = ElkRectangle(
             x: -nodeMargin.left,
             y: -nodeMargin.top,
             width: nodeMargin.left + nodeSize.x + nodeMargin.right,

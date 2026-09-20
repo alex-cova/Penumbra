@@ -31,8 +31,8 @@ package class org_eclipse_elk_alg_layered_intermediate_loops_routing_PolylineSel
             corner = next
             next = bendPoints.get(secondBPIndex)
 
-            var offset1 = nearZeroToZero(previous.clone().sub(corner))
-            var offset2 = nearZeroToZero(next.clone().sub(corner))
+            let offset1 = nearZeroToZero(previous.clone().sub(corner))
+            let offset2 = nearZeroToZero(next.clone().sub(corner))
 
             var effectiveDistance = distance
             effectiveDistance = min(effectiveDistance, abs(offset1.x + offset1.y) / 2)

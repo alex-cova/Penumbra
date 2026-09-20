@@ -223,7 +223,7 @@ package final class ElkUtil {
     package static func resizeNode(_ node: ElkNode, newWidth: Double, newHeight: Double, movePorts: Bool, moveLabels: Bool) -> KVector {
         let oldSize = KVector(node.width, node.height)
         
-        var newSize = effectiveMinSizeConstraintFor(node)
+        let newSize = effectiveMinSizeConstraintFor(node)
         newSize.x = max(newSize.x, newWidth)
         newSize.y = max(newSize.y, newHeight)
         
@@ -319,7 +319,7 @@ package final class ElkUtil {
         if sizeConstraint.contains(.minimumSize) {
             let sizeOptions: SizeOptions = node.getProperty(CoreOptions.NODE_SIZE_OPTIONS) ?? []
             let minSizeVec: KVector = node.getProperty(CoreOptions.NODE_SIZE_MINIMUM) ?? KVector()
-            var minSize = KVector(minSizeVec.x, minSizeVec.y)
+            let minSize = KVector(minSizeVec.x, minSizeVec.y)
 
             // If minimum width or height are not set, maybe default to default values
             if sizeOptions.contains(.defaultMinimumSize) {
@@ -466,7 +466,7 @@ package final class ElkUtil {
             return KVectorChain()
         }
 
-        var junctionPoints = KVectorChain()
+        let junctionPoints = KVectorChain()
 
         if let sourcePort = ElkGraphUtil.connectableShapeToPort(edge.sources[0]) {
             junctionPoints.addAll(other: determineJunctionPoints(edge, sourcePort, false))
@@ -498,7 +498,7 @@ package final class ElkUtil {
         let section = edge.sections[0]
         
         // Collection for the junction points of the current edge
-        var junctionPoints = KVectorChain()
+        let junctionPoints = KVectorChain()
         
         // Store the points of the edge in a map for efficiency
         var pointsMap: [ObjectIdentifier: [KVector]] = [:]
@@ -607,7 +607,6 @@ package final class ElkUtil {
      * @return an array with all needed edge section points
      */
     package static func getPoints(_ section: ElkEdgeSection) -> [KVector] {
-        let n = section.bendPoints.count + 2
         var points: [KVector] = []
         
         // Source point
@@ -772,7 +771,7 @@ package final class ElkUtil {
      */
     package static func toAbsolute(_ point: KVector, parent: ElkNode?) -> KVector {
         var node = parent
-        var resultPoint = point
+        let resultPoint = point
         while let currentNode = node {
             resultPoint.add(currentNode.x, currentNode.y)
             node = currentNode.parent
@@ -789,7 +788,7 @@ package final class ElkUtil {
      */
     package static func toRelative(_ point: KVector, parent: ElkNode?) -> KVector {
         var node = parent
-        var resultPoint = point
+        let resultPoint = point
         while let currentNode = node {
             resultPoint.add(-currentNode.x, -currentNode.y)
             node = currentNode.parent
@@ -885,14 +884,12 @@ package final class ElkUtil {
         // it's incompatible with gwt
         var kgeIt = ElkGraphUtil.allContents(graph).makeIterator()
         while let kge = kgeIt.next() {
-            if let kge = kge as? ElkGraphElement {
-                if let node = kge as? ElkNode {
-                    configureWithDefaultValues(node)
-                } else if let port = kge as? ElkPort {
-                    configureWithDefaultValues(port)
-                } else if let edge = kge as? ElkEdge {
-                    configureWithDefaultValues(edge)
-                }
+            if let node = kge as? ElkNode {
+                configureWithDefaultValues(node)
+            } else if let port = kge as? ElkPort {
+                configureWithDefaultValues(port)
+            } else if let edge = kge as? ElkEdge {
+                configureWithDefaultValues(edge)
             }
         }
     }
@@ -977,7 +974,7 @@ package final class ElkUtil {
      * @param visitors the visitors to apply.
      */
     package static func applyVisitors(_ graph: ElkNode, visitors: [IGraphElementVisitor]) throws {
-        var allElements = ElkGraphUtil.propertiesSkippingIteratorFor(graph, true).makeIterator()
+        let allElements = ElkGraphUtil.propertiesSkippingIteratorFor(graph, true).makeIterator()
         while let nextElement = allElements.next() {
             if let graphElement = nextElement as? ElkGraphElement {
                 for visitor in visitors {

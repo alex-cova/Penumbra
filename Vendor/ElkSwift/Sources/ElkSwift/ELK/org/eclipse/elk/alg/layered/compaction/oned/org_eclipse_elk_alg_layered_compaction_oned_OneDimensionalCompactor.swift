@@ -156,8 +156,6 @@ package final class OneDimensionalCompactor {
             case .UP: mirrorHitboxes(); reverseConstraints()
             default: break
             }
-        default:
-            break
         }
 
         return self

@@ -133,8 +133,8 @@ Trigger a release by pushing an unprefixed semver tag (this repo does not use a 
 ```bash
 ./Scripts/push-version.sh          # bump VERSION, commit, tag, and push
 # or:
-git tag 1.4.0
-git push origin 1.4.0
+git tag 1.6.0
+git push origin 1.6.0
 ```
 
 ## Settings & session

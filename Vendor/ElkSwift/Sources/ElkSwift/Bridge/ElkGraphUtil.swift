@@ -113,7 +113,7 @@ final class ElkGraphUtil {
 
     /// Create a simple edge between source and target.
     static func createSimpleEdge(_ source: ElkConnectableShape, _ target: ElkConnectableShape) -> ElkEdge {
-        var edge = createEdge(nil)
+        let edge = createEdge(nil)
         edge.sources.append(source)
         edge.targets.append(target)
         updateContainment(edge)

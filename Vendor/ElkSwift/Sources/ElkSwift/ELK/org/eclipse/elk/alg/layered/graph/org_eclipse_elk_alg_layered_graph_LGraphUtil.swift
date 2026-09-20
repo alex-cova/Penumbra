@@ -286,10 +286,10 @@ package final class LGraphUtil {
             port.setNode(node)
             
             if let endPoint = endPoint {
-                var pos = port.position
+                let pos = port.position
                 pos.x = endPoint.x - node.position.x
                 pos.y = endPoint.y - node.position.y
-                try? pos.bound(0, 0, node.size.x, node.size.y)
+                _ = try? pos.bound(0, 0, node.size.x, node.size.y)
                 port.side = calcPortSide(port, direction: direction)
             } else {
                 let defaultSide = PortSide.fromDirection(direction)
@@ -472,7 +472,7 @@ package final class LGraphUtil {
         }
 
         let portSize = port.size
-        var portAnchor = port.anchor
+        let portAnchor = port.anchor
         
         if let anchorPos = anchorPos {
             portAnchor.x = anchorPos.x
@@ -634,7 +634,7 @@ package final class LGraphUtil {
     }
     
     package static func getExternalPortPosition(_ graph: LGraph, _ portDummy: LNode, _ portWidth: Double, _ portHeight: Double) -> KVector {
-        var portPosition = portDummy.position.clone()
+        let portPosition = portDummy.position.clone()
         portPosition.x += portDummy.size.x / 2.0
         portPosition.y += portDummy.size.y / 2.0
         let portOffset = portDummy.getProperty(LayeredOptions.PORT_BORDER_OFFSET) as? Double ?? 0.0

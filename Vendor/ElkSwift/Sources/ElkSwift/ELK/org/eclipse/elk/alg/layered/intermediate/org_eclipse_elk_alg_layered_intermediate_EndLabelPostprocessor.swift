@@ -53,7 +53,7 @@ package final class EndLabelPostprocessor: ILayoutProcessor {
         let nodePos = node.position
 
         for labelCell in endLabelCells.values {
-            var labelCellRect = labelCell.cellRectangle
+            let labelCellRect = labelCell.cellRectangle
             labelCellRect.move(by: nodePos)
 
             labelCell.applyLabelLayout()

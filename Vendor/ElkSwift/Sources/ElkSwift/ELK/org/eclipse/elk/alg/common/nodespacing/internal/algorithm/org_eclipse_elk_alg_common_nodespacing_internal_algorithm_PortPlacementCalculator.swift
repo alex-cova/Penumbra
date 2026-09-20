@@ -63,7 +63,7 @@ package final class PortPlacementCalculator {
         let insidePortLabelCellPadding = insidePortLabelCell.getPadding()
 
         var portAlignment = nodeContext.getPortAlignment(portSide: portSide)
-        var availableSpace = insidePortLabelCellRectangle.width - insidePortLabelCellPadding.left
+        let availableSpace = insidePortLabelCellRectangle.width - insidePortLabelCellPadding.left
                 - insidePortLabelCellPadding.right
         var calculatedPortPlacementWidth = insidePortLabelCell.getMinimumContentAreaSize().x
         var currentXPos = insidePortLabelCellRectangle.x + insidePortLabelCellPadding.left
@@ -191,7 +191,7 @@ package final class PortPlacementCalculator {
         let insidePortLabelCellPadding = insidePortLabelCell.getPadding()
 
         var portAlignment = nodeContext.getPortAlignment(portSide: portSide)
-        var availableSpace = insidePortLabelCellRectangle.height - insidePortLabelCellPadding.top
+        let availableSpace = insidePortLabelCellRectangle.height - insidePortLabelCellPadding.top
                 - insidePortLabelCellPadding.bottom
         var calculatedPortPlacementHeight = insidePortLabelCell.getMinimumContentAreaSize().y
         var currentYPos = insidePortLabelCellRectangle.y + insidePortLabelCellPadding.top

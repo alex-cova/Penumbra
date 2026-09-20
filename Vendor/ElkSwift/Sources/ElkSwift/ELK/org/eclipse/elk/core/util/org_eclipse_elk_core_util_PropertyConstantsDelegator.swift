@@ -21,7 +21,7 @@ package final class PropertyConstantsDelegator {
 
         for optionId in algorithmData.getKnownOptionIds() {
             let defaultValue = algorithmData.getDefaultValue(optionId)
-            let delegate = Property<Any>(optionId, defaultValue: defaultValue)
+            let delegate = Property<Any>(optionId, defaultValue: defaultValue as Any)
             delegator.addDelegate(delegate)
         }
 

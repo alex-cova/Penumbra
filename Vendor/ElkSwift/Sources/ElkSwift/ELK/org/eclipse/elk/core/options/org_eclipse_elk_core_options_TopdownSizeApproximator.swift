@@ -95,7 +95,7 @@ package enum TopdownSizeApproximator: ITopdownSizeApproximator {
                       let target = edge.targets.first,
                       let newTar = oldToNewNodeMap[ObjectIdentifier(target as AnyObject)] else { continue }
 
-                var newEdge = ElkGraphFactoryImpl().createElkEdge()
+                let newEdge = ElkGraphFactoryImpl().createElkEdge()
                 newEdge.sources.append(newSrc)
                 newEdge.targets.append(newTar)
                 newEdge.containingNode = newSrc.parent

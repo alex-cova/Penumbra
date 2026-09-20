@@ -181,7 +181,7 @@ package final class org_eclipse_elk_alg_layered_p5edges_PolylineEdgeRouter {
         let layerRightXPos = layerLeftXPos + (node.getLayer()?.getSize().x ?? 0)
 
         for port in node.getPorts() {
-            var absolutePortAnchor = port.getAbsoluteAnchor()
+            let absolutePortAnchor = port.getAbsoluteAnchor()
 
             if node.type == .northSouthPort {
                 if let correspondingPort = port.getProperty(InternalProperties.ORIGIN) as? LPort {

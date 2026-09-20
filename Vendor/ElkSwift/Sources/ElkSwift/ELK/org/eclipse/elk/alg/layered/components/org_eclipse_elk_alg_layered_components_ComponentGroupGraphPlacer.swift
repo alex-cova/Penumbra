@@ -32,7 +32,7 @@ package class ComponentGroupGraphPlacer: AbstractGraphPlacer {
         }
 
         // Place components in each group
-        var offset = KVector()
+        let offset = KVector()
         let componentSpacing: Double = firstComponent.getProperty(LayeredOptions.SPACING_COMPONENT_COMPONENT) ?? 20.0
 
         for group in componentGroups {
@@ -162,7 +162,7 @@ package class ComponentGroupGraphPlacer: AbstractGraphPlacer {
     }
 
     package func placeComponentsHorizontally(_ components: [LGraph], spacing: Double) -> KVector {
-        var size = KVector()
+        let size = KVector()
 
         for component in components {
             offsetGraph(component, size.x, 0.0)
@@ -178,7 +178,7 @@ package class ComponentGroupGraphPlacer: AbstractGraphPlacer {
     }
 
     package func placeComponentsVertically(_ components: [LGraph], spacing: Double) -> KVector {
-        var size = KVector()
+        let size = KVector()
 
         for component in components {
             offsetGraph(component, 0.0, size.y)

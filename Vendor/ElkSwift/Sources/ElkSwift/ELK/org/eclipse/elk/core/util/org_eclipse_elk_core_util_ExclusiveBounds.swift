@@ -105,31 +105,5 @@ package struct ExclusiveBounds {
 
 // Extension to support Number comparison
 extension Number {
-    package var doubleValue: Double {
-        if let value = self as? Double {
-            return value
-        } else if let value = self as? Float {
-            return Double(value)
-        } else if let value = self as? Int {
-            return Double(value)
-        } else if let value = self as? Int64 {
-            return Double(value)
-        } else if let value = self as? Int32 {
-            return Double(value)
-        } else if let value = self as? Int16 {
-            return Double(value)
-        } else if let value = self as? Int8 {
-            return Double(value)
-        } else if let value = self as? UInt64 {
-            return Double(value)
-        } else if let value = self as? UInt32 {
-            return Double(value)
-        } else if let value = self as? UInt16 {
-            return Double(value)
-        } else if let value = self as? UInt8 {
-            return Double(value)
-        } else {
-            return 0.0
-        }
-    }
+    package var doubleValue: Double { self }
 }

@@ -112,7 +112,7 @@ package final class NodeMarginCalculator {
             }
 
             if includeEdgeHeadTailLabels {
-                var requiredPortLabelSpace = KVector(x: -labelSpacing, y: -labelSpacing)
+                let requiredPortLabelSpace = KVector(x: -labelSpacing, y: -labelSpacing)
 
                 let portLabelsPlacement: PortLabelPlacement = node.getProperty(CoreOptions.PORT_LABELS_PLACEMENT) ?? PortLabelPlacement()
                 if portLabelsPlacement.contains(.outside) {
@@ -170,8 +170,6 @@ package final class NodeMarginCalculator {
         labelSpacing: Double
     ) {
         let labelBox = ElkRectangle()
-        let nodePos = node.getPosition()
-        let nodeSize = node.getSize()
 
         for edge in outgoingEdges {
             for label in edge.getLabels() {

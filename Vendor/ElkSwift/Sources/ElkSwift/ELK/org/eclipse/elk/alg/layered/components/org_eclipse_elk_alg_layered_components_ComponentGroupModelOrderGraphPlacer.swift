@@ -38,10 +38,10 @@ package class ComponentGroupModelOrderGraphPlacer: ComponentGroupGraphPlacer {
         }
 
         // Place components in each group
-        var spaceBlockedBySouthEdges = KVector()
-        var spaceBlockedByComponents = KVector()
-        var offset = KVector()
-        var maxSize = KVector()
+        let spaceBlockedBySouthEdges = KVector()
+        let spaceBlockedByComponents = KVector()
+        let offset = KVector()
+        let maxSize = KVector()
         let componentSpacing: Double = firstComponent.getProperty(LayeredOptions.SPACING_COMPONENT_COMPONENT) ?? 20.0
 
         let direction: Direction = target.getProperty(LayeredOptions.DIRECTION) ?? .RIGHT

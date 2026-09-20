@@ -444,7 +444,7 @@ package final class org_eclipse_elk_alg_layered_intermediate_GraphTransformer {
 
     private func transposeNodeLabelPlacement(_ shape: LShape) {
         if !shape.hasProperty(LayeredOptions.NODE_LABELS_PLACEMENT) { return }
-        guard var oldPlacement = shape.getProperty(LayeredOptions.NODE_LABELS_PLACEMENT) as? NodeLabelPlacement else { return }
+        guard let oldPlacement = shape.getProperty(LayeredOptions.NODE_LABELS_PLACEMENT) as? NodeLabelPlacement else { return }
         if oldPlacement.isEmpty { return }
 
         var newPlacement: NodeLabelPlacement = []

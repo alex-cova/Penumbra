@@ -2,7 +2,7 @@
 
 **Repository:** [github.com/alex-cova/Penumbra](https://github.com/alex-cova/Penumbra)
 
-**v1.4.0** — A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
+**v1.6.0** — A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
 
 Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally for iOS/UIKit), this repository is natively ported and extended for **macOS (AppKit)**. It pairs a high-performance text rendering engine — including an optional **Metal** glyph pipeline and **piece-tree** storage for large files — with the **Editor Intelligence Platform (EIP)** for code completion, tree-sitter AST parsing, indexing, navigation, hover documentation, diagnostics, refactoring, and AI/LSP integrations.
 

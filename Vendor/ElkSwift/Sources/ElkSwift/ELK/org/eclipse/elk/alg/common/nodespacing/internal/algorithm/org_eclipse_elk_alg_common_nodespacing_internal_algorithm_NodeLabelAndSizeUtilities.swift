@@ -138,7 +138,7 @@ package final class NodeLabelAndSizeUtilities {
 
     package static func getMinimumNodeOrClientAreaSize(_ nodeContext: NodeContext) -> KVector {
         let rawMinSize: KVector? = nodeContext.node.getProperty(CoreOptions.NODE_SIZE_MINIMUM)
-        var minSize = KVector(rawMinSize ?? KVector())
+        let minSize = KVector(rawMinSize ?? KVector())
 
         if nodeContext.sizeOptions.contains(.defaultMinimumSize) {
             if minSize.x <= 0 {

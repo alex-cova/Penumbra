@@ -214,7 +214,7 @@ package final class KVector: Hashable, CustomStringConvertible, CustomDebugStrin
      * @return a new vector containing the sum of given vectors
      */
     package static func sum(_ vs: KVector...) -> KVector {
-        var sum = KVector()
+        let sum = KVector()
         for v in vs {
             sum.x += v.x
             sum.y += v.y
@@ -360,7 +360,6 @@ package final class KVector: Hashable, CustomStringConvertible, CustomDebugStrin
      * @param random the random number generator
      * @param amount the amount of noise to add
      */
-    @discardableResult
     package func wiggle(_ random: inout some RandomNumberGenerator, _ amount: Double) {
         self.x += Double.random(in: 0..<1, using: &random) * amount - (amount / 2)
         self.y += Double.random(in: 0..<1, using: &random) * amount - (amount / 2)
@@ -475,9 +474,8 @@ package final class KVector: Hashable, CustomStringConvertible, CustomDebugStrin
      *
      * @param string string representation of a vector
      */
-    @discardableResult
     package func parse(_ string: String) throws {
-        var chars = Array(string)
+        let chars = Array(string)
         var start = 0
         while start < chars.count && isDelimiter(chars[start]) {
             start += 1

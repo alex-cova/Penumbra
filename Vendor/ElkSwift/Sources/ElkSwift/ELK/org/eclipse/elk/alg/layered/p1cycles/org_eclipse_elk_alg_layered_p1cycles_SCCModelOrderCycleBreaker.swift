@@ -50,7 +50,7 @@ package class org_eclipse_elk_alg_layered_p1cycles_SCCModelOrderCycleBreaker {
         let bigOffset = offset * cbNumModelOrderGroupsFallback(for: layeredGraph)
 
         while true {
-            var tarjan = Tarjan(
+            let tarjan = Tarjan(
                 edgesToBeReversed: revEdges,
                 stronglyConnectedComponents: &stronglyConnectedComponents,
                 nodeToSCCID: &nodeToSCCID

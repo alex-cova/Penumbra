@@ -20,18 +20,10 @@ package class org_eclipse_elk_alg_layered_p3order_SweepCopy {
         nodeOrder = Self.deepCopy(nodeOrderIn)
         var newPortOrders: [[[org_eclipse_elk_alg_layered_graph_LPort]]] = []
         if let nodeOrderIn {
-            for (li, layerNodes) in nodeOrderIn.enumerated() {
+            for (_, layerNodes) in nodeOrderIn.enumerated() {
                 var layerPorts: [[org_eclipse_elk_alg_layered_graph_LPort]] = []
                 for node in layerNodes {
                     let ports = node.getPorts()
-                    let westPorts = ports.filter { $0.getSide() == .WEST }
-                    if westPorts.count > 1 || ports.count > 2 {
-                        let label = node.getLabels().first?.getText() ?? "node\(node.id)"
-                        let desc = ports.map { p in
-                            let edges = (p.getIncomingEdges() + p.getOutgoingEdges()).map { "e\($0.id)" }.joined(separator: ",")
-                            return "p\(p.id)(\(p.getSide()),\(edges))"
-                        }.joined(separator: ", ")
-                    }
                     layerPorts.append(ports)
                 }
                 newPortOrders.append(layerPorts)
@@ -94,15 +86,7 @@ package class org_eclipse_elk_alg_layered_p3order_SweepCopy {
 
                 if i < portOrders.count, j < portOrders[i].count {
                     let savedPorts = portOrders[i][j]
-                    let nodeLabel = node.getLabels().first?.getText() ?? "node\(node.id)"
-                    let portDesc = savedPorts.map { p -> String in
-                        let ins = p.getIncomingEdges().map { "e\($0.id)<-n\($0.getSource()?.getNode()?.id ?? -1)" }.joined(separator: "|")
-                        let outs = p.getOutgoingEdges().map { "e\($0.id)->n\($0.getTarget()?.getNode()?.id ?? -1)" }.joined(separator: "|")
-                        return "p\(p.id)(\(p.getSide()),in=\(ins),out=\(outs))"
-                    }.joined(separator: ", ")
-                    let beforePorts = node.getPorts().map { "p\($0.id)(\($0.getSide()))" }.joined(separator: ", ")
                     applyPortOrder(savedPorts, to: node)
-                    let afterPorts = node.getPorts().map { "p\($0.id)(\($0.getSide()))" }.joined(separator: ", ")
                 }
 
                 if setPortContstraints {

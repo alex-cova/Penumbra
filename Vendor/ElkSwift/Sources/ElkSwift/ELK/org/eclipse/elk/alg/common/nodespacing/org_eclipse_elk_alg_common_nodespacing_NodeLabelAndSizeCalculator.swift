@@ -85,7 +85,7 @@ package final class NodeLabelAndSizeCalculator {
         guard let labelCellContainer = nodeContext.insideNodeLabelContainer else {
             return ElkPadding()
         }
-        var padding = ElkPadding()
+        let padding = ElkPadding()
 
         // Top
         for col in ContainerArea.values {

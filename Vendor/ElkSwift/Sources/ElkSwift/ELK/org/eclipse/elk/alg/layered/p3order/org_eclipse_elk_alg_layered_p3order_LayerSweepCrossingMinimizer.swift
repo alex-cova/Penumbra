@@ -178,7 +178,7 @@ package class org_eclipse_elk_alg_layered_p3order_LayerSweepCrossingMinimizer:
                 gData.lGraph().setProperty(_Keys.firstTryWithInitialOrder, true)
             }
             let thoroughness = Self._intProperty(gData.lGraph(), _Keys.thoroughness) ?? 7
-            for iter in 0..<max(1, thoroughness) {
+            for _ in 0..<max(1, thoroughness) {
                 let crossings = minimizeCrossingsWithCounter(gData)
                 if crossings < bestCrossings {
                     bestCrossings = crossings

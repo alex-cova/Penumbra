@@ -124,7 +124,7 @@ package final class RectangleStripOverlapRemover {
     }
 
     package func computeOverlaps() {
-        var intersectingNodes = OverlapSortedSet(compare: RectangleStripOverlapRemover.compareRightRectangleBorders)
+        let intersectingNodes = OverlapSortedSet(compare: RectangleStripOverlapRemover.compareRightRectangleBorders)
         var scanlinePos: Double = Double.greatestFiniteMagnitude * -1
 
         for currNode in rectangleNodes {

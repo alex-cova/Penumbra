@@ -224,7 +224,7 @@ package final class GraphConfigurator {
         let graphProperties = lgraph.getProperty(InternalProperties.GRAPH_PROPERTIES) as? Set<GraphProperties> ?? []
         
         // Basic configuration
-        var configuration = LayoutProcessorConfiguration<LayeredPhases, LGraph>.create(from: GraphConfigurator.BASELINE_PROCESSING_CONFIGURATION)
+        let configuration = LayoutProcessorConfiguration<LayeredPhases, LGraph>.create(from: GraphConfigurator.BASELINE_PROCESSING_CONFIGURATION)
         
         // Hierarchical layout. 
         //  Note that the recursive graph layout engine made sure that at this point

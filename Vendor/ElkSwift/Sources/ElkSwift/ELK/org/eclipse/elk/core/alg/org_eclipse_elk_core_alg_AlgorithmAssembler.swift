@@ -123,7 +123,7 @@ package class AlgorithmAssembler<P: Hashable & CaseIterable & RawRepresentable, 
         }
 
         // Assemble a definitive processor configuration
-        var processorConfiguration = LayoutProcessorConfiguration<P, G>.create()
+        let processorConfiguration = LayoutProcessorConfiguration<P, G>.create()
         for phaseImpl in phaseImplementations {
             if let phase = phaseImpl,
                let layoutPhase = phase as? AnyLayoutPhaseBox {

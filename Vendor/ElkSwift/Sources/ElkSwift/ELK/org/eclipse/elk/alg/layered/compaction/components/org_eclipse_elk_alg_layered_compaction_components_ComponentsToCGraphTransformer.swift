@@ -73,24 +73,22 @@ package class ComponentsToCGraphTransformer {
             }
 
             // prepare rectangles for external extensions
-            for ee in comp.getExternalExtensions() {
-                if let uee = ee as? InternalUnionExternalExtension {
-                    let rectNode = CRectNode(uee.getRepresentor(), spacing)
-                    let eeKey = "\(ObjectIdentifier(comp))_\(uee.side)"
-                    externalExtensions[eeKey] = (first: uee.getDirection(), second: rectNode)
-                    setLock(rectNode, portSides: comp.externalExtensionSides)
+            for uee in comp.getExternalExtensions() {
+                let rectNode = CRectNode(uee.getRepresentor(), spacing)
+                let eeKey = "\(ObjectIdentifier(comp))_\(uee.side)"
+                externalExtensions[eeKey] = (first: uee.getDirection(), second: rectNode)
+                setLock(rectNode, portSides: comp.externalExtensionSides)
 
-                    if let placeholder = uee.getPlaceholder() {
-                        let rectPlaceholder = CRectNode(placeholder, 1.0)
-                        setLock(rectPlaceholder, portSides: comp.externalExtensionSides)
-                        let dummyGroup = CGroup()
-                        dummyGroup.addCNode(rectPlaceholder)
-                        let dir = uee.getDirection()
-                        if externalPlaceholder[dir] == nil {
-                            externalPlaceholder[dir] = []
-                        }
-                        externalPlaceholder[dir]?.append(Pair(group, rectPlaceholder))
+                if let placeholder = uee.getPlaceholder() {
+                    let rectPlaceholder = CRectNode(placeholder, 1.0)
+                    setLock(rectPlaceholder, portSides: comp.externalExtensionSides)
+                    let dummyGroup = CGroup()
+                    dummyGroup.addCNode(rectPlaceholder)
+                    let dir = uee.getDirection()
+                    if externalPlaceholder[dir] == nil {
+                        externalPlaceholder[dir] = []
                     }
+                    externalPlaceholder[dir]?.append(Pair(group, rectPlaceholder))
                 }
             }
         }
@@ -149,8 +147,8 @@ package class ComponentsToCGraphTransformer {
         }
 
         // calculating new graph size and offset
-        var topLeft = KVector(x: Double.greatestFiniteMagnitude, y: Double.greatestFiniteMagnitude)
-        var bottomRight = KVector(x: -Double.greatestFiniteMagnitude, y: -Double.greatestFiniteMagnitude)
+        let topLeft = KVector(x: Double.greatestFiniteMagnitude, y: Double.greatestFiniteMagnitude)
+        let bottomRight = KVector(x: -Double.greatestFiniteMagnitude, y: -Double.greatestFiniteMagnitude)
 
         for cNode in cGraph.cNodes {
             topLeft.x = min(topLeft.x, cNode.hitbox.x)

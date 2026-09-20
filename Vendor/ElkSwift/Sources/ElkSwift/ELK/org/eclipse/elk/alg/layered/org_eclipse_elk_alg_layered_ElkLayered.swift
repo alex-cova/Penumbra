@@ -350,7 +350,7 @@ package class ElkLayered {
         let sizeOptions = lgraph.getProperty(LayeredOptions.NODE_SIZE_OPTIONS) as? SizeOptions ?? []
 
         let calculatedSize = lgraph.getActualSize()
-        var adjustedSize = KVector(calculatedSize.x, calculatedSize.y)
+        let adjustedSize = KVector(calculatedSize.x, calculatedSize.y)
 
         if sizeConstraint.contains(.minimumSize) {
             let minSize = lgraph.getProperty(LayeredOptions.NODE_SIZE_MINIMUM) as? KVector ?? KVector()

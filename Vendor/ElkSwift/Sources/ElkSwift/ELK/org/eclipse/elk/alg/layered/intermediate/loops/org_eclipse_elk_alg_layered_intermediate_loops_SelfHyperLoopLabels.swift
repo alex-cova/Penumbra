@@ -73,7 +73,7 @@ package final class org_eclipse_elk_alg_layered_intermediate_loops_SelfHyperLoop
     }
 
     private func applyPlacementForHorizontalLayout(_ offset: KVector) {
-        var x = position.x
+        let x = position.x
         var y = position.y
 
         for lLabel in lLabels {

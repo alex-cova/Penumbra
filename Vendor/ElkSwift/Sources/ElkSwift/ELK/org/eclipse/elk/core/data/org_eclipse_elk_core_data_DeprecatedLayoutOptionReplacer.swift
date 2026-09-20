@@ -52,8 +52,27 @@ package class DeprecatedLayoutOptionReplacer: IGraphElementVisitor {
         (CoreOptions.NODE_SIZE_OPTIONS, spaceEfficient)
     ]
 
+    private static let activeRules: [(IProperty, (ElkGraphElement) -> Void)] = [
+        (CoreOptions.PORT_LABELS_NEXT_TO_PORT_IF_POSSIBLE, { e in
+            var portLabels = e.getProperty(CoreOptions.PORT_LABELS_PLACEMENT) as? PortLabelPlacement ?? PortLabelPlacement()
+            portLabels.insert(.nextToPortIfPossible)
+            e.setProperty(CoreOptions.PORT_LABELS_PLACEMENT, portLabels)
+            e.setProperty(CoreOptions.PORT_LABELS_NEXT_TO_PORT_IF_POSSIBLE, nil)
+        }),
+        (CoreOptions.NODE_SIZE_OPTIONS, { e in
+            if var sizeOpts = e.getProperty(CoreOptions.NODE_SIZE_OPTIONS) as? SizeOptions,
+               sizeOpts.contains(SizeOptions(rawValue: 1 << 6)) {
+                var portLabels = e.getProperty(CoreOptions.PORT_LABELS_PLACEMENT) as? PortLabelPlacement ?? PortLabelPlacement()
+                portLabels.insert(.spaceEfficient)
+                e.setProperty(CoreOptions.PORT_LABELS_PLACEMENT, portLabels)
+                sizeOpts.remove(SizeOptions(rawValue: 1 << 6))
+                e.setProperty(CoreOptions.NODE_SIZE_OPTIONS, sizeOpts)
+            }
+        })
+    ]
+
     package func visit(_ element: ElkGraphElement) {
-        for (option, replacer) in DeprecatedLayoutOptionReplacer.rules {
+        for (option, replacer) in Self.activeRules {
             if element.hasProperty(option) {
                 replacer(element)
             }

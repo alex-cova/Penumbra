@@ -869,7 +869,7 @@ package class org_eclipse_elk_alg_layered_p4nodes_NetworkSimplexPlacer {
         }
 
         let node = org_eclipse_elk_alg_common_networksimplex_NNode.of()
-            .origin(origin)
+            .origin(origin as Any)
             .type(type)
             .create(nGraph)
         node.layer = baseLayer
