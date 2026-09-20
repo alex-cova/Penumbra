@@ -42,7 +42,7 @@ public enum MarkdownPreviewRasterizer {
         contentWidth: CGFloat,
         baseURL: URL? = nil,
         syntaxTheme: Theme = DefaultTheme(),
-        codeBlockLanguageResolver: ((String) -> TreeSitterLanguage?)? = nil,
+        codeBlockLanguageResolver: (@Sendable (String) -> TreeSitterLanguage?)? = nil,
         codeBlockLanguageProvider: TreeSitterLanguageProvider? = nil
     ) async -> MarkdownPreviewRasterResult {
         var result = MarkdownPreviewRasterResult()
