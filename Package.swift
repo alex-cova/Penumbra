@@ -52,9 +52,7 @@ let package = Package(
             name: "PenumbraElkSwift",
             path: "Vendor/ElkSwift/Sources/ElkSwift",
             swiftSettings: [
-                .swiftLanguageMode(.v5),
-                .unsafeFlags(["-suppress-warnings"], .when(configuration: .debug)),
-                .unsafeFlags(["-suppress-warnings"], .when(configuration: .release))
+                .swiftLanguageMode(.v5)
             ]
         ),
         .target(
