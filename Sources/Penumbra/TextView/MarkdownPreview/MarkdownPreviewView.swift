@@ -185,15 +185,7 @@ public final class MarkdownPreviewView: NSView {
             return
         }
         let width = max(bounds.width, 1)
-        let heights = rasterHeights(for: document)
-        let layout = MarkdownPreviewLayout.layout(
-            document: document,
-            style: style,
-            width: width,
-            mermaidHeights: heights.mermaid,
-            imageHeights: heights.images,
-            highlightedCode: highlightedCode
-        )
+        let layout = computeLayout(document: document, width: width)
         applyLayout(layout)
         // `layerContentsRedrawPolicy = .never` on the Metal canvas means `setNeedsDisplay` alone
         // (from `applyLayout`/`metalRenderer.update`) never reaches `updateLayer()`. This layout
@@ -218,10 +210,37 @@ public final class MarkdownPreviewView: NSView {
         return contentView.dataWithPDF(inside: contentView.bounds)
     }
 
-    private func rasterHeights(for document: MarkdownPreviewDocument) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
+    /// Natural content size for `document` at `width`, without requiring the view to be laid out
+    /// or on-screen. Lets a host that embeds the preview inline (not in its own scrolling pane —
+    /// e.g. an auto-sizing chat bubble) size itself to fit before ever displaying the view.
+    ///
+    /// Uses the view's current `rasterImages`/`rasterNaturalSizes`/`highlightedCode`, so call this
+    /// after those are set (or after `waitForPendingWork()`-equivalent host-side rasterization) for
+    /// an accurate mermaid/image/code-block height; before that it undercounts unrasterized blocks.
+    public func preferredContentSize(forWidth width: CGFloat) -> CGSize {
+        guard let document else { return .zero }
+        return computeLayout(document: document, width: max(width, 1)).contentSize
+    }
+
+    private func computeLayout(document: MarkdownPreviewDocument, width: CGFloat) -> MarkdownPreviewLayout {
+        let heights = rasterHeights(for: document, width: width)
+        return MarkdownPreviewLayout.layout(
+            document: document,
+            style: style,
+            width: width,
+            mermaidHeights: heights.mermaid,
+            imageHeights: heights.images,
+            highlightedCode: highlightedCode
+        )
+    }
+
+    private func rasterHeights(
+        for document: MarkdownPreviewDocument,
+        width: CGFloat
+    ) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
         var mermaid: [Int: CGFloat] = [:]
         var images: [Int: CGFloat] = [:]
-        let contentWidth = max(bounds.width - style.contentInset * 2, 1)
+        let contentWidth = max(width - style.contentInset * 2, 1)
         for (index, block) in document.blocks.enumerated() {
             guard let image = rasterImages[index] else { continue }
             let height: CGFloat
