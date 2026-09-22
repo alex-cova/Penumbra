@@ -1,5 +1,18 @@
 import Foundation
 
+/// The result of typing a receiver expression: its type, and whether it's a type reference
+/// (`Foo.`, a bare class name used as a qualifier -- only static members/nested types make sense)
+/// or a value (`foo.`, an instance -- everything else).
+public struct JavaReceiverInfo: Sendable, Equatable {
+    public let type: JavaTypeRef
+    public let isTypeReference: Bool
+
+    public init(type: JavaTypeRef, isTypeReference: Bool) {
+        self.type = type
+        self.isTypeReference = isTypeReference
+    }
+}
+
 /// Infers the type of the expression immediately before a `.` (or other member-access trigger) in
 /// a live buffer -- the piece that turns "cursor is right after `list.stream().filter(x -> x > 0).`
 /// in this file" into "the receiver is a `Stream<String>`, so offer `Stream`'s members".
@@ -26,6 +39,16 @@ public enum JavaExpressionTyper {
     public static func typeOfReceiver(
         source: String, realTree: JavaSyntaxTree, dotOffset: Int, context: JavaResolutionContext, index: JavaIndex
     ) async -> JavaTypeRef? {
+        await receiverInfo(source: source, realTree: realTree, dotOffset: dotOffset, context: context, index: index)?.type
+    }
+
+    /// Like ``typeOfReceiver(source:realTree:dotOffset:context:index:)``, but also says whether the
+    /// receiver is a type reference (`Foo.`, only static members make sense) or a value (`foo.`,
+    /// everything else) -- callers driving member completion (rather than just wanting a type)
+    /// need this to pick ``JavaMemberLookupMode`` correctly.
+    public static func receiverInfo(
+        source: String, realTree: JavaSyntaxTree, dotOffset: Int, context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaReceiverInfo? {
         let bytes = Array(source.utf8)
         guard let range = JavaReceiverScanner.receiverRange(in: bytes, dotOffset: dotOffset) else { return nil }
         let receiverText = String(decoding: bytes[range], as: UTF8.self)
@@ -34,7 +57,8 @@ public enum JavaExpressionTyper {
             return nil
         }
         let locals = JavaLocalScope.locals(in: realTree, atByteOffset: dotOffset)
-        return await typed(exprNode, locals: locals, context: context, index: index)?.type
+        guard let result = await typed(exprNode, locals: locals, context: context, index: index) else { return nil }
+        return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
     }
 
     /// The synthetic wrapper is always `class __Synthetic__ { void __m__() { <receiver>; } }`; this
