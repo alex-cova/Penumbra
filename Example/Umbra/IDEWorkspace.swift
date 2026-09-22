@@ -141,6 +141,7 @@ public final class IDEWorkspace {
             await workspaceBridge.syncWorkbench(workbench)
             await workspaceBridge.workspace.connect(to: adapter)
             await intelligenceServices.indexingService.connect(to: workspaceBridge.workspace)
+            await intelligenceServices.javaSupport.connect(to: workspaceBridge.workspace)
         }
 
         NotificationCenter.default.addObserver(
@@ -1108,6 +1109,7 @@ public final class IDEWorkspace {
     private func applyProjectRoot(_ url: URL?) {
         project.setRoot(url)
         syncTerminalWorkingDirectory()
+        intelligenceServices.javaSupport.setProjectRoot(url)
     }
 
     private func activatePane(_ paneID: UUID) {

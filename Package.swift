@@ -108,6 +108,7 @@ let package = Package(
                 "Penumbra",
                 "PenumbraLanguages",
                 "PenumbraMarkdownLanguage",
+                "JavaIntelligence",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Example/Umbra",

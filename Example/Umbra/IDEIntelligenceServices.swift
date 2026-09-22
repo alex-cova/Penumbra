@@ -9,6 +9,13 @@ final class IDEIntelligenceServices {
     let hoverEngine: HoverEngine
     let diagnosticEngine: DiagnosticEngine
     let navigationEngine: NavigationEngine
+    /// Java-specific indexing (JDK + project sources) and completion, independent of the generic
+    /// `symbolIndex`/`indexingService` above (which still run for Java files too -- there's no
+    /// per-language provider filtering yet, so completion in a `.java` file currently blends
+    /// JavaCompletionProvider's precise results with generic Symbol/Word noise; a
+    /// LanguageFilteredCompletionProvider to suppress the latter for Java is a natural follow-up,
+    /// not yet built).
+    let javaSupport = IDEJavaSupport()
 
     init() {
         let parser = IDEWorkbenchLanguageParser()
@@ -16,7 +23,8 @@ final class IDEIntelligenceServices {
         completionEngine = CompletionEngine(providers: [
             SymbolCompletionProvider(index: symbolIndex),
             WordCompletionProvider(index: symbolIndex),
-            SnippetCompletionProvider()
+            SnippetCompletionProvider(),
+            javaSupport.completionProvider
         ])
         hoverEngine = HoverEngine(providers: [
             SymbolHoverProvider(index: symbolIndex)

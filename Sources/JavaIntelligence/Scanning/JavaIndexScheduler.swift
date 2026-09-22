@@ -63,6 +63,10 @@ public actor JavaIndexScheduler {
         }
         do {
             let stubs = try root.readStubs()
+            // Project-scoped shards nest under a per-root subdirectory (JavaIndexPaths.
+            // projectSourcesShard); JDK/JAR shards sit directly under the (already-created) cache
+            // root, so this is a no-op for those.
+            try FileManager.default.createDirectory(at: shardURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JavaIndexShardWriter().write(stubs, stamp: currentStamp, to: shardURL)
             return .rootFinished(id: root.id, classCount: stubs.count)
         } catch {

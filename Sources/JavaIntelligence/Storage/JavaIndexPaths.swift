@@ -35,6 +35,11 @@ public struct JavaIndexPaths: Sendable {
         root.appendingPathComponent("projects").appendingPathComponent(rootHash)
     }
 
+    /// The shard for a project's `.java` source tree (a ``SourceRoot`` rooted at `directory`).
+    public func projectSourcesShard(for directory: URL) -> URL {
+        projectDirectory(rootHash: sha256(directory.path)).appendingPathComponent("sources.idx")
+    }
+
     public func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
