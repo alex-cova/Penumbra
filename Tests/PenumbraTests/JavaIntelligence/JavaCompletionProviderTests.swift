@@ -23,21 +23,27 @@ final class JavaCompletionProviderTests: XCTestCase {
     /// `€` marks the cursor. Builds a `Document` + `CompletionContext` (via the real
     /// `makeCompletionContext`, exercising the same prefix/range logic Umbra itself uses) and runs
     /// the provider.
-    private func complete(_ source: String, index: JavaIndex, trigger: RequestTrigger = .manual) async -> [CompletionItem] {
+    private func complete(
+        _ source: String,
+        index: JavaIndex,
+        trigger: RequestTrigger = .manual,
+        url: URL? = URL(fileURLWithPath: "/tmp/Test.java"),
+        provider: JavaCompletionProvider? = nil
+    ) async -> [CompletionItem] {
         let markerRange = source.range(of: "€")!
         let withoutMarker = source.replacingOccurrences(of: "€", with: "")
         let utf16Offset = source.utf16.distance(from: source.utf16.startIndex, to: markerRange.lowerBound.samePosition(in: source.utf16)!)
         let position = textPosition(in: withoutMarker, utf16Offset: utf16Offset)
         let snapshot = TextSnapshot(version: 0, text: withoutMarker)
         let document = Document(
-            id: DocumentID(), url: URL(fileURLWithPath: "/tmp/Test.java"), displayName: "Test.java",
+            id: DocumentID(), url: url, displayName: url?.lastPathComponent ?? "Test.java",
             contentSnapshot: snapshot, selection: Selection(range: TextRange(start: position, end: position)),
             cursor: Cursor(position: position), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
             languageIdentifier: "java"
         )
         let context = makeCompletionContext(document: document, trigger: trigger)
-        let provider = JavaCompletionProvider(index: index)
-        return await provider.provide(context: context)
+        let resolved = provider ?? JavaCompletionProvider(index: index)
+        return await resolved.provide(context: context)
     }
 
     private func textPosition(in text: String, utf16Offset: Int) -> TextPosition {
@@ -194,6 +200,85 @@ final class JavaCompletionProviderTests: XCTestCase {
         let items = await complete("class Foo { void m() { int alpha = 1; €} }", index: index)
         XCTAssertFalse(items.contains { $0.kind == .keyword })
         XCTAssertFalse(items.contains { $0.kind == .type })
+    }
+
+    // MARK: - Source-set classpath scope
+
+    func testSourceSetScopeHidesTestOnlyClassesFromMain() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let mainDir = root.appendingPathComponent("src/main/java", isDirectory: true)
+        let testDir = root.appendingPathComponent("src/test/java", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let mainJar = URL(fileURLWithPath: "/deps/main.jar")
+        let testJar = URL(fileURLWithPath: "/deps/test-only.jar")
+        let paths = JavaIndexPaths(root: root.appendingPathComponent("index"))
+        try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true)
+        let mainShard = paths.jarShard(mainJar)
+        let testShard = paths.jarShard(testJar)
+        let mainStub = JavaClassStub(
+            binaryName: "com.example.MainDep", qualifiedName: "com.example.MainDep", simpleName: "MainDep",
+            packageName: "com.example", kind: .classKind, modifiers: [.publicFlag], origin: .jar(mainJar)
+        )
+        let testStub = JavaClassStub(
+            binaryName: "com.example.TestOnly", qualifiedName: "com.example.TestOnly", simpleName: "TestOnly",
+            packageName: "com.example", kind: .classKind, modifiers: [.publicFlag], origin: .jar(testJar)
+        )
+        try JavaIndexShardWriter().write([mainStub], stamp: JavaStamp(size: 1, modificationDate: 0), to: mainShard)
+        try JavaIndexShardWriter().write([testStub], stamp: JavaStamp(size: 1, modificationDate: 0), to: testShard)
+        let jdkURL = tempShardURL()
+        defer { try? FileManager.default.removeItem(at: jdkURL) }
+        try JavaIndexShardWriter().write([stringStub()], stamp: JavaStamp(size: 0, modificationDate: 0), to: jdkURL)
+
+        let index = JavaIndex()
+        await index.setSources([
+            .init(precedence: 3, reader: try JavaIndexShardReader(url: jdkURL)),
+            .init(precedence: 2, reader: try JavaIndexShardReader(url: mainShard), shardPath: mainShard.path),
+            .init(precedence: 2, reader: try JavaIndexShardReader(url: testShard), shardPath: testShard.path)
+        ])
+        let model = JavaGradleProjectModel(
+            formatVersion: 2,
+            gradleVersion: "9.0",
+            subprojects: [
+                .init(
+                    path: ":",
+                    directory: root,
+                    sourceSets: [
+                        .init(name: "main", sourceDirs: [mainDir], compileClasspathJars: [mainJar]),
+                        .init(
+                            name: "test",
+                            sourceDirs: [testDir],
+                            compileClasspathJars: [mainJar, testJar],
+                            projectDependencies: [.init(projectPath: ":", sourceSetName: "main")]
+                        )
+                    ]
+                )
+            ]
+        )
+        let mainScope = try XCTUnwrap(model.visibleShardPaths(forFile: mainDir.appendingPathComponent("App.java"), paths: paths))
+        let unscopedTestOnly = await index.classStub(qualifiedName: "com.example.TestOnly")
+        XCTAssertNotNil(unscopedTestOnly)
+        let scoped = await JavaIndex.$queryScope.withValue(mainScope) {
+            (
+                await index.classStub(qualifiedName: "com.example.TestOnly"),
+                await index.classStub(qualifiedName: "com.example.MainDep"),
+                await index.classStub(qualifiedName: "java.lang.String"),
+                await index.classes(simpleNamePrefix: "Test", limit: 20).map(\.qualifiedName)
+            )
+        }
+        XCTAssertNil(scoped.0, "test-only jar is not on the main compile classpath")
+        XCTAssertNotNil(scoped.1)
+        XCTAssertNotNil(scoped.2, "the JDK stays visible inside a source-set scope")
+        XCTAssertFalse(scoped.3.contains("com.example.TestOnly"))
+
+        let provider = JavaCompletionProvider(index: index)
+        await provider.setSourceSetClasspath(model, indexPaths: paths)
+        let fromMain = await complete("class Foo { Te€ }", index: index, url: mainDir.appendingPathComponent("App.java"), provider: provider)
+        let fromTest = await complete("class Foo { Te€ }", index: index, url: testDir.appendingPathComponent("AppTest.java"), provider: provider)
+        XCTAssertFalse(names(fromMain).contains("TestOnly"))
+        XCTAssertTrue(names(fromTest).contains("TestOnly"))
     }
 
     // MARK: - Real JDK, end-to-end (opt-in)

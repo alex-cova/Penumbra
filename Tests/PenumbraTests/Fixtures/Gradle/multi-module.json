@@ -1,5 +1,5 @@
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "gradleVersion": "9.2.1",
   "unresolved": [
     "Could not resolve com.example:missing-dep:1.0."
@@ -8,47 +8,71 @@
     {
       "path": ":",
       "directory": "file:///Users/dev/multi-module/",
-      "sourceDirs": [],
-      "testSourceDirs": [],
       "languageLevel": null,
-      "compileClasspathJars": [],
-      "testClasspathJars": []
+      "sourceSets": []
     },
     {
       "path": ":app",
       "directory": "file:///Users/dev/multi-module/app/",
-      "sourceDirs": [
-        "file:///Users/dev/multi-module/app/src/main/java/"
-      ],
-      "testSourceDirs": [
-        "file:///Users/dev/multi-module/app/src/test/java/"
-      ],
       "languageLevel": 17,
-      "compileClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar"
-      ],
-      "testClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar"
+      "sourceSets": [
+        {
+          "name": "main",
+          "sourceDirs": [
+            "file:///Users/dev/multi-module/app/src/main/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar"
+          ],
+          "projectDependencies": [
+            { "projectPath": ":lib:core", "sourceSetName": "main" }
+          ]
+        },
+        {
+          "name": "test",
+          "sourceDirs": [
+            "file:///Users/dev/multi-module/app/src/test/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar"
+          ],
+          "projectDependencies": [
+            { "projectPath": ":lib:core", "sourceSetName": "main" },
+            { "projectPath": ":app", "sourceSetName": "main" }
+          ]
+        }
       ]
     },
     {
       "path": ":lib:core",
       "directory": "file:///Users/dev/multi-module/lib/core/",
-      "sourceDirs": [
-        "file:///Users/dev/multi-module/lib/core/src/main/java/"
-      ],
-      "testSourceDirs": [
-        "file:///Users/dev/multi-module/lib/core/src/test/java/"
-      ],
       "languageLevel": 21,
-      "compileClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
-      ],
-      "testClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
+      "sourceSets": [
+        {
+          "name": "main",
+          "sourceDirs": [
+            "file:///Users/dev/multi-module/lib/core/src/main/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
+          ],
+          "projectDependencies": []
+        },
+        {
+          "name": "test",
+          "sourceDirs": [
+            "file:///Users/dev/multi-module/lib/core/src/test/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
+          ],
+          "projectDependencies": [
+            { "projectPath": ":lib:core", "sourceSetName": "main" }
+          ]
+        }
       ]
     }
   ]

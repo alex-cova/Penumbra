@@ -12,12 +12,20 @@ public actor JavaIndex {
     public struct Source: Sendable {
         public let precedence: Int
         public let reader: JavaIndexShardReader
+        /// Shard file path used to scope queries. Empty means the source is visible to every query
+        /// (the JDK, and any caller that has not opted into scoping).
+        public let shardPath: String
 
-        public init(precedence: Int, reader: JavaIndexShardReader) {
+        public init(precedence: Int, reader: JavaIndexShardReader, shardPath: String = "") {
             self.precedence = precedence
             self.reader = reader
+            self.shardPath = shardPath
         }
     }
+
+    /// Shard paths a single completion may see. `nil` (the default) sees every source. JDK shards
+    /// (precedence 3), the overlay, and sources with an empty `shardPath` stay visible either way.
+    @TaskLocal public static var queryScope: Set<String>?
 
     private var sources: [Source] = []
     private var overlay: [String: JavaClassStub] = [:]
@@ -30,6 +38,7 @@ public actor JavaIndex {
         let simpleName: String
         let qualifiedName: String
         let precedence: Int
+        let shardPath: String
     }
     private var nameIndex: [NameEntry] = []
     private var packages: Set<String> = []
@@ -58,13 +67,19 @@ public actor JavaIndex {
         var pkgs: Set<String> = []
 
         for (name, stub) in overlay {
-            entries.append(NameEntry(lowerSimpleName: stub.simpleName.lowercased(), simpleName: stub.simpleName, qualifiedName: name, precedence: -1))
+            entries.append(NameEntry(lowerSimpleName: stub.simpleName.lowercased(), simpleName: stub.simpleName, qualifiedName: name, precedence: -1, shardPath: ""))
             insertPackages(of: stub.packageName, into: &pkgs)
         }
         for source in sources {
             for qualifiedName in source.reader.allQualifiedNames {
                 let simpleName = String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName))
-                entries.append(NameEntry(lowerSimpleName: simpleName.lowercased(), simpleName: simpleName, qualifiedName: qualifiedName, precedence: source.precedence))
+                entries.append(NameEntry(
+                    lowerSimpleName: simpleName.lowercased(),
+                    simpleName: simpleName,
+                    qualifiedName: qualifiedName,
+                    precedence: source.precedence,
+                    shardPath: source.shardPath
+                ))
                 if let lastDot = qualifiedName.range(of: ".", options: .backwards) {
                     insertPackages(of: String(qualifiedName[..<lastDot.lowerBound]), into: &pkgs)
                 } else {
@@ -75,6 +90,19 @@ public actor JavaIndex {
         entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
         self.nameIndex = entries
         self.packages = pkgs
+    }
+
+    /// The cached package set when unscoped. Under a query scope, only packages that still have a
+    /// visible class, so import completion doesn't offer a test-only package from `src/main`.
+    private func visiblePackages() -> Set<String> {
+        guard Self.queryScope != nil else { return packages }
+        var scoped = Set<String>()
+        for entry in nameIndex where isVisible(shardPath: entry.shardPath, precedence: entry.precedence) {
+            if let lastDot = entry.qualifiedName.range(of: ".", options: .backwards) {
+                insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
+            }
+        }
+        return scoped
     }
 
     private func insertPackages(of packageName: String, into set: inout Set<String>) {
@@ -95,11 +123,20 @@ public actor JavaIndex {
             return overlaid
         }
         for source in sources.sorted(by: { $0.precedence < $1.precedence }) {
+            guard isVisible(shardPath: source.shardPath, precedence: source.precedence) else { continue }
             if let stub = source.reader.classStub(named: qualifiedName) {
                 return stub
             }
         }
         return nil
+    }
+
+    /// JDK (precedence 3), the overlay (precedence -1), and unscoped sources stay visible. A set
+    /// query scope hides every other shard whose path is not in the set.
+    private func isVisible(shardPath: String, precedence: Int) -> Bool {
+        if precedence <= 0 || precedence == 3 || shardPath.isEmpty { return true }
+        guard let scope = Self.queryScope else { return true }
+        return scope.contains(shardPath)
     }
 
     /// Classes whose simple name starts with `prefix` (case-insensitive), or matches it as an
@@ -115,7 +152,9 @@ public actor JavaIndex {
         let startIndex = lowerBoundIndex(for: lowerPrefix)
         var i = startIndex
         while i < nameIndex.count, nameIndex[i].lowerSimpleName.hasPrefix(lowerPrefix) {
-            considerMatch(nameIndex[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+            if isVisible(shardPath: nameIndex[i].shardPath, precedence: nameIndex[i].precedence) {
+                considerMatch(nameIndex[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+            }
             i += 1
         }
         // Camel-hump: only worth scanning the rest of the table when the prefix looks like an
@@ -123,6 +162,7 @@ public actor JavaIndex {
         // anything else immediately anyway.
         if prefix.count > 1, prefix.allSatisfy(\.isUppercase) {
             for entry in nameIndex where bestPrecedence[entry.qualifiedName] == nil {
+                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
                 if matchesCamelHump(prefix, entry.simpleName) {
                     considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                 }
@@ -187,6 +227,7 @@ public actor JavaIndex {
         var seenQualified = Set<String>()
         var results: [JavaClassStub] = []
         for entry in nameIndex {
+            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
             guard seenQualified.insert(entry.qualifiedName).inserted else { continue }
             guard let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
             results.append(stub)
@@ -200,7 +241,8 @@ public actor JavaIndex {
     public func subpackages(of prefix: String) -> [String] {
         let searchPrefix = prefix.isEmpty ? "" : "\(prefix)."
         var result = Set<String>()
-        for package in packages {
+        let pool = visiblePackages()
+        for package in pool {
             guard package.hasPrefix(searchPrefix), package != prefix else { continue }
             let remainder = package.dropFirst(searchPrefix.count)
             guard !remainder.contains(".") else { continue }

@@ -24,14 +24,38 @@ public actor JavaCompletionProvider: CompletionProvider {
     public let name = "Java"
     private let index: JavaIndex
     private let classNameCompletionLimit: Int
+    /// Set after a Gradle sync. Nil keeps every indexed shard visible (non-Gradle folders, and the
+    /// whole-tree fallback while the first sync is still running).
+    private var classpathModel: JavaGradleProjectModel?
+    private var classpathPaths: JavaIndexPaths?
 
     public init(index: JavaIndex, classNameCompletionLimit: Int = 100) {
         self.index = index
         self.classNameCompletionLimit = classNameCompletionLimit
     }
 
+    /// Installs or clears the source-set classpath used to scope completion. `nil` sees every shard.
+    public func setSourceSetClasspath(_ model: JavaGradleProjectModel?, indexPaths: JavaIndexPaths) {
+        classpathModel = model
+        classpathPaths = model == nil ? nil : indexPaths
+    }
+
     public func provide(context: CompletionContext) async -> [CompletionItem] {
         guard context.document.languageIdentifier == "java" else { return [] }
+        if let scope = scope(for: context.document.url) {
+            return await JavaIndex.$queryScope.withValue(scope) {
+                await self.provideInScope(context: context)
+            }
+        }
+        return await provideInScope(context: context)
+    }
+
+    private func scope(for file: URL?) -> Set<String>? {
+        guard let file, let classpathModel, let classpathPaths else { return nil }
+        return classpathModel.visibleShardPaths(forFile: file, paths: classpathPaths)
+    }
+
+    private func provideInScope(context: CompletionContext) async -> [CompletionItem] {
         guard !context.document.contentSnapshot.isElided else { return [] }
         let text = context.document.text
         guard let tree = JavaSyntaxParser().parse(text) else { return [] }

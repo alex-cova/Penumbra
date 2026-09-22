@@ -6,7 +6,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
 
     func testDecodesSingleModuleFixture() throws {
         let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: GradleFixtures.modelData("single-module"))
-        XCTAssertEqual(model.formatVersion, 1)
+        XCTAssertEqual(model.formatVersion, 2)
         XCTAssertEqual(model.gradleVersion, "9.2.1")
         XCTAssertTrue(model.unresolved.isEmpty)
         XCTAssertEqual(model.subprojects.count, 1)
@@ -34,6 +34,67 @@ final class JavaGradleProjectModelTests: XCTestCase {
 
         let libCore = try XCTUnwrap(model.subprojects.first { $0.path == ":lib:core" })
         XCTAssertEqual(libCore.languageLevel, 21)
+
+        let appMain = try XCTUnwrap(app.sourceSets.first { $0.name == "main" })
+        XCTAssertEqual(appMain.projectDependencies, [.init(projectPath: ":lib:core", sourceSetName: "main")])
+        XCTAssertEqual(app.testClasspathJars.count, 2)
+        XCTAssertEqual(app.compileClasspathJars.count, 1)
+    }
+
+    func testSourceSetContainingFilePicksTheLongestDirectoryPrefix() {
+        let root = URL(fileURLWithPath: "/proj")
+        let mainDir = URL(fileURLWithPath: "/proj/src/main/java")
+        let testDir = URL(fileURLWithPath: "/proj/src/test/java")
+        let model = JavaGradleProjectModel(
+            formatVersion: 2,
+            gradleVersion: "9.0",
+            subprojects: [
+                .init(path: ":", directory: root, sourceDirs: [mainDir], testSourceDirs: [testDir])
+            ]
+        )
+        let testFile = URL(fileURLWithPath: "/proj/src/test/java/com/example/AppTest.java")
+        let match = model.sourceSet(containing: testFile)
+        XCTAssertEqual(match?.sourceSet.name, "test")
+        XCTAssertNil(model.sourceSet(containing: URL(fileURLWithPath: "/proj/README.md")))
+    }
+
+    func testVisibleShardPathsHideTestOnlyJarsFromMain() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mainDir = root.appendingPathComponent("src/main/java", isDirectory: true)
+        let testDir = root.appendingPathComponent("src/test/java", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+
+        let guava = URL(fileURLWithPath: "/caches/guava.jar")
+        let junit = URL(fileURLWithPath: "/caches/junit.jar")
+        let model = JavaGradleProjectModel(
+            formatVersion: 2,
+            gradleVersion: "9.0",
+            subprojects: [
+                .init(
+                    path: ":",
+                    directory: root,
+                    sourceSets: [
+                        .init(name: "main", sourceDirs: [mainDir], compileClasspathJars: [guava]),
+                        .init(
+                            name: "test",
+                            sourceDirs: [testDir],
+                            compileClasspathJars: [guava, junit],
+                            projectDependencies: [.init(projectPath: ":", sourceSetName: "main")]
+                        )
+                    ]
+                )
+            ]
+        )
+        let paths = JavaIndexPaths(root: root.appendingPathComponent("index-cache"))
+        let mainScope = try XCTUnwrap(model.visibleShardPaths(forFile: mainDir.appendingPathComponent("App.java"), paths: paths))
+        let testScope = try XCTUnwrap(model.visibleShardPaths(forFile: testDir.appendingPathComponent("AppTest.java"), paths: paths))
+        XCTAssertTrue(mainScope.contains(paths.jarShard(guava).path))
+        XCTAssertFalse(mainScope.contains(paths.jarShard(junit).path))
+        XCTAssertTrue(testScope.contains(paths.jarShard(junit).path))
+        XCTAssertTrue(testScope.contains(paths.projectSourcesShard(for: mainDir.standardizedFileURL).path))
+        XCTAssertNil(model.visibleShardPaths(forFile: root.appendingPathComponent("README.md"), paths: paths))
     }
 
     func testClasspathJarsDedupesSharedDependencyAcrossSubprojects() throws {

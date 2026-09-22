@@ -44,8 +44,10 @@ final class IDEJavaSupport {
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
     @ObservationIgnored private var jdkReader: JavaIndexShardReader?
-    @ObservationIgnored private var projectReaders: [JavaIndexShardReader] = []
-    @ObservationIgnored private var jarReaders: [JavaIndexShardReader] = []
+    /// Project and jar shards carry `shardPath` so a Gradle source-set scope can hide the ones that
+    /// are not on the file's compile classpath. The JDK shard does not: it is always visible.
+    @ObservationIgnored private var projectSources: [JavaIndex.Source] = []
+    @ObservationIgnored private var jarSources: [JavaIndex.Source] = []
     @ObservationIgnored private var jdkIndexingTask: Task<Void, Never>?
     @ObservationIgnored private var projectIndexingTask: Task<Void, Never>?
     @ObservationIgnored private var gradleSyncTask: Task<Void, Never>?
@@ -175,12 +177,13 @@ final class IDEJavaSupport {
         gradleSyncInFlight = false
         gradleBuildFilesChanged = false
         projectRootURL = url
-        let hadJars = !jarReaders.isEmpty
-        jarReaders = []
+        let hadJars = !jarSources.isEmpty
+        jarSources = []
         lastUnresolved = []
+        clearSourceSetClasspath()
 
         guard let url else {
-            projectReaders = []
+            projectSources = []
             gradleSync = .notGradle
             lastGradleResult = nil
             lastGradleCommandLine = nil
@@ -244,7 +247,9 @@ final class IDEJavaSupport {
                 return
             }
             if let reader = try? JavaIndexShardReader(url: shardURL) {
-                projectReaders = [reader]
+                // No shard path: this whole-tree fallback is only published while completion is
+                // unscoped. A finished sync replaces it with per-source-set readers.
+                projectSources = [.init(precedence: 1, reader: reader)]
             }
             if statusMessage == "Indexing project sources…" {
                 statusMessage = nil
@@ -316,15 +321,24 @@ final class IDEJavaSupport {
                 for await _ in await scheduler.index(sourceTargets + jarTargets) {}
                 guard isCurrent(generation) else { return }
 
-                projectReaders = sourceTargets.compactMap { try? JavaIndexShardReader(url: $0.shardURL) }
-                jarReaders = jarTargets.compactMap { try? JavaIndexShardReader(url: $0.shardURL) }
+                projectSources = sourceTargets.compactMap { target in
+                    guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                    return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+                }
+                jarSources = jarTargets.compactMap { target in
+                    guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                    return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
+                }
                 if statusMessage == dependencyMessage {
                     statusMessage = nil
                 }
                 gradleSync = .synced(subprojects: model.subprojects.count, jars: model.classpathJars.count)
+                // Publish first so a scoped query never runs against shards that are not installed yet.
                 await publishSources()
+                await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
             } catch {
                 guard isCurrent(generation) else { return }
+                clearSourceSetClasspath()
                 // Only clear the message this task set. JDK indexing and the whole-tree fallback
                 // publish their own status and must not be blanked by a Gradle failure.
                 if statusMessage == "Resolving Gradle project…" {
@@ -426,9 +440,13 @@ final class IDEJavaSupport {
     private func publishSources() async {
         var sources: [JavaIndex.Source] = []
         if let jdkReader { sources.append(.init(precedence: 3, reader: jdkReader)) }
-        for reader in projectReaders { sources.append(.init(precedence: 1, reader: reader)) }
-        for reader in jarReaders { sources.append(.init(precedence: 2, reader: reader)) }
+        sources.append(contentsOf: projectSources)
+        sources.append(contentsOf: jarSources)
         await javaIndex.setSources(sources)
+    }
+
+    private func clearSourceSetClasspath() {
+        Task { await completionProvider.setSourceSetClasspath(nil, indexPaths: paths) }
     }
 
     private func startBuildFileWatcher(root: URL) {

@@ -1,24 +1,36 @@
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "gradleVersion": "9.2.1",
   "unresolved": [],
   "subprojects": [
     {
       "path": ":",
       "directory": "file:///Users/dev/single-module/",
-      "sourceDirs": [
-        "file:///Users/dev/single-module/src/main/java/"
-      ],
-      "testSourceDirs": [
-        "file:///Users/dev/single-module/src/test/java/"
-      ],
       "languageLevel": 21,
-      "compileClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar"
-      ],
-      "testClasspathJars": [
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
-        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar"
+      "sourceSets": [
+        {
+          "name": "main",
+          "sourceDirs": [
+            "file:///Users/dev/single-module/src/main/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar"
+          ],
+          "projectDependencies": []
+        },
+        {
+          "name": "test",
+          "sourceDirs": [
+            "file:///Users/dev/single-module/src/test/java/"
+          ],
+          "compileClasspathJars": [
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+            "file:///Users/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar"
+          ],
+          "projectDependencies": [
+            { "projectPath": ":", "sourceSetName": "main" }
+          ]
+        }
       ]
     }
   ]

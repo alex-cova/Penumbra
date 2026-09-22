@@ -32,17 +32,35 @@ final class GradleProjectIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(model.subprojects.map(\.path)), [":", ":app", ":lib"])
 
         let app = try XCTUnwrap(model.subprojects.first { $0.path == ":app" })
+        let appMain = try XCTUnwrap(app.sourceSets.first { $0.name == "main" })
+        let appTest = try XCTUnwrap(app.sourceSets.first { $0.name == "test" })
         XCTAssertTrue(
-            app.sourceDirs.contains { $0.path.hasSuffix("app/src/main/java") },
-            "expected :app's src/main/java, got \(app.sourceDirs)"
+            appMain.sourceDirs.contains { $0.path.hasSuffix("app/src/main/java") },
+            "expected :app's src/main/java, got \(appMain.sourceDirs)"
         )
         XCTAssertTrue(
-            app.compileClasspathJars.contains { $0.path == JavaFixtures.jarURL.path },
-            "expected the fixture jar in :app's compile classpath, got \(app.compileClasspathJars)"
+            appMain.compileClasspathJars.contains { $0.path == JavaFixtures.jarURL.path },
+            "expected the fixture jar in :app main, got \(appMain.compileClasspathJars)"
         )
         XCTAssertFalse(
-            app.compileClasspathJars.contains { $0.path.contains("/lib/build/") },
-            "the inter-project :lib dependency is indexed from its own sourceDirs -- it must not also leak in as a jar"
+            appMain.compileClasspathJars.contains { $0.path.hasSuffix("test-only.jar") },
+            "testImplementation must not be on the main compile classpath: \(appMain.compileClasspathJars)"
+        )
+        XCTAssertTrue(
+            appTest.compileClasspathJars.contains { $0.path.hasSuffix("test-only.jar") },
+            "expected test-only.jar on the test compile classpath, got \(appTest.compileClasspathJars)"
+        )
+        XCTAssertTrue(
+            appMain.projectDependencies.contains { $0.projectPath == ":lib" && $0.sourceSetName == "main" },
+            "expected :app main to depend on :lib main, got \(appMain.projectDependencies)"
+        )
+        XCTAssertFalse(
+            appMain.compileClasspathJars.contains { $0.path.contains("/lib/build/") },
+            "the inter-project :lib dependency is indexed from its own sources -- it must not also leak in as a jar"
+        )
+        XCTAssertFalse(
+            appTest.compileClasspathJars.contains { $0.path.contains("/lib/build/") },
+            "the test classpath must not index :lib's jar either"
         )
 
         // End-to-end: index the model-driven sources + jars and confirm both a project class and a
@@ -104,6 +122,8 @@ final class GradleProjectIntegrationTests: XCTestCase {
             .write(to: root.appendingPathComponent("lib/src/main/java/com/example/Lib.java"), atomically: true, encoding: .utf8)
 
         let fixtureJarPath = JavaFixtures.jarURL.path
+        let testOnlyJar = root.appendingPathComponent("test-only.jar")
+        try fileManager.copyItem(at: JavaFixtures.jarURL, to: testOnlyJar)
         try """
         plugins {
             id 'java'
@@ -115,6 +135,7 @@ final class GradleProjectIntegrationTests: XCTestCase {
         dependencies {
             implementation project(':lib')
             implementation files('\(fixtureJarPath)')
+            testImplementation files('\(testOnlyJar.path)')
         }
         """.write(to: root.appendingPathComponent("app/build.gradle"), atomically: true, encoding: .utf8)
 

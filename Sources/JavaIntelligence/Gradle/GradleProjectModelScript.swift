@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 1
+    static let formatVersion = 2
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -31,15 +31,63 @@ enum GradleProjectModelScript {
         r.ext.umbraFragments = Collections.synchronizedList([])
     }
 
+    def umbraDescribeSourceSet = { p, ss ->
+        def described = [
+            name: ss.name,
+            sourceDirs: ss.java.srcDirs.collect { it.toURI().toString() },
+            compileClasspathJars: [],
+            projectDependencies: [],
+            unresolved: []
+        ]
+        def config = p.configurations.findByName(ss.compileClasspathConfigurationName)
+        if (config == null || !config.canBeResolved) {
+            return described
+        }
+        try {
+            def view = config.incoming.artifactView { viewSpec ->
+                viewSpec.lenient(true)
+            }
+            def seenJars = [] as LinkedHashSet
+            def seenProjects = [] as HashSet
+            view.artifacts.each { artifact ->
+                def owner = null
+                def variantName = ''
+                try {
+                    owner = artifact.variant.owner
+                    variantName = artifact.variant.displayName ?: ''
+                } catch (Exception ignored) {}
+                if (owner instanceof ProjectComponentIdentifier) {
+                    def sourceSetName = variantName.contains('testFixtures') ? 'testFixtures' : 'main'
+                    // A source set's own output is not a dependency; its directories are already listed.
+                    if (owner.projectPath == p.path && sourceSetName == ss.name) {
+                        return
+                    }
+                    def key = owner.projectPath + '@' + sourceSetName
+                    if (seenProjects.add(key)) {
+                        described.projectDependencies.add([projectPath: owner.projectPath, sourceSetName: sourceSetName])
+                    }
+                } else if (artifact.file.name.endsWith('.jar')) {
+                    def uri = artifact.file.toURI().toString()
+                    if (seenJars.add(uri)) {
+                        described.compileClasspathJars.add(uri)
+                    }
+                }
+            }
+            view.artifacts.failures.each { failure ->
+                described.unresolved.add(failure.message ?: failure.toString())
+            }
+        } catch (Exception e) {
+            described.unresolved.add(e.message ?: e.toString())
+        }
+        return described
+    }
+
     def umbraDescribeProject = { p ->
         def result = [
             path: p.path,
             directory: p.projectDir.toURI().toString(),
-            sourceDirs: [],
-            testSourceDirs: [],
             languageLevel: null,
-            compileClasspathJars: [],
-            testClasspathJars: [],
+            sourceSets: [],
             unresolved: []
         ]
 
@@ -50,15 +98,6 @@ enum GradleProjectModelScript {
         def javaExt = p.extensions.findByType(JavaPluginExtension)
         if (javaExt == null) {
             return result
-        }
-
-        javaExt.sourceSets.each { ss ->
-            def dirs = ss.java.srcDirs.collect { it.toURI().toString() }
-            if (ss.name.toLowerCase().contains('test')) {
-                result.testSourceDirs.addAll(dirs)
-            } else {
-                result.sourceDirs.addAll(dirs)
-            }
         }
 
         Integer level = null
@@ -75,39 +114,12 @@ enum GradleProjectModelScript {
         }
         result.languageLevel = level
 
-        def resolveJars = { String configurationName ->
-            def jars = []
-            def unresolvedDeps = []
-            def config = p.configurations.findByName(configurationName)
-            if (config == null || !config.canBeResolved) {
-                return [jars: jars, unresolved: unresolvedDeps]
-            }
-            try {
-                def view = config.incoming.artifactView { viewSpec ->
-                    viewSpec.lenient(true)
-                    viewSpec.componentFilter { id -> !(id instanceof ProjectComponentIdentifier) }
-                }
-                view.artifacts.each { artifact ->
-                    if (artifact.file.name.endsWith('.jar')) {
-                        jars.add(artifact.file.toURI().toString())
-                    }
-                }
-                view.artifacts.failures.each { failure ->
-                    unresolvedDeps.add(failure.message ?: failure.toString())
-                }
-            } catch (Exception e) {
-                unresolvedDeps.add(e.message ?: e.toString())
-            }
-            return [jars: jars, unresolved: unresolvedDeps]
+        javaExt.sourceSets.each { ss ->
+            def described = umbraDescribeSourceSet(p, ss)
+            result.unresolved.addAll(described.unresolved)
+            described.remove('unresolved')
+            result.sourceSets.add(described)
         }
-
-        def compile = resolveJars('compileClasspath')
-        result.compileClasspathJars = compile.jars
-        result.unresolved.addAll(compile.unresolved)
-
-        def testCompile = resolveJars('testCompileClasspath')
-        result.testClasspathJars = testCompile.jars
-        result.unresolved.addAll(testCompile.unresolved)
 
         return result
     }
