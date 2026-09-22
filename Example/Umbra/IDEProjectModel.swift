@@ -45,11 +45,12 @@ final class IDEProjectModel {
         }
     }
 
-    func restoreRoot(from bookmarkData: Data?) {
-        guard let bookmarkData else {
-            setRoot(nil)
-            return
-        }
+    /// Resolves a security-scoped project bookmark and starts access. `nil` when there is no
+    /// bookmark or it can no longer be resolved. Does not update the model -- callers that also
+    /// need Java/terminal side effects should pass the result through `IDEWorkspace`'s project-root
+    /// path instead of `setRoot` alone.
+    func rootURL(from bookmarkData: Data?) -> URL? {
+        guard let bookmarkData else { return nil }
         var isStale = false
         guard let url = try? URL(
             resolvingBookmarkData: bookmarkData,
@@ -57,11 +58,14 @@ final class IDEProjectModel {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ) else {
-            setRoot(nil)
-            return
+            return nil
         }
         _ = url.startAccessingSecurityScopedResource()
-        setRoot(url)
+        return url
+    }
+
+    func restoreRoot(from bookmarkData: Data?) {
+        setRoot(rootURL(from: bookmarkData))
     }
 
     func makeBookmarkData() -> Data? {

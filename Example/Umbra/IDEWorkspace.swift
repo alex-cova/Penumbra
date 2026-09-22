@@ -76,6 +76,8 @@ public final class IDEWorkspace {
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
 
+    var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
+
     public init() {}
 
     var isSidebarVisible = true
@@ -123,6 +125,10 @@ public final class IDEWorkspace {
 
     func bootstrap() {
         applyLaunchConfiguration()
+        intelligenceServices.javaSupport.requestTrust = { [weak self] url in
+            guard let self else { return false }
+            return await self.promptGradleTrust(for: url)
+        }
         loadSession()
         wireAdapter()
         rebuildLayoutHosts()
@@ -841,10 +847,12 @@ public final class IDEWorkspace {
            !terminalTabs.contains(where: { $0.id == selectedID }) {
             selectedTerminalTabID = terminalTabs.first?.id
         }
-        project.restoreRoot(from: session.projectRootBookmark)
         if isTerminalVisible && terminalTabs.isEmpty {
             addTerminalTab(saveSession: false)
         }
+        // Same path as Open Folder, so a restored Gradle project syncs instead of only rebuilding
+        // the sidebar. `restoreRoot` alone never reached `javaSupport.setProjectRoot`.
+        applyProjectRoot(project.rootURL(from: session.projectRootBookmark))
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
@@ -1102,8 +1110,24 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.nextTerminalTab", title: "Next Terminal Tab", group: "View",
                           action: { [weak self] in self?.selectNextTerminalTab() }),
             EditorCommand(id: "app.previousTerminalTab", title: "Previous Terminal Tab", group: "View",
-                          action: { [weak self] in self?.selectPreviousTerminalTab() })
+                          action: { [weak self] in self?.selectPreviousTerminalTab() }),
+            EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
+                          action: { [weak self] in self?.reloadGradleProject() }),
+            EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
+                          action: { [weak self] in self?.showGradleOutput() })
         ])
+    }
+
+    func reloadGradleProject() {
+        javaSupport.reloadGradleProject()
+    }
+
+    func showGradleOutput() {
+        IDEGradleOutputPanel.shared.show(javaSupport.gradleOutputText())
+    }
+
+    func dismissGradleReloadBanner() {
+        javaSupport.dismissGradleBuildFileChanges()
     }
 
     private func applyProjectRoot(_ url: URL?) {
@@ -1478,6 +1502,28 @@ public final class IDEWorkspace {
 
     private func presentError(_ error: Error) {
         NSAlert(error: error).runModal()
+    }
+
+    private func promptGradleTrust(for url: URL) async -> Bool {
+        let name = url.lastPathComponent
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Trust and run Gradle build scripts for “\(name)”?"
+            alert.informativeText = "Gradle build scripts can run arbitrary code, including code from plugins they apply. Trust this folder only if you trust its contents."
+            alert.addButton(withTitle: "Trust Project")
+            alert.addButton(withTitle: "Don't Trust")
+            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+            if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                alert.beginSheetModal(for: window) { response in
+                    finish(response)
+                }
+            } else {
+                finish(alert.runModal())
+            }
+        }
     }
 
     private func presentMetalFailureOnce(reason: String) {

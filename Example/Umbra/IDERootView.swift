@@ -34,6 +34,12 @@ public struct IDERootView: View {
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
 
+                    if workspace.javaSupport.gradleBuildFilesChanged {
+                        IDEGradleReloadBanner()
+                            .opacity(workspace.chromeOpacity)
+                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                    }
+
                     ZStack {
                         if workspace.showsWelcome && !workspace.hasOpenDocuments {
                             IDEWelcomeView()
@@ -112,6 +118,39 @@ public struct IDERootView: View {
     IDERootView()
         .environment(IDEWorkspace())
         .frame(width: 1100, height: 700)
+}
+
+struct IDEGradleReloadBanner: View {
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Text("Build files changed — reload Gradle project?")
+                .font(IDEAppearance.Typography.body)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+            Spacer(minLength: IDEAppearance.Spacing.sm)
+            Button("Reload") {
+                workspace.reloadGradleProject()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            Button("Dismiss") {
+                workspace.dismissGradleReloadBanner()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, IDEAppearance.Spacing.sm)
+        .background(IDEAppearance.ColorToken.tabActive)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+    }
 }
 
 private struct IDETerminalResizeHandle: View {

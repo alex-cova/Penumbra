@@ -188,6 +188,33 @@ public struct IDEPreferencesView: View {
                             isOn: $preferences.isFocusModeEnabled
                         )
                     }
+
+                    IDESettingsSection(title: "Java") {
+                        IDESettingsToggleRow(
+                            title: "Sync Gradle Projects",
+                            caption: "Resolve modules and dependencies when a Gradle project opens. Build scripts still run only after you trust the project.",
+                            isOn: $preferences.javaGradleAutoSync
+                        )
+                        IDESettingsSeparator()
+                        IDESettingsRow(title: "Gradle Sync Timeout") {
+                            HStack(spacing: IDEAppearance.Spacing.xs) {
+                                Text("\(preferences.javaGradleSyncTimeoutSeconds)s")
+                                    .font(IDEAppearance.Typography.monoCaption)
+                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    .monospacedDigit()
+                                    .frame(width: 48, alignment: .trailing)
+                                    .accessibilityHidden(true)
+                                Stepper(
+                                    "Gradle Sync Timeout",
+                                    value: $preferences.javaGradleSyncTimeoutSeconds,
+                                    in: 30...3600,
+                                    step: 30
+                                )
+                                .labelsHidden()
+                                .controlSize(.small)
+                            }
+                        }
+                    }
                 }
                 .padding(IDEAppearance.Spacing.lg)
             }

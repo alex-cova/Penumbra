@@ -12,6 +12,7 @@ struct IDEStatusBarPanel: View {
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             syntaxPicker
+            javaStatus
             if workspace.statusSelectionLength > 0 {
                 Text("·  \(workspace.statusSelectionLength) selected")
                     .font(IDEAppearance.Typography.monoSmall)
@@ -49,6 +50,43 @@ struct IDEStatusBarPanel: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+    }
+
+    @ViewBuilder
+    private var javaStatus: some View {
+        switch workspace.javaSupport.gradleSync {
+        case .failed(let summary):
+            Text("·")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Button("Gradle sync failed") {
+                workspace.showGradleOutput()
+            }
+            .buttonStyle(.borderless)
+            .font(IDEAppearance.Typography.monoSmall)
+            .foregroundStyle(Color(hex: 0xE5484D))
+            .fixedSize()
+            .help(summary)
+            .accessibilityLabel("Gradle sync failed")
+            .accessibilityHint(summary)
+        default:
+            if let message = workspace.javaSupport.statusMessage {
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.65)
+                    .frame(width: 12, height: 12)
+                    .accessibilityHidden(true)
+                Text(message)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 280, alignment: .leading)
+            }
+        }
     }
 
     private var leadingSummary: String {

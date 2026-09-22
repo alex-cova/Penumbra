@@ -32,6 +32,8 @@ public final class IDEPreferences {
         static let isDistractionFreeModeEnabled = "com.umbra.editor.isDistractionFreeModeEnabled"
         static let isFocusModeEnabled = "com.umbra.editor.isFocusModeEnabled"
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
+        static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
+        static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
     }
 
     var fontSize: Double {
@@ -133,6 +135,18 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(hasCompletedFirstRunGuide, forKey: Keys.hasCompletedFirstRunGuide) }
     }
 
+    /// When a Gradle project opens, resolve modules and dependencies automatically. Still gated by
+    /// the trust prompt. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaGradleAutoSync: Bool {
+        didSet { UserDefaults.standard.set(javaGradleAutoSync, forKey: Keys.javaGradleAutoSync) }
+    }
+
+    /// How long one Gradle project-model sync may run before it is killed. A first sync may
+    /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
+    var javaGradleSyncTimeoutSeconds: Int {
+        didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
@@ -159,6 +173,8 @@ public final class IDEPreferences {
         isDistractionFreeModeEnabled = defaults.object(forKey: Keys.isDistractionFreeModeEnabled) as? Bool ?? false
         isFocusModeEnabled = defaults.object(forKey: Keys.isFocusModeEnabled) as? Bool ?? false
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
+        javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
+        javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         applyTheme()
     }
 

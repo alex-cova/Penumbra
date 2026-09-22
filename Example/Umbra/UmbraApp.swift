@@ -65,6 +65,13 @@ struct UmbraApp: App {
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }
 
+            CommandMenu("Java") {
+                Button("Reload Gradle Project", action: workspace.reloadGradleProject)
+                    .disabled(!workspace.javaSupport.isGradleProject)
+                Button("Show Gradle Output", action: workspace.showGradleOutput)
+                    .disabled(workspace.javaSupport.lastGradleResult == nil)
+            }
+
             CommandMenu("View") {
                 Button("Split Editor Right", systemImage: "rectangle.split.2x1", action: workspace.splitRight)
                     .keyboardShortcut("\\", modifiers: .command)

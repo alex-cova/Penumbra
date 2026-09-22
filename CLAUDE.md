@@ -8,7 +8,8 @@ Penumbra is a Swift Package Manager library: a high-performance plain text/code 
 
 - **`Penumbra`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
 - **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Penumbra`**. The two are connected only through `Sources/Penumbra/EditorIntelligenceAdapter/PenumbraEditorAdapter.swift`.
-- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**: lightweight, fast editing with project folders, split panes, symbol-aware navigation, and session restore (Sublime keymap by default). Built on `Penumbra` and `EditorIntelligence`.
+- **`JavaIntelligence`** — native Java indexing and completion (JDK discovery, source and JAR stubs, type resolution, completion) with **no dependency on `Penumbra`**. Umbra wires it through `Example/Umbra/IDEJavaSupport.swift`. For a Gradle project, a trusted sync (`GradleCommandRunner` plus an init script) replaces the whole-folder `.java` walk with per-module source sets and resolved dependency JARs.
+- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**: lightweight, fast editing with project folders, split panes, symbol-aware navigation, session restore, and Java completion with Gradle module and dependency sync (Sublime keymap by default). Built on `Penumbra`, `EditorIntelligence`, and `JavaIntelligence`.
 
 Requires macOS 14+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in `Packages/TreeSitter` as a local SPM package.
 

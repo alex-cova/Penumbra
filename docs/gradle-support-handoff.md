@@ -242,3 +242,16 @@ Follow the patterns already established in `Tests/PenumbraTests/JavaIntelligence
 Steps 1-3 have no Umbra/UI dependency and are fully testable in isolation; 4 and 5 are additive to
 existing, already-tested code (`SourceRoot`, `JarRoot`, `JavaIndexScheduler`, `IDEJavaSupport`)
 rather than a rewrite of it.
+
+## Implementation notes
+
+Shipped on `java-completion`. Deviations from the literal handoff, where Gradle 9 (what's installed here) or the way Umbra is packaged made the original approach fragile:
+
+1. **Trust store location.** `~/Library/Application Support/com.umbra.editor/gradle-trust.json`, next to `session.json`, not under `JavaIndexPaths` (that root is in Caches and versioned by shard format, so trust would silently reset on a format bump). Declined roots are stored too, so Umbra doesn't re-ask every launch; Reload asks again.
+2. **Init script is a Swift string**, not a `Bundle.module` resource. `Scripts/build-app.sh` never copies SPM resource bundles into `Umbra.app`, and `JavaIntelligence` has no resources.
+3. **Per-project fragment tasks.** Each project registers `umbraProjectModelFragment` and resolves only its own configurations. A root `umbraProjectModel` task depends on every fragment and writes one `model.json`. A single root task that walks `allprojects` and resolves other projects' configurations is deprecated in Gradle 8 and rejected by Gradle 9.
+4. **`artifactView { lenient(true) }`** instead of `resolvedConfiguration.lenientConfiguration`, with a component filter that drops inter-project dependencies (their sources are indexed from their own source dirs, and a stale `build/libs/*.jar` must not be indexed). Unresolved dependencies are listed on the model as `unresolved` and shown in the Gradle output panel.
+5. **Paths are `file://` URIs**, and the model also carries `formatVersion` and `gradleVersion`, so `Codable`'s `URL` decoding produces file URLs.
+6. **Session restore** routes the bookmarked root through the same path as Open Folder (`applyProjectRoot`), so a restored Gradle project syncs instead of only rebuilding the sidebar.
+7. **Flat index.** Sources and JARs from every module go into one `JavaIndex` (every module sees every module's classes and dependencies). Per-module visibility is out of scope.
+8. **JDK for Gradle vs JDK for the project.** The Gradle process itself gets the newest installed JDK (`Gradle 9` needs 17+). The indexed JDK is re-selected only when `maxLanguageLevel` would pick a different installation than the one already indexed.

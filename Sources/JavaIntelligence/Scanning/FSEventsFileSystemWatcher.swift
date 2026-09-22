@@ -2,10 +2,12 @@ import CoreServices
 import EditorIntelligence
 import Foundation
 
-/// Watches a directory tree with FSEvents and emits `.java` file changes as
-/// `EditorIntelligence.FileSystemEvent`s. Polling the whole tree every couple of seconds (the
-/// package's `PollingFileSystemWatcher`) doesn't scale to a real project's source tree; FSEvents
-/// gets kernel-level notifications instead.
+/// Watches a directory tree with FSEvents and emits file changes as
+/// `EditorIntelligence.FileSystemEvent`s. By default only `.java` paths are forwarded (what
+/// `JavaIndexScheduler` re-indexes); pass `pathFilter` to watch a different set, such as Gradle
+/// build scripts. Polling the whole tree every couple of seconds (the package's
+/// `PollingFileSystemWatcher`) doesn't scale to a real project's source tree; FSEvents gets
+/// kernel-level notifications instead.
 ///
 /// FSEvents reports changes at file granularity (with `kFSEventStreamCreateFlagFileEvents`), but
 /// doesn't distinguish create/modify from its flags as cleanly as one might like for a "was this
@@ -17,13 +19,21 @@ import Foundation
 public final class FSEventsFileSystemWatcher: FileSystemWatcher, @unchecked Sendable {
     private let root: URL
     private let latency: CFTimeInterval
+    private let pathFilter: @Sendable (String) -> Bool
     private var streamRef: FSEventStreamRef?
     private let continuation: AsyncStream<FileSystemEvent>.Continuation
     public let events: AsyncStream<FileSystemEvent>
 
-    public init(root: URL, latency: CFTimeInterval = 0.3) {
+    /// `pathFilter` receives the absolute path FSEvents reported and decides whether it becomes an
+    /// event. The default keeps the historical `.java`-only behavior.
+    public init(
+        root: URL,
+        latency: CFTimeInterval = 0.3,
+        pathFilter: @escaping @Sendable (String) -> Bool = { $0.hasSuffix(".java") }
+    ) {
         self.root = root
         self.latency = latency
+        self.pathFilter = pathFilter
         var capturedContinuation: AsyncStream<FileSystemEvent>.Continuation!
         self.events = AsyncStream { capturedContinuation = $0 }
         self.continuation = capturedContinuation
@@ -79,7 +89,7 @@ public final class FSEventsFileSystemWatcher: FileSystemWatcher, @unchecked Send
         for index in 0..<numEvents {
             guard index < paths.count else { break }
             let path = paths[index]
-            guard path.hasSuffix(".java") else { continue }
+            guard watcher.pathFilter(path) else { continue }
             let url = URL(fileURLWithPath: path)
             let flags = eventFlags[index]
             if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0, !FileManager.default.fileExists(atPath: path) {
