@@ -135,10 +135,26 @@ final class IDETerminalHostView: NSView {
         }
     }
 
+    private var pendingCommands: [String] = []
+
+    func sendCommand(_ command: String) {
+        let line = command.hasSuffix("\n") ? command : command + "\n"
+        pendingCommands.append(line)
+        flushPendingCommands()
+        guard !pendingCommands.isEmpty else { return }
+        // The shell may not be running until the view is laid out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.flushPendingCommands()
+        }
+    }
+
     func startProcessIfNeeded() {
         guard isActive else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
-        guard !terminalView.process.running else { return }
+        guard !terminalView.process.running else {
+            flushPendingCommands()
+            return
+        }
 
         let shell = IDETerminalShell.resolvedShell()
         let cwd = (workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser).path
@@ -149,6 +165,15 @@ final class IDETerminalHostView: NSView {
             execName: IDETerminalShell.loginExecName(for: shell),
             currentDirectory: cwd
         )
+        flushPendingCommands()
+    }
+
+    private func flushPendingCommands() {
+        guard terminalView.process.running, !pendingCommands.isEmpty else { return }
+        for command in pendingCommands {
+            terminalView.send(txt: command)
+        }
+        pendingCommands.removeAll()
     }
 
     func handleProcessTerminated() {
@@ -185,6 +210,11 @@ final class IDETerminalHostView: NSView {
     }
 }
 
+@MainActor
+private enum IDETerminalCommandDelivery {
+    static var lastTicket: UInt64 = 0
+}
+
 // MARK: - Representable
 
 private struct IDETerminalHostRepresentable: NSViewRepresentable {
@@ -195,6 +225,8 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let fontSize: Double
     let focusRequestID: UInt64
     let restartRequestID: UInt64
+    let commandTicket: UInt64
+    let command: String?
     let onTitleUpdate: (String) -> Void
     let onDirectoryUpdate: (URL) -> Void
 
@@ -211,6 +243,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         if isActive {
             view.scheduleFocus()
         }
+        deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
         return view
     }
 
@@ -240,6 +273,16 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
                 view.restartProcess()
             }
         }
+        deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
+    }
+
+    private func deliver(_ command: String?, ticket: UInt64, to view: IDETerminalHostView, coordinator: Coordinator) {
+        // One ticket is delivered once, by whichever host is selected when the view exists.
+        // Remembering it per view would replay the command when switching terminal tabs.
+        guard let command, ticket > IDETerminalCommandDelivery.lastTicket else { return }
+        IDETerminalCommandDelivery.lastTicket = ticket
+        coordinator.lastCommandTicket = ticket
+        view.sendCommand(command)
     }
 
     func dismantleNSView(_ nsView: IDETerminalHostView, coordinator: Coordinator) {
@@ -254,6 +297,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         weak var hostView: IDETerminalHostView?
         var lastFocusRequestID: UInt64 = 0
         var lastRestartRequestID: UInt64 = 0
+        var lastCommandTicket: UInt64 = 0
         var wasActive = false
     }
 }
@@ -303,6 +347,8 @@ struct IDETerminalPanel: View {
                         fontSize: workspace.preferences.fontSize,
                         focusRequestID: workspace.terminalFocusRequestID,
                         restartRequestID: tab.restartRequestID,
+                        commandTicket: isSelected ? workspace.terminalCommandTicket : 0,
+                        command: isSelected ? workspace.pendingTerminalCommand : nil,
                         onTitleUpdate: { workspace.updateTerminalTabTitle(tab.id, title: $0) },
                         onDirectoryUpdate: { workspace.updateTerminalTabDirectory(tab.id, url: $0) }
                     )

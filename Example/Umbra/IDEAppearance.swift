@@ -66,6 +66,7 @@ enum IDEAppearance {
         static let statusBar = Color(hex: 0x18181B)
         static let border = Color.white.opacity(0.08)
         static let accent = Color(hex: 0x74ADE8)
+        static let run = Color(hex: 0x3DDC84)
         static let foreground = Color(hex: 0xECEDEE)
         static let muted = Color(hex: 0x8A8F98)
         static let selection = Color(hex: 0x74ADE8).opacity(0.18)

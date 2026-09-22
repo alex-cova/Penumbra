@@ -77,6 +77,8 @@ final class IDEJavaSupport {
     /// project…", "Indexing N dependencies…", or nil once idle).
     private(set) var statusMessage: String?
     private(set) var gradleSync: GradleSyncState = .notGradle
+    /// Last successful project model. Used to pick `:app:run` versus `run` for the play button.
+    private(set) var gradleModel: JavaGradleProjectModel?
     /// The last Gradle invocation's full result (stdout/stderr/exit code), whether it succeeded or
     /// failed -- backs "Java: Show Gradle Output".
     private(set) var lastGradleResult: GradleCommandResult?
@@ -177,6 +179,7 @@ final class IDEJavaSupport {
         gradleSyncInFlight = false
         gradleBuildFilesChanged = false
         projectRootURL = url
+        gradleModel = nil
         let hadJars = !jarSources.isEmpty
         jarSources = []
         lastUnresolved = []
@@ -311,6 +314,7 @@ final class IDEJavaSupport {
                 guard isCurrent(generation) else { return }
                 lastGradleResult = result
                 lastUnresolved = model.unresolved
+                gradleModel = model
                 await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
                 guard isCurrent(generation) else { return }
 
@@ -339,6 +343,7 @@ final class IDEJavaSupport {
             } catch {
                 guard isCurrent(generation) else { return }
                 clearSourceSetClasspath()
+                gradleModel = nil
                 // Only clear the message this task set. JDK indexing and the whole-tree fallback
                 // publish their own status and must not be blanked by a Gradle failure.
                 if statusMessage == "Resolving Gradle project…" {

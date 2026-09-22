@@ -28,9 +28,12 @@ struct IDEToolbarPanel: View {
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                isJavaRunnable: workspace.javaFileCanRun,
+                javaRunHelp: workspace.javaRunHelp,
                 isTerminalVisible: workspace.isTerminalVisible,
                 showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                runJava: workspace.runActiveJava,
                 toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
@@ -135,9 +138,12 @@ private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
+    let isJavaRunnable: Bool
+    let javaRunHelp: String
     let isTerminalVisible: Bool
     let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
+    let runJava: () -> Void
     let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
@@ -164,6 +170,15 @@ private struct IDEToolbarActionCluster: View {
                 )
             }
             
+            if isJavaRunnable {
+                IDEToolbarIconButton(
+                    systemName: "play.fill",
+                    tint: IDEAppearance.ColorToken.run,
+                    help: javaRunHelp,
+                    action: runJava
+                )
+            }
+
             if isMarkdownFile {
                 if isMarkdownPreviewVisible {
                     IDEToolbarIconButton(
@@ -189,6 +204,7 @@ private struct IDEToolbarActionCluster: View {
 private struct IDEToolbarIconButton: View {
     let systemName: String
     var isActive = false
+    var tint: Color? = nil
     let help: String
     let action: () -> Void
 
@@ -198,7 +214,7 @@ private struct IDEToolbarIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .foregroundStyle(tint ?? (isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
                 .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
                 .background(isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))

@@ -1,5 +1,6 @@
 import AppKit
 import EditorIntelligence
+import JavaIntelligence
 import Observation
 import Penumbra
 import SwiftUI
@@ -92,6 +93,13 @@ public final class IDEWorkspace {
     var statusLine = 1
     var statusColumn = 1
     var statusLanguage = ""
+    /// True when the active editor is a Java file with `public static void main` (either modifier
+    /// order) and there is something to launch: the file itself, or a Gradle `run` task.
+    var javaFileCanRun = false
+    private var javaRunFileURL: URL?
+    /// Bumped when the play button should type a command into the selected terminal.
+    var terminalCommandTicket: UInt64 = 0
+    var pendingTerminalCommand: String?
     var isMarkdownPreviewVisible = false
     var statusSelectionLength = 0
     var statusRenderer = "Core Graphics"
@@ -334,6 +342,40 @@ public final class IDEWorkspace {
     func hideFindInFiles() {
         isFindInFilesVisible = false
         focusActiveEditor()
+    }
+
+    var javaRunHelp: String {
+        javaSupport.isGradleProject ? "Run Gradle project" : "Run Java file"
+    }
+
+    /// Play button for a Java file that has `main`. Gradle projects get `gradle run` (or
+    /// `./gradlew :module:run` when the file sits in a subproject). Other files are launched with
+    /// `java File.java`.
+    public func runActiveJava() {
+        guard javaFileCanRun else { return }
+        let root = project.rootURL
+        let wrapper = root.map {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
+        } ?? false
+        guard let command = JavaLaunchCommand.make(
+            file: javaRunFileURL,
+            projectRoot: root,
+            isGradleProject: javaSupport.isGradleProject,
+            model: javaSupport.gradleModel,
+            gradleWrapperExists: wrapper
+        ) else { return }
+        runInTerminal(command.shellCommand)
+    }
+
+    private func runInTerminal(_ command: String) {
+        if terminalTabs.isEmpty {
+            addTerminalTab(saveSession: false)
+        } else if !isTerminalVisible {
+            isTerminalVisible = true
+            requestTerminalFocus()
+        }
+        pendingTerminalCommand = command
+        terminalCommandTicket += 1
     }
 
     public func toggleTerminal() {
@@ -1307,6 +1349,8 @@ public final class IDEWorkspace {
             statusLanguage = "Image"
             statusSelectionLength = 0
             statusRenderer = ""
+            javaFileCanRun = false
+            javaRunFileURL = nil
             return
         }
         let range = textView.selectedRange
@@ -1320,6 +1364,18 @@ public final class IDEWorkspace {
         statusLanguage = workbench.activePane.selectedDocument?.languageIdentifier ?? ""
         statusSelectionLength = range.length
         statusRenderer = textView.isMetalRenderingActive ? "Metal" : "Core Graphics"
+        refreshJavaRunAvailability(from: textView)
+    }
+
+    private func refreshJavaRunAvailability(from textView: TextView) {
+        let document = workbench.activePane.selectedDocument
+        let isJava = document?.languageIdentifier == "java"
+        let hasMain = isJava && JavaMainMethod.containsMain(in: textView.text)
+        let fileURL = document?.url
+        let canPlainRun = fileURL?.pathExtension.lowercased() == "java"
+        let canGradleRun = javaSupport.isGradleProject && project.rootURL != nil
+        javaFileCanRun = hasMain && (canPlainRun || canGradleRun)
+        javaRunFileURL = fileURL
     }
 
     /// Writes `textView`'s live content back into `document` and bumps `document.contentGeneration`
@@ -1553,6 +1609,7 @@ extension IDEWorkspace: TextViewDelegate {
     }
 
     public func textViewDidChange(_ textView: TextView) {
+        refreshJavaRunAvailability(from: textView)
         refreshPresentation()
     }
 
