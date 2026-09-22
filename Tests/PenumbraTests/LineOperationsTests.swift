@@ -215,11 +215,13 @@ final class LineOperationsTests: XCTestCase {
         XCTAssertEqual(textView.selectedRanges, [NSRange(location: 0, length: 3)]) // word under caret
     }
 
-    func testCommandLSelectsTheCurrentLine() {
+    func testCommandLIsGoToLineAndLeavesTheSelectionAlone() {
+        // `Keymap.default_` binds ⌘L to go to line (see `testCommandLInvokesGoToLineUnderDefaultKeymap`).
+        // Select Line is `selectLines()`, covered above, not this shortcut.
         let textView = makeFocusedTextView(text: "foo\nbar")
         textView.selectedRange = NSRange(location: 5, length: 0)
         send(keyEvent(keyCode: KeyCode.letterL, characters: "l", flags: .command), to: textView)
-        XCTAssertEqual(textView.selectedRange, NSRange(location: 4, length: 3)) // "bar"
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 5, length: 0))
     }
 
     func testCommandBackspaceDeletesTheCurrentLine() {

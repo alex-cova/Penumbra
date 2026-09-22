@@ -142,6 +142,11 @@ public final class IDEWorkspace {
             let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
             Task { await openDocument(from: url) }
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--open-folder"),
+           index + 1 < CommandLine.arguments.count {
+            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            applyProjectRoot(url)
+        }
 
         Task {
             await workspaceBridge.syncWorkbench(workbench)
