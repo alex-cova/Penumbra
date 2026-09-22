@@ -1,0 +1,55 @@
+{
+  "formatVersion": 1,
+  "gradleVersion": "9.2.1",
+  "unresolved": [
+    "Could not resolve com.example:missing-dep:1.0."
+  ],
+  "subprojects": [
+    {
+      "path": ":",
+      "directory": "file:///Users/dev/multi-module/",
+      "sourceDirs": [],
+      "testSourceDirs": [],
+      "languageLevel": null,
+      "compileClasspathJars": [],
+      "testClasspathJars": []
+    },
+    {
+      "path": ":app",
+      "directory": "file:///Users/dev/multi-module/app/",
+      "sourceDirs": [
+        "file:///Users/dev/multi-module/app/src/main/java/"
+      ],
+      "testSourceDirs": [
+        "file:///Users/dev/multi-module/app/src/test/java/"
+      ],
+      "languageLevel": 17,
+      "compileClasspathJars": [
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar"
+      ],
+      "testClasspathJars": [
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar"
+      ]
+    },
+    {
+      "path": ":lib:core",
+      "directory": "file:///Users/dev/multi-module/lib/core/",
+      "sourceDirs": [
+        "file:///Users/dev/multi-module/lib/core/src/main/java/"
+      ],
+      "testSourceDirs": [
+        "file:///Users/dev/multi-module/lib/core/src/test/java/"
+      ],
+      "languageLevel": 21,
+      "compileClasspathJars": [
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
+      ],
+      "testClasspathJars": [
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/guava-33.0.0-jre.jar",
+        "file:///Users/dev/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.10.1/gson-2.10.1.jar"
+      ]
+    }
+  ]
+}

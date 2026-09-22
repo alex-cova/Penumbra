@@ -325,6 +325,6 @@ let package = Package(
             "PenumbraBeautifulMermaid",
             "JavaIntelligence",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], resources: [.copy("Fixtures/Java")], swiftSettings: swift6)
+        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle")], swiftSettings: swift6)
     ]
 )
