@@ -7,6 +7,14 @@ import Foundation
 /// (`superclass (type_identifier)`, `scoped_type_identifier` has no `scope:`/`name:` fields even
 /// though the near-identical `scoped_identifier` used for package/import paths does).
 ///
+/// Known grammar limitation (confirmed empirically, not guessed at): a *fully-qualified* generic
+/// type used directly as a declaration's type with no import (`java.util.List<String> items = ...`)
+/// is genuinely ambiguous to tree-sitter-java without a symbol table -- it parses as a chained
+/// comparison/field-access expression (`(java.util.List < String) > (items = ...)`) instead of a
+/// declaration, so it never reaches this converter at all. Real code almost always imports the type
+/// and uses the simple generic form (`List<String>`), which parses correctly; this only affects the
+/// rarer fully-qualified-inline style.
+///
 /// A bare `type_identifier` (a single simple name, e.g. `Bar`) can't be told apart syntactically
 /// from a reference to an enclosing type parameter -- both are just an identifier token. Rather
 /// than track type-parameter scope here (which the source stub builder has no need to do for its

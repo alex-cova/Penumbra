@@ -40,7 +40,32 @@ final class JavaSyntaxTreeGroundTruthTests: XCTestCase {
             "class Foo { static { x = 1; } }",
             "class Foo<T> { T value; static class Nested<U> {} }",
             "enum Foo { A, B; void bar() {} int x; }",
-            "class Foo { final int x = 1; }"
+            "class Foo { final int x = 1; }",
+            "class Foo { void m() { foo. } }",
+            "class Foo { void m() { foo.bar } }",
+            "class Foo { void m() { foo.bar() } }",
+            "class Foo { void m() { this. } }",
+            "class Foo { void m() { List<String> l = new ArrayList<>(); l. } }",
+            "class Foo { void m() { new Fo } }",
+            "class Foo { void m() { String s = \"\"; s. } }",
+            "import java.util.c",
+            "class Foo { void m() { for (String s : list) { s. } } }",
+            "class Foo { void m() { if (x instanceof String s) { s. } } }",
+            "class Foo { void m() { int[] a = new int[5]; a. } }",
+            "class Foo { void m() { list.stream().map(x -> x.toString()). } }",
+            "class Foo { void m(int a) { a. } }",
+            "class Foo<T> { void m(T t) { t. } }",
+            "class Foo { void m() { getFoo(). } }",
+            "@Over",
+            "class Foo extends Ba",
+            "class Foo { void m() { try (AutoCloseable c = get()) { c. } } }",
+            "class Foo { void m() { Object o = 1; o. } }",
+            "class Foo { void m() { var x = 1; x. } }",
+            "class Foo { void m() { java.util.List<String> items = null; } }",
+            "class Foo { void m() { int x = arr[0]; Object o = (String) x; } }",
+            "class Foo { void m() { foo(1, \"a\"); } }",
+            "class Foo { void m() { Object x = null; boolean b = x instanceof String; } }",
+            "class Foo { void m(Bar bar) { bar.value. } }"
         ]
         for snippet in snippets {
             guard let tree = parser.parse(snippet) else { continue }

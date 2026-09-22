@@ -27,6 +27,16 @@ public final class JavaSyntaxTree: @unchecked Sendable {
         SyntaxNode(raw: ts_tree_root_node(tree), tree: self)
     }
 
+    /// The smallest node spanning a single byte offset (tree-sitter's own
+    /// `ts_node_descendant_for_byte_range` with a zero-length range) -- the standard way to find
+    /// "what's at the cursor" including inside `ERROR` subtrees, which is where a lot of
+    /// completion-time lookups land given incomplete/still-being-typed code.
+    public func node(atByteOffset offset: Int) -> SyntaxNode {
+        let clamped = max(0, min(offset, sourceBytes.count))
+        let raw = ts_node_descendant_for_byte_range(ts_tree_root_node(tree), UInt32(clamped), UInt32(clamped))
+        return SyntaxNode(raw: raw, tree: self)
+    }
+
     /// Decodes a byte range of the source as UTF-8 text.
     func text(in range: Range<Int>) -> String {
         guard range.lowerBound >= 0, range.upperBound <= sourceBytes.count, range.lowerBound <= range.upperBound else {
@@ -105,6 +115,12 @@ public struct SyntaxNode {
     public func namedChild(at index: Int) -> SyntaxNode? {
         guard index >= 0, index < namedChildCount else { return nil }
         return SyntaxNode(raw: ts_node_named_child(raw, UInt32(index)), tree: tree)
+    }
+
+    public var parent: SyntaxNode? {
+        let raw = ts_node_parent(raw)
+        guard !ts_node_is_null(raw) else { return nil }
+        return SyntaxNode(raw: raw, tree: tree)
     }
 
     public var children: [SyntaxNode] {
