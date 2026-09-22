@@ -156,6 +156,13 @@ public final class EditorIntelligenceController {
         }
         forwarding.attach(controller: self)
         startObservingEvents()
+
+        completionPanelView.onSelectRow = { [weak self] index in
+            self?.selectCompletionRow(index)
+        }
+        completionPanelView.onAcceptRow = { [weak self] index in
+            self?.acceptCompletionRow(index)
+        }
     }
 
     /// Invoked with the candidates when "Go to Definition/Implementation" resolves to more than
@@ -610,7 +617,7 @@ public final class EditorIntelligenceController {
             replacementRange: replacementRange
         )
         completionPanelView.update(model: model)
-        positionPanel(completionPanelView, near: replacementRange.end.utf16Offset, in: textView)
+        positionPanel(completionPanelView, near: replacementRange.end.utf16Offset, in: textView, size: CompletionPanelView.preferredSize(for: model))
         completionPanelView.isHidden = false
         overlayContainer.isHidden = false
 
@@ -685,6 +692,24 @@ public final class EditorIntelligenceController {
         completionPanelView.update(model: model)
         let item = completionItems[selectedCompletionIndex]
         showGhostText(item.insertText, at: replacementRange.end)
+    }
+
+    /// A click on a completion row moves the selection there (mirrors arrow-key navigation)
+    /// without accepting it, matching how a hover/click-to-highlight list normally behaves.
+    private func selectCompletionRow(_ index: Int) {
+        guard isCompletionVisible, completionItems.indices.contains(index), let replacementRange = currentReplacementRange else { return }
+        selectedCompletionIndex = index
+        let model = CompletionPanelModel(items: completionItems, selectedIndex: selectedCompletionIndex, replacementRange: replacementRange)
+        completionPanelView.update(model: model)
+        showGhostText(completionItems[index].insertText, at: replacementRange.end)
+    }
+
+    /// A double-click on a completion row accepts that item directly, regardless of which row is
+    /// currently selected.
+    private func acceptCompletionRow(_ index: Int) {
+        guard isCompletionVisible, completionItems.indices.contains(index), let replacementRange = currentReplacementRange else { return }
+        applyCompletion(completionItems[index], replacementRange: replacementRange)
+        hideCompletionPanel()
     }
 
     // MARK: - Hover
