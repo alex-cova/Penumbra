@@ -21,7 +21,8 @@ let package = Package(
         .library(name: "EditorIntelligenceLSP", targets: ["EditorIntelligenceLSP"]),
         .library(name: "PenumbraGraphQLLanguage", targets: ["PenumbraGraphQLLanguage"]),
         .library(name: "PenumbraMarkdownLanguage", targets: ["PenumbraMarkdownLanguage"]),
-        .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"])
+        .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"]),
+        .library(name: "JavaIntelligence", targets: ["JavaIntelligence"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -82,6 +83,18 @@ let package = Package(
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
         ], swiftSettings: swift6),
+        // Native Java indexing/completion engine: no dependency on Penumbra, only on
+        // EditorIntelligence and the vendored tree-sitter-java grammar. See
+        // Sources/JavaIntelligence/README.md for the architecture.
+        .target(
+            name: "JavaIntelligence",
+            dependencies: [
+                "EditorIntelligence",
+                "TreeSitter",
+                "TreeSitterJava"
+            ],
+            swiftSettings: swift6
+        ),
         .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
@@ -309,7 +322,8 @@ let package = Package(
             "PenumbraMarkdownLanguage",
             "PenumbraLanguages",
             "PenumbraBeautifulMermaid",
+            "JavaIntelligence",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], swiftSettings: swift6)
+        ], resources: [.copy("Fixtures/Java")], swiftSettings: swift6)
     ]
 )
