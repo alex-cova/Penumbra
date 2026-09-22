@@ -27,8 +27,8 @@ enum GradleProjectModelScript {
     import org.gradle.api.artifacts.component.ProjectComponentIdentifier
     import org.gradle.api.plugins.JavaPluginExtension
 
-    rootProject {
-        ext.umbraFragments = Collections.synchronizedList([])
+    gradle.rootProject { r ->
+        r.ext.umbraFragments = Collections.synchronizedList([])
     }
 
     def umbraDescribeProject = { p ->
@@ -120,15 +120,16 @@ enum GradleProjectModelScript {
         }
     }
 
-    gradle.projectsEvaluated {
-        rootProject.tasks.register('umbraProjectModel') { t ->
-            t.dependsOn(rootProject.allprojects.collect { it.tasks.named('umbraProjectModelFragment') })
+    gradle.projectsEvaluated { g ->
+        def root = g.rootProject
+        root.tasks.register('umbraProjectModel') { t ->
+            t.dependsOn(root.allprojects.collect { it.tasks.named('umbraProjectModelFragment') })
             t.doLast {
-                def outputPath = gradle.startParameter.projectProperties.get('umbraModelOutput')
+                def outputPath = g.startParameter.projectProperties.get('umbraModelOutput')
                 if (outputPath == null) {
                     throw new GradleException("umbraProjectModel requires -PumbraModelOutput=<path>")
                 }
-                def subprojectsList = new ArrayList(rootProject.ext.umbraFragments)
+                def subprojectsList = new ArrayList(root.ext.umbraFragments)
                 def unresolvedAll = []
                 subprojectsList.each { sp ->
                     if (sp.unresolved) { unresolvedAll.addAll(sp.unresolved) }
@@ -136,7 +137,7 @@ enum GradleProjectModelScript {
                 }
                 def model = [
                     formatVersion: \(formatVersion),
-                    gradleVersion: gradle.gradleVersion,
+                    gradleVersion: g.gradleVersion,
                     subprojects: subprojectsList,
                     unresolved: unresolvedAll
                 ]
