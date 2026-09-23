@@ -1578,6 +1578,30 @@ public final class IDEWorkspace {
         project.rootURL.map(IDEFileOperations.init(rootURL:))
     }
 
+    /// Where Explorer create commands should land: the selected folder, the parent of a selected
+    /// file, or the project root when nothing is selected.
+    func explorerCreationDirectory() -> URL? {
+        guard let rootURL = project.rootURL else { return nil }
+        if let selected = project.selectedPath, let node = project.node(at: selected) {
+            return node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+        }
+        return rootURL
+    }
+
+    /// Creates a new file in the Explorer and starts inline rename. Shows the sidebar when hidden.
+    func createExplorerFile(in directory: URL? = nil) {
+        guard let directory = directory ?? explorerCreationDirectory() else { return }
+        isSidebarVisible = true
+        createExplorerItem(in: directory, isDirectory: false)
+    }
+
+    /// Creates a new folder in the Explorer and starts inline rename. Shows the sidebar when hidden.
+    func createExplorerFolder(in directory: URL? = nil) {
+        guard let directory = directory ?? explorerCreationDirectory() else { return }
+        isSidebarVisible = true
+        createExplorerItem(in: directory, isDirectory: true)
+    }
+
     /// Creates an empty file or folder named `untitled…` in `directory` and opens the inline rename
     /// field on its row. Cancelling that rename removes the placeholder again.
     func createExplorerItem(in directory: URL, isDirectory: Bool) {

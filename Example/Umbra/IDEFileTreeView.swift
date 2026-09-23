@@ -21,10 +21,9 @@ struct IDEFileTreeView: View {
     var gitStatus: IDEGitStatusModel?
     var openPaths: Set<String> = []
     var actions: IDEFileTreeActions?
-
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
-    @State private var collapsedWhileFiltering: Set<String> = []
+    @Binding var collapsedWhileFiltering: Set<String>
 
     var body: some View {
         Group {
@@ -63,7 +62,9 @@ struct IDEFileTreeView: View {
                             }
                         }
                         .padding(.vertical, IDEAppearance.Spacing.xs)
-                        .frame(minWidth: proxy.size.width, alignment: .leading)
+                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+                        .contentShape(Rectangle())
+                        .contextMenu { creationContextMenu(for: creationDirectory) }
                     }
                     .focusable(actions != nil)
                     .focusEffectDisabled()
@@ -144,6 +145,22 @@ struct IDEFileTreeView: View {
 
     private var filterNeedle: String {
         nameFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var creationDirectory: URL? {
+        guard let rootURL = project.rootURL else { return nil }
+        if let selected = project.selectedPath, let node = project.node(at: selected) {
+            return node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+        }
+        return rootURL
+    }
+
+    @ViewBuilder
+    private func creationContextMenu(for directory: URL?) -> some View {
+        if let actions, let directory {
+            Button("New File…") { actions.newItem(directory, false) }
+            Button("New Folder…") { actions.newItem(directory, true) }
+        }
     }
 
     private struct FlatNode: Identifiable {
@@ -337,25 +354,37 @@ private struct IDEFileTreeRow: View {
     private var contextMenuItems: some View {
         if let actions {
             let directory = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
-            Button("New File…") { actions.newItem(directory, false) }
-            Button("New Folder…") { actions.newItem(directory, true) }
+            if node.isDirectory {
+                Button("New File…") { selectAndRun { actions.newItem(node.url, false) } }
+                Button("New Folder…") { selectAndRun { actions.newItem(node.url, true) } }
+            } else {
+                Button("New File…") { selectAndRun { actions.newItem(directory, false) } }
+                Button("New Folder…") { selectAndRun { actions.newItem(directory, true) } }
+            }
             Divider()
-            Button("Rename") { actions.beginRename(node.url) }
+            Button("Rename") { selectAndRun { actions.beginRename(node.url) } }
                 .disabled(isRoot)
-            Button("Duplicate") { actions.duplicate(node.url) }
+            Button("Duplicate") { selectAndRun { actions.duplicate(node.url) } }
                 .disabled(isRoot)
             Divider()
-            Button("Copy Path") { actions.copyPath(node.url, false) }
-            Button("Copy Relative Path") { actions.copyPath(node.url, true) }
+            Button("Copy Path") { selectAndRun { actions.copyPath(node.url, false) } }
+            Button("Copy Relative Path") { selectAndRun { actions.copyPath(node.url, true) } }
         }
         Button("Reveal in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([node.url])
+            selectAndRun {
+                NSWorkspace.shared.activateFileViewerSelecting([node.url])
+            }
         }
         if let actions {
             Divider()
-            Button("Move to Trash", role: .destructive) { actions.trash(node.url) }
+            Button("Move to Trash", role: .destructive) { selectAndRun { actions.trash(node.url) } }
                 .disabled(isRoot)
         }
+    }
+
+    private func selectAndRun(_ action: () -> Void) {
+        onSelect()
+        action()
     }
 
     private var displayName: String {
@@ -490,7 +519,8 @@ private struct IDEInlineRenameField: NSViewRepresentable {
             project.setRoot(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
             return project
         }(),
-        onOpenFile: { _ in }
+        onOpenFile: { _ in },
+        collapsedWhileFiltering: .constant([])
     )
     .frame(width: 240, height: 320)
     .background(IDEAppearance.ColorToken.sidebar)
@@ -498,7 +528,7 @@ private struct IDEInlineRenameField: NSViewRepresentable {
 }
 
 #Preview("Empty") {
-    IDEFileTreeView(project: IDEProjectModel(), onOpenFile: { _ in })
+    IDEFileTreeView(project: IDEProjectModel(), onOpenFile: { _ in }, collapsedWhileFiltering: .constant([]))
         .frame(width: 240, height: 320)
         .background(IDEAppearance.ColorToken.sidebar)
         .preferredColorScheme(.dark)

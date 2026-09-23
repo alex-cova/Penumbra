@@ -5,6 +5,7 @@ struct IDESidebarPanel: View {
     @Bindable private var preferences = IDEPreferences.shared
     @State private var isSearchPresented = false
     @State private var searchQuery = ""
+    @State private var collapsedWhileFiltering: Set<String> = []
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
@@ -16,7 +17,35 @@ struct IDESidebarPanel: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                IDEExplorerSearchButton(isPresented: isSearchPresented, action: toggleSearch)
+                if workspace.project.rootNode != nil {
+                    IDEExplorerToolbarButton(
+                        systemImage: "doc.badge.plus",
+                        help: "New File",
+                        action: { workspace.createExplorerFile() }
+                    )
+                    IDEExplorerToolbarButton(
+                        systemImage: "folder.badge.plus",
+                        help: "New Folder",
+                        action: { workspace.createExplorerFolder() }
+                    )
+                    IDEExplorerToolbarButton(
+                        systemImage: "rectangle.expand.vertical",
+                        help: "Expand All",
+                        action: expandAll
+                    )
+                    IDEExplorerToolbarButton(
+                        systemImage: "rectangle.compress.vertical",
+                        help: "Collapse All",
+                        action: collapseAll
+                    )
+                }
+
+                IDEExplorerToolbarButton(
+                    systemImage: "magnifyingglass",
+                    help: isSearchPresented ? "Hide Search" : "Search",
+                    isActive: isSearchPresented,
+                    action: toggleSearch
+                )
             }
             .padding(.leading, IDEAppearance.Spacing.lg)
             .padding(.trailing, IDEAppearance.Spacing.xs)
@@ -57,12 +86,16 @@ struct IDESidebarPanel: View {
                     duplicate: { workspace.duplicateExplorerItem($0) },
                     trash: { workspace.trashExplorerItem($0) },
                     copyPath: { workspace.copyExplorerPath($0, relative: $1) }
-                )
+                ),
+                collapsedWhileFiltering: $collapsedWhileFiltering
             )
         }
         .onChange(of: workspace.project.revealRequest) { _, request in
             // A filter would hide the revealed row.
             if request?.centered == true, !searchQuery.isEmpty { searchQuery.removeAll() }
+        }
+        .onChange(of: searchQuery) { _, _ in
+            collapsedWhileFiltering.removeAll()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.sidebar)
@@ -87,19 +120,32 @@ struct IDESidebarPanel: View {
         isSearchFocused = false
         workspace.focusActiveEditor()
     }
+
+    private func expandAll() {
+        workspace.project.expandAll()
+        collapsedWhileFiltering.removeAll()
+    }
+
+    private func collapseAll() {
+        workspace.project.collapseAll()
+        let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        collapsedWhileFiltering = needle.isEmpty ? [] : workspace.project.allDirectoryPaths()
+    }
 }
 
-private struct IDEExplorerSearchButton: View {
-    let isPresented: Bool
+private struct IDEExplorerToolbarButton: View {
+    let systemImage: String
+    let help: String
+    var isActive = false
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: systemImage)
                 .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(isPresented || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .foregroundStyle(isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
                 .background(buttonBackground)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
@@ -109,16 +155,12 @@ private struct IDEExplorerSearchButton: View {
         .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
-        .accessibilityAddTraits(isPresented ? .isSelected : [])
+        .accessibilityAddTraits(isActive ? .isSelected : [])
         .focusable(false)
     }
 
-    private var help: String {
-        isPresented ? "Hide Search" : "Search"
-    }
-
     private var buttonBackground: Color {
-        if isPresented {
+        if isActive {
             return IDEAppearance.ColorToken.selection
         }
         return isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear

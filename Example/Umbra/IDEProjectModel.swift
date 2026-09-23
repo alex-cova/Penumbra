@@ -119,6 +119,24 @@ final class IDEProjectModel {
         expandedPaths.contains(node.id)
     }
 
+    /// Expands every directory in the tree. The project root stays open.
+    func expandAll() {
+        guard let rootNode else { return }
+        expandedPaths = Self.allDirectoryPaths(in: rootNode)
+    }
+
+    /// Collapses every folder except the project root.
+    func collapseAll() {
+        guard let rootURL else { return }
+        expandedPaths = [rootURL.path]
+    }
+
+    /// Every directory path in the current tree, including the project root.
+    func allDirectoryPaths() -> Set<String> {
+        guard let rootNode else { return [] }
+        return Self.allDirectoryPaths(in: rootNode)
+    }
+
     /// Expands every ancestor from the project root down to `url` so the Explorer shows that
     /// folder. No-op when no project is open or `url` sits outside the root.
     func reveal(url: URL) {
@@ -373,6 +391,17 @@ final class IDEProjectModel {
                 files.append(entry)
             }
         }
+    }
+
+    nonisolated private static func allDirectoryPaths(in node: IDEFileNode) -> Set<String> {
+        var paths = Set<String>()
+        func walk(_ node: IDEFileNode) {
+            guard node.isDirectory else { return }
+            paths.insert(node.id)
+            node.children?.forEach(walk)
+        }
+        walk(node)
+        return paths
     }
 
     nonisolated private static func buildNode(at url: URL, isDirectory: Bool) -> IDEFileNode? {
