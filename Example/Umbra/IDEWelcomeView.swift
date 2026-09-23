@@ -14,6 +14,12 @@ struct IDEWelcomeView: View {
                     openFolder: workspace.openFolder,
                     newFile: workspace.newFile
                 )
+                if !workspace.recentProjectURLs.isEmpty {
+                    IDEWelcomeRecentProjectsSection(
+                        urls: Array(workspace.recentProjectURLs.prefix(8)),
+                        onOpen: workspace.openRecentProject
+                    )
+                }
                 if !workspace.recentFileURLs.isEmpty {
                     IDEWelcomeRecentFilesSection(
                         urls: Array(workspace.recentFileURLs.prefix(8)),
@@ -92,6 +98,28 @@ private struct IDEWelcomeActionRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Keyboard shortcut \(shortcut)")
+    }
+}
+
+private struct IDEWelcomeRecentProjectsSection: View {
+    let urls: [URL]
+    let onOpen: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            Text("Recent Projects")
+                .font(IDEAppearance.Typography.sectionHeader)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .textCase(.uppercase)
+
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(urls, id: \.path) { url in
+                    Button(url.lastPathComponent, systemImage: "folder", action: { onOpen(url) })
+                        .buttonStyle(IDEWelcomeLinkButtonStyle())
+                        .help(url.path)
+                }
+            }
+        }
     }
 }
 

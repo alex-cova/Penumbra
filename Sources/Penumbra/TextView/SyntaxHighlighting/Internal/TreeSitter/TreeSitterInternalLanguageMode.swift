@@ -25,6 +25,33 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         rootLanguageLayer.language.lineCommentPrefix
     }
 
+    var enterBehavior: EnterBehavior? {
+        rootLanguageLayer.language.enterBehavior
+    }
+
+    var hasIndentationScopes: Bool {
+        rootLanguageLayer.language.indentationScopes != nil
+    }
+
+    func enclosingSyntaxNodes(at linePosition: LinePosition) -> [SyntaxNode] {
+        guard var node = treeSitterNode(at: linePosition) else {
+            return []
+        }
+        var result: [SyntaxNode] = []
+        while result.count < 64 {
+            if let type = node.type {
+                result.append(SyntaxNode(type: type,
+                                         startLocation: TextLocation(LinePosition(node.startPoint)),
+                                         endLocation: TextLocation(LinePosition(node.endPoint))))
+            }
+            guard let parent = node.parent else {
+                break
+            }
+            node = parent
+        }
+        return result
+    }
+
     private let stringView: StringView
     private let parser: TreeSitterParser
     private let lineManager: LineManager

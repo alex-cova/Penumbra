@@ -18,6 +18,9 @@ public final class TreeSitterLanguage {
     /// The token that starts a line comment (e.g. `"//"`, `"#"`), or `nil` if this language has no
     /// line-comment syntax. Drives ``TextView/toggleComment()``.
     public let lineCommentPrefix: String?
+    /// Rules for the Enter key (block-comment continuation, string splitting, structure-aware indent),
+    /// or `nil` for the generic behavior. See ``EnterBehavior``.
+    public let enterBehavior: EnterBehavior?
 
     var internalLanguage: TreeSitterInternalLanguage {
         prepare()
@@ -39,28 +42,33 @@ public final class TreeSitterLanguage {
     ///   - indentationScopes: Rules used for indenting text.
     ///   - lineCommentPrefix: The token that starts a line comment (e.g. `"//"`), or `nil` if this
     ///     language has no line-comment syntax.
+    ///   - enterBehavior: Language-specific Enter-key rules, or `nil`.
     public init(_ language: TreeSitterLanguagePointer,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
                 indentationScopes: TreeSitterIndentationScopes? = nil,
-                lineCommentPrefix: String? = nil) {
+                lineCommentPrefix: String? = nil,
+                enterBehavior: EnterBehavior? = nil) {
         self.languagePointer = language
         self.highlightsQuery = highlightsQuery
         self.injectionsQuery = injectionsQuery
         self.indentationScopes = indentationScopes
         self.lineCommentPrefix = lineCommentPrefix
+        self.enterBehavior = enterBehavior
     }
 
     public convenience init<T>(_ language: UnsafePointer<T>,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
                 indentationScopes: TreeSitterIndentationScopes? = nil,
-                lineCommentPrefix: String? = nil) {
+                lineCommentPrefix: String? = nil,
+                enterBehavior: EnterBehavior? = nil) {
         self.init(TreeSitterLanguagePointer(language),
                   highlightsQuery: highlightsQuery,
                   injectionsQuery: injectionsQuery,
                   indentationScopes: indentationScopes,
-                  lineCommentPrefix: lineCommentPrefix)
+                  lineCommentPrefix: lineCommentPrefix,
+                  enterBehavior: enterBehavior)
     }
 
     /// Prepares the language to be used by Penumbra. This can be called on a background queue to have the language prepared before it is needed.
@@ -110,7 +118,8 @@ private extension TreeSitterInternalLanguage {
                   highlightsQuery: highlightsQuery,
                   injectionsQuery: injectionsQuery,
                   indentationScopes: language.indentationScopes,
-                  lineCommentPrefix: language.lineCommentPrefix)
+                  lineCommentPrefix: language.lineCommentPrefix,
+                  enterBehavior: language.enterBehavior)
     }
 
     private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: TreeSitterLanguagePointer) -> TreeSitterQuery? {

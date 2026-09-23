@@ -33,11 +33,21 @@ struct UmbraApp: App {
                 Divider()
                 Button("Close Tab", systemImage: "xmark", action: workspace.closeActiveTab)
                     .keyboardShortcut("w")
-                if !workspace.recentFileURLs.isEmpty {
+                if !workspace.recentProjectURLs.isEmpty || !workspace.recentFileURLs.isEmpty {
                     Divider()
                     Menu("Open Recent") {
+                        if !workspace.recentProjectURLs.isEmpty {
+                            ForEach(workspace.recentProjectURLs, id: \.path) { url in
+                                Button(url.lastPathComponent, systemImage: "folder") {
+                                    workspace.openRecentProject(url)
+                                }
+                            }
+                            if !workspace.recentFileURLs.isEmpty {
+                                Divider()
+                            }
+                        }
                         ForEach(workspace.recentFileURLs, id: \.path) { url in
-                            Button(url.lastPathComponent) {
+                            Button(url.lastPathComponent, systemImage: "doc") {
                                 workspace.openRecentFile(url)
                             }
                         }

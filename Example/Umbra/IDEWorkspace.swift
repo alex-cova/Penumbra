@@ -81,6 +81,7 @@ public final class IDEWorkspace {
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
+    private var recentProjects: [URL] = []
 
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
@@ -203,6 +204,7 @@ public final class IDEWorkspace {
         if let index = CommandLine.arguments.firstIndex(of: "--open-folder"),
            index + 1 < CommandLine.arguments.count {
             let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            isSidebarVisible = true
             applyProjectRoot(url)
         }
 
@@ -225,15 +227,7 @@ public final class IDEWorkspace {
             await intelligenceServices.javaSupport.connect(to: workspaceBridge.workspace)
         }
 
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.saveSession()
-            }
-        }
+        (NSApp.delegate as? IDEAppDelegate)?.workspace = self
     }
 
     // MARK: - Commands
@@ -309,8 +303,11 @@ public final class IDEWorkspace {
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url, let self else { return }
+            _ = url.startAccessingSecurityScopedResource()
+            self.isSidebarVisible = true
             self.applyProjectRoot(url)
             self.refreshPresentation()
+            self.saveSession()
         }
     }
 
@@ -318,8 +315,20 @@ public final class IDEWorkspace {
         Task { await openDocument(from: url) }
     }
 
+    public func openRecentProject(_ url: URL) {
+        applyProjectRoot(url)
+        isSidebarVisible = true
+        showsWelcome = !hasOpenDocuments
+        refreshPresentation()
+        saveSession()
+    }
+
     public var recentFileURLs: [URL] {
         recentFiles
+    }
+
+    public var recentProjectURLs: [URL] {
+        recentProjects
     }
 
     public func saveActiveDocument() async {
@@ -955,7 +964,11 @@ public final class IDEWorkspace {
                     continue
                 }
                 if isDirectory.boolValue {
+                    _ = url.startAccessingSecurityScopedResource()
+                    isSidebarVisible = true
                     applyProjectRoot(url)
+                    refreshPresentation()
+                    saveSession()
                 } else {
                     await openDocument(from: url)
                 }
@@ -1080,6 +1093,7 @@ public final class IDEWorkspace {
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             recentFiles: recentFiles,
+            recentProjects: recentProjects,
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
@@ -1123,6 +1137,7 @@ public final class IDEWorkspace {
         let session = IDESessionStore.load()
         preferences.restore(from: session.preferences)
         recentFiles = session.recentFiles
+        recentProjects = session.recentProjects
         isSidebarVisible = session.isSidebarVisible
         gradleSidebarWidth = session.gradleSidebarWidth
         isGradleSidebarVisible = session.isGradleSidebarVisible
@@ -1274,6 +1289,15 @@ public final class IDEWorkspace {
         recentFiles.insert(url, at: 0)
         if recentFiles.count > 15 {
             recentFiles = Array(recentFiles.prefix(15))
+        }
+    }
+
+    private func recordRecentProject(_ url: URL) {
+        let standardized = url.standardizedFileURL
+        recentProjects.removeAll { $0.standardizedFileURL == standardized }
+        recentProjects.insert(standardized, at: 0)
+        if recentProjects.count > 15 {
+            recentProjects = Array(recentProjects.prefix(15))
         }
     }
 
@@ -1445,12 +1469,15 @@ public final class IDEWorkspace {
             self.gitStatus.refresh()
         }]
         if let url {
+            _ = url.startAccessingSecurityScopedResource()
+            recordRecentProject(url)
             projectWatcher.start(root: url)
         } else {
             projectWatcher.stop()
         }
         syncTerminalWorkingDirectory()
         intelligenceServices.javaSupport.setProjectRoot(url)
+        paletteController?.workspaceRoot = url
     }
 
     private func activatePane(_ paneID: UUID) {

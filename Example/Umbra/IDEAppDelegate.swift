@@ -5,6 +5,8 @@ import AppKit
 /// Restore `.regular` before activation, then key the windows after SwiftUI creates them.
 @MainActor
 public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
+    weak var workspace: IDEWorkspace?
+
     public override init() {
         super.init()
     }
@@ -23,6 +25,10 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Self.activateAndKeyWindows()
         return true
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        workspace?.saveSession()
     }
 
     private static func activateAndKeyWindows() {

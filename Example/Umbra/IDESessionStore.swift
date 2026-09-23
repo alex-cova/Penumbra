@@ -5,6 +5,7 @@ struct AppSession: Codable {
     var restoration: EditorRestorationState?
     var projectRootBookmark: Data?
     var recentFiles: [URL]
+    var recentProjects: [URL]
     var preferences: IDEPreferencesSnapshot
     var sidebarWidth: Double
     var isSidebarVisible: Bool
@@ -19,6 +20,7 @@ struct AppSession: Codable {
         restoration: nil,
         projectRootBookmark: nil,
         recentFiles: [],
+        recentProjects: [],
         preferences: IDEPreferencesSnapshot(
             fontSize: 13,
             themeID: ThemeCatalog.defaultDarkID,
@@ -45,6 +47,7 @@ struct AppSession: Codable {
         restoration: EditorRestorationState?,
         projectRootBookmark: Data?,
         recentFiles: [URL],
+        recentProjects: [URL] = [],
         preferences: IDEPreferencesSnapshot,
         sidebarWidth: Double,
         isSidebarVisible: Bool,
@@ -58,6 +61,7 @@ struct AppSession: Codable {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
         self.recentFiles = recentFiles
+        self.recentProjects = recentProjects
         self.preferences = preferences
         self.sidebarWidth = sidebarWidth
         self.isSidebarVisible = isSidebarVisible
@@ -74,6 +78,7 @@ struct AppSession: Codable {
         restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
         projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
         recentFiles = try container.decode([URL].self, forKey: .recentFiles)
+        recentProjects = try container.decodeIfPresent([URL].self, forKey: .recentProjects) ?? []
         preferences = try container.decode(IDEPreferencesSnapshot.self, forKey: .preferences)
         sidebarWidth = try container.decode(Double.self, forKey: .sidebarWidth)
         isSidebarVisible = try container.decode(Bool.self, forKey: .isSidebarVisible)

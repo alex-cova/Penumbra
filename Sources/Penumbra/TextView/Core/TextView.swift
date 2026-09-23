@@ -454,6 +454,18 @@ public struct MetalPerformanceStats: Sendable {
             textInputView.characterPairs = newValue
         }
     }
+    /// Handlers that pre-process the Enter key, consulted before the built-in ones (block comments,
+    /// string literals, brackets, indentation). The first to return an edit wins.
+    ///
+    /// The text view holds these strongly; avoid a delegate that also owns the text view.
+    public var enterHandlerDelegates: [EnterHandlerDelegate] {
+        get {
+            textInputView.enterHandlerDelegates
+        }
+        set {
+            textInputView.enterHandlerDelegates = newValue
+        }
+    }
     /// Determines what should happen to the trailing component of a character pair when deleting the leading component. Defaults to `disabled` meaning that nothing will happen.
     public var characterPairTrailingComponentDeletionMode: CharacterPairTrailingComponentDeletionMode {
         get {

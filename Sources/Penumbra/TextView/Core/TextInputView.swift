@@ -489,6 +489,10 @@ final class TextInputView: UIView, UITextInput {
         }
     }
     var characterPairTrailingComponentDeletionMode: CharacterPairTrailingComponentDeletionMode = .disabled
+    var enterHandlerDelegates: [EnterHandlerDelegate] {
+        get { indentController.enterHandlerDelegates }
+        set { indentController.enterHandlerDelegates = newValue }
+    }
     var showPageGuide = false {
         didSet {
             if showPageGuide != oldValue {

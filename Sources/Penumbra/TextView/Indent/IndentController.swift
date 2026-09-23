@@ -10,6 +10,8 @@ protocol IndentControllerDelegate: AnyObject {
 @MainActor
 final class IndentController {
     weak var delegate: IndentControllerDelegate?
+    /// Host handlers consulted before the built-in Enter handlers.
+    var enterHandlerDelegates: [EnterHandlerDelegate] = []
     var stringView: StringView
     var lineManager: LineManager
     var languageMode: InternalLanguageMode
@@ -113,25 +115,19 @@ final class IndentController {
     }
 
     func insertLineBreak(in range: NSRange, using lineEnding: LineEnding) {
-        let symbol = lineEnding.symbol
-        if let startLinePosition = lineManager.linePosition(at: range.lowerBound),
-            let endLinePosition = lineManager.linePosition(at: range.upperBound) {
-            let strategy = languageMode.strategyForInsertingLineBreak(from: startLinePosition, to: endLinePosition, using: indentStrategy)
-            if strategy.insertExtraLineBreak {
-                // Inserting a line break enters a new indentation level.
-                // We insert an additional line break and place the cursor in the new block.
-                let firstLineText = symbol + indentStrategy.string(indentLevel: strategy.indentLevel)
-                let secondLineText = symbol + indentStrategy.string(indentLevel: strategy.indentLevel - 1)
-                let indentedText = firstLineText + secondLineText
-                delegate?.indentController(self, shouldInsert: indentedText, in: range)
-                let newSelectedRange = NSRange(location: range.location + firstLineText.utf16.count, length: 0)
-                delegate?.indentController(self, shouldSelect: newSelectedRange)
-            } else {
-                let indentedText = symbol + indentStrategy.string(indentLevel: strategy.indentLevel)
-                delegate?.indentController(self, shouldInsert: indentedText, in: range)
-            }
-        } else {
-            delegate?.indentController(self, shouldInsert: symbol, in: range)
+        let controller = EnterController(stringView: stringView,
+                                         lineManager: lineManager,
+                                         languageMode: languageMode,
+                                         indentStrategy: indentStrategy,
+                                         hostDelegates: enterHandlerDelegates)
+        guard let edit = controller.makeEdit(in: range, lineEnding: lineEnding) else {
+            delegate?.indentController(self, shouldInsert: lineEnding.symbol, in: range)
+            return
+        }
+        delegate?.indentController(self, shouldInsert: edit.text, in: edit.replacementRange)
+        if let caretOffset = edit.caretOffset, caretOffset != edit.text.utf16.count {
+            let caret = NSRange(location: edit.replacementRange.location + caretOffset, length: 0)
+            delegate?.indentController(self, shouldSelect: caret)
         }
     }
 
