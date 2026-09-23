@@ -20,6 +20,7 @@ public final class IDEPreferences {
         static let isLineFoldingEnabled = "com.umbra.editor.isLineFoldingEnabled"
         static let showMinimap = "com.umbra.editor.showMinimap"
         static let showScrollbars = "com.umbra.editor.showScrollbars"
+        static let flattenJavaPackages = "com.umbra.editor.flattenJavaPackages"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
@@ -82,6 +83,12 @@ public final class IDEPreferences {
     /// the minimap's viewport indicator already serves that role.
     var showScrollbars: Bool {
         didSet { UserDefaults.standard.set(showScrollbars, forKey: Keys.showScrollbars) }
+    }
+
+    /// Explorer shows each Java source root's packages as flat dotted rows (IntelliJ's
+    /// "Flatten Packages") instead of nested folders.
+    var flattenJavaPackages: Bool {
+        didSet { UserDefaults.standard.set(flattenJavaPackages, forKey: Keys.flattenJavaPackages) }
     }
 
     var isMetalRenderingEnabled: Bool {
@@ -170,6 +177,7 @@ public final class IDEPreferences {
         isLineFoldingEnabled = defaults.object(forKey: Keys.isLineFoldingEnabled) as? Bool ?? true
         showMinimap = defaults.object(forKey: Keys.showMinimap) as? Bool ?? true
         showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
+        flattenJavaPackages = defaults.object(forKey: Keys.flattenJavaPackages) as? Bool ?? false
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
@@ -243,7 +251,8 @@ public final class IDEPreferences {
             isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
             isDistractionFreeModeEnabled: isDistractionFreeModeEnabled,
             isFocusModeEnabled: isFocusModeEnabled,
-            showScrollbars: showScrollbars
+            showScrollbars: showScrollbars,
+            flattenJavaPackages: flattenJavaPackages
         )
     }
 
@@ -270,6 +279,7 @@ public final class IDEPreferences {
         isDistractionFreeModeEnabled = snapshot.isDistractionFreeModeEnabled
         isFocusModeEnabled = snapshot.isFocusModeEnabled
         showScrollbars = snapshot.showScrollbars
+        flattenJavaPackages = snapshot.flattenJavaPackages
     }
 }
 
@@ -296,6 +306,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var isDistractionFreeModeEnabled: Bool
     var isFocusModeEnabled: Bool
     var showScrollbars: Bool
+    var flattenJavaPackages: Bool
 
     init(
         fontSize: Double,
@@ -319,7 +330,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isTypewriterScrollingEnabled: Bool = false,
         isDistractionFreeModeEnabled: Bool = false,
         isFocusModeEnabled: Bool = false,
-        showScrollbars: Bool = true
+        showScrollbars: Bool = true,
+        flattenJavaPackages: Bool = false
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
@@ -343,6 +355,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.isDistractionFreeModeEnabled = isDistractionFreeModeEnabled
         self.isFocusModeEnabled = isFocusModeEnabled
         self.showScrollbars = showScrollbars
+        self.flattenJavaPackages = flattenJavaPackages
     }
 
     init(from decoder: Decoder) throws {
@@ -371,6 +384,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isDistractionFreeModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDistractionFreeModeEnabled) ?? false
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false
         showScrollbars = try container.decodeIfPresent(Bool.self, forKey: .showScrollbars) ?? true
+        flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
     }
 }
 

@@ -48,15 +48,17 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         window.contentView = textView
         textView.selectedRange = NSRange(location: 3, length: 0)
 
-        let provider = MockCompletionProvider(items: [
+        // Two candidates, so the explicit request shows the popup instead of inserting a lone
+        // suggestion straight away.
+        let provider = MockCompletionProvider(items: ["hello", "helium"].map {
             CompletionItem(
-                label: "hello",
-                insertText: "hello",
+                label: $0,
+                insertText: $0,
                 kind: .function,
                 range: makeRange(start: 0, end: 3),
                 source: "Test"
             )
-        ])
+        })
         let controller = EditorIntelligenceController(
             textView: textView,
             completionEngine: CompletionEngine(providers: [provider], debounceInterval: 0),

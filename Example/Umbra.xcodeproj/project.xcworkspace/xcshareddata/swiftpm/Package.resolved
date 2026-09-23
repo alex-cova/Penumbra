@@ -74,6 +74,15 @@
       }
     },
     {
+      "identity" : "sunflower",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/alex-cova/sunflower",
+      "state" : {
+        "revision" : "ba6ca8727983f2340fe7d6817dc2abbec48da48b",
+        "version" : "1.0.0"
+      }
+    },
+    {
       "identity" : "swift-glob",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/davbeck/swift-glob",

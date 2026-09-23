@@ -8,6 +8,18 @@ final class JavaSourceStubBuilderTests: XCTestCase {
 
     // MARK: - Package & imports
 
+    func testInterfaceExtendsListIsRecorded() {
+        let stub = build("""
+        interface StockSet extends StockOperation, Validable,
+                MinMaxSetter { }
+        """).classes.first
+        XCTAssertEqual(stub?.interfaces, [
+            .unresolved(simpleName: "StockOperation", arguments: []),
+            .unresolved(simpleName: "Validable", arguments: []),
+            .unresolved(simpleName: "MinMaxSetter", arguments: [])
+        ])
+    }
+
     func testPackageDeclaration() {
         let result = build("package com.example.app;\nclass Foo {}")
         XCTAssertEqual(result.packageName, "com.example.app")

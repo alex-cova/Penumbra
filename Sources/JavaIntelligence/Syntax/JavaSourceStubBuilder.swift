@@ -125,6 +125,11 @@ public enum JavaSourceStubBuilder {
         if let list = node.child(byFieldName: "interfaces")?.firstNamedChild(ofType: "type_list") {
             interfaces = list.namedChildren.map(JavaTypeNodeConverter.convert)
         }
+        // An interface's `extends A, B` is an `extends_interfaces` child, not the `interfaces`
+        // field classes use for `implements`.
+        if let list = node.firstNamedChild(ofType: "extends_interfaces")?.firstNamedChild(ofType: "type_list") {
+            interfaces += list.namedChildren.map(JavaTypeNodeConverter.convert)
+        }
 
         var fields: [JavaFieldStub] = []
         var methods: [JavaMethodStub] = []

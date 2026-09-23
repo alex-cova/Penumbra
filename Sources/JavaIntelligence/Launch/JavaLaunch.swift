@@ -72,9 +72,9 @@ public enum JavaMainMethod {
     }
 }
 
-/// Shell command for the toolbar play button. A Gradle project runs that project's `run` task
-/// (`./gradlew run`, or `:app:run` when the file lives in a subproject). Anything else is a
-/// single-file `java` launch.
+/// Shell command for the toolbar play and hammer buttons. A Gradle project runs that project's
+/// `run` task (`./gradlew run`, or `:app:run` when the file lives in a subproject) or `build` at
+/// the project root. Anything else is a single-file `java` launch.
 public struct JavaLaunchCommand: Equatable, Sendable {
     public let shellCommand: String
 
@@ -90,14 +90,25 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         gradleWrapperExists: Bool
     ) -> JavaLaunchCommand? {
         if isGradleProject, let projectRoot {
-            let launcher = gradleWrapperExists ? "./gradlew" : "gradle"
             let task = gradleRunTask(file: file, model: model)
             return JavaLaunchCommand(
-                shellCommand: "cd \(shellQuote(projectRoot.path)) && \(launcher) \(task)"
+                shellCommand: gradleInvocation(task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
             )
         }
         guard let file, file.pathExtension.lowercased() == "java" else { return nil }
         return JavaLaunchCommand(shellCommand: "java \(shellQuote(file.path))")
+    }
+
+    /// `./gradlew build` (or `gradle build`) at the project root. Builds every subproject.
+    public static func build(projectRoot: URL, gradleWrapperExists: Bool) -> JavaLaunchCommand {
+        JavaLaunchCommand(
+            shellCommand: gradleInvocation(task: "build", projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
+        )
+    }
+
+    private static func gradleInvocation(task: String, projectRoot: URL, gradleWrapperExists: Bool) -> String {
+        let launcher = gradleWrapperExists ? "./gradlew" : "gradle"
+        return "cd \(shellQuote(projectRoot.path)) && \(launcher) \(task)"
     }
 
     private static func gradleRunTask(file: URL?, model: JavaGradleProjectModel?) -> String {

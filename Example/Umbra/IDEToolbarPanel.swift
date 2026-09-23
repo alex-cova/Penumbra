@@ -28,11 +28,13 @@ struct IDEToolbarPanel: View {
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                isGradleProject: workspace.javaSupport.isGradleProject,
                 isJavaRunnable: workspace.javaFileCanRun,
                 javaRunHelp: workspace.javaRunHelp,
                 isTerminalVisible: workspace.isTerminalVisible,
                 showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                buildGradle: workspace.buildGradleProject,
                 runJava: workspace.runActiveJava,
                 toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
@@ -138,11 +140,13 @@ private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
+    let isGradleProject: Bool
     let isJavaRunnable: Bool
     let javaRunHelp: String
     let isTerminalVisible: Bool
     let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
+    let buildGradle: () -> Void
     let runJava: () -> Void
     let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
@@ -170,6 +174,14 @@ private struct IDEToolbarActionCluster: View {
                 )
             }
             
+            if isGradleProject {
+                IDEToolbarIconButton(
+                    systemName: "hammer",
+                    help: "Build Project",
+                    action: buildGradle
+                )
+            }
+
             if isJavaRunnable {
                 IDEToolbarIconButton(
                     systemName: "play.fill",

@@ -23,6 +23,8 @@
 		000000000000000000000063 /* IDERootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000043 /* IDERootView.swift */; };
 		000000000000000000000064 /* IDESessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000044 /* IDESessionStore.swift */; };
 		000000000000000000000065 /* IDESidebarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000045 /* IDESidebarPanel.swift */; };
+		000000000000000000000076 /* IDEFlattenedPackages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000075 /* IDEFlattenedPackages.swift */; };
+		000000000000000000000078 /* IDEGradleConsoleLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000077 /* IDEGradleConsoleLog.swift */; };
 		000000000000000000000066 /* IDEStatusBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000046 /* IDEStatusBarPanel.swift */; };
 		000000000000000000000067 /* IDEToolbarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000047 /* IDEToolbarPanel.swift */; };
 		000000000000000000000068 /* IDEWelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000048 /* IDEWelcomeView.swift */; };
@@ -55,6 +57,8 @@
 		000000000000000000000043 /* IDERootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDERootView.swift; sourceTree = "<group>"; };
 		000000000000000000000044 /* IDESessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDESessionStore.swift; sourceTree = "<group>"; };
 		000000000000000000000045 /* IDESidebarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDESidebarPanel.swift; sourceTree = "<group>"; };
+		000000000000000000000075 /* IDEFlattenedPackages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFlattenedPackages.swift; sourceTree = "<group>"; };
+		000000000000000000000077 /* IDEGradleConsoleLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEGradleConsoleLog.swift; sourceTree = "<group>"; };
 		000000000000000000000046 /* IDEStatusBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEStatusBarPanel.swift; sourceTree = "<group>"; };
 		000000000000000000000047 /* IDEToolbarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEToolbarPanel.swift; sourceTree = "<group>"; };
 		000000000000000000000048 /* IDEWelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWelcomeView.swift; sourceTree = "<group>"; };
@@ -115,6 +119,8 @@
 				000000000000000000000043 /* IDERootView.swift */,
 				000000000000000000000044 /* IDESessionStore.swift */,
 				000000000000000000000045 /* IDESidebarPanel.swift */,
+				000000000000000000000075 /* IDEFlattenedPackages.swift */,
+				000000000000000000000077 /* IDEGradleConsoleLog.swift */,
 				000000000000000000000046 /* IDEStatusBarPanel.swift */,
 				000000000000000000000047 /* IDEToolbarPanel.swift */,
 				000000000000000000000048 /* IDEWelcomeView.swift */,
@@ -228,6 +234,8 @@
 				000000000000000000000063 /* IDERootView.swift in Sources */,
 				000000000000000000000064 /* IDESessionStore.swift in Sources */,
 				000000000000000000000065 /* IDESidebarPanel.swift in Sources */,
+				000000000000000000000076 /* IDEFlattenedPackages.swift in Sources */,
+				000000000000000000000078 /* IDEGradleConsoleLog.swift in Sources */,
 				000000000000000000000066 /* IDEStatusBarPanel.swift in Sources */,
 				000000000000000000000067 /* IDEToolbarPanel.swift in Sources */,
 				000000000000000000000068 /* IDEWelcomeView.swift in Sources */,

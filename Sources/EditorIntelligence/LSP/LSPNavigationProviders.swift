@@ -109,7 +109,7 @@ public actor LSPRenameProvider {
     }
 }
 
-public actor LSPSignatureHelpProvider {
+public actor LSPSignatureHelpProvider: SignatureHelpProviding {
     private let client: LSPClient
 
     public init(client: LSPClient) {

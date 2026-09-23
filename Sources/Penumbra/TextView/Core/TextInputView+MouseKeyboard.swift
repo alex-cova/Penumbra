@@ -153,6 +153,13 @@ extension TextInputView {
             return
         }
 
+        // ⌘Z / ⌘⇧Z stay hard-wired for the same reason. The standard key-binding path
+        // (`NSTextInputContext` → `doCommand(by:)`) does not reach this view's undo manager,
+        // and a SwiftUI host's Edit menu consumes the shortcut for a different one.
+        if performUndoOrRedo(for: event, flags: flags) {
+            return
+        }
+
         switch keymapDispatcher.resolve(event: event, keymap: keymap) {
         case .pendingChord:
             return
@@ -356,9 +363,43 @@ extension TextInputView {
                 break
             }
             super.doCommand(by: selector)
+        case #selector(TextInputView.undoFromResponderChain(_:)):
+            undoManager?.undo()
+        case #selector(TextInputView.redoFromResponderChain(_:)):
+            undoManager?.redo()
         default:
             super.doCommand(by: selector)
         }
+    }
+
+    /// ⌘Z undoes and ⌘⇧Z redoes. Option and Control are left alone so they can still be
+    /// bound to other actions. The shortcut is consumed either way, so a closed stack does
+    /// not insert "z".
+    private func performUndoOrRedo(for event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+        guard flags.contains(.command),
+              !flags.contains(.option),
+              !flags.contains(.control),
+              event.charactersIgnoringModifiers?.lowercased() == "z" else {
+            return false
+        }
+        if flags.contains(.shift) {
+            undoManager?.redo()
+        } else {
+            undoManager?.undo()
+        }
+        return true
+    }
+
+    /// `undo:` / `redo:` are what Edit menus send down the responder chain. AppKit no longer
+    /// declares them on `NSResponder`, so the text view has to provide them itself.
+    @objc(undo:)
+    func undoFromResponderChain(_ sender: Any?) {
+        undoManager?.undo()
+    }
+
+    @objc(redo:)
+    func redoFromResponderChain(_ sender: Any?) {
+        undoManager?.redo()
     }
 }
 

@@ -45,6 +45,25 @@ struct UmbraApp: App {
                 }
             }
 
+            // SwiftUI's default Undo/Redo items call the environment undo manager, which is
+            // not the editor's `TimedUndoManager`, and their ⌘Z / ⌘⇧Z equivalents consume the
+            // key before `TextInputView` sees it. Send the actions down the responder chain
+            // so the focused editor (or a focused text field) uses its own stack.
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    if !NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
+                        workspace.undoActiveEditor()
+                    }
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                Button("Redo") {
+                    if !NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
+                        workspace.redoActiveEditor()
+                    }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+
             CommandGroup(after: .pasteboard) {
                 Button("Find…", systemImage: "magnifyingglass", action: workspace.showFind)
                     .keyboardShortcut("f")
@@ -66,6 +85,8 @@ struct UmbraApp: App {
             }
 
             CommandMenu("Java") {
+                Button("Build Project", systemImage: "hammer", action: workspace.buildGradleProject)
+                    .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Reload Gradle Project", action: workspace.reloadGradleProject)
                     .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Show Gradle Output", action: workspace.showGradleOutput)

@@ -72,19 +72,36 @@ public struct LSPCompletionItem: Sendable, Hashable {
     public let kind: Int?
     public let documentation: String?
     public let detail: String?
+    /// `insertTextFormat == 2`: `insertText` is a snippet.
+    public let isSnippet: Bool
+    public let deprecated: Bool
+    /// Edits applied with the item, e.g. an import the server adds for the completed type.
+    public let additionalTextEdits: [LSPTextEdit]
+    public let filterText: String?
+    public let sortText: String?
 
     public init(
         label: String,
         insertText: String? = nil,
         kind: Int? = nil,
         documentation: String? = nil,
-        detail: String? = nil
+        detail: String? = nil,
+        isSnippet: Bool = false,
+        deprecated: Bool = false,
+        additionalTextEdits: [LSPTextEdit] = [],
+        filterText: String? = nil,
+        sortText: String? = nil
     ) {
         self.label = label
         self.insertText = insertText
         self.kind = kind
         self.documentation = documentation
         self.detail = detail
+        self.isSnippet = isSnippet
+        self.deprecated = deprecated
+        self.additionalTextEdits = additionalTextEdits
+        self.filterText = filterText
+        self.sortText = sortText
     }
 }
 

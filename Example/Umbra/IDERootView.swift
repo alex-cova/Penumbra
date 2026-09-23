@@ -11,6 +11,7 @@ public struct IDERootView: View {
 
     public var body: some View {
         let _ = workspace.layoutEpoch
+        let _ = workspace.showsWelcome
         VStack(spacing: 0) {
             IDEToolbarPanel()
                 .opacity(workspace.chromeOpacity)
@@ -41,11 +42,13 @@ public struct IDERootView: View {
                     }
 
                     ZStack {
-                        if workspace.showsWelcome && !workspace.hasOpenDocuments {
-                            IDEWelcomeView()
-                        } else {
+                        // A folder alone is not a document. The workbench always has an empty
+                        // pane, so showing it here paints a text editor with no tab and no text.
+                        if workspace.hasOpenDocuments {
                             IDEEditorLayoutNode(layout: workspace.editorLayout)
                                 .id("editor-layout")
+                        } else {
+                            IDEWelcomeView()
                         }
                     }
                     .frame(maxHeight: .infinity)

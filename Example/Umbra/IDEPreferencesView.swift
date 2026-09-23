@@ -189,6 +189,14 @@ public struct IDEPreferencesView: View {
                         )
                     }
 
+                    IDESettingsSection(title: "Explorer") {
+                        IDESettingsToggleRow(
+                            title: "Flatten Packages",
+                            caption: "Show Java packages under each source root as single dotted rows.",
+                            isOn: $preferences.flattenJavaPackages
+                        )
+                    }
+
                     IDESettingsSection(title: "Java") {
                         IDESettingsToggleRow(
                             title: "Sync Gradle Projects",

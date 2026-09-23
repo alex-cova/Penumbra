@@ -1,96 +1,110 @@
 import Foundation
 
-/// Default ranker combining prefix, camelCase, fuzzy, provider, and kind signals.
+/// Default ranker, ordered like IntelliJ's completion list:
+///
+/// 1. match tier from ``CompletionMatcher`` (exact > prefix > camel-hump > word start);
+/// 2. `preselect`, then provider `priority` (locals over members over inherited members…);
+/// 3. recently accepted items;
+/// 4. kind weight;
+/// 5. shorter label, then alphabetical, so equal items keep a stable order.
+///
+/// Items that don't match the prefix at all are dropped.
 public struct DefaultRanker: Ranker {
-    public init() {}
+    public let recency: CompletionRecency
 
-    public func rank(items: [CompletionItem], context: CompletionContext) async -> [RankedCompletionItem] {
-        let prefix = context.prefix
-        let ranked = items.map { item -> RankedCompletionItem in
-            let score = score(item: item, prefix: prefix)
-            return RankedCompletionItem(item: item, score: score)
-        }
-        return ranked.sorted { $0.score > $1.score }
+    public init(recency: CompletionRecency = CompletionRecency()) {
+        self.recency = recency
     }
 
-    private func score(item: CompletionItem, prefix: String) -> Double {
-        let label = item.label
-        let lowerPrefix = prefix.lowercased()
-        let lowerLabel = label.lowercased()
-        var score: Double = 0
+    public func rank(items: [CompletionItem], context: CompletionContext) async -> [RankedCompletionItem] {
+        rankSynchronously(items: items, prefix: context.prefix)
+    }
 
-        if prefix.isEmpty {
-            score += 0.1
-        } else if label == prefix {
-            score += 1.0
-        } else if lowerLabel == lowerPrefix {
-            score += 0.95
-        } else if lowerLabel.hasPrefix(lowerPrefix) {
-            score += 0.8
-        } else if isCamelCaseMatch(label: label, prefix: prefix) {
-            score += 0.7
-        } else if lowerLabel.contains(lowerPrefix) {
-            score += 0.5
-        } else if isFuzzyMatch(label: label, prefix: prefix) {
-            score += 0.3
+    /// Ranking without the async hop, used when re-filtering an open popup on every keystroke.
+    public func rankSynchronously(items: [CompletionItem], prefix: String) -> [RankedCompletionItem] {
+        let recent = recency.snapshot()
+        var scored: [(RankedCompletionItem, CompletionMatcher.Match)] = []
+        scored.reserveCapacity(items.count)
+        for item in items {
+            guard let match = CompletionMatcher.match(prefix, in: item.matchText) else { continue }
+            let score = Self.score(item: item, match: match, recentRank: recent[Self.recencyKey(item)])
+            scored.append((RankedCompletionItem(item: item, score: score), match))
         }
+        scored.sort { lhs, rhs in
+            if lhs.0.score != rhs.0.score { return lhs.0.score > rhs.0.score }
+            let lhsLabel = lhs.0.item.label, rhsLabel = rhs.0.item.label
+            if lhsLabel.count != rhsLabel.count { return lhsLabel.count < rhsLabel.count }
+            if lhsLabel != rhsLabel { return lhsLabel < rhsLabel }
+            return (lhs.0.item.labelDetail ?? "") < (rhs.0.item.labelDetail ?? "")
+        }
+        return scored.map(\.0)
+    }
 
-        score += providerWeight(item.source)
+    /// Scores are always positive for matching items: the tier dominates (100 apart), and
+    /// priority/recency/kind only order items within one tier.
+    static func score(item: CompletionItem, match: CompletionMatcher.Match, recentRank: Int?) -> Double {
+        var score = 1000 + Double(match.tier.rawValue) * 100
+        if match.firstCharacterCaseMatches { score += 5 }
+        if item.preselect { score += 20 }
+        score += max(-40, min(40, item.priority * 4))
+        if let recentRank { score += max(0, 3 - Double(recentRank) * 0.1) }
         score += kindWeight(item.kind)
         return score
     }
 
-    private func isCamelCaseMatch(label: String, prefix: String) -> Bool {
-        let upperPrefix = prefix.uppercased()
-        let acronym = label.reduce("") { result, character in
-            if character.isUppercase {
-                return result + String(character)
-            }
-            return result
-        }
-        return acronym.hasPrefix(upperPrefix)
+    static func recencyKey(_ item: CompletionItem) -> String {
+        "\(item.label)|\(item.labelDetail ?? "")|\(item.detail ?? "")"
     }
 
-    private func isFuzzyMatch(label: String, prefix: String) -> Bool {
-        var labelIndex = label.startIndex
-        for character in prefix {
-            guard let matchIndex = label[labelIndex...].firstIndex(where: { $0.lowercased() == character.lowercased() }) else {
-                return false
-            }
-            labelIndex = label.index(after: matchIndex)
-        }
-        return true
-    }
-
-    private func providerWeight(_ source: String) -> Double {
-        switch source {
-        case "Symbol":
-            return 0.3
-        case "Snippet":
-            return 0.2
-        case "Word":
-            return 0.1
-        default:
-            return 0.0
-        }
-    }
-
-    private func kindWeight(_ kind: CompletionItemKind) -> Double {
+    static func kindWeight(_ kind: CompletionItemKind) -> Double {
         switch kind {
-        case .function, .method:
-            return 0.2
-        case .type:
-            return 0.15
-        case .property, .variable:
-            return 0.1
-        case .snippet:
-            return 0.05
+        case .variable:
+            return 0.6
+        case .field, .property, .enumMember:
+            return 0.5
+        case .method, .function, .constructor:
+            return 0.4
+        case .type, .class, .interface, .enum, .annotation:
+            return 0.3
         case .keyword:
-            return 0.04
+            return 0.2
+        case .snippet, .module, .package, .file:
+            return 0.1
         case .text:
             return 0.0
-        case .module, .file:
-            return 0.05
         }
+    }
+}
+
+/// Most-recently-accepted completions, used to lift items the user keeps picking.
+public final class CompletionRecency: @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [String] = []
+    private let capacity: Int
+
+    public init(capacity: Int = 30) {
+        self.capacity = capacity
+    }
+
+    public func record(_ item: CompletionItem) {
+        let key = DefaultRanker.recencyKey(item)
+        lock.lock()
+        defer { lock.unlock() }
+        keys.removeAll { $0 == key }
+        keys.insert(key, at: 0)
+        if keys.count > capacity {
+            keys.removeLast(keys.count - capacity)
+        }
+    }
+
+    /// Key → rank (0 is the most recent).
+    func snapshot() -> [String: Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        var result: [String: Int] = [:]
+        for (rank, key) in keys.enumerated() {
+            result[key] = rank
+        }
+        return result
     }
 }

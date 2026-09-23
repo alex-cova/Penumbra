@@ -8,14 +8,23 @@ struct IDEFileNode: Identifiable, Hashable {
     let isDirectory: Bool
     var children: [IDEFileNode]?
     var isExpanded: Bool
+    /// Overrides `name` in the Explorer, e.g. a dotted package name when packages are flattened.
+    var displayName: String?
 
-    init(url: URL, isDirectory: Bool, children: [IDEFileNode]? = nil, isExpanded: Bool = false) {
+    init(
+        url: URL,
+        isDirectory: Bool,
+        children: [IDEFileNode]? = nil,
+        isExpanded: Bool = false,
+        displayName: String? = nil
+    ) {
         self.id = url.path
         self.url = url
         self.name = url.lastPathComponent
         self.isDirectory = isDirectory
         self.children = children
         self.isExpanded = isExpanded
+        self.displayName = displayName
     }
 }
 

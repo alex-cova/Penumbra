@@ -2,49 +2,62 @@ import XCTest
 import EditorIntelligence
 
 final class DefaultRankerTests: XCTestCase {
-    func testExactMatchScoresHighest() async {
+    func testMatchTiersOrderExactThenPrefixThenCamelHumpThenWordStart() async {
         let ranker = DefaultRanker()
-        let context = makeContext(prefix: "foo")
-        let exact = makeItem(label: "foo", kind: .variable, source: "Symbol")
-        let prefix = makeItem(label: "foobar", kind: .variable, source: "Symbol")
-        let fuzzy = makeItem(label: "fxoo", kind: .variable, source: "Symbol")
-        let ranked = await ranker.rank(items: [fuzzy, prefix, exact], context: context)
-        XCTAssertEqual(ranked.map(\.item.label), ["foo", "foobar", "fxoo"])
+        let context = makeContext(prefix: "getN")
+        let items = [
+            makeItem(label: "targetName", kind: .variable, source: "Symbol"), // no word-start match for "getN"
+            makeItem(label: "getNumberOfThings", kind: .method, source: "Symbol"),
+            makeItem(label: "getName", kind: .method, source: "Symbol"),
+            makeItem(label: "getN", kind: .method, source: "Symbol"),
+            makeItem(label: "gettingNear", kind: .method, source: "Symbol") // camel hump: get + N
+        ]
+        let ranked = await ranker.rank(items: items, context: context)
+        XCTAssertEqual(ranked.map(\.item.label), ["getN", "getName", "getNumberOfThings", "gettingNear"])
     }
 
-    func testCaseInsensitivePrefixMatch() async throws {
+    func testCamelHumpMatchesLowercaseAndMixedQueries() async {
         let ranker = DefaultRanker()
-        let context = makeContext(prefix: "FOO")
-        let item = makeItem(label: "foo", kind: .variable, source: "Symbol")
-        let ranked = await ranker.rank(items: [item], context: context)
-        let score = try XCTUnwrap(ranked.first?.score)
-        XCTAssertEqual(score, 0.95 + providerAndKindBonus(item: item), accuracy: 0.001)
+        for query in ["gN", "gn", "getNa"] {
+            let ranked = await ranker.rank(items: [makeItem(label: "getName", kind: .method, source: "Java")], context: makeContext(prefix: query))
+            XCTAssertEqual(ranked.first?.item.label, "getName", "query \(query)")
+        }
     }
 
-    func testCamelCaseMatch() async {
+    func testNonMatchingItemsAreDropped() async {
         let ranker = DefaultRanker()
-        let context = makeContext(prefix: "GB")
-        let item = makeItem(label: "getBar", kind: .method, source: "Symbol")
-        let ranked = await ranker.rank(items: [item], context: context)
-        XCTAssertEqual(ranked.first?.item.label, "getBar")
+        let ranked = await ranker.rank(
+            items: [makeItem(label: "foo", kind: .variable, source: "Symbol"), makeItem(label: "fxoo", kind: .variable, source: "Symbol")],
+            context: makeContext(prefix: "fo")
+        )
+        XCTAssertEqual(ranked.map(\.item.label), ["foo"])
     }
 
-    func testFuzzyMatchScoresLowerThanPrefix() async {
+    func testPriorityOrdersWithinTierButNotAcrossTiers() async {
         let ranker = DefaultRanker()
-        let context = makeContext(prefix: "fo")
-        let prefix = makeItem(label: "foo", kind: .variable, source: "Symbol")
-        let fuzzy = makeItem(label: "fxoo", kind: .variable, source: "Symbol")
-        let ranked = await ranker.rank(items: [fuzzy, prefix], context: context)
-        XCTAssertEqual(ranked.map(\.item.label), ["foo", "fxoo"])
+        let local = makeItem(label: "value", kind: .variable, source: "Java", priority: 3)
+        let inherited = makeItem(label: "valueOf", kind: .method, source: "Java", priority: 1)
+        let objectMember = makeItem(label: "values", kind: .method, source: "Java", priority: 0)
+        let exactLowPriority = makeItem(label: "val", kind: .keyword, source: "Java", priority: -2)
+        let ranked = await ranker.rank(items: [objectMember, inherited, local, exactLowPriority], context: makeContext(prefix: "val"))
+        XCTAssertEqual(ranked.map(\.item.label), ["val", "value", "valueOf", "values"])
     }
 
-    func testProviderAndKindWeights() async {
+    func testEqualScoresBreakTiesByLengthThenAlphabetically() async {
         let ranker = DefaultRanker()
-        let context = makeContext(prefix: "f")
-        let function = makeItem(label: "foo", kind: .function, source: "Symbol")
-        let word = makeItem(label: "foo", kind: .text, source: "Word")
-        let ranked = await ranker.rank(items: [word, function], context: context)
-        XCTAssertEqual(ranked.first?.item.source, "Symbol")
+        let items = ["beta", "alpha", "al"].map { makeItem(label: $0, kind: .variable, source: "Java") }
+        let ranked = await ranker.rank(items: items, context: makeContext(prefix: ""))
+        XCTAssertEqual(ranked.map(\.item.label), ["al", "beta", "alpha"])
+    }
+
+    func testRecentlyAcceptedItemRanksFirstAmongEquals() async {
+        let recency = CompletionRecency()
+        let ranker = DefaultRanker(recency: recency)
+        let first = makeItem(label: "fooA", kind: .method, source: "Java")
+        let second = makeItem(label: "fooB", kind: .method, source: "Java")
+        recency.record(second)
+        let ranked = await ranker.rank(items: [first, second], context: makeContext(prefix: "foo"))
+        XCTAssertEqual(ranked.first?.item.label, "fooB")
     }
 }
 
@@ -69,33 +82,14 @@ private func makeContext(prefix: String) -> CompletionContext {
     )
 }
 
-private func makeItem(label: String, kind: CompletionItemKind, source: String) -> CompletionItem {
+private func makeItem(label: String, kind: CompletionItemKind, source: String, priority: Double = 0) -> CompletionItem {
     let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
     return CompletionItem(
         label: label,
         insertText: label,
         kind: kind,
         range: TextRange(start: position, end: position),
-        source: source
+        source: source,
+        priority: priority
     )
-}
-
-private func providerAndKindBonus(item: CompletionItem) -> Double {
-    var bonus: Double = 0
-    switch item.source {
-    case "Symbol": bonus += 0.3
-    case "Snippet": bonus += 0.2
-    case "Word": bonus += 0.1
-    default: break
-    }
-    switch item.kind {
-    case .function, .method: bonus += 0.2
-    case .type: bonus += 0.15
-    case .property, .variable: bonus += 0.1
-    case .snippet: bonus += 0.05
-    case .keyword: bonus += 0.04
-    case .text: bonus += 0.0
-    case .module, .file: bonus += 0.05
-    }
-    return bonus
 }

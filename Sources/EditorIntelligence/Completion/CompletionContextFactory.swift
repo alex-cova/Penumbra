@@ -3,9 +3,9 @@ import Foundation
 /// Build a `CompletionContext` from a document snapshot and a trigger.
 ///
 /// The cursor position is read from the document, and the prefix is the contiguous run of word
-/// characters immediately before the cursor. The returned `range` is the document range that should
+/// characters (letters, digits, `_`, `$`) immediately before the cursor. The returned `range` is the document range that should
 /// be replaced by the chosen completion.
-public func makeCompletionContext(document: Document, trigger: RequestTrigger) -> CompletionContext {
+public func makeCompletionContext(document: Document, trigger: RequestTrigger, invocationCount: Int = 1) -> CompletionContext {
     let cursor = document.cursor
     let offset = cursor.position.utf16Offset
     let windowStart = max(0, offset - 256)
@@ -23,7 +23,8 @@ public func makeCompletionContext(document: Document, trigger: RequestTrigger) -
         cursor: cursor,
         trigger: trigger,
         prefix: prefix,
-        range: range
+        range: range,
+        invocationCount: invocationCount
     )
 }
 
@@ -33,11 +34,16 @@ private func extractPrefixAndStart(before offset: Int, in text: String) -> (Stri
     while start > 0 {
         let charIndex = start - 1
         let char = nsString.character(at: charIndex)
-        if let scalar = UnicodeScalar(char), CharacterSet.alphanumerics.contains(scalar) {
+        if let scalar = UnicodeScalar(char), isCompletionIdentifierScalar(scalar) {
             start = charIndex
         } else {
             break
         }
     }
     return (nsString.substring(with: NSRange(location: start, length: offset - start)), start)
+}
+
+/// Characters that belong to an identifier for completion purposes: letters, digits, `_`, `$`.
+public func isCompletionIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
+    CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "$"
 }

@@ -299,7 +299,14 @@ private func eipCompletionItem(from item: LanguageServerProtocol.CompletionItem)
         insertText: item.insertText,
         kind: item.kind?.rawValue,
         documentation: completionDocumentation(item.documentation),
-        detail: item.detail
+        detail: item.detail,
+        isSnippet: item.insertTextFormat == .snippet,
+        deprecated: item.deprecated ?? false,
+        additionalTextEdits: (item.additionalTextEdits ?? []).map {
+            EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
+        },
+        filterText: item.filterText,
+        sortText: item.sortText
     )
 }
 

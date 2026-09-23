@@ -60,6 +60,10 @@ public enum JavaMemberLookup {
         if case .array(let element) = type {
             return arrayMembers(elementType: element)
         }
+        if case .typeVariable = type {
+            // No bound information travels with a type variable reference; offer `Object`'s.
+            return await members(of: .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil), mode: mode, context: context, index: index)
+        }
         guard case .classType(let qualifiedName, let arguments, _) = type else {
             return []
         }
@@ -81,26 +85,35 @@ public enum JavaMemberLookup {
             queueIndex += 1
             guard visitedClasses.insert(currentName).inserted else { continue }
             guard let stub = await index.classStub(qualifiedName: currentName) else { continue }
+            // Source stubs keep type names as written (`List<StockSet>`); they must be resolved
+            // against the *declaring* file's imports, not the file asking for completion.
+            let declaringContext = await sourceDeclarationContext(of: stub, cache: fileCache)
 
-            for field in stub.fields {
+            for field in stub.fields where !field.modifiers.contains(.synthetic) {
                 guard mode == .instance || field.modifiers.contains(.staticFlag) || field.modifiers.contains(.enumConstant) else { continue }
                 guard await isAccessible(field.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
                 let key = "field:\(field.name)"
                 guard seenSignatures.insert(key).inserted else { continue }
-                let substituted = substitute(field.type, using: substitution)
+                let substituted = substitute(await resolvedDeclaration(field.type, in: declaringContext, index: index), using: substitution)
                 result.append(.field(JavaFieldStub(name: field.name, type: substituted, modifiers: field.modifiers, javadoc: field.javadoc), declaringClass: currentName))
             }
-            for method in stub.methods where !method.isConstructor {
+            for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
                 guard mode == .instance || method.modifiers.contains(.staticFlag) else { continue }
                 guard await isAccessible(method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
-                let substitutedParams = method.parameters.map { JavaParameterStub(name: $0.name, type: substitute($0.type, using: substitution)) }
+                let methodContext = declaringContext?.entering(methodTypeParameters: method.typeParameters)
+                var substitutedParams: [JavaParameterStub] = []
+                for parameter in method.parameters {
+                    let declared = await resolvedDeclaration(parameter.type, in: methodContext, index: index)
+                    substitutedParams.append(JavaParameterStub(name: parameter.name, type: substitute(declared, using: substitution)))
+                }
+                let declaredReturn = await resolvedDeclaration(method.returnType, in: methodContext, index: index)
                 let key = "method:\(method.name)(\(substitutedParams.map { erasedKey($0.type) }.joined(separator: ",")))"
                 guard seenSignatures.insert(key).inserted else { continue }
                 let substitutedMethod = JavaMethodStub(
                     name: method.name,
                     typeParameters: method.typeParameters,
                     parameters: substitutedParams,
-                    returnType: substitute(method.returnType, using: substitution),
+                    returnType: substitute(declaredReturn, using: substitution),
                     thrownTypes: method.thrownTypes,
                     modifiers: method.modifiers,
                     isConstructor: false,
@@ -216,6 +229,15 @@ public enum JavaMemberLookup {
         return current
     }
 
+    /// Every supertype of `qualifiedName` (itself included), transitively: superclasses and
+    /// interfaces, erased. Used for assignability checks when ranking by expected type.
+    public static func supertypeClosure(of qualifiedName: String, index: JavaIndex) async -> Set<String> {
+        var closure = await ancestorQualifiedNames(of: qualifiedName, index: index)
+        closure.insert(qualifiedName)
+        closure.insert("java.lang.Object") // every reference type, interfaces included, converts to Object
+        return closure
+    }
+
     /// Every ancestor (superclass chain + interfaces, transitively) of `qualifiedName`, used only
     /// to decide protected-member visibility ("is the querying type a subclass of the declaring
     /// type"). Cycles are guarded; this only needs class identity, not member types, so it doesn't
@@ -262,6 +284,41 @@ public enum JavaMemberLookup {
             }
         }
         return resolvedAtCall
+    }
+
+    /// The resolution context of a source stub's own file (its package and imports), falling
+    /// back to just its package when the file can't be read. `nil` for class-file stubs, whose
+    /// types are already qualified.
+    private static func sourceDeclarationContext(of stub: JavaClassStub, cache: DeclaringFileCache) async -> JavaResolutionContext? {
+        guard case .source = stub.origin else { return nil }
+        if let context = await contextOfDeclaringFile(stub, cache: cache) {
+            return context
+        }
+        return JavaResolutionContext(
+            packageName: stub.packageName, imports: [],
+            enclosingTypeQualifiedNames: [stub.qualifiedName], typeParameterNames: Set(stub.typeParameters.map(\.name))
+        )
+    }
+
+    private static func resolvedDeclaration(_ type: JavaTypeRef, in context: JavaResolutionContext?, index: JavaIndex) async -> JavaTypeRef {
+        guard let context, containsUnresolved(type) else { return type }
+        return await JavaTypeResolver.resolve(type, context: context, index: index)
+    }
+
+    private static func containsUnresolved(_ type: JavaTypeRef) -> Bool {
+        switch type {
+        case .unresolved: return true
+        case .array(let element): return containsUnresolved(element)
+        case .classType(_, let arguments, let outer):
+            return (outer.map(containsUnresolved) ?? false) || arguments.contains {
+                switch $0 {
+                case .type(let t), .wildcard(.extends(let t)?), .wildcard(.superBound(let t)?): return containsUnresolved(t)
+                case .wildcard(nil): return false
+                }
+            }
+        case .wildcard(.extends(let t)?), .wildcard(.superBound(let t)?): return containsUnresolved(t)
+        default: return false
+        }
     }
 
     private static func contextOfDeclaringFile(_ stub: JavaClassStub, cache: DeclaringFileCache) async -> JavaResolutionContext? {

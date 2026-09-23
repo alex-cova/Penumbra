@@ -6,10 +6,13 @@ import Foundation
 public struct JavaReceiverInfo: Sendable, Equatable {
     public let type: JavaTypeRef
     public let isTypeReference: Bool
+    /// Set when the receiver is a package prefix (`java.util.`), not a type or a value.
+    public let packageName: String?
 
-    public init(type: JavaTypeRef, isTypeReference: Bool) {
+    public init(type: JavaTypeRef, isTypeReference: Bool, packageName: String? = nil) {
         self.type = type
         self.isTypeReference = isTypeReference
+        self.packageName = packageName
     }
 }
 
@@ -27,11 +30,15 @@ public struct JavaReceiverInfo: Sendable, Equatable {
 ///    file's tree, via ``JavaLocalScope``, since the synthetic snippet obviously has none of its
 ///    own.
 ///
-/// Known simplifications (documented rather than silently wrong): method overload resolution is
-/// arity-based only (no argument-type matching); `super.` is not yet handled; lambda expressions
-/// used as call arguments aren't typed (irrelevant here -- only the outermost receiver is typed,
-/// never a lambda's own body); a chain that bottoms out in something this can't type (an unindexed
-/// class, a language feature not covered below) returns `nil` rather than guessing.
+/// Lambdas and method references passed to a call are typed against the functional interface of
+/// the parameter they land in (`map(StockSet::getUuid)` binds `R` to `UUID`), and implicitly typed
+/// lambda parameters take that interface's parameter types (`forEach(item -> item.|)`).
+///
+/// Known simplifications (documented rather than silently wrong): overloads are chosen by arity,
+/// then by how many argument types agree (erased names only); a generic method's type variables
+/// are never bound from the assignment target; a chain that bottoms out in something this can't
+/// type (an unindexed class, a language feature not covered below) returns `nil` rather than
+/// guessing.
 public enum JavaExpressionTyper {
     /// `source`/`realTree` are the live file being edited; `dotOffset` is the byte offset of the
     /// `.` (or other trigger character) itself. Returns the receiver's resolved type, or `nil` if
@@ -52,12 +59,21 @@ public enum JavaExpressionTyper {
         let bytes = Array(source.utf8)
         guard let range = JavaReceiverScanner.receiverRange(in: bytes, dotOffset: dotOffset) else { return nil }
         let receiverText = String(decoding: bytes[range], as: UTF8.self)
+        if receiverText == "super" {
+            // `super;` alone isn't a statement tree-sitter will parse as an expression.
+            guard let selfName = context.enclosingTypeQualifiedNames.first,
+                  let superclass = await JavaMemberLookup.directSuperclass(of: selfName, context: context, index: index) else { return nil }
+            return JavaReceiverInfo(type: superclass, isTypeReference: false)
+        }
         guard let syntheticTree = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(receiverText); } }"),
               let exprNode = outermostExpression(in: syntheticTree.rootNode) else {
             return nil
         }
         let locals = JavaLocalScope.locals(in: realTree, atByteOffset: dotOffset)
         guard let result = await typed(exprNode, locals: locals, context: context, index: index) else { return nil }
+        if let packageName = result.packageName {
+            return JavaReceiverInfo(type: .unresolved(simpleName: packageName, arguments: []), isTypeReference: true, packageName: packageName)
+        }
         return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
     }
 
@@ -74,18 +90,58 @@ public enum JavaExpressionTyper {
         return statement.namedChild(at: 0)
     }
 
+    /// Types a standalone expression written in the file (e.g. a `var` initializer, the left-hand
+    /// side of an assignment), with `locals` in scope. `nil` when it can't be parsed or typed.
+    public static func typeOfExpression(
+        _ expressionText: String, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaReceiverInfo? {
+        guard let syntheticTree = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(expressionText); } }"),
+              let exprNode = outermostExpression(in: syntheticTree.rootNode) else {
+            return nil
+        }
+        guard let result = await typed(exprNode, locals: locals, context: context, index: index), result.packageName == nil else { return nil }
+        return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
+    }
+
+    /// Resolves the `var` locals in `locals` by typing their initializers (each against the locals
+    /// declared before it), and implicitly typed lambda parameters from their call site. Other
+    /// locals pass through unchanged.
+    public static func resolvingVarLocals(
+        _ locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaLocalVariable] {
+        var result = locals
+        for (position, local) in locals.enumerated() where local.lambdaOrigin != nil {
+            if let typed = await typedIdentifier(local.name, locals: Array(locals[position...]), context: context, index: index), !typed.isTypeReference {
+                result[position] = JavaLocalVariable(name: local.name, type: typed.type)
+            }
+        }
+        for (position, local) in locals.enumerated() where local.isVarDeclaration {
+            guard let initializer = local.initializerText else { continue }
+            // `locals` is innermost-first, so everything after this one was declared before it.
+            let visible = Array(result[(position + 1)...])
+            if let info = await typeOfExpression(initializer, locals: visible, context: context, index: index), !info.isTypeReference {
+                result[position] = JavaLocalVariable(name: local.name, type: info.type)
+            }
+        }
+        return result
+    }
+
     // MARK: - Node typing
 
     /// A typed node result also says whether it's a *value* (an instance the `.` would offer
     /// instance members on) or a *type reference* (a bare class name like `Foo` used as a
-    /// qualifier, where `.` should offer only static members) -- only a bare `identifier` can be
-    /// the latter; every other node kind always produces a value.
-    private struct Typed {
+    /// qualifier, where `.` should offer only static members). A dotted name that is neither a
+    /// variable nor a type yet (`java.util` in `java.util.List`) is a package prefix.
+    struct Typed {
         let type: JavaTypeRef
         let isTypeReference: Bool
+        var packageName: String?
 
         static func value(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: false) }
         static func typeReference(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: true) }
+        static func package(_ name: String) -> Typed {
+            Typed(type: .unresolved(simpleName: name, arguments: []), isTypeReference: true, packageName: name)
+        }
     }
 
     /// Types a node and resolves the result before returning it -- every recursive call goes
@@ -94,11 +150,14 @@ public enum JavaExpressionTyper {
     /// declared parameter type is `.unresolved("Bar")` until resolved) is never handed to
     /// ``JavaMemberLookup`` unresolved -- `JavaMemberLookup.members(of:...)` only understands
     /// `.classType`/`.array`, so an unresolved intermediate would silently produce zero members.
-    private static func typed(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
+    static func typed(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
         guard let raw = await rawTyped(node, locals: locals, context: context, index: index) else { return nil }
+        if raw.packageName != nil { return raw }
         let resolvedType = await JavaTypeResolver.resolve(raw.type, context: context, index: index)
         return Typed(type: resolvedType, isTypeReference: raw.isTypeReference)
     }
+
+    private static let stringType = JavaTypeRef.classType(qualifiedName: "java.lang.String", arguments: [], outer: nil)
 
     private static func rawTyped(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
         switch node.type {
@@ -109,23 +168,37 @@ public enum JavaExpressionTyper {
         case "this":
             return implicitSelfType(context: context).map(Typed.value)
 
+        case "super":
+            guard let selfName = context.enclosingTypeQualifiedNames.first,
+                  let superclass = await JavaMemberLookup.directSuperclass(of: selfName, context: context, index: index) else { return nil }
+            return .value(superclass)
+
         case "identifier":
             return await typedIdentifier(node.text, locals: locals, context: context, index: index)
 
         case "field_access":
-            guard let objectNode = node.child(byFieldName: "object"), let fieldNode = node.child(byFieldName: "field") else { return nil }
-            guard let object = await typed(objectNode, locals: locals, context: context, index: index) else { return nil }
-            let mode: JavaMemberLookupMode = object.isTypeReference ? .staticOnly : .instance
-            let members = await JavaMemberLookup.members(of: object.type, mode: mode, context: context, index: index)
-            guard case .field(let field, _) = members.first(where: { $0.name == fieldNode.text }) else { return nil }
-            return .value(field.type)
+            return await typedFieldAccess(node, locals: locals, context: context, index: index)
+
+        case "scoped_identifier", "scoped_type_identifier", "type_identifier", "generic_type":
+            let type = JavaTypeNodeConverter.convert(node)
+            return .typeReference(type)
 
         case "method_invocation":
             return await typedMethodInvocation(node, locals: locals, context: context, index: index)
 
         case "object_creation_expression":
             guard let typeNode = node.child(byFieldName: "type") else { return nil }
-            return .value(JavaTypeNodeConverter.convert(typeNode))
+            return .value(await diamondResolved(JavaTypeNodeConverter.convert(typeNode), context: context, index: index))
+
+        case "array_creation_expression":
+            guard let typeNode = node.child(byFieldName: "type") else { return nil }
+            var type = JavaTypeNodeConverter.convert(typeNode)
+            let dimensionCount = node.namedChildren.filter { $0.type == "dimensions_expr" }.count
+                + (node.namedChildren.first { $0.type == "dimensions" }.map { $0.text.filter { $0 == "[" }.count } ?? 0)
+            for _ in 0..<max(1, dimensionCount) {
+                type = .array(element: type)
+            }
+            return .value(type)
 
         case "array_access":
             guard let arrayNode = node.child(byFieldName: "array") else { return nil }
@@ -137,14 +210,37 @@ public enum JavaExpressionTyper {
             guard let typeNode = node.child(byFieldName: "type") else { return nil }
             return .value(JavaTypeNodeConverter.convert(typeNode))
 
-        case "string_literal":
-            return .value(.classType(qualifiedName: "java.lang.String", arguments: [], outer: nil))
+        case "class_literal":
+            let target = node.namedChild(at: 0).map(JavaTypeNodeConverter.convert)
+            let argument: [JavaTypeArgument] = target.map { [.type(boxed($0))] } ?? []
+            return .value(.classType(qualifiedName: "java.lang.Class", arguments: argument, outer: nil))
+
+        case "ternary_expression":
+            if let consequence = node.child(byFieldName: "consequence"),
+               let result = await typed(consequence, locals: locals, context: context, index: index), !isNullType(result.type) {
+                return .value(result.type)
+            }
+            guard let alternative = node.child(byFieldName: "alternative") else { return nil }
+            return await typed(alternative, locals: locals, context: context, index: index).map { .value($0.type) }
+
+        case "binary_expression":
+            return await typedBinary(node, locals: locals, context: context, index: index)
+
+        case "instanceof_expression":
+            return .value(.primitive(.boolean))
+
+        case "assignment_expression":
+            guard let left = node.child(byFieldName: "left") else { return nil }
+            return await typed(left, locals: locals, context: context, index: index).map { .value($0.type) }
+
+        case "string_literal", "text_block":
+            return .value(stringType)
         case "character_literal":
             return .value(.primitive(.char))
         case "decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal":
-            return .value(.primitive(.int))
+            return .value(.primitive(node.text.hasSuffix("L") || node.text.hasSuffix("l") ? .long : .int))
         case "decimal_floating_point_literal", "hex_floating_point_literal":
-            return .value(.primitive(.double))
+            return .value(.primitive(node.text.hasSuffix("f") || node.text.hasSuffix("F") ? .float : .double))
         case "true", "false":
             return .value(.primitive(.boolean))
 
@@ -153,50 +249,479 @@ public enum JavaExpressionTyper {
         }
     }
 
+    private static func isNullType(_ type: JavaTypeRef) -> Bool {
+        if case .unresolved("null", _) = type { return true }
+        return false
+    }
+
+    private static func typedBinary(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
+        let operatorText = node.child(byFieldName: "operator")?.text ?? node.children.first { !$0.isNamed }?.text ?? ""
+        switch operatorText {
+        case "==", "!=", "<", ">", "<=", ">=", "&&", "||":
+            return .value(.primitive(.boolean))
+        default:
+            break
+        }
+        guard let leftNode = node.child(byFieldName: "left"), let rightNode = node.child(byFieldName: "right") else { return nil }
+        let left = await typed(leftNode, locals: locals, context: context, index: index)
+        let right = await typed(rightNode, locals: locals, context: context, index: index)
+        if operatorText == "+", left?.type == stringType || right?.type == stringType {
+            return .value(stringType)
+        }
+        guard let left else { return right.map { .value($0.type) } }
+        if case .primitive(let l) = left.type, case .primitive(let r)? = right?.type {
+            let order: [JavaPrimitive] = [.byte, .short, .char, .int, .long, .float, .double]
+            let widest = max(order.firstIndex(of: l) ?? 3, order.firstIndex(of: r) ?? 3, 3)
+            return .value(l == .boolean ? .primitive(.boolean) : .primitive(order[widest]))
+        }
+        return .value(left.type)
+    }
+
+    /// `a.b`: a field of `a`, a nested type of type `a`, `Outer.this`, or -- when `a` is a package
+    /// prefix -- the class `a.b` or the longer package `a.b`.
+    private static func typedFieldAccess(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
+        guard let objectNode = node.child(byFieldName: "object"), let fieldNode = node.child(byFieldName: "field") else { return nil }
+        guard let object = await typed(objectNode, locals: locals, context: context, index: index) else { return nil }
+        if let packageName = object.packageName {
+            let candidate = "\(packageName).\(fieldNode.text)"
+            if await index.classStub(qualifiedName: candidate) != nil {
+                return .typeReference(.classType(qualifiedName: candidate, arguments: [], outer: nil))
+            }
+            return .package(candidate)
+        }
+        if fieldNode.type == "this" {
+            return .value(object.type)
+        }
+        let mode: JavaMemberLookupMode = object.isTypeReference ? .staticOnly : .instance
+        let members = await JavaMemberLookup.members(of: object.type, mode: mode, context: context, index: index)
+        if case .field(let field, _)? = members.first(where: {
+            if case .field(let f, _) = $0 { return f.name == fieldNode.text }
+            return false
+        }) {
+            return .value(field.type)
+        }
+        if object.isTypeReference, let outerName = object.type.erasedQualifiedName {
+            let nested = "\(outerName).\(fieldNode.text)"
+            if await index.classStub(qualifiedName: nested) != nil {
+                return .typeReference(.classType(qualifiedName: nested, arguments: [], outer: nil))
+            }
+        }
+        return nil
+    }
+
     /// `foo` alone: a local/parameter first (shadows everything else, matching Java's own scoping),
-    /// then an instance/static field of an enclosing type (implicit `this.foo`), then -- if neither
-    /// matches -- treated as a type name (`Foo.bar` where `Foo` is a class, not a variable). This
-    /// mirrors how a real compiler disambiguates the same syntax.
+    /// then an instance/static field of an enclosing type (implicit `this.foo`, including outer
+    /// classes), then a statically imported field, then a type name, and finally -- when nothing
+    /// matches -- the first segment of a package (`java` in `java.util.List`).
     private static func typedIdentifier(_ name: String, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
         if let local = locals.first(where: { $0.name == name }) {
+            if let origin = local.lambdaOrigin {
+                let outer = locals.filter { $0.lambdaOrigin != origin }
+                if let type = await lambdaParameterType(origin, locals: outer, context: context, index: index) {
+                    return .value(type)
+                }
+            }
+            if local.isVarDeclaration, let initializer = local.initializerText {
+                let earlier = Array(locals.drop { $0.name != name }.dropFirst())
+                return await typeOfExpression(initializer, locals: earlier, context: context, index: index).map { .value($0.type) }
+            }
             return .value(local.type)
         }
-        if let selfType = implicitSelfType(context: context) {
+        for enclosing in context.enclosingTypeQualifiedNames {
+            let selfType = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
             let members = await JavaMemberLookup.members(of: selfType, mode: .instance, context: context, index: index)
-            if case .field(let field, _) = members.first(where: { $0.name == name }) {
+            if case .field(let field, _)? = members.first(where: {
+                if case .field(let f, _) = $0 { return f.name == name }
+                return false
+            }) {
                 return .value(field.type)
             }
+        }
+        if let field = await staticallyImportedField(named: name, context: context, index: index) {
+            return .value(field.type)
         }
         let resolved = await JavaTypeResolver.resolve(.unresolved(simpleName: name, arguments: []), context: context, index: index)
         guard case .unresolved = resolved else {
             return .typeReference(resolved)
         }
+        if await !index.subpackages(of: name).isEmpty {
+            return .package(name)
+        }
         return nil
     }
 
-    private static func typedMethodInvocation(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
-        guard let nameNode = node.child(byFieldName: "name") else { return nil }
-        let argumentCount = node.child(byFieldName: "arguments")?.namedChildCount ?? 0
-
-        let receiver: Typed?
-        if let objectNode = node.child(byFieldName: "object") {
-            receiver = await typed(objectNode, locals: locals, context: context, index: index)
-        } else {
-            // Unqualified call: implicit `this.name(...)`.
-            receiver = implicitSelfType(context: context).map(Typed.value)
+    private static func staticallyImportedField(named name: String, context: JavaResolutionContext, index: JavaIndex) async -> JavaFieldStub? {
+        for member in await JavaStaticImports.members(context: context, index: index) {
+            if case .field(let field, _) = member, field.name == name {
+                return field
+            }
         }
-        guard let receiver else { return nil }
+        return nil
+    }
 
-        let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        let members = await JavaMemberLookup.members(of: receiver.type, mode: mode, context: context, index: index)
-        let candidates = members.compactMap { member -> JavaMethodStub? in
-            guard case .method(let method, _) = member, method.name == nameNode.text else { return nil }
+    /// `target` is the type the call's result is expected to have (the parameter it's passed to),
+    /// used to bind type variables its arguments leave open: `collect(Collectors.toSet())`.
+    private static func typedMethodInvocation(
+        _ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex, target: JavaTypeRef? = nil
+    ) async -> Typed? {
+        let argumentNodes = node.child(byFieldName: "arguments")?.namedChildren ?? []
+        let candidates = await invocationCandidates(node, locals: locals, context: context, index: index)
+        guard !candidates.isEmpty else { return nil }
+
+        // Lambdas and method references are typed after the overload is chosen, against the
+        // functional interface of the parameter they land in.
+        var argumentTypes: [JavaTypeRef?] = []
+        for argument in argumentNodes {
+            argumentTypes.append(isFunctionalArgument(argument) ? nil : await typed(argument, locals: locals, context: context, index: index)?.type)
+        }
+        guard let chosen = chooseOverload(candidates, argumentTypes: argumentTypes) else { return nil }
+
+        // Generic calls passed as arguments get the parameter type as their target.
+        for (position, argument) in argumentNodes.enumerated() where argument.type == "method_invocation" {
+            guard let parameterType = functionalParameterType(of: chosen, at: position),
+                  let retyped = await typedMethodInvocation(argument, locals: locals, context: context, index: index, target: parameterType) else { continue }
+            argumentTypes[position] = retyped.type
+        }
+
+        var extraBindings: [String: JavaTypeRef] = [:]
+        let methodTypeVariables = Set(chosen.typeParameters.map(\.name))
+        for (position, argument) in argumentNodes.enumerated() where isFunctionalArgument(argument) {
+            guard let parameterType = functionalParameterType(of: chosen, at: position),
+                  let signature = await functionalSignature(of: parameterType, context: context, index: index),
+                  let result = await resultType(ofFunctional: argument, signature: signature, locals: locals, context: context, index: index) else { continue }
+            bind(signature.returnType, to: result, names: methodTypeVariables, bindings: &extraBindings, fromTarget: false)
+        }
+        if let target {
+            bind(chosen.returnType, to: target, names: methodTypeVariables, bindings: &extraBindings, fromTarget: true)
+        }
+        let returnType = inferMethodTypeVariables(chosen, argumentTypes: argumentTypes, extraBindings: extraBindings)
+        return .value(returnType)
+    }
+
+    /// The overloads a `method_invocation` node could call: members of its receiver, or for an
+    /// unqualified call the innermost enclosing type that declares the name, then static imports.
+    static func invocationCandidates(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> [JavaMethodStub] {
+        guard let nameNode = node.child(byFieldName: "name") else { return [] }
+        var candidates: [JavaMethodStub] = []
+        if let objectNode = node.child(byFieldName: "object") {
+            guard let receiver = await typed(objectNode, locals: locals, context: context, index: index), receiver.packageName == nil else { return [] }
+            let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
+            candidates = await methods(named: nameNode.text, on: receiver.type, mode: mode, context: context, index: index)
+        } else {
+            for enclosing in context.enclosingTypeQualifiedNames where candidates.isEmpty {
+                let selfType = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
+                candidates = await methods(named: nameNode.text, on: selfType, mode: .instance, context: context, index: index)
+            }
+            if candidates.isEmpty {
+                candidates = await JavaStaticImports.members(context: context, index: index).compactMap {
+                    guard case .method(let method, _) = $0, method.name == nameNode.text else { return nil }
+                    return method
+                }
+            }
+        }
+        return candidates
+    }
+
+    // MARK: - Lambdas and method references
+
+    static func isFunctionalArgument(_ node: SyntaxNode) -> Bool {
+        node.type == "lambda_expression" || node.type == "method_reference"
+    }
+
+    private static func functionalParameterType(of method: JavaMethodStub, at position: Int) -> JavaTypeRef? {
+        if position < method.parameters.count {
+            let type = method.parameters[position].type
+            if position == method.parameters.count - 1, method.modifiers.contains(.varargs), case .array(let element) = type {
+                return element
+            }
+            return type
+        }
+        if method.modifiers.contains(.varargs), case .array(let element)? = method.parameters.last?.type {
+            return element
+        }
+        return nil
+    }
+
+    /// The single abstract method of a functional interface type, with the type's arguments
+    /// substituted: `Function<? super StockSet, ? extends R>` → `(StockSet) -> R`.
+    static func functionalSignature(of type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex) async -> (parameters: [JavaTypeRef], returnType: JavaTypeRef)? {
+        guard case .classType = type else { return nil }
+        let objectMethods: Set<String> = ["equals", "hashCode", "toString", "getClass", "notify", "notifyAll", "wait", "clone", "finalize"]
+        for member in await JavaMemberLookup.members(of: type, mode: .instance, context: context, index: index) {
+            guard case .method(let method, _) = member,
+                  method.modifiers.contains(.abstractFlag), !method.modifiers.contains(.staticFlag),
+                  !method.modifiers.contains(.defaultMethod), !objectMethods.contains(method.name) else { continue }
+            return (method.parameters.map(\.type), method.returnType)
+        }
+        return nil
+    }
+
+    /// What a lambda or method reference produces when used as `signature`.
+    private static func resultType(
+        ofFunctional node: SyntaxNode, signature: (parameters: [JavaTypeRef], returnType: JavaTypeRef),
+        locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef? {
+        if node.type == "method_reference" {
+            return await methodReferenceResult(node, arity: signature.parameters.count, locals: locals, context: context, index: index)
+        }
+        guard let body = node.child(byFieldName: "body") else { return nil }
+        var scope = lambdaParameters(of: node).enumerated().map { position, name in
+            JavaLocalVariable(name: name, type: position < signature.parameters.count ? signature.parameters[position] : .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil))
+        }
+        if let formal = node.child(byFieldName: "parameters"), formal.type == "formal_parameters" {
+            scope = formal.namedChildren.filter { $0.type == "formal_parameter" }.compactMap { parameter in
+                guard let typeNode = parameter.child(byFieldName: "type"), let nameNode = parameter.child(byFieldName: "name") else { return nil }
+                return JavaLocalVariable(name: nameNode.text, type: JavaTypeNodeConverter.convert(typeNode))
+            }
+        }
+        let bodyLocals = scope + locals
+        if body.type == "block" {
+            guard let returned = firstReturnExpression(in: body) else { return nil }
+            return await typed(returned, locals: bodyLocals, context: context, index: index)?.type
+        }
+        return await typed(body, locals: bodyLocals, context: context, index: index)?.type
+    }
+
+    /// Names of a lambda's parameters: `x ->`, `(a, b) ->`, `(String s) ->`.
+    static func lambdaParameters(of lambda: SyntaxNode) -> [String] {
+        guard let parameters = lambda.child(byFieldName: "parameters") else { return [] }
+        switch parameters.type {
+        case "identifier":
+            return [parameters.text]
+        case "inferred_parameters":
+            return parameters.namedChildren.filter { $0.type == "identifier" }.map(\.text)
+        case "formal_parameters":
+            return parameters.namedChildren.compactMap { $0.child(byFieldName: "name")?.text }
+        default:
+            return []
+        }
+    }
+
+    private static func firstReturnExpression(in node: SyntaxNode) -> SyntaxNode? {
+        for child in node.namedChildren {
+            if child.type == "return_statement" { return child.namedChild(at: 0) }
+            if child.type == "lambda_expression" || child.type == "class_body" { continue }
+            if let nested = firstReturnExpression(in: child) { return nested }
+        }
+        return nil
+    }
+
+    /// `Type::method` (unbound receiver or static), `expr::method` (bound), `Type::new`.
+    private static func methodReferenceResult(
+        _ node: SyntaxNode, arity: Int, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef? {
+        let named = node.namedChildren
+        guard let objectNode = named.first,
+              let object = await typed(objectNode, locals: locals, context: context, index: index), object.packageName == nil else { return nil }
+        if node.text.hasSuffix("::new") || named.count < 2 {
+            return object.type
+        }
+        let name = named[named.count - 1].text
+        let candidates = await methods(named: name, on: object.type, mode: .instance, context: context, index: index)
+        let chosen: JavaMethodStub?
+        if object.isTypeReference {
+            chosen = candidates.first { $0.modifiers.contains(.staticFlag) && $0.parameters.count == arity }
+                ?? candidates.first { !$0.modifiers.contains(.staticFlag) && $0.parameters.count == arity - 1 }
+        } else {
+            chosen = candidates.first { $0.parameters.count == arity }
+        }
+        return (chosen ?? candidates.first).map { inferMethodTypeVariables($0, argumentTypes: []) }
+    }
+
+    /// Type of an implicitly typed lambda parameter, from the functional interface of the call
+    /// argument the lambda is passed as (`list.forEach(item -> item.|)` → the list's element type).
+    private static func lambdaParameterType(_ origin: JavaLambdaOrigin, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> JavaTypeRef? {
+        guard let synthetic = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(origin.invocationText); } }"),
+              let invocation = outermostExpression(in: synthetic.rootNode), invocation.type == "method_invocation" else { return nil }
+        let argumentNodes = invocation.child(byFieldName: "arguments")?.namedChildren ?? []
+        let candidates = await invocationCandidates(invocation, locals: locals, context: context, index: index)
+        var argumentTypes: [JavaTypeRef?] = []
+        for argument in argumentNodes {
+            argumentTypes.append(isFunctionalArgument(argument) ? nil : await typed(argument, locals: locals, context: context, index: index)?.type)
+        }
+        let byArity = candidates.filter { $0.parameters.count == argumentNodes.count }
+        for method in (byArity.isEmpty ? candidates : byArity) {
+            guard let parameterType = functionalParameterType(of: method, at: origin.argumentIndex),
+                  let signature = await functionalSignature(of: parameterType, context: context, index: index),
+                  origin.parameterIndex < signature.parameters.count else { continue }
+            let type = signature.parameters[origin.parameterIndex]
+            if case .typeVariable = type { continue }
+            return await JavaTypeResolver.resolve(type, context: context, index: index)
+        }
+        return nil
+    }
+
+    static func methods(
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaMethodStub] {
+        await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index).compactMap { member in
+            guard case .method(let method, _) = member, method.name == name else { return nil }
             return method
         }
-        let exactArity = candidates.first { $0.parameters.count == argumentCount }
-        let varargsMatch = candidates.first { $0.modifiers.contains(.varargs) && argumentCount >= max(0, $0.parameters.count - 1) }
-        guard let chosen = exactArity ?? varargsMatch ?? candidates.first else { return nil }
-        return .value(chosen.returnType)
+    }
+
+    /// Arity first (exact, then varargs), then the candidate whose parameter types agree with the
+    /// most argument types (erased names; unknown arguments count as agreeing).
+    static func chooseOverload(_ candidates: [JavaMethodStub], argumentTypes: [JavaTypeRef?]) -> JavaMethodStub? {
+        let count = argumentTypes.count
+        var applicable = candidates.filter { $0.parameters.count == count }
+        if applicable.isEmpty {
+            applicable = candidates.filter { $0.modifiers.contains(.varargs) && count >= max(0, $0.parameters.count - 1) }
+        }
+        if applicable.isEmpty {
+            return candidates.first
+        }
+        guard applicable.count > 1 else { return applicable.first }
+        func agreement(_ method: JavaMethodStub) -> Int {
+            var score = 0
+            for (position, argument) in argumentTypes.enumerated() {
+                guard let argument else { score += 1; continue }
+                let parameter = position < method.parameters.count ? method.parameters[position].type : method.parameters.last?.type
+                guard let parameter else { continue }
+                if roughlyAssignable(argument, to: parameter) { score += 2 }
+            }
+            return score
+        }
+        return applicable.max { agreement($0) < agreement($1) }
+    }
+
+    /// A cheap assignability check for overload choice: same erased class, primitive ⇄ box,
+    /// anything to `Object`/a type variable.
+    static func roughlyAssignable(_ argument: JavaTypeRef, to parameter: JavaTypeRef) -> Bool {
+        switch parameter {
+        case .typeVariable, .wildcard:
+            return true
+        case .array(let parameterElement):
+            if case .array(let argumentElement) = argument { return roughlyAssignable(argumentElement, to: parameterElement) }
+            return roughlyAssignable(argument, to: parameterElement) // varargs element
+        case .primitive(let p):
+            if case .primitive(let a) = argument { return a == p }
+            return boxed(.primitive(p)).erasedQualifiedName == argument.erasedQualifiedName
+        case .classType(let name, _, _):
+            if name == "java.lang.Object" { return true }
+            if case .primitive = argument { return boxed(argument).erasedQualifiedName == name }
+            return argument.erasedQualifiedName == name
+        default:
+            return false
+        }
+    }
+
+    /// Binds a generic method's own type variables from directly-typed arguments (`List.of(x)`,
+    /// `Optional.of(x)`, `Arrays.asList(a, b)`) and substitutes them into the return type. Unbound
+    /// variables fall back to their first bound, or `Object`.
+    static func inferMethodTypeVariables(
+        _ method: JavaMethodStub, argumentTypes: [JavaTypeRef?], extraBindings: [String: JavaTypeRef] = [:]
+    ) -> JavaTypeRef {
+        guard !method.typeParameters.isEmpty else { return method.returnType }
+        let names = Set(method.typeParameters.map(\.name))
+        var bindings = extraBindings
+        for (position, argument) in argumentTypes.enumerated() {
+            guard let argument else { continue }
+            let isVarargsTail = method.modifiers.contains(.varargs) && position >= method.parameters.count - 1
+            guard let parameter = position < method.parameters.count ? method.parameters[position].type : method.parameters.last?.type else { continue }
+            var target = parameter
+            if isVarargsTail, case .array(let element) = parameter, !isArray(argument) {
+                target = element
+            }
+            bind(target, to: argument, names: names, bindings: &bindings)
+        }
+        for parameter in method.typeParameters where bindings[parameter.name] == nil {
+            bindings[parameter.name] = parameter.bounds.first ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+        }
+        return substitute(method.returnType, bindings)
+    }
+
+    private static func isArray(_ type: JavaTypeRef) -> Bool {
+        if case .array = type { return true }
+        return false
+    }
+
+    /// Structurally matches `parameter` against `argument`, recording what each of `names` stands
+    /// for. With `fromTarget`, the "argument" is an expected type that may itself still contain
+    /// unbound type variables; those are never recorded as bindings.
+    private static func bind(
+        _ parameter: JavaTypeRef, to argument: JavaTypeRef, names: Set<String>, bindings: inout [String: JavaTypeRef], fromTarget: Bool = false
+    ) {
+        if fromTarget, case .typeVariable = argument { return }
+        switch parameter {
+        case .typeVariable(let name) where names.contains(name) && bindings[name] == nil:
+            bindings[name] = boxed(argument)
+        case .unresolved(let name, []) where names.contains(name) && bindings[name] == nil:
+            bindings[name] = boxed(argument)
+        case .array(let element):
+            if case .array(let argumentElement) = argument { bind(element, to: argumentElement, names: names, bindings: &bindings, fromTarget: fromTarget) }
+        case .classType(_, let parameterArguments, _):
+            guard case .classType(_, let argumentArguments, _) = argument else { return }
+            for (p, a) in zip(parameterArguments, argumentArguments) {
+                guard let at = argumentTypeValue(a) else { continue }
+                switch p {
+                case .type(let pt), .wildcard(.extends(let pt)?), .wildcard(.superBound(let pt)?):
+                    bind(pt, to: at, names: names, bindings: &bindings, fromTarget: fromTarget)
+                case .wildcard(nil):
+                    break
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private static func argumentTypeValue(_ argument: JavaTypeArgument) -> JavaTypeRef? {
+        switch argument {
+        case .type(let t), .wildcard(.extends(let t)?), .wildcard(.superBound(let t)?): return t
+        case .wildcard(nil): return nil
+        }
+    }
+
+    private static func substitute(_ type: JavaTypeRef, _ bindings: [String: JavaTypeRef]) -> JavaTypeRef {
+        switch type {
+        case .typeVariable(let name):
+            return bindings[name] ?? type
+        case .unresolved(let name, let arguments):
+            if arguments.isEmpty, let bound = bindings[name] { return bound }
+            return .unresolved(simpleName: name, arguments: arguments.map { substituteArgument($0, bindings) })
+        case .array(let element):
+            return .array(element: substitute(element, bindings))
+        case .classType(let name, let arguments, let outer):
+            return .classType(qualifiedName: name, arguments: arguments.map { substituteArgument($0, bindings) }, outer: outer)
+        default:
+            return type
+        }
+    }
+
+    private static func substituteArgument(_ argument: JavaTypeArgument, _ bindings: [String: JavaTypeRef]) -> JavaTypeArgument {
+        switch argument {
+        case .type(let t):
+            return .type(substitute(t, bindings))
+        case .wildcard(.extends(let t)):
+            return .wildcard(.extends(substitute(t, bindings)))
+        case .wildcard(.superBound(let t)):
+            return .wildcard(.superBound(substitute(t, bindings)))
+        case .wildcard(nil):
+            return argument
+        }
+    }
+
+    /// The wrapper class for a primitive (`int` → `Integer`); other types pass through.
+    static func boxed(_ type: JavaTypeRef) -> JavaTypeRef {
+        guard case .primitive(let primitive) = type else { return type }
+        let name: String
+        switch primitive {
+        case .boolean: name = "Boolean"
+        case .byte: name = "Byte"
+        case .char: name = "Character"
+        case .short: name = "Short"
+        case .int: name = "Integer"
+        case .long: name = "Long"
+        case .float: name = "Float"
+        case .double: name = "Double"
+        }
+        return .classType(qualifiedName: "java.lang.\(name)", arguments: [], outer: nil)
+    }
+
+    /// `new ArrayList<>()` gets no arguments here; members then show their declared (generic) types.
+    private static func diamondResolved(_ type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex) async -> JavaTypeRef {
+        type
     }
 
     /// The type of an implicit/explicit `this`: the innermost enclosing type. Its own declared

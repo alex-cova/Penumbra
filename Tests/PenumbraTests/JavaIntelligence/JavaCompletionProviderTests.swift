@@ -58,6 +58,12 @@ final class JavaCompletionProviderTests: XCTestCase {
         Set(items.map(\.label))
     }
 
+    /// What the popup shows: the provider's items filtered and ordered by the default ranker for
+    /// the prefix before `€` (providers no longer prefix-filter themselves).
+    private func ranked(_ items: [CompletionItem], prefix: String) -> [String] {
+        DefaultRanker().rankSynchronously(items: items, prefix: prefix).map(\.item.label)
+    }
+
     private func stringStub() -> JavaClassStub {
         JavaClassStub(
             binaryName: "java.lang.String", qualifiedName: "java.lang.String", simpleName: "String", packageName: "java.lang",
@@ -103,14 +109,17 @@ final class JavaCompletionProviderTests: XCTestCase {
         XCTAssertEqual(getValue.kind, .method)
         XCTAssertEqual(getValue.insertText, "getValue()")
         let value = try XCTUnwrap(items.first { $0.label == "value" })
-        XCTAssertEqual(value.kind, .property)
+        XCTAssertEqual(value.kind, .field)
+        XCTAssertEqual(value.detail, "int")
+        XCTAssertEqual(getValue.detail, "int")
+        XCTAssertEqual(getValue.labelDetail, "()")
         XCTAssertEqual(value.insertText, "value")
     }
 
     func testMemberAccessFiltersByPrefix() async throws {
         let index = try await makeIndex(withStubs: [stringStub()])
         let items = await complete("class Foo { void m(String s) { s.tr€ } }", index: index)
-        XCTAssertEqual(names(items), ["trim"])
+        XCTAssertEqual(ranked(items, prefix: "tr"), ["trim"])
     }
 
     func testMemberAccessOnRealChainedMethodCall() async throws {
@@ -151,8 +160,8 @@ final class JavaCompletionProviderTests: XCTestCase {
     func testGeneralPositionOffersLocalsMatchingPrefix() async throws {
         let index = try await makeIndex(withStubs: [])
         let items = await complete("class Foo { void m() { int alpha = 1; int beta = 2; al€ } }", index: index)
-        XCTAssertTrue(names(items).contains("alpha"))
-        XCTAssertFalse(names(items).contains("beta"))
+        XCTAssertTrue(ranked(items, prefix: "al").contains("alpha"))
+        XCTAssertFalse(ranked(items, prefix: "al").contains("beta"))
         let alpha = try XCTUnwrap(items.first { $0.label == "alpha" })
         XCTAssertEqual(alpha.kind, .variable)
     }
@@ -183,7 +192,7 @@ final class JavaCompletionProviderTests: XCTestCase {
         let items = await complete("class Foo { void m() { Array€ } }", index: index)
         XCTAssertTrue(names(items).contains("ArrayList"))
         let item = try XCTUnwrap(items.first { $0.label == "ArrayList" })
-        XCTAssertEqual(item.kind, .type)
+        XCTAssertEqual(item.kind, .class)
     }
 
     func testGeneralPositionOffersMatchingKeywords() async throws {
@@ -197,9 +206,11 @@ final class JavaCompletionProviderTests: XCTestCase {
         // completion meaninglessly broad; locals/fields are still offered since those come from a
         // small, already-scoped set.
         let index = try await makeIndex(withStubs: [])
-        let items = await complete("class Foo { void m() { int alpha = 1; €} }", index: index)
+        // An automatic (not Ctrl+Space) request at an empty prefix.
+        let items = await complete("class Foo { void m() { int alpha = 1; €} }", index: index, trigger: .idle)
         XCTAssertFalse(items.contains { $0.kind == .keyword })
-        XCTAssertFalse(items.contains { $0.kind == .type })
+        XCTAssertFalse(items.contains { $0.kind.isTypeLike })
+        XCTAssertTrue(names(items).contains("alpha"))
     }
 
     // MARK: - Source-set classpath scope

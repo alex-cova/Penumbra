@@ -51,6 +51,22 @@ final class JavaLaunchTests: XCTestCase {
         XCTAssertEqual(command?.shellCommand, "cd '/proj' && ./gradlew :app:run")
     }
 
+    func testGradleBuildUsesTheWrapperAtTheProjectRoot() {
+        let command = JavaLaunchCommand.build(
+            projectRoot: URL(fileURLWithPath: "/proj"),
+            gradleWrapperExists: true
+        )
+        XCTAssertEqual(command.shellCommand, "cd '/proj' && ./gradlew build")
+    }
+
+    func testGradleBuildFallsBackToGradleOnPath() {
+        let command = JavaLaunchCommand.build(
+            projectRoot: URL(fileURLWithPath: "/My Project"),
+            gradleWrapperExists: false
+        )
+        XCTAssertEqual(command.shellCommand, "cd '/My Project' && gradle build")
+    }
+
     func testGradleProjectWithoutAMatchingSourceSetRunsAtTheRoot() {
         let root = URL(fileURLWithPath: "/proj")
         let command = JavaLaunchCommand.make(

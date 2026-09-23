@@ -148,6 +148,16 @@ public final class IDEWorkspace {
         host(for: workbench.activePaneID).textView.focusTextInputWhenReady()
     }
 
+    /// Used when ⌘Z / ⌘⇧Z is not delivered to the focused control (a SwiftUI host with no
+    /// `undo:` implementation). The editor's own undo manager is the stack those shortcuts edit.
+    func undoActiveEditor() {
+        host(for: workbench.activePaneID).textView.undoManager?.undo()
+    }
+
+    func redoActiveEditor() {
+        host(for: workbench.activePaneID).textView.undoManager?.redo()
+    }
+
     func bootstrap() {
         applyLaunchConfiguration()
         intelligenceServices.javaSupport.requestTrust = { [weak self] url in
@@ -379,6 +389,15 @@ public final class IDEWorkspace {
         javaSupport.isGradleProject ? "Run Gradle project" : "Run Java file"
     }
 
+    /// Hammer for an open Gradle project. Types `./gradlew build` (or `gradle build`) into the
+    /// terminal so the whole project, including every subproject, is built.
+    public func buildGradleProject() {
+        guard javaSupport.isGradleProject, let root = project.rootURL else { return }
+        let wrapper = FileManager.default.fileExists(atPath: root.appendingPathComponent("gradlew").path)
+        let command = JavaLaunchCommand.build(projectRoot: root, gradleWrapperExists: wrapper)
+        runInTerminal(command.shellCommand)
+    }
+
     /// Play button for a Java file that has `main`. Gradle projects get `gradle run` (or
     /// `./gradlew :module:run` when the file sits in a subproject). Other files are launched with
     /// `java File.java`.
@@ -399,7 +418,7 @@ public final class IDEWorkspace {
     }
 
     private func runInTerminal(_ command: String) {
-        // The play button always needs an actual shell, even if the Gradle console tab is what's
+        // Build and run always need an actual shell, even if the Gradle console tab is what's
         // currently showing.
         isGradleConsoleSelected = false
         if terminalTabs.isEmpty {
@@ -1291,6 +1310,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.selectNextTerminalTab() }),
             EditorCommand(id: "app.previousTerminalTab", title: "Previous Terminal Tab", group: "View",
                           action: { [weak self] in self?.selectPreviousTerminalTab() }),
+            EditorCommand(id: "app.java.buildGradleProject", title: "Java: Build Project", group: "Java",
+                          action: { [weak self] in self?.buildGradleProject() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
                           action: { [weak self] in self?.reloadGradleProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",

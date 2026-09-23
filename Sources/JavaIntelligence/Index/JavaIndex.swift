@@ -1,4 +1,5 @@
 import Foundation
+import EditorIntelligence
 
 /// Composes indexed shards (JDK, JARs, project sources) plus an in-memory overlay for open/edited
 /// documents into one query surface -- the equivalent of `FileBasedIndex`'s read side, scoped to
@@ -176,6 +177,42 @@ public actor JavaIndex {
             if let stub = classStub(qualifiedName: name) {
                 result.append(stub)
             }
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    /// A class whose simple name matched a completion query, with how well it matched.
+    public struct ClassMatch: Sendable {
+        public let stub: JavaClassStub
+        public let tier: CompletionMatcher.Tier
+    }
+
+    /// Classes whose simple name matches `query` the way IntelliJ's class-name completion does:
+    /// prefix, camel-hump (`ArrLi`, `aL`, `NPE`), or from a later word start (`List` finds
+    /// `ArrayList`). Best tier first, then higher-precedence (project before JDK), shorter names,
+    /// alphabetical; deduplicated by qualified name and capped at `limit`.
+    public func classes(matching query: String, limit: Int = 150) -> [ClassMatch] {
+        guard let firstQueryCharacter = query.lowercased().first else { return [] }
+        var best: [String: (entry: NameEntry, tier: CompletionMatcher.Tier)] = [:]
+        for entry in nameIndex where entry.lowerSimpleName.contains(firstQueryCharacter) {
+            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                  let match = CompletionMatcher.match(query, in: entry.simpleName) else { continue }
+            if let existing = best[entry.qualifiedName], existing.entry.precedence <= entry.precedence {
+                continue
+            }
+            best[entry.qualifiedName] = (entry, match.tier)
+        }
+        let ordered = best.values.sorted { lhs, rhs in
+            if lhs.tier != rhs.tier { return lhs.tier > rhs.tier }
+            if lhs.entry.precedence != rhs.entry.precedence { return lhs.entry.precedence < rhs.entry.precedence }
+            if lhs.entry.simpleName.count != rhs.entry.simpleName.count { return lhs.entry.simpleName.count < rhs.entry.simpleName.count }
+            return lhs.entry.qualifiedName < rhs.entry.qualifiedName
+        }
+        var result: [ClassMatch] = []
+        for candidate in ordered {
+            guard let stub = classStub(qualifiedName: candidate.entry.qualifiedName) else { continue }
+            result.append(ClassMatch(stub: stub, tier: candidate.tier))
             if result.count >= limit { break }
         }
         return result

@@ -123,6 +123,21 @@ final class IDEJavaSupport {
             .appendingPathComponent("gradle-trust.json")
     }
 
+    /// Standardized paths of every Gradle source directory from the last successful sync. Empty
+    /// before a sync; the Explorer also recognizes the `src/<set>/java` convention on its own.
+    var javaSourceRootPaths: Set<String> {
+        guard let gradleModel else { return [] }
+        var paths: Set<String> = []
+        for subproject in gradleModel.subprojects {
+            for sourceSet in subproject.sourceSets {
+                for directory in sourceSet.sourceDirs {
+                    paths.insert(directory.standardizedFileURL.path)
+                }
+            }
+        }
+        return paths
+    }
+
     var isGradleProject: Bool {
         if case .notGradle = gradleSync { return false }
         return projectRootURL != nil

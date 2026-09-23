@@ -11,7 +11,9 @@ public actor SymbolCompletionProvider: CompletionProvider {
 
     public func provide(context: CompletionContext) async -> [CompletionItem] {
         let prefix = context.prefix
-        let symbols = await index.search(prefix: prefix)
+        // Plain buffer words come from `WordCompletionProvider` (as `.text`, which never opens the
+        // popup on its own while typing prose); reporting them here as variables would.
+        let symbols = await index.search(prefix: prefix).filter { $0.kind != .word }
         return symbols.map { symbol in
             CompletionItem(
                 label: symbol.name,

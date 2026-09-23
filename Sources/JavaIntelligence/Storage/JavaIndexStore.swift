@@ -43,7 +43,9 @@ public enum JavaIndexStoreError: Error, Sendable {
 /// entries: encoded JavaClassStub bodies, referenced by the index table
 /// ```
 public struct JavaIndexShardWriter {
-    public static let formatVersion: UInt32 = 1
+    /// 2: source stubs of interfaces now record their `extends` list (v1 dropped it), so shards
+    /// written by v1 must be rebuilt rather than read.
+    public static let formatVersion: UInt32 = 2
     private static let magic: [UInt8] = Array("PJIX".utf8)
 
     public init() {}

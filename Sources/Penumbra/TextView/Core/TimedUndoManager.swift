@@ -82,6 +82,11 @@ final class TimedUndoManager: UndoManager {
         endUndoGrouping()
         super.undo()
     }
+
+    override func redo() {
+        endUndoGrouping()
+        super.redo()
+    }
 }
 
 private extension TimedUndoManager {

@@ -53,6 +53,28 @@ public struct MetalPerformanceStats: Sendable {
     public func addKeyDownInterceptor(_ interceptor: @escaping (NSEvent) -> Bool) {
         keyDownInterceptors.append(interceptor)
     }
+    private var typingObservers: [(TextViewTypingEvent) -> Void] = []
+
+    /// Registers an observer called after each typed insertion or backward delete has been
+    /// applied (``insertText(_:)``, ``deleteBackward()`` and their keyboard equivalents). Unlike
+    /// ``TextViewDelegate/textView(_:shouldChangeTextIn:replacementText:)`` this also fires for
+    /// auto-paired characters and needs no delegate, so several features can compose on it.
+    public func addTypingObserver(_ observer: @escaping (TextViewTypingEvent) -> Void) {
+        typingObservers.append(observer)
+    }
+    private var scrollObservers: [() -> Void] = []
+
+    /// Registers an observer called whenever the visible content scrolls (programmatic, animated
+    /// or user scrolls). Overlays anchored to text use it to follow the text.
+    public func addScrollObserver(_ observer: @escaping () -> Void) {
+        scrollObservers.append(observer)
+    }
+
+    /// The caret rect for `location`, in this view's own (viewport) coordinates -- what a fixed
+    /// overlay added with ``addFixedOverlaySubview(_:)`` needs to anchor a popup to the text.
+    public func caretRectInViewport(at location: Int) -> CGRect {
+        convert(textInputView.caretRect(for: IndexedPosition(index: location)), from: textInputView)
+    }
     /// Whether the text view is in a state where the contents can be edited.
     public private(set) var isEditing = false {
         didSet {
@@ -110,12 +132,18 @@ public struct MetalPerformanceStats: Sendable {
         ObjectIdentifier(textInputView.stringView)
     }
     /// A Boolean value that indicates whether the text view is editable.
+    ///
+    /// Turning this off does not resign first responder or hide the caret. A read-only
+    /// document (a JDK class, decompiled source) is still selectable, and
+    /// ``NSWindow/makeFirstResponder(_:)`` does nothing when the text input is already
+    /// first responder — ending the caret session here left it hidden for every document
+    /// opened afterwards.
     public var isEditable = true {
         didSet {
-            if isEditable != oldValue && !isEditable && isEditing {
-                resignFirstResponder()
-                textInputViewDidEndEditing(textInputView)
+            guard isEditable != oldValue else {
+                return
             }
+            beginCaretSessionIfFocused()
         }
     }
     /// A Boolean value that indicates whether the text view is selectable.
@@ -1164,6 +1192,12 @@ public struct MetalPerformanceStats: Sendable {
         textInputView.onFlagsChanged = { [weak self] event in
             self?.onHoverEvent?(event)
         }
+        textInputView.onTypingEvent = { [weak self] event in
+            guard let self else { return }
+            for observer in self.typingObservers {
+                observer(event)
+            }
+        }
         textInputView.gutterParentView = self
         textInputView.languageConfiguration = resolvedLanguageConfiguration
         addSubview(textInputView)
@@ -1187,6 +1221,9 @@ public struct MetalPerformanceStats: Sendable {
                 self.minimapView.setNeedsDisplayForContentChange()
             }
             self.scrollerOverlay.handleScroll()
+            for observer in self.scrollObservers {
+                observer()
+            }
         }
         _ = findPanelController.panelView
         tapGestureRecognizer.delegate = self
@@ -2329,6 +2366,16 @@ private extension TextView {
         justScrollRangeToVisible(range, animateTypewriter: animateTypewriter)
     }
 
+    /// Restarts the caret when this view is already first responder but ``isEditing`` is false.
+    /// Focusing again cannot do it: the window treats an existing first responder as a no-op,
+    /// which is how a read-only document used to leave the caret hidden permanently.
+    private func beginCaretSessionIfFocused() {
+        guard isSelectable, !isEditing, textInputView.window?.firstResponder === textInputView else {
+            return
+        }
+        textInputViewWillBeginEditing(textInputView)
+    }
+
     private func installEditableInteraction() {
         isInputAccessoryViewEnabled = true
         textInputView.setSelectionOverlayEnabled(true)
@@ -2432,7 +2479,9 @@ extension TextView {
 // MARK: - TextInputViewDelegate
 extension TextView: TextInputViewDelegate {
     func textInputViewWillBeginEditing(_ view: TextInputView) {
-        guard isEditable else {
+        // Selectable read-only views still show a caret so keyboard navigation has a place
+        // to land. Mutations are refused in ``textInputView(_:shouldChangeTextIn:replacementText:)``.
+        guard isSelectable else {
             return
         }
         isEditing = true
@@ -2545,6 +2594,9 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputView(_ view: TextInputView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        guard isEditable else {
+            return false
+        }
         if textInputView.isRestoringPreviouslyDeletedText {
             // UIKit is inserting text to combine characters, for example to combine two Korean characters into one, and we do not want to interfere with that.
             return editorDelegate?.textView(self, shouldChangeTextIn: range, replacementText: text) ?? true

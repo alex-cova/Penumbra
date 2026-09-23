@@ -42,6 +42,9 @@ final class TextInputView: UIView, UITextInput {
     /// Modifier changes (Command pressed or released) for Cmd-hover navigation. The text input
     /// is first responder, so it — not the enclosing scroll view — receives `flagsChanged`.
     var onFlagsChanged: ((NSEvent) -> Void)?
+    /// Fired after every `insertText(_:)` / `deleteBackward()`, including auto-paired characters
+    /// whose insertion bypasses the editor delegate. Completion keys its auto-popup off this.
+    var onTypingEvent: ((TextViewTypingEvent) -> Void)?
 
     // MARK: - UITextInput
     var selectedTextRange: UITextRange? {
@@ -1252,13 +1255,17 @@ final class TextInputView: UIView, UITextInput {
                 return false
             }
         } else if action == #selector(cut(_:)) {
+            guard delegate?.textInputViewIsEditable(self) ?? true else {
+                return false
+            }
             if let selectedTextRange = selectedTextRange {
                 return isEditing && !selectedTextRange.isEmpty
             } else {
                 return false
             }
         } else if action == #selector(paste(_:)) {
-            return isEditing && UIPasteboard.general.hasStrings
+            let isEditable = delegate?.textInputViewIsEditable(self) ?? true
+            return isEditing && isEditable && UIPasteboard.general.hasStrings
         } else if action == #selector(selectAll(_:)) {
             return true
         } else if action == #selector(replace(_:)) {
@@ -2249,6 +2256,9 @@ extension TextInputView {
         hasDeletedTextWithPendingLayoutSubviews = false
         defer {
             isRestoringPreviouslyDeletedText = false
+            if imeMarkedRange == nil {
+                onTypingEvent?(.inserted(text))
+            }
         }
         if multiSelectionController.hasMultipleSelections {
             if LineEnding(symbol: text) != nil {
@@ -2288,6 +2298,9 @@ extension TextInputView {
 
     func deleteBackward() {
         didCallDeleteBackward = true
+        defer {
+            onTypingEvent?(.deletedBackward)
+        }
         if multiSelectionController.hasMultipleSelections {
             deleteBackwardAtAllSelections()
             return

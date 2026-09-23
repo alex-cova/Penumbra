@@ -62,6 +62,7 @@ enum TestKeyCode {
     static let escape: UInt16 = 0x35
     static let delete: UInt16 = 0x33
     static let letterA: UInt16 = 0x00
+    static let letterZ: UInt16 = 0x06
     static let letterD: UInt16 = 0x02
     static let letterK: UInt16 = 0x28
     static let letterL: UInt16 = 0x25

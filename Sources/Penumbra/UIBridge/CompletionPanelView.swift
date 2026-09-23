@@ -1,16 +1,18 @@
 @preconcurrency import AppKit
 import EditorIntelligence
 
-/// Native AppKit completion panel view that renders a `CompletionPanelModel` as a real list: every
-/// item (not just the first), the selected row highlighted, a short kind badge, and a dimmed
-/// detail string when the item has one. Capped at `maxVisibleRows` items with no scrolling for
-/// anything beyond that -- a real scroll view is a reasonable follow-up, not attempted here to
-/// keep this a plain custom-drawn view like its predecessor.
+/// Native AppKit completion popup in the style of IntelliJ's lookup list. Each row shows a
+/// colored kind icon, the label with the typed characters in bold, a dimmed tail (a method's
+/// parameter list) and a right-aligned type (return type, field type, package). Deprecated items
+/// are struck through. The list scrolls: at most `maxVisibleRows` rows are drawn and the
+/// selected row is kept in view.
 @MainActor
 public final class CompletionPanelView: NSView {
     private var model: CompletionPanelModel
     private var hoveredIndex: Int?
     private var trackingArea: NSTrackingArea?
+    /// Index of the first drawn row.
+    private(set) var firstVisibleIndex = 0
 
     /// Called when the user clicks a row (without accepting it) -- wire this to move the host's
     /// selection index.
@@ -18,13 +20,28 @@ public final class CompletionPanelView: NSView {
     /// Called when the user double-clicks a row -- wire this to accept that completion.
     public var onAcceptRow: ((Int) -> Void)?
 
-    public static let rowHeight: CGFloat = 20
-    public static let maxVisibleRows = 10
-    public static let defaultWidth: CGFloat = 280
+    public static let rowHeight: CGFloat = 22
+    public static let maxVisibleRows = 12
+    public static let minimumWidth: CGFloat = 280
+    public static let maximumWidth: CGFloat = 640
+    /// Kept for source compatibility; the panel now sizes its width to its content.
+    public static let defaultWidth: CGFloat = minimumWidth
+
+    private static let iconSize: CGFloat = 16
+    private static let horizontalPadding: CGFloat = 6
+    private static let iconGap: CGFloat = 6
+    private static let columnGap: CGFloat = 16
+    private static let labelFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let boldLabelFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .bold)
+    private static let detailFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private static let iconFont = NSFont.systemFont(ofSize: 10, weight: .bold)
 
     public init(model: CompletionPanelModel) {
         self.model = model
         super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.masksToBounds = true
     }
 
     @available(*, unavailable)
@@ -32,19 +49,84 @@ public final class CompletionPanelView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    public func update(model: CompletionPanelModel) {
-        self.model = model
-        hoveredIndex = nil
-        setNeedsDisplay(bounds)
+    public override var isFlipped: Bool {
+        true
     }
 
-    /// The size this panel should be given `model.items.count`, capped at `maxVisibleRows` rows
-    /// (a minimum of one row's height even when empty, so the panel never collapses to nothing
-    /// while still visible during a request).
-    public static func preferredSize(for model: CompletionPanelModel, width: CGFloat = defaultWidth) -> NSSize {
-        let rows = max(1, min(model.items.count, maxVisibleRows))
-        return NSSize(width: width, height: CGFloat(rows) * rowHeight + 2)
+    public func update(model: CompletionPanelModel) {
+        let itemsChanged = model.items.map(\.id) != self.model.items.map(\.id)
+        self.model = model
+        hoveredIndex = nil
+        if itemsChanged {
+            firstVisibleIndex = 0
+        }
+        scrollSelectionIntoView()
+        needsDisplay = true
     }
+
+    /// The size this panel should have for `model`: up to `maxVisibleRows` rows, and wide enough
+    /// for the widest row's label, tail and type (clamped to `minimumWidth...maximumWidth`).
+    public static func preferredSize(for model: CompletionPanelModel, width: CGFloat? = nil) -> NSSize {
+        let rows = max(1, min(model.items.count, maxVisibleRows))
+        let height = CGFloat(rows) * rowHeight + 2
+        if let width {
+            return NSSize(width: width, height: height)
+        }
+        var widest: CGFloat = 0
+        for item in model.items.prefix(200) {
+            widest = max(widest, contentWidth(of: item))
+        }
+        if model.items.isEmpty, let emptyText = model.emptyText {
+            widest = (emptyText as NSString).size(withAttributes: [.font: detailFont]).width + 2 * horizontalPadding
+        }
+        let scrollerAllowance: CGFloat = model.items.count > maxVisibleRows ? 6 : 0
+        return NSSize(width: min(maximumWidth, max(minimumWidth, ceil(widest + scrollerAllowance))), height: height)
+    }
+
+    private static func contentWidth(of item: CompletionItem) -> CGFloat {
+        var width = horizontalPadding + iconSize + iconGap
+        width += (item.label as NSString).size(withAttributes: [.font: boldLabelFont]).width
+        if let tail = item.labelDetail, !tail.isEmpty {
+            width += (tail as NSString).size(withAttributes: [.font: detailFont]).width
+        }
+        if let detail = item.detail, !detail.isEmpty {
+            width += columnGap + (detail as NSString).size(withAttributes: [.font: detailFont]).width
+        }
+        return width + horizontalPadding
+    }
+
+    // MARK: - Scrolling
+
+    private var visibleRowCount: Int {
+        min(model.items.count, Self.maxVisibleRows)
+    }
+
+    private func scrollSelectionIntoView() {
+        let count = model.items.count
+        let maxFirst = max(0, count - Self.maxVisibleRows)
+        guard let selected = model.selectedIndex, count > 0 else {
+            firstVisibleIndex = min(firstVisibleIndex, maxFirst)
+            return
+        }
+        if selected < firstVisibleIndex {
+            firstVisibleIndex = selected
+        } else if selected >= firstVisibleIndex + Self.maxVisibleRows {
+            firstVisibleIndex = selected - Self.maxVisibleRows + 1
+        }
+        firstVisibleIndex = max(0, min(firstVisibleIndex, maxFirst))
+    }
+
+    public override func scrollWheel(with event: NSEvent) {
+        let count = model.items.count
+        guard count > Self.maxVisibleRows else { return }
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / Self.rowHeight : event.scrollingDeltaY
+        let rows = Int(delta.rounded(delta > 0 ? .up : .down))
+        guard rows != 0 else { return }
+        firstVisibleIndex = max(0, min(count - Self.maxVisibleRows, firstVisibleIndex - rows))
+        needsDisplay = true
+    }
+
+    // MARK: - Mouse
 
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -59,12 +141,12 @@ public final class CompletionPanelView: NSView {
         let newHovered = rowIndex(at: point)
         guard newHovered != hoveredIndex else { return }
         hoveredIndex = newHovered
-        setNeedsDisplay(bounds)
+        needsDisplay = true
     }
 
     public override func mouseExited(with event: NSEvent) {
         hoveredIndex = nil
-        setNeedsDisplay(bounds)
+        needsDisplay = true
     }
 
     public override func mouseDown(with event: NSEvent) {
@@ -79,34 +161,57 @@ public final class CompletionPanelView: NSView {
 
     private func rowIndex(at point: NSPoint) -> Int? {
         guard bounds.contains(point) else { return nil }
-        let visibleCount = min(model.items.count, Self.maxVisibleRows)
-        for i in 0..<visibleCount where rowRect(for: i).contains(point) {
-            return i
-        }
-        return nil
+        let row = Int((point.y - 1) / Self.rowHeight)
+        let index = firstVisibleIndex + row
+        guard row >= 0, row < visibleRowCount, model.items.indices.contains(index) else { return nil }
+        return index
     }
 
-    private func rowRect(for index: Int) -> NSRect {
-        NSRect(x: 0, y: bounds.height - CGFloat(index + 1) * Self.rowHeight, width: bounds.width, height: Self.rowHeight)
+    private func rowRect(forVisibleRow row: Int) -> NSRect {
+        NSRect(x: 0, y: 1 + CGFloat(row) * Self.rowHeight, width: bounds.width, height: Self.rowHeight)
     }
+
+    // MARK: - Drawing
 
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSColor.controlBackgroundColor.setFill()
-        dirtyRect.fill()
+        bounds.fill()
 
-        let visibleCount = min(model.items.count, Self.maxVisibleRows)
-        for i in 0..<visibleCount {
-            draw(item: model.items[i], at: i, isSelected: i == model.selectedIndex, isHovered: i == hoveredIndex)
+        if model.items.isEmpty, let emptyText = model.emptyText {
+            let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: NSColor.secondaryLabelColor]
+            let size = (emptyText as NSString).size(withAttributes: attributes)
+            (emptyText as NSString).draw(
+                at: NSPoint(x: Self.horizontalPadding, y: (bounds.height - size.height) / 2),
+                withAttributes: attributes
+            )
         }
 
-        let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+        for row in 0..<visibleRowCount {
+            let index = firstVisibleIndex + row
+            guard model.items.indices.contains(index) else { break }
+            draw(item: model.items[index], in: rowRect(forVisibleRow: row), isSelected: index == model.selectedIndex, isHovered: index == hoveredIndex)
+        }
+
+        drawScrollIndicator()
+
+        let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
         NSColor.separatorColor.setStroke()
         border.stroke()
     }
 
-    private func draw(item: CompletionItem, at index: Int, isSelected: Bool, isHovered: Bool) {
-        let rect = rowRect(for: index)
+    private func drawScrollIndicator() {
+        let count = model.items.count
+        guard count > Self.maxVisibleRows else { return }
+        let trackHeight = bounds.height - 4
+        let thumbHeight = max(12, trackHeight * CGFloat(Self.maxVisibleRows) / CGFloat(count))
+        let progress = CGFloat(firstVisibleIndex) / CGFloat(count - Self.maxVisibleRows)
+        let thumb = NSRect(x: bounds.width - 5, y: 2 + (trackHeight - thumbHeight) * progress, width: 3, height: thumbHeight)
+        NSColor.tertiaryLabelColor.setFill()
+        NSBezierPath(roundedRect: thumb, xRadius: 1.5, yRadius: 1.5).fill()
+    }
+
+    private func draw(item: CompletionItem, in rect: NSRect, isSelected: Bool, isHovered: Bool) {
         if isSelected {
             NSColor.selectedContentBackgroundColor.setFill()
             rect.fill()
@@ -116,47 +221,90 @@ public final class CompletionPanelView: NSView {
         }
 
         let labelColor = isSelected ? NSColor.selectedMenuItemTextColor : NSColor.labelColor
-        let badgeColor = isSelected ? NSColor.selectedMenuItemTextColor : NSColor.secondaryLabelColor
-        let font = NSFont.systemFont(ofSize: 12)
-        let badgeFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        let secondaryColor = isSelected ? NSColor.selectedMenuItemTextColor.withAlphaComponent(0.75) : NSColor.secondaryLabelColor
 
-        let badgeRect = NSRect(x: 6, y: rect.minY + 4, width: 14, height: rect.height - 4)
-        Self.badge(for: item.kind).draw(in: badgeRect, withAttributes: [.font: badgeFont, .foregroundColor: badgeColor])
+        // Kind icon.
+        let iconRect = NSRect(
+            x: rect.minX + Self.horizontalPadding,
+            y: rect.midY - Self.iconSize / 2,
+            width: Self.iconSize,
+            height: Self.iconSize
+        )
+        Self.drawIcon(for: item.kind, in: iconRect)
 
-        let labelRect = NSRect(x: 24, y: rect.minY + 3, width: rect.width - 24 - 90, height: rect.height - 3)
-        var labelAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: labelColor]
-        if item.kind == .keyword {
-            labelAttributes[.font] = NSFont.systemFont(ofSize: 12, weight: .medium)
-        }
-        (item.label as NSString).draw(in: labelRect, withAttributes: labelAttributes)
+        let textX = iconRect.maxX + Self.iconGap
+        let rightEdge = rect.maxX - Self.horizontalPadding - (model.items.count > Self.maxVisibleRows ? 6 : 0)
 
-        if let detail = item.documentation, !detail.isEmpty {
-            let detailColor = isSelected ? NSColor.selectedMenuItemTextColor.withAlphaComponent(0.8) : NSColor.tertiaryLabelColor
-            let detailRect = NSRect(x: rect.width - 88, y: rect.minY + 4, width: 82, height: rect.height - 4)
+        // Right-aligned type column, truncated first from the left edge budget.
+        var detailWidth: CGFloat = 0
+        if let detail = item.detail, !detail.isEmpty {
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .right
-            paragraph.lineBreakMode = .byTruncatingTail
-            let detailAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 10), .foregroundColor: detailColor, .paragraphStyle: paragraph
-            ]
-            (detail as NSString).draw(in: detailRect, withAttributes: detailAttributes)
+            paragraph.lineBreakMode = .byTruncatingHead
+            let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: secondaryColor, .paragraphStyle: paragraph]
+            let labelWidth = (item.label as NSString).size(withAttributes: [.font: Self.boldLabelFont]).width
+            let available = max(40, rightEdge - textX - labelWidth - Self.columnGap)
+            detailWidth = min((detail as NSString).size(withAttributes: attributes).width, available)
+            let detailRect = NSRect(x: rightEdge - detailWidth, y: rect.minY + 4, width: detailWidth, height: rect.height - 4)
+            (detail as NSString).draw(in: detailRect, withAttributes: attributes)
         }
+
+        // Label (+ tail) with matched characters in bold.
+        let text = NSMutableAttributedString(string: item.label, attributes: [.font: Self.labelFont, .foregroundColor: labelColor])
+        if !model.prefix.isEmpty, let match = CompletionMatcher.match(model.prefix, in: item.label) {
+            for range in match.matchedRanges where NSMaxRange(range) <= text.length {
+                text.addAttribute(.font, value: Self.boldLabelFont, range: range)
+            }
+        }
+        if item.isDeprecated {
+            text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: text.length))
+        }
+        if let tail = item.labelDetail, !tail.isEmpty {
+            text.append(NSAttributedString(string: tail, attributes: [.font: Self.detailFont, .foregroundColor: secondaryColor]))
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
+        let labelWidth = max(20, rightEdge - textX - (detailWidth > 0 ? detailWidth + Self.columnGap : 0))
+        text.draw(in: NSRect(x: textX, y: rect.minY + 3, width: labelWidth, height: rect.height - 3))
     }
 
-    /// A short kind badge in the style of IntelliJ's completion popup. `CompletionItemKind`
-    /// doesn't yet distinguish class/interface/enum/field from their nearest existing case
-    /// (`.type`/`.property`), so those share one letter for now.
-    private static func badge(for kind: CompletionItemKind) -> String {
+    /// IntelliJ-style kind icon: a colored disc with a one-letter glyph.
+    private static func drawIcon(for kind: CompletionItemKind, in rect: NSRect) {
+        guard let (letter, color) = iconStyle(for: kind) else { return }
+        color.setFill()
+        let disc: NSBezierPath
         switch kind {
-        case .method, .function: return "m"
-        case .property: return "f"
-        case .variable: return "v"
-        case .type: return "c"
-        case .keyword: return "k"
-        case .snippet: return "s"
-        case .module: return "M"
-        case .file: return "•"
-        case .text: return " "
+        case .keyword, .snippet, .text, .file, .package, .module:
+            disc = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3)
+        default:
+            disc = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
+        }
+        disc.fill()
+        let attributes: [NSAttributedString.Key: Any] = [.font: iconFont, .foregroundColor: NSColor.white]
+        let size = (letter as NSString).size(withAttributes: attributes)
+        (letter as NSString).draw(
+            at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+            withAttributes: attributes
+        )
+    }
+
+    private static func iconStyle(for kind: CompletionItemKind) -> (String, NSColor)? {
+        switch kind {
+        case .method, .function: return ("m", NSColor.systemRed.blended(withFraction: 0.2, of: .systemPink) ?? .systemRed)
+        case .constructor: return ("m", NSColor.systemRed)
+        case .field, .property: return ("f", NSColor.systemOrange)
+        case .enumMember: return ("e", NSColor.systemOrange)
+        case .variable: return ("v", NSColor.systemPurple)
+        case .class, .type: return ("c", NSColor.systemBlue)
+        case .interface: return ("i", NSColor.systemGreen)
+        case .enum: return ("e", NSColor.systemTeal)
+        case .annotation: return ("@", NSColor.systemGreen.blended(withFraction: 0.3, of: .systemTeal) ?? .systemGreen)
+        case .keyword: return ("k", NSColor.systemGray)
+        case .snippet: return ("s", NSColor.systemGray)
+        case .module, .package: return ("p", NSColor.systemBrown)
+        case .file: return ("•", NSColor.systemGray)
+        case .text: return ("a", NSColor.systemGray.withAlphaComponent(0.6))
         }
     }
 }

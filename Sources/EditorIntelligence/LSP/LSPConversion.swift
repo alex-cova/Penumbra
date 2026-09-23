@@ -48,18 +48,25 @@ public func diagnostic(from lspDiagnostic: LSPDiagnostic, source: String) -> Dia
 ///
 /// LSP completion item kinds: 1 = text, 2 = method, 3 = function, 4 = constructor, 5 = field,
 /// 6 = variable, 7 = class, 8 = interface, 9 = module, 10 = property, 11 = unit, 12 = value,
-/// 13 = enum, 14 = keyword, 15 = snippet, 16 = color, 17 = file, 18 = reference.
+/// 13 = enum, 14 = keyword, 15 = snippet, 16 = color, 17 = file, 18 = reference, 19 = folder,
+/// 20 = enum member, 21 = constant, 22 = struct, 23 = event, 24 = operator, 25 = type parameter.
 public func completionItemKind(from lspKind: Int?) -> CompletionItemKind {
     switch lspKind {
     case 2: return .method
-    case 3, 4: return .function
-    case 5, 10: return .property
-    case 6: return .variable
-    case 7, 8, 9, 13: return .type
+    case 3: return .function
+    case 4: return .constructor
+    case 5: return .field
+    case 10: return .property
+    case 6, 21: return .variable
+    case 7, 22: return .class
+    case 8: return .interface
+    case 9: return .module
+    case 13: return .enum
+    case 20: return .enumMember
+    case 25: return .type
     case 14: return .keyword
     case 15: return .snippet
-    case 17: return .file
-    case 1, 11, 12, 16, 18: return .text
+    case 17, 19: return .file
     default: return .text
     }
 }
@@ -73,6 +80,13 @@ public func completionItem(from lspItem: LSPCompletionItem, source: String, rang
         range: range,
         source: source,
         documentation: lspItem.documentation,
-        sortText: lspItem.detail
+        sortText: lspItem.sortText,
+        filterText: lspItem.filterText,
+        detail: lspItem.detail,
+        isDeprecated: lspItem.deprecated,
+        insertTextIsSnippet: lspItem.isSnippet,
+        additionalEdits: lspItem.additionalTextEdits.map {
+            TextEdit(range: textRange(from: $0.range), replacement: $0.newText)
+        }
     )
 }

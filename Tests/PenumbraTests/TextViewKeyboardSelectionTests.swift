@@ -114,4 +114,95 @@ final class TextViewKeyboardSelectionTests: XCTestCase {
 
         XCTAssertEqual(textView.text, "hello world")
     }
+
+    func testReadOnlyEditorShowsCaret() {
+        let textView = makeFocusedTextView(text: "hello world", isEditable: false)
+
+        XCTAssertTrue(textView.isEditing)
+        XCTAssertNotNil(visibleCaret(in: textView))
+    }
+
+    /// Opening a non-editable document (a JDK class) used to end the caret session while
+    /// leaving the text input as first responder. The next focus was then a no-op, so the
+    /// caret stayed hidden in that file and in every editable file opened afterwards.
+    func testCaretSurvivesBecomingReadOnlyAndBack() {
+        let textView = makeFocusedTextView(text: "hello world")
+        let responder = textView.window?.firstResponder
+        XCTAssertNotNil(visibleCaret(in: textView))
+
+        textView.isEditable = false
+        XCTAssertTrue(textView.focusTextInput())
+        XCTAssertTrue(textView.window?.firstResponder === responder)
+        XCTAssertTrue(textView.isEditing)
+        XCTAssertNotNil(visibleCaret(in: textView))
+
+        send(keyEvent(keyCode: KeyCode.letterA, characters: "a"), to: textView)
+        XCTAssertEqual(textView.text, "hello world")
+
+        textView.isEditable = true
+        XCTAssertTrue(textView.focusTextInput())
+        XCTAssertTrue(textView.window?.firstResponder === responder)
+        XCTAssertTrue(textView.isEditing)
+        XCTAssertNotNil(visibleCaret(in: textView))
+    }
+
+    func testCommandZUndoesAndCommandShiftZRedoes() {
+        let textView = makeFocusedTextView(text: "hello")
+        textView.selectedRange = NSRange(location: 5, length: 0)
+        textView.insertText("!")
+
+        XCTAssertEqual(textView.text, "hello!")
+        XCTAssertTrue(textView.undoManager?.canUndo ?? false)
+
+        send(keyEvent(keyCode: KeyCode.letterZ, characters: "z", flags: .command), to: textView)
+        XCTAssertEqual(textView.text, "hello")
+
+        send(keyEvent(keyCode: KeyCode.letterZ, characters: "z", flags: [.command, .shift]), to: textView)
+        XCTAssertEqual(textView.text, "hello!")
+    }
+
+    func testResponderChainUndoAndRedo() {
+        let textView = makeFocusedTextView(text: "hello")
+        textView.selectedRange = NSRange(location: 5, length: 0)
+        textView.insertText("!")
+
+        let responder = textView.window?.firstResponder
+        XCTAssertTrue(responder?.responds(to: #selector(TextInputView.undoFromResponderChain(_:))) ?? false)
+        XCTAssertTrue(responder?.responds(to: #selector(TextInputView.redoFromResponderChain(_:))) ?? false)
+
+        responder?.perform(#selector(TextInputView.undoFromResponderChain(_:)), with: nil)
+        XCTAssertEqual(textView.text, "hello")
+        responder?.perform(#selector(TextInputView.redoFromResponderChain(_:)), with: nil)
+        XCTAssertEqual(textView.text, "hello!")
+    }
+
+    func testReadOnlyEditorDoesNotPaste() {
+        let pasteboardBackup = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let pasteboardBackup {
+                NSPasteboard.general.setString(pasteboardBackup, forType: .string)
+            }
+        }
+        let textView = makeFocusedTextView(text: "hello world", isEditable: false)
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("pasted", forType: .string)
+
+        (textView.window?.firstResponder as? TextInputView)?.paste(nil)
+
+        XCTAssertEqual(textView.text, "hello world")
+    }
+
+    private func visibleCaret(in view: NSView) -> CaretView? {
+        if let caret = view as? CaretView, !caret.isHidden, caret.frame.height > 0 {
+            return caret
+        }
+        for subview in view.subviews {
+            if let caret = visibleCaret(in: subview) {
+                return caret
+            }
+        }
+        return nil
+    }
 }
