@@ -40,6 +40,7 @@ final class IDEJavaSupport {
     let javaIndex = JavaIndex()
     let overlayService: JavaOverlayService
     let completionProvider: JavaCompletionProvider
+    let navigationProvider: JavaGoToDefinitionProvider
 
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
@@ -100,6 +101,7 @@ final class IDEJavaSupport {
     init(gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL) {
         overlayService = JavaOverlayService(index: javaIndex)
         completionProvider = JavaCompletionProvider(index: javaIndex)
+        navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleExtractor = GradleProjectModelExtractor(runner: GradleCommandRunner(trustStore: gradleTrustStore))
     }
@@ -340,6 +342,7 @@ final class IDEJavaSupport {
                 // Publish first so a scoped query never runs against shards that are not installed yet.
                 await publishSources()
                 await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
+                await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
             } catch {
                 guard isCurrent(generation) else { return }
                 clearSourceSetClasspath()
@@ -448,10 +451,16 @@ final class IDEJavaSupport {
         sources.append(contentsOf: projectSources)
         sources.append(contentsOf: jarSources)
         await javaIndex.setSources(sources)
+        if let indexedJDKHomePath {
+            await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+        }
     }
 
     private func clearSourceSetClasspath() {
-        Task { await completionProvider.setSourceSetClasspath(nil, indexPaths: paths) }
+        Task {
+            await completionProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await navigationProvider.setSourceSetClasspath(nil, indexPaths: paths)
+        }
     }
 
     private func startBuildFileWatcher(root: URL) {

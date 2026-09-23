@@ -55,6 +55,12 @@ struct IDEHeaderContext: Equatable {
     var items: [IDEBreadcrumbItem] { pathItems + symbolItems }
 }
 
+/// Holds the workspace for the Java navigation provider without capturing `IDEWorkspace` in a
+/// `@Sendable` closure. The provider calls it off the main actor and hops back here.
+private final class NavigationBufferBridge: @unchecked Sendable {
+    nonisolated(unsafe) weak var workspace: IDEWorkspace?
+}
+
 @MainActor
 @Observable
 public final class IDEWorkspace {
@@ -64,6 +70,7 @@ public final class IDEWorkspace {
     private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
     private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
+    private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
     @ObservationIgnored
     private var paletteController: CommandPaletteController?
@@ -156,7 +163,19 @@ public final class IDEWorkspace {
             applyProjectRoot(url)
         }
 
+        navigationBuffers.workspace = self
         Task {
+            await intelligenceServices.javaSupport.navigationProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.navigationProvider.setDecompilerConsent(
+                accepted: preferences.javaDecompilerAgreementAccepted,
+                request: { [navigationBuffers] in
+                    await navigationBuffers.workspace?.requestDecompilerConsent() ?? false
+                }
+            )
             await workspaceBridge.syncWorkbench(workbench)
             await workspaceBridge.workspace.connect(to: adapter)
             await intelligenceServices.indexingService.connect(to: workspaceBridge.workspace)
@@ -527,6 +546,78 @@ public final class IDEWorkspace {
                 findInFilesStatus = "\(hits.count) results"
             }
         }
+    }
+
+    /// Opens a Go to Definition target. A file already open is focused without reloading it, so a
+    /// dirty buffer keeps the user's edits. JDK and dependency sources extracted into the index
+    /// cache are ordinary files the read-only check in ``applyState`` then locks.
+    @discardableResult
+    func openNavigationLocation(_ location: Location) -> Bool {
+        let current = host(for: workbench.activePaneID)
+        current.textView.recordNavigationCheckpoint()
+        let nsRange = NSRange(
+            location: location.range.start.utf16Offset,
+            length: max(0, location.range.end.utf16Offset - location.range.start.utf16Offset)
+        )
+        if let url = location.url,
+           url.standardizedFileURL.path != current.textView.documentURL?.standardizedFileURL.path {
+            if let (pane, document) = paneAndDocument(matching: url) {
+                document.selectedRange = nsRange
+                workbench.activatePane(pane.id)
+                pane.selectDocument(document.id)
+                let destination = host(for: pane.id)
+                showDocument(in: pane, host: destination)
+                if destination.loadedDocumentID == document.id {
+                    destination.textView.selectedRange = nsRange
+                    destination.textView.scrollRangeToVisible(nsRange)
+                    _ = destination.textView.focusTextInput()
+                }
+                return true
+            }
+            Task { await openDocument(from: url, selecting: nsRange) }
+            return true
+        }
+        current.textView.selectedRange = nsRange
+        current.textView.scrollRangeToVisible(nsRange)
+        _ = current.textView.focusTextInput()
+        return true
+    }
+
+    func presentNavigationChoices(_ locations: [Location]) {
+        guard let paletteController else {
+            if let first = locations.first {
+                _ = openNavigationLocation(first)
+            }
+            return
+        }
+        let items = locations.map { location -> (title: String, subtitle: String?) in
+            (location.displayName, location.url?.lastPathComponent)
+        }
+        paletteController.presentList(title: "Go to Definition", items: items) { [weak self] index in
+            guard let self, locations.indices.contains(index) else { return }
+            _ = self.openNavigationLocation(locations[index])
+        }
+    }
+
+    private func paneAndDocument(matching url: URL) -> (EditorPane, WorkbenchDocument)? {
+        let path = url.standardizedFileURL.path
+        for pane in workbench.panes {
+            if let document = pane.documents.first(where: { $0.url?.standardizedFileURL.path == path }) {
+                return (pane, document)
+            }
+        }
+        return nil
+    }
+
+    /// Text of an open document, including unsaved edits. Nil when `url` is not open, so navigation
+    /// reads the file from disk instead of an empty file-backed model.
+    func openBufferText(for url: URL) -> String? {
+        let path = url.standardizedFileURL.path
+        guard let document = workbench.allDocuments().first(where: { $0.url?.standardizedFileURL.path == path }) else {
+            return nil
+        }
+        let text = sourceText(for: document)
+        return text.isEmpty ? nil : text
     }
 
     func openFindInFilesHit(_ hit: ProjectSearchResult) {
@@ -936,6 +1027,12 @@ public final class IDEWorkspace {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
+        host.intelligenceController?.onOpenLocationInOtherDocument = { [weak self] location in
+            self?.openNavigationLocation(location) ?? false
+        }
+        host.intelligenceController?.onPresentNavigationChoices = { [weak self] locations in
+            self?.presentNavigationChoices(locations)
+        }
         host.wireMarkdownPreview()
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
@@ -1546,6 +1643,8 @@ public final class IDEWorkspace {
         host.lastSelectedRange = nil
         host.lastScrollOffset = nil
         preferences.apply(to: host.textView)
+        let attachedSource = document.url.map { JavaAttachedSources.isExtractedSource($0) } ?? false
+        host.textView.isEditable = !attachedSource
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration
         host.loadedBufferGeneration = host.textView.contentGeneration
@@ -1585,6 +1684,40 @@ public final class IDEWorkspace {
                 finish(alert.runModal())
             }
         }
+    }
+
+    /// Shown once before Umbra first decompiles a `.class` file with no attached source. Accepting
+    /// persists to ``IDEPreferences/javaDecompilerAgreementAccepted``, which the caller then treats
+    /// as standing consent — this alert should not appear again.
+    private func requestDecompilerConsent() async -> Bool {
+        let accepted = await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = JavaDecompilerAgreement.title
+            alert.addButton(withTitle: "Accept")
+            alert.addButton(withTitle: "Cancel")
+            let scrollView = NSTextView.scrollableTextView()
+            scrollView.frame = NSRect(x: 0, y: 0, width: 420, height: 220)
+            if let textView = scrollView.documentView as? NSTextView {
+                textView.string = JavaDecompilerAgreement.text
+                textView.isEditable = false
+                textView.font = .systemFont(ofSize: 11)
+            }
+            alert.accessoryView = scrollView
+            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+            if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                alert.beginSheetModal(for: window) { response in
+                    finish(response)
+                }
+            } else {
+                finish(alert.runModal())
+            }
+        }
+        if accepted {
+            preferences.javaDecompilerAgreementAccepted = true
+        }
+        return accepted
     }
 
     private func presentMetalFailureOnce(reason: String) {

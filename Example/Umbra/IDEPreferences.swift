@@ -34,6 +34,7 @@ public final class IDEPreferences {
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
+        static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
     }
 
     var fontSize: Double {
@@ -147,6 +148,15 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
     }
 
+    /// Standing consent for decompiling `.class` files with no attached source using Sunflower
+    /// (FernflowerKit). Set once the user accepts ``JavaDecompilerAgreement`` at a Go to
+    /// Definition. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaDecompilerAgreementAccepted: Bool {
+        didSet {
+            UserDefaults.standard.set(javaDecompilerAgreementAccepted, forKey: Keys.javaDecompilerAgreementAccepted)
+        }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
@@ -175,6 +185,7 @@ public final class IDEPreferences {
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
+        javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         applyTheme()
     }
 

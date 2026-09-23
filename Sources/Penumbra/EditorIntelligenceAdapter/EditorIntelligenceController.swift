@@ -62,6 +62,7 @@ public final class EditorIntelligenceController {
     private var signatureHelpTask: Task<Void, Never>?
     private var outlineTask: Task<Void, Never>?
     private var breadcrumbTask: Task<Void, Never>?
+    private var jumpToDefinitionController: JumpToDefinitionController?
 
     private let formattingProvider: LSPFormattingProvider?
     private let signatureHelpProvider: LSPSignatureHelpProvider?
@@ -156,6 +157,21 @@ public final class EditorIntelligenceController {
         }
         forwarding.attach(controller: self)
         startObservingEvents()
+        if let navigationEngine {
+            let jump = JumpToDefinitionController(textView: textView, adapter: self.adapter, navigationEngine: navigationEngine)
+            jump.onOpenInOtherDocument = { [weak self] location in
+                self?.onOpenLocationInOtherDocument?(location) ?? false
+            }
+            jump.onPresentChoices = { [weak self] locations in
+                guard let self else { return }
+                if let onPresentNavigationChoices = self.onPresentNavigationChoices {
+                    onPresentNavigationChoices(locations)
+                } else if let first = locations.first {
+                    self.focus(first)
+                }
+            }
+            jumpToDefinitionController = jump
+        }
 
         completionPanelView.onSelectRow = { [weak self] index in
             self?.selectCompletionRow(index)
@@ -208,12 +224,26 @@ public final class EditorIntelligenceController {
     /// Runs the navigation engine for `kind` at the current cursor and focuses the result.
     @discardableResult
     public func navigate(kind: NavigationKind) -> Bool {
-        guard let navigationEngine, let document = adapter.currentDocument else {
+        guard let navigationEngine, let textView, let base = adapter.currentDocument else {
             return false
         }
+        // The adapter snapshot lags the live buffer, and the caret to resolve is the one on screen.
+        let utf16 = textView.selectedRange.location
+        let position = TextPosition(line: 0, column: utf16, utf16Offset: utf16)
+        let cursor = Cursor(position: position)
+        let document = Document(
+            id: base.id,
+            url: textView.documentURL ?? base.url,
+            displayName: base.displayName,
+            contentSnapshot: TextSnapshot(version: base.version, text: textView.text),
+            selection: Selection(range: TextRange(start: position, end: position)),
+            cursor: cursor,
+            viewport: base.viewport,
+            languageIdentifier: base.languageIdentifier
+        )
         let context = NavigationContext(
             document: document,
-            cursor: document.cursor,
+            cursor: cursor,
             selection: document.selection,
             trigger: .manual,
             kind: kind

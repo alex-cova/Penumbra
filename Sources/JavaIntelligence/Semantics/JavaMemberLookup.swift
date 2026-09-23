@@ -1,5 +1,11 @@
 import Foundation
 
+/// Parsed declaring files for one member walk. Source stubs leave `extends Animal` unresolved;
+/// resolving it re-reads that file's imports. One walk parses each file at most once.
+private final class DeclaringFileCache: @unchecked Sendable {
+    var files: [String: JavaSourceFileStubs] = [:]
+}
+
 /// One member found while walking a type's inheritance chain: the field/method itself (with its
 /// type/return type already substituted for the receiver's actual generic arguments), plus the
 /// class that declares it (for display, e.g. "declared in AbstractList", and for access checks).
@@ -41,6 +47,10 @@ public enum JavaMemberLookupMode: Sendable {
 /// sets and inherited members that a real `javac`/IDE symbol table would give you, built from
 /// ``JavaIndex`` stubs instead.
 public enum JavaMemberLookup {
+    /// Optional reader for `.source` stubs whose superclass was stored as a simple name.
+    /// Navigation installs one that prefers the live editor buffer. Nil falls back to disk.
+    @TaskLocal public static var sourceTextProvider: (@Sendable (URL) async -> String?)?
+
     /// All members visible on `type` from the perspective of `context`, most-derived first,
     /// deduplicated so an override hides its superclass/interface original (matched by name +
     /// erased parameter list) and filtered by ``JavaMemberLookupMode`` and access.
@@ -54,6 +64,7 @@ public enum JavaMemberLookup {
             return []
         }
         let selfHierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
+        let fileCache = DeclaringFileCache()
 
         var seenSignatures = Set<String>()
         var result: [JavaResolvedMember] = []
@@ -98,9 +109,10 @@ public enum JavaMemberLookup {
                 result.append(.method(substitutedMethod, declaringClass: currentName))
             }
 
-            if let superclass = stub.superclass, stub.kind != .interfaceKind {
+            if stub.kind != .interfaceKind, let superclass = stub.superclass {
                 let substitutedSuper = substitute(superclass, using: substitution)
-                if case .classType(let superName, let superArgs, _) = substitutedSuper {
+                let resolvedSuper = await resolveSupertype(substitutedSuper, declaredOn: stub, context: context, index: index, cache: fileCache)
+                if case .classType(let superName, let superArgs, _) = resolvedSuper {
                     queue.append((superName, await substitutionMap(forTypeArguments: superArgs, appliedTo: superName, index: index)))
                 }
             } else if (stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind),
@@ -109,12 +121,56 @@ public enum JavaMemberLookup {
             }
             for iface in stub.interfaces {
                 let substitutedIface = substitute(iface, using: substitution)
-                if case .classType(let ifaceName, let ifaceArgs, _) = substitutedIface {
+                let resolvedIface = await resolveSupertype(substitutedIface, declaredOn: stub, context: context, index: index, cache: fileCache)
+                if case .classType(let ifaceName, let ifaceArgs, _) = resolvedIface {
                     queue.append((ifaceName, await substitutionMap(forTypeArguments: ifaceArgs, appliedTo: ifaceName, index: index)))
                 }
             }
         }
         return result
+    }
+
+    /// Constructors declared on `type` itself (they are not inherited), visible from `context`.
+    /// An empty result means the class has no written constructor — callers that are navigating
+    /// `new Foo()` should land on the class name, which is the implicit constructor.
+    public static func constructors(
+        of type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaMethodStub] {
+        guard case .classType(let qualifiedName, _, _) = type else { return [] }
+        guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
+        if stub.kind == .interfaceKind || stub.kind == .annotationKind { return [] }
+        let selfHierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
+        var visible: [JavaMethodStub] = []
+        for method in stub.methods where method.isConstructor {
+            if await isAccessible(
+                method.modifiers, declaringClass: qualifiedName, declaringPackage: stub.packageName,
+                context: context, selfHierarchy: selfHierarchy, index: index
+            ) {
+                visible.append(method)
+            }
+        }
+        return visible
+    }
+
+    /// The superclass `qualifiedName` actually extends, with a source stub's simple name resolved
+    /// against that file's package and imports. Implicit `Object` is returned for a class that
+    /// declares no superclass.
+    public static func directSuperclass(
+        of qualifiedName: String, context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef? {
+        guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return nil }
+        if let superclass = stub.superclass {
+            let resolved = await resolveSupertype(
+                superclass, declaredOn: stub, context: context, index: index, cache: DeclaringFileCache()
+            )
+            if case .classType = resolved { return resolved }
+            return nil
+        }
+        if qualifiedName != "java.lang.Object",
+           stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind {
+            return .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+        }
+        return nil
     }
 
     private static func arrayMembers(elementType: JavaTypeRef) -> [JavaResolvedMember] {
@@ -166,17 +222,72 @@ public enum JavaMemberLookup {
     /// substitute generics.
     private static func ancestorQualifiedNames(of qualifiedName: String?, index: JavaIndex) async -> Set<String> {
         guard let qualifiedName else { return [] }
+        let cache = DeclaringFileCache()
         var visited = Set<String>()
         var queue = [qualifiedName]
         while let next = queue.popLast() {
             guard visited.insert(next).inserted else { continue }
             guard let stub = await index.classStub(qualifiedName: next) else { continue }
-            if let superclassName = stub.superclass?.erasedQualifiedName {
-                queue.append(superclassName)
+            let fallback = JavaResolutionContext(packageName: stub.packageName, imports: [])
+            if let superclass = stub.superclass {
+                let resolved = await resolveSupertype(superclass, declaredOn: stub, context: fallback, index: index, cache: cache)
+                if let name = resolved.erasedQualifiedName { queue.append(name) }
             }
-            queue.append(contentsOf: stub.interfaces.compactMap(\.erasedQualifiedName))
+            for interface in stub.interfaces {
+                let resolved = await resolveSupertype(interface, declaredOn: stub, context: fallback, index: index, cache: cache)
+                if let name = resolved.erasedQualifiedName { queue.append(name) }
+            }
         }
         return visited
+    }
+
+    /// Source stubs store `extends Animal` as `.unresolved("Animal")`. Class files already carry a
+    /// qualified `.classType`. Resolve the simple name in the declaring file's own package and
+    /// imports (not the call site's — `import b.Animal` lives on Dog's file, not the caller's).
+    private static func resolveSupertype(
+        _ type: JavaTypeRef, declaredOn stub: JavaClassStub, context: JavaResolutionContext, index: JavaIndex, cache: DeclaringFileCache
+    ) async -> JavaTypeRef {
+        if case .classType = type { return type }
+        guard case .unresolved = type else { return type }
+        if let fileContext = await contextOfDeclaringFile(stub, cache: cache) {
+            let resolved = await JavaTypeResolver.resolve(type, context: fileContext, index: index)
+            if case .classType = resolved { return resolved }
+        }
+        let resolvedAtCall = await JavaTypeResolver.resolve(type, context: context, index: index)
+        if case .classType = resolvedAtCall { return resolvedAtCall }
+        if case .unresolved(let simpleName, let arguments) = type {
+            let samePackage = stub.packageName.isEmpty ? simpleName : "\(stub.packageName).\(simpleName)"
+            if await index.classStub(qualifiedName: samePackage) != nil {
+                return .classType(qualifiedName: samePackage, arguments: arguments, outer: nil)
+            }
+        }
+        return resolvedAtCall
+    }
+
+    private static func contextOfDeclaringFile(_ stub: JavaClassStub, cache: DeclaringFileCache) async -> JavaResolutionContext? {
+        guard case .source(let url, _) = stub.origin else { return nil }
+        let key = url.standardizedFileURL.path
+        let file: JavaSourceFileStubs
+        if let cached = cache.files[key] {
+            file = cached
+        } else {
+            guard let text = await sourceText(at: url) else { return nil }
+            file = JavaSourceStubBuilder.build(source: text, url: url)
+            cache.files[key] = file
+        }
+        return JavaResolutionContext(
+            packageName: file.packageName,
+            imports: file.imports,
+            enclosingTypeQualifiedNames: [stub.qualifiedName],
+            typeParameterNames: Set(stub.typeParameters.map(\.name))
+        )
+    }
+
+    private static func sourceText(at url: URL) async -> String? {
+        if let provider = sourceTextProvider, let text = await provider(url) {
+            return text
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
     }
 
     // MARK: - Generic substitution

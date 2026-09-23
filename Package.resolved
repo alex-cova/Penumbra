@@ -1,5 +1,5 @@
 {
-  "originHash" : "74f3527392edc93a83648a367241be7a32ff19acde95ad1f17ab84583d38de91",
+  "originHash" : "7f0bba89fc0f3a6ab6c559a6ddeb951182c29658264a7181da1e0e369dae8546",
   "pins" : [
     {
       "identity" : "fseventswrapper",
@@ -71,6 +71,15 @@
       "state" : {
         "revision" : "2543679282aa6f6c8ecf2138acd613ed20790bc2",
         "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "sunflower",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/alex-cova/sunflower",
+      "state" : {
+        "revision" : "ba6ca8727983f2340fe7d6817dc2abbec48da48b",
+        "version" : "1.0.0"
       }
     },
     {

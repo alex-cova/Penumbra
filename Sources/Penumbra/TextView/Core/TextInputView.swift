@@ -39,6 +39,10 @@ protocol TextInputViewDelegate: AnyObject {
 
 // swiftlint:disable:next type_body_length
 final class TextInputView: UIView, UITextInput {
+    /// Modifier changes (Command pressed or released) for Cmd-hover navigation. The text input
+    /// is first responder, so it — not the enclosing scroll view — receives `flagsChanged`.
+    var onFlagsChanged: ((NSEvent) -> Void)?
+
     // MARK: - UITextInput
     var selectedTextRange: UITextRange? {
         get {

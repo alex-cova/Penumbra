@@ -1161,6 +1161,9 @@ public struct MetalPerformanceStats: Sendable {
         // canvas beside a dark gutter (DefaultTheme reads appearance colors).
         backgroundColor = .textBackgroundColor
         textInputView.delegate = self
+        textInputView.onFlagsChanged = { [weak self] event in
+            self?.onHoverEvent?(event)
+        }
         textInputView.gutterParentView = self
         textInputView.languageConfiguration = resolvedLanguageConfiguration
         addSubview(textInputView)
@@ -1319,10 +1322,22 @@ public struct MetalPerformanceStats: Sendable {
         distractionFreeTrackingArea = trackingArea
     }
 
+    /// Mouse movement and modifier-flag changes while the pointer is over the editor. Cmd-hover
+    /// navigation underlines a symbol from here; the flag changes arrive via the text input,
+    /// which is the first responder.
+    public var onHoverEvent: ((NSEvent) -> Void)?
+
     override open func mouseMoved(with event: NSEvent) {
         distractionFreeController.mouseDidMove()
         scrollerOverlay.mouseMoved(to: convert(event.locationInWindow, from: nil))
+        onHoverEvent?(event)
         super.mouseMoved(with: event)
+    }
+
+    /// Clicks land on the text input, which sits above this scroll view. A gesture recognizer
+    /// added only to the scroll view does not see them.
+    func addTextInputGestureRecognizer(_ recognizer: NSGestureRecognizer) {
+        textInputView.addGestureRecognizer(recognizer)
     }
 
     /// Called when the safe area of the view changes.

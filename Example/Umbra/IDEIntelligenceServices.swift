@@ -33,7 +33,8 @@ final class IDEIntelligenceServices {
             DuplicateSymbolDiagnosticProvider(index: symbolIndex)
         ])
         navigationEngine = NavigationEngine(providers: [
-            GoToDefinitionProvider(index: symbolIndex),
+            javaSupport.navigationProvider,
+            GoToDefinitionProvider(index: symbolIndex, skippingLanguages: ["java"]),
             FindReferencesProvider(index: symbolIndex)
         ])
     }

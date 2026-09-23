@@ -28,7 +28,8 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0"),
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0")
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
+        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0")
     ],
     targets: [
         .target(
@@ -91,7 +92,8 @@ let package = Package(
             dependencies: [
                 "EditorIntelligence",
                 "TreeSitter",
-                "TreeSitterJava"
+                "TreeSitterJava",
+                .product(name: "FernflowerKit", package: "sunflower")
             ],
             swiftSettings: swift6
         ),
