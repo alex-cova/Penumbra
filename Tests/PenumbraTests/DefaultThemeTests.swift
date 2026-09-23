@@ -114,7 +114,7 @@ final class DefaultThemeTests: XCTestCase {
         // A theme that predates these properties still compiles and gets sensible defaults.
         final class LegacyTheme: MinimalThemeStub {}
         let theme = LegacyTheme()
-        XCTAssertEqual(theme.methodSeparatorColor, theme.gutterHairlineColor)
+        XCTAssertEqual(theme.methodSeparatorColor, theme.pageGuideHairlineColor)
         XCTAssertGreaterThan(theme.methodSeparatorWidth, 0)
         XCTAssertLessThan(theme.occurrenceHighlightColor.cgColor.alpha, 1)
     }

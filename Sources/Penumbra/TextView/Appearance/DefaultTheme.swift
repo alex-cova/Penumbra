@@ -213,12 +213,10 @@ private extension UIColor {
             case "occurrence_highlight":
                 // Translucent #3b82f6 — reads on both light and dark editor backgrounds.
                 return UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 0.28)
-            case "method_separator":
-                return .secondaryLabelColor
             case "foreground":
                 return .textColor
             case "line_number", "line_number_current_line", "invisible_characters",
-                 "gutter_hairline", "page_guide_hairline":
+                 "gutter_hairline", "page_guide_hairline", "method_separator":
                 return .secondaryLabelColor
             case "comment":
                 return isDark

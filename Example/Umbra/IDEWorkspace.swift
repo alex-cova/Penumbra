@@ -92,6 +92,8 @@ public final class IDEWorkspace {
     public init() {}
 
     var isSidebarVisible = true
+    var isGradleSidebarVisible = true
+    var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
     private(set) var layoutEpoch: UInt64 = 0
     private(set) var activePaneID = UUID()
@@ -139,7 +141,8 @@ public final class IDEWorkspace {
     /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
     /// produced output worth revisiting.
     var showsGradleConsoleTab: Bool {
-        javaSupport.isGradleProject && (javaSupport.gradleSync.isSyncing || !javaSupport.gradleConsole.lines.isEmpty)
+        javaSupport.isGradleProject
+            && (javaSupport.isGradleBusy || !javaSupport.gradleConsole.lines.isEmpty)
     }
     /// Whether the "HTTP" tab should appear for the active `.http` file or after a request runs.
     var showsHTTPTab: Bool {
@@ -151,6 +154,8 @@ public final class IDEWorkspace {
     /// What `IDERootView` should actually render — just the user's sidebar toggle. The Explorer
     /// stays visible even with no folder or documents open, showing its own empty state.
     var showsSidebar: Bool { isSidebarVisible }
+    /// Right-hand Gradle panel — modules and dependencies — only for Gradle project folders.
+    var showsGradleSidebar: Bool { isGradleSidebarVisible && javaSupport.isGradleProject }
 
     func host(for paneID: UUID) -> IDEEditorPaneHost {
         hostedPaneIDs.insert(paneID)
@@ -576,6 +581,19 @@ public final class IDEWorkspace {
         javaSupport.cancelGradleSync()
     }
 
+    func cancelGradleOperation() {
+        if javaSupport.gradleSync.isSyncing {
+            cancelGradleSync()
+        } else if javaSupport.isRunningGradleTasks {
+            javaSupport.cancelGradleTasks()
+        }
+    }
+
+    func runGradleTask(_ taskPath: String) {
+        showGradleOutput()
+        javaSupport.runGradleTasks([taskPath])
+    }
+
     func restartTerminal() {
         restartTerminalTab(selectedTerminalTabID)
     }
@@ -784,6 +802,22 @@ public final class IDEWorkspace {
     public func toggleSidebar() {
         isSidebarVisible.toggle()
         focusActiveEditor()
+    }
+
+    public func toggleGradleSidebar() {
+        isGradleSidebarVisible.toggle()
+        focusActiveEditor()
+        saveSession()
+    }
+
+    /// Reveals a folder or file in the left Explorer, expanding ancestors as needed.
+    func revealInExplorer(_ url: URL) {
+        guard project.rootURL != nil else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+        isSidebarVisible = true
+        project.revealAndSelect(url: url, centered: false)
     }
 
     public func toggleMarkdownPreview() {
@@ -1037,7 +1071,11 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
-    func makeSession(sidebarWidth: Double, terminalHeight: Double? = nil) -> AppSession {
+    func makeSession(
+        sidebarWidth: Double,
+        gradleSidebarWidth: Double? = nil,
+        terminalHeight: Double? = nil
+    ) -> AppSession {
         AppSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
@@ -1045,6 +1083,8 @@ public final class IDEWorkspace {
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
+            gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
+            isGradleSidebarVisible: isGradleSidebarVisible,
             isTerminalVisible: isTerminalVisible,
             terminalHeight: terminalHeight ?? self.terminalHeight,
             terminalTabs: terminalTabs.isEmpty ? nil : terminalTabs,
@@ -1054,9 +1094,14 @@ public final class IDEWorkspace {
 
     func saveSession(
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
+        gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
-        IDESessionStore.save(makeSession(sidebarWidth: sidebarWidth, terminalHeight: terminalHeight))
+        IDESessionStore.save(makeSession(
+            sidebarWidth: sidebarWidth,
+            gradleSidebarWidth: gradleSidebarWidth,
+            terminalHeight: terminalHeight
+        ))
     }
 
     // MARK: - Private
@@ -1079,6 +1124,8 @@ public final class IDEWorkspace {
         preferences.restore(from: session.preferences)
         recentFiles = session.recentFiles
         isSidebarVisible = session.isSidebarVisible
+        gradleSidebarWidth = session.gradleSidebarWidth
+        isGradleSidebarVisible = session.isGradleSidebarVisible
         isTerminalVisible = session.isTerminalVisible
         terminalHeight = session.terminalHeight
         terminalTabs = session.terminalTabs ?? []
@@ -1331,6 +1378,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.splitDown() }),
             EditorCommand(id: "app.toggleSidebar", title: "Toggle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleSidebar() }),
+            EditorCommand(id: "app.toggleGradleSidebar", title: "Toggle Gradle Sidebar", group: "View",
+                          action: { [weak self] in self?.toggleGradleSidebar() }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
                           action: { [weak self] in self?.revealActiveFileInExplorer() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",

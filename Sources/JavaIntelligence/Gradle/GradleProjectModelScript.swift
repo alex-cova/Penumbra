@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 2
+    static let formatVersion = 3
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -83,12 +83,30 @@ enum GradleProjectModelScript {
         return described
     }
 
+    def umbraDescribeTasks = { p ->
+        def skip = ['umbraProjectModelFragment', 'umbraProjectModel'] as Set
+        return p.tasks.matching { t ->
+            t.enabled && t.group != null && !t.group.isEmpty() && !skip.contains(t.name)
+        }.collect { t ->
+            [
+                path: t.path,
+                name: t.name,
+                group: t.group,
+                description: t.description ?: ''
+            ]
+        }.sort { a, b ->
+            def ga = a.group <=> b.group
+            ga != 0 ? ga : a.path <=> b.path
+        }
+    }
+
     def umbraDescribeProject = { p ->
         def result = [
             path: p.path,
             directory: p.projectDir.toURI().toString(),
             languageLevel: null,
             sourceSets: [],
+            tasks: umbraDescribeTasks(p),
             unresolved: []
         ]
 

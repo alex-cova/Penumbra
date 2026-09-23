@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
+    @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
     @State private var didBootstrap = false
 
     public init() {}
@@ -24,7 +25,7 @@ public struct IDERootView: View {
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
 
-                    IDESidebarResizeHandle(width: $sidebarWidth)
+                    IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
                         .opacity(workspace.chromeOpacity)
                 }
 
@@ -69,6 +70,16 @@ public struct IDERootView: View {
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
                 }
+
+                if workspace.showsGradleSidebar {
+                    IDESidebarResizeHandle(width: $gradleSidebarWidth, edge: .trailing)
+                        .opacity(workspace.chromeOpacity)
+
+                    IDEGradleSidebarPanel()
+                        .frame(width: gradleSidebarWidth)
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                }
             }
 
             IDEStatusBarPanel()
@@ -95,10 +106,18 @@ public struct IDERootView: View {
             workspace.focusActiveEditor()
         }
         .onChange(of: sidebarWidth) { _, newWidth in
-            workspace.saveSession(sidebarWidth: newWidth)
+            workspace.saveSession(sidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
+        }
+        .onChange(of: gradleSidebarWidth) { _, newWidth in
+            workspace.gradleSidebarWidth = newWidth
+            workspace.saveSession(sidebarWidth: sidebarWidth, gradleSidebarWidth: newWidth)
         }
         .onChange(of: workspace.terminalHeight) { _, newHeight in
-            workspace.saveSession(terminalHeight: newHeight)
+            workspace.saveSession(
+                sidebarWidth: sidebarWidth,
+                gradleSidebarWidth: gradleSidebarWidth,
+                terminalHeight: newHeight
+            )
         }
         .focusable(false)
     }
@@ -194,7 +213,12 @@ private struct IDETerminalResizeHandle: View {
 }
 
 private struct IDESidebarResizeHandle: View {
+    enum Edge {
+        case leading, trailing
+    }
+
     @Binding var width: Double
+    var edge: Edge = .leading
     @State private var lastTranslation: CGFloat = 0
 
     var body: some View {
@@ -208,8 +232,9 @@ private struct IDESidebarResizeHandle: View {
         .gesture(
             DragGesture(minimumDistance: 1)
                 .onChanged { value in
-                    let delta = value.translation.width - lastTranslation
+                    let rawDelta = value.translation.width - lastTranslation
                     lastTranslation = value.translation.width
+                    let delta = edge == .leading ? rawDelta : -rawDelta
                     width = min(
                         max(width + delta, IDEAppearance.Spacing.sidebarMinWidth),
                         IDEAppearance.Spacing.sidebarMaxWidth

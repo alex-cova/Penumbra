@@ -23,7 +23,8 @@ let package = Package(
         .library(name: "PenumbraMarkdownLanguage", targets: ["PenumbraMarkdownLanguage"]),
         .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"]),
         .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
-        .library(name: "HTTPClient", targets: ["HTTPClient"])
+        .library(name: "HTTPClient", targets: ["HTTPClient"]),
+        .library(name: "GitIntelligence", targets: ["GitIntelligence"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -113,6 +114,7 @@ let package = Package(
                 "PenumbraMarkdownLanguage",
                 "JavaIntelligence",
                 "HTTPClient",
+                "GitIntelligence",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Example/Umbra",
@@ -231,6 +233,7 @@ let package = Package(
             dependencies: ["Penumbra", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
             swiftSettings: swift6
         ),
+        .target(name: "GitIntelligence", swiftSettings: swift6),
         .target(
             name: "HTTPClient",
             dependencies: ["TreeSitter", "TreeSitterHTTP"],
@@ -334,6 +337,7 @@ let package = Package(
             "PenumbraBeautifulMermaid",
             "JavaIntelligence",
             "HTTPClient",
+            "GitIntelligence",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle")], swiftSettings: swift6)
     ]

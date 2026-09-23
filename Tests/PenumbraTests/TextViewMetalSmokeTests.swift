@@ -367,6 +367,59 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertEqual((canvas.layer as? CAMetalLayer)?.isOpaque, true)
     }
 
+    func testOpaqueMetalCanvasPaintsMethodSeparatorLikePageGuide() throws {
+        try skipUnlessMetalActivatable()
+        let source = """
+        function alpha() {
+          return 1
+        }
+
+        function beta() {
+          return 2
+        }
+        """
+        let host = try makeCapturingMetalTextView(text: source)
+        defer {
+            host.close()
+            TextView.allowsMetalDrawableCapture = false
+        }
+        let textView = host.textView
+        textView.setState(TextViewState(
+            text: source,
+            theme: DefaultTheme(),
+            language: .javaScript,
+            parsePolicy: .eager
+        ))
+        textView.showMethodSeparators = false
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.3)
+        textView.layoutIfNeeded()
+
+        let before = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        textView.showMethodSeparators = true
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        textView.layoutIfNeeded()
+
+        let input = try XCTUnwrap(findTextInputView(in: textView))
+        XCTAssertFalse(
+            input.methodSeparatorController.separatorRows.isEmpty,
+            "expected a separator above the second function"
+        )
+        let separatorView = try XCTUnwrap(findSeparatorView(in: textView))
+        let frames = separatorView.separatorLineFrames(
+            clip: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000)
+        )
+        XCTAssertFalse(frames.isEmpty, "expected a hairline frame for the separator row")
+        let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
+        XCTAssertGreaterThan(
+            differingPixelCount(before, after),
+            20,
+            "Metal must paint method separators with the page-guide hairline"
+        )
+    }
+
     /// The white-flash regression: `redisplayLines` asks for a *synchronous* highlight on the
     /// edited line, but an edit at/above `maxSyncEditLength` forces `textDidChange` down the
     /// no-reparse path (`canHighlight` false until the background parse catches up). Before the
@@ -744,6 +797,18 @@ private extension TextViewMetalSmokeTests {
         for subview in root.subviews {
             if let canvas = findMetalCanvas(in: subview) {
                 return canvas
+            }
+        }
+        return nil
+    }
+
+    func findSeparatorView(in root: NSView) -> MethodSeparatorView? {
+        if let separator = root as? MethodSeparatorView {
+            return separator
+        }
+        for subview in root.subviews {
+            if let found = findSeparatorView(in: subview) {
+                return found
             }
         }
         return nil

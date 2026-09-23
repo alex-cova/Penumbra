@@ -16,6 +16,13 @@ struct IDEToolbarPanel: View {
                 action: workspace.toggleSidebar
             )
 
+            if workspace.javaSupport.isGradleProject {
+                IDEToolbarGradleSidebarToggle(
+                    isSidebarVisible: workspace.isGradleSidebarVisible,
+                    action: workspace.toggleGradleSidebar
+                )
+            }
+
             IDEToolbarBreadcrumb(
                 headerContext: workspace.headerContext,
                 onSelect: workspace.selectBreadcrumb
@@ -66,6 +73,20 @@ private struct IDEToolbarSidebarToggle: View {
             systemName: "sidebar.leading",
             isActive: isSidebarVisible,
             help: isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
+            action: action
+        )
+    }
+}
+
+private struct IDEToolbarGradleSidebarToggle: View {
+    let isSidebarVisible: Bool
+    let action: () -> Void
+
+    var body: some View {
+        IDEToolbarIconButton(
+            systemName: "sidebar.trailing",
+            isActive: isSidebarVisible,
+            help: isSidebarVisible ? "Hide Gradle Sidebar" : "Show Gradle Sidebar",
             action: action
         )
     }

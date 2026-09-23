@@ -43,9 +43,12 @@ public protocol Theme: AnyObject {
     /// against the wrong appearance.
     var selectionColor: UIColor { get }
     /// Color of the hairline drawn above a method/function declaration when
-    /// ``TextView/showMethodSeparators`` is on. Defaults to ``gutterHairlineColor``.
+    /// ``TextView/showMethodSeparators`` is on. The editor draws the right-margin hairline
+    /// (``pageGuideHairlineColor`` at 45% opacity, ``pageGuideHairlineWidth``).
+    /// Defaults to ``pageGuideHairlineColor``.
     var methodSeparatorColor: UIColor { get }
-    /// Thickness, in points, of the method separator hairline. Defaults to one hairline.
+    /// Thickness, in points, of the method separator hairline. The editor uses
+    /// ``pageGuideHairlineWidth``. Defaults to one hairline.
     var methodSeparatorWidth: CGFloat { get }
     /// Background color used to highlight other occurrences of the selection when
     /// ``TextView/highlightsOccurrencesOfSelection`` is on. Defaults to a translucent
@@ -118,7 +121,7 @@ public extension Theme {
     }
 
     var methodSeparatorColor: UIColor {
-        gutterHairlineColor
+        pageGuideHairlineColor
     }
 
     var methodSeparatorWidth: CGFloat {

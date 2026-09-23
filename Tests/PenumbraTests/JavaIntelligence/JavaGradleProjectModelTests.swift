@@ -6,7 +6,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
 
     func testDecodesSingleModuleFixture() throws {
         let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: GradleFixtures.modelData("single-module"))
-        XCTAssertEqual(model.formatVersion, 2)
+        XCTAssertEqual(model.formatVersion, 3)
         XCTAssertEqual(model.gradleVersion, "9.2.1")
         XCTAssertTrue(model.unresolved.isEmpty)
         XCTAssertEqual(model.subprojects.count, 1)
@@ -14,6 +14,8 @@ final class JavaGradleProjectModelTests: XCTestCase {
         let root = try XCTUnwrap(model.subprojects.first)
         XCTAssertEqual(root.path, ":")
         XCTAssertEqual(root.languageLevel, 21)
+        XCTAssertEqual(root.tasks.map(\.path), [":build", ":test", ":run"])
+        XCTAssertEqual(model.taskGroups.map(\.name), ["build", "verification", "application"])
         XCTAssertEqual(root.sourceDirs, [URL(string: "file:///Users/dev/single-module/src/main/java/")])
         XCTAssertEqual(root.testSourceDirs, [URL(string: "file:///Users/dev/single-module/src/test/java/")])
         XCTAssertEqual(root.compileClasspathJars.count, 1)
@@ -31,6 +33,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
 
         let app = try XCTUnwrap(model.subprojects.first { $0.path == ":app" })
         XCTAssertEqual(app.languageLevel, 17)
+        XCTAssertEqual(app.tasks.map(\.path), [":app:build", ":app:test", ":app:run"])
 
         let libCore = try XCTUnwrap(model.subprojects.first { $0.path == ":lib:core" })
         XCTAssertEqual(libCore.languageLevel, 21)
@@ -103,6 +106,22 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertEqual(guavaJars.count, 1, "guava is a dependency of both :app and :lib:core -- must be indexed once")
         // gson (lib:core only) + guava (shared) + junit-jupiter (app test only) = 3 unique jars.
         XCTAssertEqual(model.classpathJars.count, 3)
+    }
+
+    func testSubprojectTaskGroupsAreScopedAndOrdered() {
+        let subproject = JavaGradleProjectModel.Subproject(
+            path: ":app",
+            directory: URL(fileURLWithPath: "/tmp/app"),
+            tasks: [
+                .init(path: ":app:test", name: "test", group: "verification"),
+                .init(path: ":app:run", name: "run", group: "application"),
+                .init(path: ":app:jar", name: "jar", group: "build"),
+                .init(path: ":app:assemble", name: "assemble", group: "build")
+            ]
+        )
+        let groups = subproject.taskGroups
+        XCTAssertEqual(groups.map(\.name), ["build", "verification", "application"])
+        XCTAssertEqual(groups.first?.tasks.map(\.name), ["assemble", "jar"])
     }
 
     func testMaxLanguageLevelPicksHighestAcrossSubprojects() throws {

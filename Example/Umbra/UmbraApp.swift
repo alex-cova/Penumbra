@@ -110,6 +110,8 @@ struct UmbraApp: App {
                 Divider()
                 Button("Toggle Sidebar", systemImage: "sidebar.leading", action: workspace.toggleSidebar)
                     .keyboardShortcut("0", modifiers: .command)
+                Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: workspace.toggleGradleSidebar)
+                    .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Reveal Active File in Explorer", systemImage: "scope", action: workspace.revealActiveFileInExplorer)
                     .keyboardShortcut("e", modifiers: [.command, .option])
                 Button("Markdown Preview", systemImage: "doc.richtext", action: workspace.toggleMarkdownPreview)

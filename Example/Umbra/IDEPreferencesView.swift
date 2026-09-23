@@ -121,7 +121,7 @@ public struct IDEPreferencesView: View {
                         IDESettingsSeparator()
                         IDESettingsToggleRow(
                             title: "Method Separators",
-                            caption: "Hairlines between function declarations.",
+                            caption: "A hairline between declarations, matching the right margin.",
                             isOn: $preferences.showMethodSeparators
                         )
                         IDESettingsSeparator()

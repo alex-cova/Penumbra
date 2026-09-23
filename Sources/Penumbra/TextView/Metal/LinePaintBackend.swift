@@ -28,6 +28,9 @@ struct CanvasPaintSpec {
     var pageGuideHairlineColor: UIColor
     var pageGuideShadingColor: UIColor
     var showsPageGuideShading: Bool
+    /// Horizontal hairlines in content space, painted with the page-guide hairline.
+    var methodSeparatorFrames: [CGRect]
+    var methodSeparatorColor: UIColor
     var appearance: NSAppearance?
     var colorSpace: NSColorSpace
 }

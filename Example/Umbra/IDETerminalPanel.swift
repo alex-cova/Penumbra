@@ -418,7 +418,7 @@ private struct IDEGradleConsoleControls: View {
     @ViewBuilder
     private var elapsedTimeView: some View {
         if let startedAt = workspace.javaSupport.gradleConsole.startedAt {
-            if workspace.javaSupport.gradleSync.isSyncing {
+            if workspace.javaSupport.isGradleBusy {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(Self.formattedElapsed(context.date.timeIntervalSince(startedAt)))
                         .font(IDEAppearance.Typography.monoSmall)
@@ -434,8 +434,8 @@ private struct IDEGradleConsoleControls: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        if workspace.javaSupport.gradleSync.isSyncing {
-            Button("Cancel", action: workspace.cancelGradleSync)
+        if workspace.javaSupport.isGradleBusy {
+            Button("Cancel", action: workspace.cancelGradleOperation)
                 .buttonStyle(.borderless)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } else {

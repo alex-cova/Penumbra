@@ -7,6 +7,22 @@ import Foundation
 /// All `URL`s are absolute `file://` URLs (the script emits `file.toURI().toString()` so `Codable`'s
 /// single-string `URL` decoding produces a proper file URL rather than a scheme-less one).
 public struct JavaGradleProjectModel: Codable, Sendable {
+    public struct GradleTask: Codable, Hashable, Sendable {
+        /// Fully-qualified Gradle task path, e.g. `:build`, `:app:test`.
+        public let path: String
+        public let name: String
+        /// Gradle task group, e.g. `build`, `verification`, `application`.
+        public let group: String
+        public let description: String
+
+        public init(path: String, name: String, group: String, description: String = "") {
+            self.path = path
+            self.name = name
+            self.group = group
+            self.description = description
+        }
+    }
+
     public struct ProjectDependency: Codable, Hashable, Sendable {
         public let projectPath: String
         /// Source set of the dependency project that this edge compiles against. `main` for a normal
@@ -49,17 +65,29 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         /// toolchain nor `sourceCompatibility` could be read.
         public let languageLevel: Int?
         public let sourceSets: [SourceSet]
+        public let tasks: [GradleTask]
 
         public init(
             path: String,
             directory: URL,
             languageLevel: Int? = nil,
-            sourceSets: [SourceSet] = []
+            sourceSets: [SourceSet] = [],
+            tasks: [GradleTask] = []
         ) {
             self.path = path
             self.directory = directory
             self.languageLevel = languageLevel
             self.sourceSets = sourceSets
+            self.tasks = tasks
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            path = try container.decode(String.self, forKey: .path)
+            directory = try container.decode(URL.self, forKey: .directory)
+            languageLevel = try container.decodeIfPresent(Int.self, forKey: .languageLevel)
+            sourceSets = try container.decodeIfPresent([SourceSet].self, forKey: .sourceSets) ?? []
+            tasks = try container.decodeIfPresent([GradleTask].self, forKey: .tasks) ?? []
         }
 
         /// Convenience for tests that still think in main/test directories and jars. Builds a `main`
@@ -105,6 +133,11 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         public var testClasspathJars: [URL] {
             sourceSets.first { $0.name == "test" }?.compileClasspathJars ?? []
         }
+
+        /// This module's own tasks, grouped and ordered like ``JavaGradleProjectModel/taskGroups``.
+        public var taskGroups: [TaskGroup] {
+            JavaGradleProjectModel.groupTasks(tasks)
+        }
     }
 
     public let formatVersion: Int
@@ -124,6 +157,15 @@ public struct JavaGradleProjectModel: Codable, Sendable {
 }
 
 extension JavaGradleProjectModel {
+    public struct TaskGroup: Sendable {
+        public let name: String
+        public let tasks: [GradleTask]
+    }
+
+    private static let preferredTaskGroupOrder = [
+        "build", "verification", "application", "formatting", "documentation", "help", "other"
+    ]
+
     /// The source set whose directory is the longest prefix of `file`, or `nil` when the file is
     /// outside every source set (unsaved buffers, scripts at the project root).
     public func sourceSet(containing file: URL) -> (subproject: Subproject, sourceSet: SourceSet)? {
@@ -196,6 +238,31 @@ extension JavaGradleProjectModel {
             kept.append(candidate)
         }
         return kept
+    }
+
+    /// User-visible Gradle tasks from every subproject, grouped and sorted for IDE presentation.
+    public var taskGroups: [TaskGroup] {
+        Self.groupTasks(subprojects.flatMap(\.tasks))
+    }
+
+    /// Groups `tasks` by Gradle group, ordered for IDE presentation (well-known groups first, then
+    /// alphabetical), with tasks sorted by path inside each group.
+    public static func groupTasks(_ tasks: [GradleTask]) -> [TaskGroup] {
+        var grouped: [String: [GradleTask]] = [:]
+        for task in tasks {
+            grouped[task.group, default: []].append(task)
+        }
+        return grouped.map { TaskGroup(name: $0.key, tasks: $0.value.sorted { $0.path < $1.path }) }
+            .sorted { lhs, rhs in
+                let li = Self.preferredTaskGroupOrder.firstIndex {
+                    $0.caseInsensitiveCompare(lhs.name) == .orderedSame
+                } ?? Int.max
+                let ri = Self.preferredTaskGroupOrder.firstIndex {
+                    $0.caseInsensitiveCompare(rhs.name) == .orderedSame
+                } ?? Int.max
+                if li != ri { return li < ri }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
     }
 
     /// Every resolved jar across every source set, deduplicated -- shared dependencies between

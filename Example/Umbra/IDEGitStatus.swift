@@ -42,7 +42,7 @@ final class IDEGitStatusModel {
         needsAnotherPass = false
         rootURL = url?.standardizedFileURL
         apply(GitSnapshot())
-        guard let rootURL else { return }
+        guard rootURL != nil else { return }
         refresh()
     }
 

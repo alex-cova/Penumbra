@@ -19,7 +19,7 @@ struct IDETerminalTabsBar: View {
                 if workspace.showsGradleConsoleTab {
                     IDEGradleTabItem(
                         isSelected: workspace.isGradleConsoleSelected,
-                        isSyncing: workspace.javaSupport.gradleSync.isSyncing,
+                        isSyncing: workspace.javaSupport.isGradleBusy,
                         isFailed: workspace.javaSupport.gradleSync.isFailed,
                         onSelect: { workspace.selectGradleConsoleTab() }
                     )

@@ -1,5 +1,5 @@
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
   "gradleVersion": "9.2.1",
   "unresolved": [
     "Could not resolve com.example:missing-dep:1.0."
@@ -9,12 +9,40 @@
       "path": ":",
       "directory": "file:///Users/dev/multi-module/",
       "languageLevel": null,
+      "tasks": [
+        {
+          "path": ":build",
+          "name": "build",
+          "group": "build",
+          "description": "Assembles the outputs of this project."
+        }
+      ],
       "sourceSets": []
     },
     {
       "path": ":app",
       "directory": "file:///Users/dev/multi-module/app/",
       "languageLevel": 17,
+      "tasks": [
+        {
+          "path": ":app:build",
+          "name": "build",
+          "group": "build",
+          "description": "Assembles the outputs of this project."
+        },
+        {
+          "path": ":app:test",
+          "name": "test",
+          "group": "verification",
+          "description": "Runs the test suite."
+        },
+        {
+          "path": ":app:run",
+          "name": "run",
+          "group": "application",
+          "description": "Runs this project as a JVM application."
+        }
+      ],
       "sourceSets": [
         {
           "name": "main",
@@ -48,6 +76,20 @@
       "path": ":lib:core",
       "directory": "file:///Users/dev/multi-module/lib/core/",
       "languageLevel": 21,
+      "tasks": [
+        {
+          "path": ":lib:core:build",
+          "name": "build",
+          "group": "build",
+          "description": "Assembles the outputs of this project."
+        },
+        {
+          "path": ":lib:core:test",
+          "name": "test",
+          "group": "verification",
+          "description": "Runs the test suite."
+        }
+      ],
       "sourceSets": [
         {
           "name": "main",

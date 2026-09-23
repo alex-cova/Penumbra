@@ -79,7 +79,9 @@ final class IDEJavaSupport {
     @ObservationIgnored private var gradleSyncInFlight = false
 
     @ObservationIgnored private let gradleTrustStore: GradleTrustStore
+    @ObservationIgnored private let gradleRunner: GradleCommandRunner
     @ObservationIgnored private let gradleExtractor: GradleProjectModelExtractor
+    @ObservationIgnored private var gradleRunTask: Task<Void, Never>?
 
     @ObservationIgnored private var buildFileWatcher: FSEventsFileSystemWatcher?
     @ObservationIgnored private var buildFileWatchTask: Task<Void, Never>?
@@ -96,6 +98,11 @@ final class IDEJavaSupport {
     /// Set when a watched Gradle build file changes outside of a sync. Bursts collapse to one
     /// banner; cleared by Reload or Dismiss.
     private(set) var gradleBuildFilesChanged = false
+    /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
+    private(set) var isRunningGradleTasks = false
+    private(set) var runningGradleTaskPaths: [String] = []
+
+    var isGradleBusy: Bool { gradleSync.isSyncing || isRunningGradleTasks }
 
     /// Asks the user whether to trust `url` to run Gradle build scripts; set by `IDEWorkspace` to a
     /// sheet-presenting closure. `nil` means never prompt automatically -- a sync for an
@@ -110,7 +117,9 @@ final class IDEJavaSupport {
         completionProvider = JavaCompletionProvider(index: javaIndex)
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
-        gradleExtractor = GradleProjectModelExtractor(runner: GradleCommandRunner(trustStore: gradleTrustStore))
+        let runner = GradleCommandRunner(trustStore: gradleTrustStore)
+        gradleRunner = runner
+        gradleExtractor = GradleProjectModelExtractor(runner: runner)
     }
 
     /// `~/Library/Application Support/com.umbra.editor/gradle-trust.json`, alongside
@@ -165,6 +174,7 @@ final class IDEJavaSupport {
         let generation = projectGeneration
         projectIndexingTask?.cancel()
         gradleSyncTask?.cancel()
+        gradleRunTask?.cancel()
         stopBuildFileWatcher()
         gradleSyncInFlight = false
         gradleBuildFilesChanged = false
@@ -207,6 +217,76 @@ final class IDEJavaSupport {
     func reloadGradleProject() {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         syncGradleProject(url, forcePrompt: true, generation: projectGeneration)
+    }
+
+    /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
+    /// console tab. No-op while a sync or another task run is already in progress.
+    func runGradleTasks(_ taskPaths: [String]) {
+        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
+        guard !taskPaths.isEmpty else { return }
+        guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
+        guard gradleTrustStore.isTrusted(url) else { return }
+
+        gradleRunTask?.cancel()
+        gradleRunTask = Task { [gradleRunner] in
+            isRunningGradleTasks = true
+            runningGradleTaskPaths = taskPaths
+            gradleConsole.reset()
+            gradleConsole.appendNote("Project: \(url.path)")
+            gradleConsole.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
+
+            let javaHome = await Task.detached(priority: .utility) {
+                JDKLocator().select()?.home
+            }.value
+            if let javaHome {
+                gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
+            }
+
+            defer {
+                isRunningGradleTasks = false
+                runningGradleTaskPaths = []
+            }
+
+            do {
+                let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
+                let startedAt = Date()
+                let result = try await gradleRunner.run(
+                    projectDirectory: url,
+                    tasks: taskPaths,
+                    arguments: ["--no-configuration-cache"],
+                    javaHome: javaHome,
+                    timeout: timeout,
+                    output: { line in
+                        Task { @MainActor in
+                            guard !Task.isCancelled else { return }
+                            self.gradleConsole.appendProcessLine(line)
+                        }
+                    }
+                )
+                let elapsed = Date().timeIntervalSince(startedAt)
+                gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
+                gradleConsole.markFinished()
+            } catch is CancellationError {
+                gradleConsole.appendNote("Task run cancelled")
+                gradleConsole.markFinished()
+            } catch {
+                gradleConsole.appendNote(Self.summarizeTaskRun(error))
+                gradleConsole.markFinished()
+                if case GradleCommandError.untrusted = error {
+                    gradleSync = .untrusted
+                }
+            }
+        }
+    }
+
+    func cancelGradleTasks() {
+        guard isRunningGradleTasks else { return }
+        gradleRunTask?.cancel()
+        gradleRunTask = nil
+        isRunningGradleTasks = false
+        runningGradleTaskPaths = []
+        gradleConsole.appendNote("Task run cancelled")
+        gradleConsole.markFinished()
     }
 
     func dismissGradleBuildFileChanges() {
@@ -425,6 +505,17 @@ final class IDEJavaSupport {
     private static func projectModelCommandLine(project: URL, javaHome: URL?) -> String {
         let java = javaHome.map { "JAVA_HOME=\($0.path) " } ?? ""
         return "\(java)cd \(project.path) && gradle --console=plain --init-script umbra-project-model.init.gradle --no-configuration-cache -PumbraModelOutput=model.json :umbraProjectModel"
+    }
+
+    private static func summarizeTaskRun(_ error: Error) -> String {
+        switch error {
+        case GradleCommandError.timedOut:
+            "Gradle task timed out"
+        case GradleCommandError.cancelled:
+            "Gradle task was cancelled"
+        default:
+            summarize(error)
+        }
     }
 
     private static func summarize(_ error: Error) -> String {

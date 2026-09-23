@@ -1,5 +1,5 @@
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
   "gradleVersion": "9.2.1",
   "unresolved": [],
   "subprojects": [
@@ -7,6 +7,26 @@
       "path": ":",
       "directory": "file:///Users/dev/single-module/",
       "languageLevel": 21,
+      "tasks": [
+        {
+          "path": ":build",
+          "name": "build",
+          "group": "build",
+          "description": "Assembles the outputs of this project."
+        },
+        {
+          "path": ":test",
+          "name": "test",
+          "group": "verification",
+          "description": "Runs the test suite."
+        },
+        {
+          "path": ":run",
+          "name": "run",
+          "group": "application",
+          "description": "Runs this project as a JVM application."
+        }
+      ],
       "sourceSets": [
         {
           "name": "main",

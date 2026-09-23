@@ -8,6 +8,8 @@ struct AppSession: Codable {
     var preferences: IDEPreferencesSnapshot
     var sidebarWidth: Double
     var isSidebarVisible: Bool
+    var gradleSidebarWidth: Double
+    var isGradleSidebarVisible: Bool
     var isTerminalVisible: Bool
     var terminalHeight: Double
     var terminalTabs: [IDETerminalTab]?
@@ -31,6 +33,8 @@ struct AppSession: Codable {
         ),
         sidebarWidth: IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: true,
+        gradleSidebarWidth: IDEAppearance.Spacing.sidebarWidth,
+        isGradleSidebarVisible: true,
         isTerminalVisible: false,
         terminalHeight: IDEAppearance.Spacing.terminalDefaultHeight,
         terminalTabs: nil,
@@ -44,6 +48,8 @@ struct AppSession: Codable {
         preferences: IDEPreferencesSnapshot,
         sidebarWidth: Double,
         isSidebarVisible: Bool,
+        gradleSidebarWidth: Double,
+        isGradleSidebarVisible: Bool,
         isTerminalVisible: Bool,
         terminalHeight: Double,
         terminalTabs: [IDETerminalTab]? = nil,
@@ -55,6 +61,8 @@ struct AppSession: Codable {
         self.preferences = preferences
         self.sidebarWidth = sidebarWidth
         self.isSidebarVisible = isSidebarVisible
+        self.gradleSidebarWidth = gradleSidebarWidth
+        self.isGradleSidebarVisible = isGradleSidebarVisible
         self.isTerminalVisible = isTerminalVisible
         self.terminalHeight = terminalHeight
         self.terminalTabs = terminalTabs
@@ -69,6 +77,9 @@ struct AppSession: Codable {
         preferences = try container.decode(IDEPreferencesSnapshot.self, forKey: .preferences)
         sidebarWidth = try container.decode(Double.self, forKey: .sidebarWidth)
         isSidebarVisible = try container.decode(Bool.self, forKey: .isSidebarVisible)
+        gradleSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .gradleSidebarWidth)
+            ?? IDEAppearance.Spacing.sidebarWidth
+        isGradleSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isGradleSidebarVisible) ?? true
         isTerminalVisible = try container.decodeIfPresent(Bool.self, forKey: .isTerminalVisible) ?? false
         terminalHeight = try container.decodeIfPresent(Double.self, forKey: .terminalHeight)
             ?? IDEAppearance.Spacing.terminalDefaultHeight

@@ -1679,11 +1679,16 @@ private extension TextInputView {
         indentController.indentFont = theme.font
         pageGuideController.font = theme.font
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
-        pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor.withAlphaComponent(0.45)
+        pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor.withAlphaComponent(pageGuideHairlineOpacity)
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
         pageGuideController.guideView.shadingColor = theme.pageGuideBackgroundColor.withAlphaComponent(0.35)
         selectionHighlightColor = theme.selectionColor
         occurrenceHighlightController.theme = theme
+        // Same instance skips `theme.didSet`, so copy the guide stroke here too.
+        layoutManager.syncMethodSeparatorHairline(
+            color: pageGuideController.guideView.hairlineColor,
+            width: pageGuideController.guideView.hairlineWidth
+        )
         layoutManager.theme = theme
     }
 }

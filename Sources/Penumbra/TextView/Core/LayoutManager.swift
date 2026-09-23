@@ -29,6 +29,11 @@ final class LayoutManager {
         didSet {
             if lineManager !== oldValue {
                 foldRibbonView.lineManager = lineManager
+                // `setState` replaces the line manager. The separator view holds it weakly, so
+                // without this the y positions go nil and no hairline is ever produced.
+                methodSeparatorView.lineManager = lineManager
+                methodSeparatorView.needsDisplay = true
+                setNeedsLayout()
             }
         }
     }
@@ -55,8 +60,10 @@ final class LayoutManager {
                 invisibleCharacterConfiguration.textColor = theme.invisibleCharactersColor
                 gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
                 lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
-                methodSeparatorView.separatorColor = theme.methodSeparatorColor
-                methodSeparatorView.separatorWidth = theme.methodSeparatorWidth
+                syncMethodSeparatorHairline(
+                    color: pageGuideView?.hairlineColor,
+                    width: pageGuideView?.hairlineWidth ?? 0
+                )
                 applyFoldRibbonTheme()
                 for lineController in lineControllerStorage {
                     lineController.theme = theme
@@ -266,8 +273,10 @@ final class LayoutManager {
         gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
         gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
         lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
-        methodSeparatorView.separatorColor = theme.methodSeparatorColor
-        methodSeparatorView.separatorWidth = theme.methodSeparatorWidth
+        syncMethodSeparatorHairline(
+            color: pageGuideView?.hairlineColor,
+            width: pageGuideView?.hairlineWidth ?? 0
+        )
         applyFoldRibbonTheme()
         self.updateShownViews()
         let memoryWarningNotificationName = UIApplication.didReceiveMemoryWarningNotification
@@ -417,8 +426,17 @@ final class LayoutManager {
             isMetalRenderingActive = false
         }
         setupViewHierarchy()
+        updateShownViews()
         setNeedsLayout()
         return active == isMetalRenderingActive
+    }
+
+    /// Copies the right-margin hairline onto method separators. `color == nil` or `width <= 0`
+    /// falls back to the theme's page-guide stroke at ``pageGuideHairlineOpacity``.
+    func syncMethodSeparatorHairline(color: UIColor?, width: CGFloat) {
+        methodSeparatorView.separatorColor = color
+            ?? theme.pageGuideHairlineColor.withAlphaComponent(pageGuideHairlineOpacity)
+        methodSeparatorView.separatorWidth = width > 0 ? width : theme.pageGuideHairlineWidth
     }
 
     func textPreview(containing needleRange: NSRange, peekLength: Int = 50) -> TextPreview? {
@@ -587,7 +605,15 @@ extension LayoutManager {
 
     /// Publish the row set the method-separator overlay should draw.
     func setMethodSeparatorRows(_ rows: Set<Int>) {
+        guard rows != methodSeparatorView.separatorRows else {
+            return
+        }
         methodSeparatorView.separatorRows = rows
+        guard isMetalRenderingActive else {
+            return
+        }
+        updateMetalCanvasPaintSpec()
+        presentMetalCanvasIfNeeded()
     }
 
     func layoutLineSelectionIfNeeded() {
@@ -808,6 +834,9 @@ extension LayoutManager {
             methodSeparatorView.textContainerInsetTop = textContainerInset.top
             methodSeparatorView.frame = CGRect(x: 0, y: 0, width: separatorWidth, height: contentSize.height)
         }
+        // The canvas was positioned before line heights settled. Replay the underlay so method
+        // separators use the frame just assigned, matching the page-guide hairline.
+        updateMetalCanvasPaintSpec()
         // Update the visible lines and line fragments. Clean up everything that is not in the viewport anymore.
         visibleLineIDs = appearedLineIDs
         let disappearedLineIDs = oldVisibleLineIDs.subtracting(appearedLineIDs)
@@ -907,9 +936,20 @@ extension LayoutManager {
             pageGuideHairlineColor: visiblePageGuide?.hairlineColor ?? .clear,
             pageGuideShadingColor: visiblePageGuide?.shadingColor ?? .clear,
             showsPageGuideShading: visiblePageGuide?.showReformattingGuideShading ?? false,
+            methodSeparatorFrames: methodSeparatorFrames(in: canvasFrame),
+            methodSeparatorColor: methodSeparatorView.separatorColor,
             appearance: textInputView?.effectiveAppearance,
             colorSpace: metalCanvasView.effectiveColorSpace
         ))
+    }
+
+    /// Visible method-separator hairlines in content space. Empty when the feature is off; the
+    /// AppKit view is hidden while Metal is active, so visibility is `showMethodSeparators`.
+    private func methodSeparatorFrames(in canvasFrame: CGRect) -> [CGRect] {
+        guard showMethodSeparators else {
+            return []
+        }
+        return methodSeparatorView.separatorLineFrames(clip: canvasFrame.insetBy(dx: -2, dy: -2))
     }
 
     /// Rebuild the paint spec for every visible line fragment without running a full viewport
@@ -1100,7 +1140,8 @@ extension LayoutManager {
         gutterBackgroundView.isHidden = !showLineNumbers
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
-        methodSeparatorView.isHidden = !showMethodSeparators
+        // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
+        methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing
         lineSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !isEditing || selectedLength > 0
     }
