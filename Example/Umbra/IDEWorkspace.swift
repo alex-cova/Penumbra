@@ -220,7 +220,6 @@ public final class IDEWorkspace {
         if let index = CommandLine.arguments.firstIndex(of: "--open-folder"),
            index + 1 < CommandLine.arguments.count {
             let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            isSidebarVisible = true
             applyProjectRoot(url)
         }
 
@@ -1185,7 +1184,8 @@ public final class IDEWorkspace {
         preferences.restore(from: session.preferences)
         recentFiles = session.recentFiles
         recentProjects = session.recentProjects
-        isSidebarVisible = session.isSidebarVisible
+        // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
+        isSidebarVisible = false
         gradleSidebarWidth = session.gradleSidebarWidth
         isGradleSidebarVisible = session.isGradleSidebarVisible
         isTerminalVisible = session.isTerminalVisible
