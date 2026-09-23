@@ -69,7 +69,7 @@ struct UmbraApp: App {
                 Button("Reload Gradle Project", action: workspace.reloadGradleProject)
                     .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Show Gradle Output", action: workspace.showGradleOutput)
-                    .disabled(workspace.javaSupport.lastGradleResult == nil)
+                    .disabled(workspace.javaSupport.gradleConsole.lines.isEmpty)
             }
 
             CommandMenu("View") {

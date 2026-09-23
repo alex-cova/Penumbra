@@ -70,6 +70,7 @@ enum IDEAppearance {
         static let foreground = Color(hex: 0xECEDEE)
         static let muted = Color(hex: 0x8A8F98)
         static let selection = Color(hex: 0x74ADE8).opacity(0.18)
+        static let error = Color(hex: 0xE5484D)
     }
 
     enum NSToken {
@@ -81,6 +82,7 @@ enum IDEAppearance {
         static let foreground = ns(0xECEDEE)
         static let muted = ns(0x8A8F98)
         static let selection = ns(0x74ADE8).withAlphaComponent(0.18)
+        static let error = ns(0xE5484D)
 
         private static func ns(_ hex: UInt32) -> NSColor {
             NSColor(

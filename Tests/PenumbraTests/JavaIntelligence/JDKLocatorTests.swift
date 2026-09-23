@@ -116,6 +116,55 @@ final class JDKLocatorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(installation.featureVersion, 8)
         XCTAssertTrue(installation.hasCtSym || installation.hasJmods, "expected either ct.sym or jmods")
     }
+
+    /// Same regression as `GradleCommandRunnerTests.testSystemLauncherClosesChildStandardInput`.
+    /// `SystemProcessRunner` has no timeout of its own, so this waits on a background thread and
+    /// fails the test if `cat` is still blocked after a few seconds.
+    func testSystemProcessRunnerClosesChildStandardInput() {
+        let finished = expectation(description: "cat exits")
+        let box = ResultBox()
+        DispatchQueue.global().async {
+            let start = Date()
+            do {
+                let output = try SystemProcessRunner().run(executable: "/bin/cat", arguments: [])
+                box.store(.success((output, Date().timeIntervalSince(start))))
+            } catch {
+                box.store(.failure(error))
+            }
+            finished.fulfill()
+        }
+        let result = XCTWaiter.wait(for: [finished], timeout: 5)
+        XCTAssertEqual(result, .completed, "cat should see immediate EOF on a closed stdin, not block on an inherited terminal")
+        guard result == .completed else { return }
+        switch box.value {
+        case .success(let (output, elapsed)):
+            XCTAssertEqual(output, "")
+            XCTAssertLessThan(elapsed, 5)
+        case .failure(let error):
+            XCTFail("unexpected error: \(error)")
+        case nil:
+            XCTFail("cat finished without a result")
+        }
+    }
+}
+
+/// Cross-thread handoff for the stdin regression. The runner blocks, so the result is written
+/// from a background queue and read only after the expectation is fulfilled.
+private final class ResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<(String, TimeInterval), Error>?
+
+    func store(_ result: Result<(String, TimeInterval), Error>) {
+        lock.lock()
+        stored = result
+        lock.unlock()
+    }
+
+    var value: Result<(String, TimeInterval), Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
 }
 
 private struct FakeProcessRunner: ProcessRunning {

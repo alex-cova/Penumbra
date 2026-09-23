@@ -35,6 +35,16 @@ final class IDEJavaSupport {
         case syncing
         case synced(subprojects: Int, jars: Int)
         case failed(summary: String)
+
+        var isSyncing: Bool {
+            if case .syncing = self { return true }
+            return false
+        }
+
+        var isFailed: Bool {
+            if case .failed = self { return true }
+            return false
+        }
     }
 
     let javaIndex = JavaIndex()
@@ -80,15 +90,9 @@ final class IDEJavaSupport {
     private(set) var gradleSync: GradleSyncState = .notGradle
     /// Last successful project model. Used to pick `:app:run` versus `run` for the play button.
     private(set) var gradleModel: JavaGradleProjectModel?
-    /// The last Gradle invocation's full result (stdout/stderr/exit code), whether it succeeded or
-    /// failed -- backs "Java: Show Gradle Output".
-    private(set) var lastGradleResult: GradleCommandResult?
-    /// Dependencies the lenient model resolution could not resolve. Shown with the Gradle output,
-    /// not as a failed sync.
-    private(set) var lastUnresolved: [String] = []
-    /// A human-readable description of the last project-model invocation (the real executable path
-    /// is chosen inside `GradleCommandRunner` and isn't part of `GradleCommandResult`).
-    private(set) var lastGradleCommandLine: String?
+    /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
+    /// tab in the bottom panel. Reset at the start of every sync.
+    private(set) var gradleConsole = IDEGradleConsoleLog()
     /// Set when a watched Gradle build file changes outside of a sync. Bursts collapse to one
     /// banner; cleared by Reload or Dismiss.
     private(set) var gradleBuildFilesChanged = false
@@ -97,6 +101,9 @@ final class IDEJavaSupport {
     /// sheet-presenting closure. `nil` means never prompt automatically -- a sync for an
     /// undecided root just settles on `.awaitingTrust` instead of running anything.
     var requestTrust: (@MainActor (URL) async -> Bool)?
+    /// Called when a sync ends in `.failed` (not on a user-initiated cancel) so `IDEWorkspace` can
+    /// surface the Gradle console automatically.
+    var onGradleSyncFailed: (@MainActor () -> Void)?
 
     init(gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL) {
         overlayService = JavaOverlayService(index: javaIndex)
@@ -119,40 +126,6 @@ final class IDEJavaSupport {
     var isGradleProject: Bool {
         if case .notGradle = gradleSync { return false }
         return projectRootURL != nil
-    }
-
-    /// Text for the Gradle output panel: command, exit code, unresolved dependencies, stdout, stderr.
-    func gradleOutputText() -> String {
-        guard let result = lastGradleResult else {
-            var lines = ["No Gradle process output was captured."]
-            if let lastGradleCommandLine {
-                lines.insert("Command: \(lastGradleCommandLine)", at: 0)
-            }
-            if case .failed(let summary) = gradleSync {
-                lines.append(summary)
-            }
-            return lines.joined(separator: "\n")
-        }
-        var parts: [String] = []
-        if let projectRootURL {
-            parts.append("Project: \(projectRootURL.path)")
-        }
-        if let lastGradleCommandLine {
-            parts.append("Command: \(lastGradleCommandLine)")
-        }
-        parts.append("Exit code: \(result.exitCode)")
-        if !lastUnresolved.isEmpty {
-            parts.append("")
-            parts.append("Unresolved dependencies:")
-            parts.append(contentsOf: lastUnresolved.map { "  \($0)" })
-        }
-        parts.append("")
-        parts.append("----- stdout -----")
-        parts.append(result.stdout.isEmpty ? "(empty)" : result.stdout)
-        parts.append("")
-        parts.append("----- stderr -----")
-        parts.append(result.stderr.isEmpty ? "(empty)" : result.stderr)
-        return parts.joined(separator: "\n")
     }
 
     /// Connects the overlay service to the shared workspace (mirrors
@@ -184,14 +157,12 @@ final class IDEJavaSupport {
         gradleModel = nil
         let hadJars = !jarSources.isEmpty
         jarSources = []
-        lastUnresolved = []
+        gradleConsole = IDEGradleConsoleLog()
         clearSourceSetClasspath()
 
         guard let url else {
             projectSources = []
             gradleSync = .notGradle
-            lastGradleResult = nil
-            lastGradleCommandLine = nil
             Task { await publishSources() }
             return
         }
@@ -200,16 +171,12 @@ final class IDEJavaSupport {
 
         guard GradleProjectModelExtractor.isGradleProject(url) else {
             gradleSync = .notGradle
-            lastGradleResult = nil
-            lastGradleCommandLine = nil
             if hadJars {
                 Task { await publishSources() }
             }
             return
         }
 
-        lastGradleResult = nil
-        lastGradleCommandLine = nil
         gradleSync = .awaitingTrust
         startBuildFileWatcher(root: url)
         if hadJars {
@@ -304,27 +271,75 @@ final class IDEJavaSupport {
                 JDKLocator().select()?.home
             }.value
             guard isCurrent(generation) else { return }
-            lastGradleCommandLine = Self.projectModelCommandLine(project: url, javaHome: javaHome)
+
+            gradleConsole.reset()
+            gradleConsole.appendNote("Project: \(url.path)")
+            gradleConsole.appendNote("Command: \(Self.projectModelCommandLine(project: url, javaHome: javaHome))")
+            if let javaHome {
+                gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
+            }
 
             do {
                 let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
+                let startedAt = Date()
                 let (model, result) = try await gradleExtractor.extract(
                     projectDirectory: url,
                     javaHome: javaHome,
-                    timeout: timeout
+                    timeout: timeout,
+                    output: { line in
+                        Task { @MainActor in
+                            guard generation == self.projectGeneration else { return }
+                            self.gradleConsole.appendProcessLine(line)
+                        }
+                    }
                 )
                 guard isCurrent(generation) else { return }
-                lastGradleResult = result
-                lastUnresolved = model.unresolved
+                let elapsed = Date().timeIntervalSince(startedAt)
+                gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
+                if !model.unresolved.isEmpty {
+                    gradleConsole.appendNote("Unresolved dependencies:")
+                    for dependency in model.unresolved {
+                        gradleConsole.appendNote("  \(dependency)")
+                    }
+                }
                 gradleModel = model
                 await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
                 guard isCurrent(generation) else { return }
 
-                let dependencyMessage = "Indexing \(model.classpathJars.count) dependencies…"
-                statusMessage = dependencyMessage
                 let sourceTargets = model.sourceIndexTargets(paths: paths)
                 let jarTargets = model.jarIndexTargets(paths: paths)
-                for await _ in await scheduler.index(sourceTargets + jarTargets) {}
+                let totalTargets = sourceTargets.count + jarTargets.count
+                gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
+                var completedTargets = 0
+                for await progress in await scheduler.index(sourceTargets + jarTargets) {
+                    guard isCurrent(generation) else { return }
+                    switch progress {
+                    case .allFinished:
+                        continue
+                    case .rootStarted(let id):
+                        // Reading a JAR (decompress + parse every class file) can take real,
+                        // visible time with no other feedback in between -- announce it starting,
+                        // not just its eventual completion, so a slow one doesn't look identical
+                        // to a genuine hang.
+                        gradleConsole.appendNote("Indexing \(Self.shortRootName(id))…")
+                        if totalTargets > 0 {
+                            statusMessage = "Indexing dependencies… (\(completedTargets)/\(totalTargets)): \(Self.shortRootName(id))"
+                        }
+                        continue
+                    case .rootSkipped(let id, let reason):
+                        completedTargets += 1
+                        gradleConsole.appendNote("Skipped \(Self.shortRootName(id)) (\(reason))")
+                    case .rootFinished(let id, let classCount):
+                        completedTargets += 1
+                        gradleConsole.appendNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
+                    case .rootFailed(let id, let message):
+                        completedTargets += 1
+                        gradleConsole.appendNote("Failed to index \(Self.shortRootName(id)): \(message)")
+                    }
+                    if totalTargets > 0 {
+                        statusMessage = "Indexing dependencies… (\(completedTargets)/\(totalTargets))"
+                    }
+                }
                 guard isCurrent(generation) else { return }
 
                 projectSources = sourceTargets.compactMap { target in
@@ -335,10 +350,12 @@ final class IDEJavaSupport {
                     guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
                     return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
                 }
-                if statusMessage == dependencyMessage {
+                if statusMessage?.hasPrefix("Indexing dependencies…") == true {
                     statusMessage = nil
                 }
                 gradleSync = .synced(subprojects: model.subprojects.count, jars: model.classpathJars.count)
+                gradleConsole.appendNote("Sync finished")
+                gradleConsole.markFinished()
                 // Publish first so a scoped query never runs against shards that are not installed yet.
                 await publishSources()
                 await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
@@ -352,10 +369,30 @@ final class IDEJavaSupport {
                 if statusMessage == "Resolving Gradle project…" {
                     statusMessage = nil
                 }
-                gradleSync = .failed(summary: Self.summarize(error))
-                rememberGradleFailure(error)
+                let summary = Self.summarize(error)
+                gradleSync = .failed(summary: summary)
+                gradleConsole.appendNote(summary)
+                gradleConsole.markFinished()
+                onGradleSyncFailed?()
             }
         }
+    }
+
+    /// Cancels an in-progress sync -- backs the Gradle console tab's Cancel button. A no-op unless
+    /// a sync is actually running: the task's own `catch` never sees a plain cancellation (it
+    /// returns early once `isCurrent` sees `Task.isCancelled`), so the state transition has to
+    /// happen here instead.
+    func cancelGradleSync() {
+        guard case .syncing = gradleSync else { return }
+        gradleSyncTask?.cancel()
+        gradleSyncTask = nil
+        gradleSyncInFlight = false
+        if statusMessage == "Resolving Gradle project…" {
+            statusMessage = nil
+        }
+        gradleSync = .failed(summary: "Gradle sync was cancelled")
+        gradleConsole.appendNote("Sync cancelled")
+        gradleConsole.markFinished()
     }
 
     /// Re-indexes the JDK only when the project's language level would select a different
@@ -368,21 +405,6 @@ final class IDEJavaSupport {
         guard isCurrent(generation) else { return }
         guard let selectedPath, selectedPath != (pendingJDKHomePath ?? indexedJDKHomePath) else { return }
         indexJDK(minimumFeatureVersion: maxLevel)
-    }
-
-    private func rememberGradleFailure(_ error: Error) {
-        switch error {
-        case let GradleProjectModelExtractionError.syncFailed(result),
-             let GradleProjectModelExtractionError.missingOutput(result):
-            lastGradleResult = result
-        case let GradleProjectModelExtractionError.decodingFailed(_, result):
-            lastGradleResult = result
-        case let GradleCommandError.timedOut(partial),
-             let GradleCommandError.cancelled(partial):
-            lastGradleResult = partial
-        default:
-            break
-        }
     }
 
     private static func projectModelCommandLine(project: URL, javaHome: URL?) -> String {
@@ -414,6 +436,10 @@ final class IDEJavaSupport {
     private func indexJDK(minimumFeatureVersion: Int?) {
         jdkIndexingTask?.cancel()
         pendingJDKHomePath = nil
+        // Only when JDK indexing is triggered mid-sync (a Gradle project's language level needing a
+        // different installation than the one already indexed) is it meaningful to narrate into
+        // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
+        let noteToConsole = gradleSync.isSyncing
         jdkIndexingTask = Task { [paths, scheduler] in
             // JDKLocator.select() does synchronous filesystem/process work (java_home -X, walking
             // ~/Library/Java/JavaVirtualMachines); hopped off the main actor so it can't stall the
@@ -433,7 +459,22 @@ final class IDEJavaSupport {
             if statusMessage == nil {
                 statusMessage = message
             }
-            for await _ in await scheduler.index([(root: root, shardURL: shardURL)]) {}
+            if noteToConsole {
+                gradleConsole.appendNote(message)
+            }
+            for await progress in await scheduler.index([(root: root, shardURL: shardURL)]) {
+                guard noteToConsole, !Task.isCancelled else { continue }
+                switch progress {
+                case .rootFinished(let id, let classCount):
+                    gradleConsole.appendNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
+                case .rootSkipped(let id, let reason):
+                    gradleConsole.appendNote("Skipped \(Self.shortRootName(id)) (\(reason))")
+                case .rootFailed(let id, let failureMessage):
+                    gradleConsole.appendNote("Failed to index \(Self.shortRootName(id)): \(failureMessage)")
+                case .rootStarted, .allFinished:
+                    break
+                }
+            }
             guard !Task.isCancelled else { return }
             jdkReader = try? JavaIndexShardReader(url: shardURL)
             indexedJDKHomePath = homePath
@@ -443,6 +484,16 @@ final class IDEJavaSupport {
             }
             await publishSources()
         }
+    }
+
+    /// Short, human-readable form of a `JavaIndexableRoot.id` for the console/status bar -- strips
+    /// the `"jar-"`/`"source-"` prefix `JarRoot`/`SourceRoot` use for shard-naming and keys, and
+    /// collapses the remaining path to its last component instead of showing a full filesystem path.
+    private static func shortRootName(_ id: String) -> String {
+        for prefix in ["jar-", "source-"] where id.hasPrefix(prefix) {
+            return (String(id.dropFirst(prefix.count)) as NSString).lastPathComponent
+        }
+        return id
     }
 
     private func publishSources() async {

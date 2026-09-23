@@ -38,7 +38,8 @@ public struct GradleProjectModelExtractor: Sendable {
     public func extract(
         projectDirectory: URL,
         javaHome: URL?,
-        timeout: Duration = .seconds(120)
+        timeout: Duration = .seconds(120),
+        output: GradleOutputHandler? = nil
     ) async throws -> (model: JavaGradleProjectModel, result: GradleCommandResult) {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-gradle-model-\(UUID().uuidString)", isDirectory: true)
@@ -58,7 +59,8 @@ public struct GradleProjectModelExtractor: Sendable {
                 "-PumbraModelOutput=\(outputURL.path)"
             ],
             javaHome: javaHome,
-            timeout: timeout
+            timeout: timeout,
+            output: output
         )
 
         guard result.exitCode == 0 else {

@@ -93,6 +93,38 @@ final class JavaIndexSchedulerTests: XCTestCase {
         XCTAssertEqual(Set(reader.allQualifiedNames), ["com.example.Foo", "com.example.Bar"])
     }
 
+    /// A caller (Umbra's Gradle console) narrates `.rootStarted` as "indexing X…" before the
+    /// (possibly slow) read finishes, so a stalled root doesn't look identical to a hang -- pin
+    /// down that every root gets one, before its matching completion event.
+    func testEveryRootReportsStartedBeforeItsCompletionEvent() async throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let roots: [(root: any JavaIndexableRoot, shardURL: URL)] = (0..<5).map { i in
+            let root = FakeRoot(id: "root\(i)", stamp: JavaStamp(size: Int64(i), modificationDate: Double(i)), stubs: [stub("com.example.Item\(i)")])
+            return (root, dir.appendingPathComponent("root\(i).idx"))
+        }
+        let scheduler = JavaIndexScheduler(paths: JavaIndexPaths(root: dir), maxConcurrency: 2)
+        var startedIndex: [String: Int] = [:]
+        var completedIndex: [String: Int] = [:]
+        var position = 0
+        for await event in await scheduler.index(roots) {
+            defer { position += 1 }
+            switch event {
+            case .rootStarted(let id):
+                startedIndex[id] = position
+            case .rootFinished(let id, _):
+                completedIndex[id] = position
+            default:
+                break
+            }
+        }
+        XCTAssertEqual(Set(startedIndex.keys), Set((0..<5).map { "root\($0)" }))
+        for (id, completedAt) in completedIndex {
+            let startedAt = try XCTUnwrap(startedIndex[id], "\(id) finished without ever reporting started")
+            XCTAssertLessThan(startedAt, completedAt, "\(id) should report started before it completes")
+        }
+    }
+
     func testMultipleRootsAllComplete() async throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

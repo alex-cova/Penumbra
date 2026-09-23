@@ -126,6 +126,32 @@ final class GradleCommandRunnerTests: XCTestCase {
         XCTAssertEqual(command.environment["JAVA_HOME"], javaHome.path)
     }
 
+    func testRunPassesOutputHandlerThroughToLauncher() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeExecutableFile(at: dir.appendingPathComponent("gradlew"))
+        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        store.setTrusted(true, for: dir)
+        let emitted = [
+            GradleOutputLine(stream: .stdout, text: "> Task :umbraProjectModel"),
+            GradleOutputLine(stream: .stderr, text: "warning: deprecated")
+        ]
+        let launcher = RecordingLauncher(result: .init(exitCode: 0, stdout: "", stderr: ""), linesToEmit: emitted)
+        let runner = GradleCommandRunner(trustStore: store, launcher: launcher, resolver: GradleExecutableResolver())
+
+        let received = LineCollector()
+        _ = try await runner.run(
+            projectDirectory: dir,
+            tasks: ["tasks"],
+            javaHome: nil,
+            output: { line in Task { await received.append(line) } }
+        )
+        // Let the fire-and-forget append Tasks land before asserting.
+        try await Task.sleep(for: .milliseconds(50))
+        let lines = await received.lines
+        XCTAssertEqual(lines.map(\.text), emitted.map(\.text))
+    }
+
     // MARK: - SystemGradleProcessLauncher: real process behavior (no Gradle needed)
 
     func testSystemLauncherCapturesStdoutStderrAndExitCode() async throws {
@@ -139,6 +165,45 @@ final class GradleCommandRunnerTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 3)
         XCTAssertEqual(result.stdout.count, 300_000, "large stdout should be fully drained, not deadlocked on a full pipe")
         XCTAssertTrue(result.stderr.contains("err-marker"))
+    }
+
+    /// Regression for a real hang: without an explicitly closed stdin, a spawned Gradle client
+    /// inherits Umbra's own (possibly a live terminal's), and its interactive-cancellation listener
+    /// thread blocks on it forever -- the JVM never exits even though the build already finished.
+    /// `cat` with no args reads stdin until EOF and echoes nothing; it only completes promptly if
+    /// its stdin is actually closed/empty, not a still-open, never-written-to pipe.
+    func testSystemLauncherClosesChildStandardInput() async throws {
+        let command = GradleCommand(
+            executable: URL(fileURLWithPath: "/bin/cat"),
+            arguments: [],
+            currentDirectory: FileManager.default.temporaryDirectory,
+            environment: [:]
+        )
+        let start = Date()
+        let result = try await SystemGradleProcessLauncher().launch(command, timeout: .seconds(10))
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertLessThan(
+            Date().timeIntervalSince(start), 5,
+            "cat should see immediate EOF on a closed stdin, not block reading from an inherited terminal"
+        )
+    }
+
+    func testSystemLauncherStreamsOutputLinesLive() async throws {
+        let command = GradleCommand(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "echo a; echo b >&2; printf c"],
+            currentDirectory: FileManager.default.temporaryDirectory,
+            environment: [:]
+        )
+        let received = LineCollector()
+        let result = try await SystemGradleProcessLauncher().launch(command, timeout: .seconds(10)) { line in
+            Task { await received.append(line) }
+        }
+        XCTAssertEqual(result.exitCode, 0)
+        try await Task.sleep(for: .milliseconds(50))
+        let lines = await received.lines
+        XCTAssertEqual(lines.filter { $0.stream == .stdout }.map(\.text), ["a", "c"])
+        XCTAssertEqual(lines.filter { $0.stream == .stderr }.map(\.text), ["b"])
     }
 
     func testSystemLauncherTimesOutAndKillsProcess() async throws {
@@ -216,18 +281,27 @@ private struct FakeProcessRunner: ProcessRunning {
     }
 }
 
+private actor LineCollector {
+    private(set) var lines: [GradleOutputLine] = []
+    func append(_ line: GradleOutputLine) { lines.append(line) }
+}
+
 private actor RecordingLauncher: GradleProcessLaunching {
     private let result: GradleCommandResult
+    /// Lines to feed to `output` before returning, so tests can assert the runner wires it through.
+    private let linesToEmit: [GradleOutputLine]
     private(set) var lastCommand: GradleCommand?
     private(set) var launchCount = 0
 
-    init(result: GradleCommandResult) {
+    init(result: GradleCommandResult, linesToEmit: [GradleOutputLine] = []) {
         self.result = result
+        self.linesToEmit = linesToEmit
     }
 
-    func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult {
+    func launch(_ command: GradleCommand, timeout: Duration, output: GradleOutputHandler?) async throws -> GradleCommandResult {
         lastCommand = command
         launchCount += 1
+        for line in linesToEmit { output?(line) }
         return result
     }
 }

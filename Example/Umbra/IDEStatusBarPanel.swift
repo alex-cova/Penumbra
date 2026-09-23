@@ -64,11 +64,40 @@ struct IDEStatusBarPanel: View {
             }
             .buttonStyle(.borderless)
             .font(IDEAppearance.Typography.monoSmall)
-            .foregroundStyle(Color(hex: 0xE5484D))
+            .foregroundStyle(IDEAppearance.ColorToken.error)
             .fixedSize()
             .help(summary)
             .accessibilityLabel("Gradle sync failed")
             .accessibilityHint(summary)
+        case .syncing:
+            if let message = workspace.javaSupport.statusMessage {
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Button {
+                    workspace.showGradleOutput()
+                } label: {
+                    HStack(spacing: IDEAppearance.Spacing.sm) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.65)
+                            .frame(width: 12, height: 12)
+                            .accessibilityHidden(true)
+                        TimelineView(.periodic(from: workspace.javaSupport.gradleConsole.startedAt ?? .now, by: 1)) { context in
+                            Text(syncingSummary(message, now: context.date))
+                                .font(IDEAppearance.Typography.monoSmall)
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 280, alignment: .leading)
+                        }
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Show Gradle output")
+                .accessibilityLabel("Gradle sync in progress")
+                .accessibilityHint(message)
+            }
         default:
             if let message = workspace.javaSupport.statusMessage {
                 Text("·")
@@ -87,6 +116,20 @@ struct IDEStatusBarPanel: View {
                     .frame(maxWidth: 280, alignment: .leading)
             }
         }
+    }
+
+    /// "Resolving Gradle project · 0:42 · > Task :app:umbraProjectModelFragment" -- the status
+    /// message plus elapsed time plus the latest console line, all in the one truncating label.
+    private func syncingSummary(_ message: String, now: Date) -> String {
+        var parts = [message]
+        if let startedAt = workspace.javaSupport.gradleConsole.startedAt {
+            let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
+            parts.append(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
+        }
+        if let latest = workspace.javaSupport.gradleConsole.latestLine {
+            parts.append(latest)
+        }
+        return parts.joined(separator: "  ·  ")
     }
 
     private var leadingSummary: String {

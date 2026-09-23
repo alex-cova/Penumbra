@@ -36,6 +36,11 @@ public actor JavaIndexScheduler {
                     func addNext() {
                         guard let next = iterator.next() else { return }
                         active += 1
+                        // Reading a JAR/JDK root (ZIP decompression + per-class-file parsing) can
+                        // take a real, visible amount of time with nothing else to show for it in
+                        // between -- announce which root a worker just picked up so a caller can
+                        // show "indexing X…" instead of going silent until it happens to finish.
+                        continuation.yield(.rootStarted(id: next.root.id))
                         group.addTask {
                             await Self.indexOne(root: next.root, shardURL: next.shardURL)
                         }

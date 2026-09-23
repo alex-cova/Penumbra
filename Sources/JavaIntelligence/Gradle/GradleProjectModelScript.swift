@@ -44,6 +44,7 @@ enum GradleProjectModelScript {
             return described
         }
         try {
+            p.logger.lifecycle("Umbra: resolving " + p.path + " " + ss.name + " compile classpath")
             def view = config.incoming.artifactView { viewSpec ->
                 viewSpec.lenient(true)
             }

@@ -9,9 +9,17 @@ struct IDETerminalTabsBar: View {
                 ForEach(workspace.terminalTabs) { tab in
                     IDETerminalTabItem(
                         tab: tab,
-                        isSelected: tab.id == workspace.selectedTerminalTabID,
+                        isSelected: !workspace.isGradleConsoleSelected && tab.id == workspace.selectedTerminalTabID,
                         onSelect: { workspace.selectTerminalTab(tab.id) },
                         onClose: { workspace.closeTerminalTab(tab.id) }
+                    )
+                }
+                if workspace.showsGradleConsoleTab {
+                    IDEGradleTabItem(
+                        isSelected: workspace.isGradleConsoleSelected,
+                        isSyncing: workspace.javaSupport.gradleSync.isSyncing,
+                        isFailed: workspace.javaSupport.gradleSync.isFailed,
+                        onSelect: { workspace.selectGradleConsoleTab() }
                     )
                 }
             }
@@ -64,6 +72,75 @@ private struct IDETerminalTabItem: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .focusable(false)
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return IDEAppearance.ColorToken.tabActive
+        }
+        if isHovering {
+            return IDEAppearance.ColorToken.tabHover
+        }
+        return IDEAppearance.ColorToken.tabInactive
+    }
+}
+
+/// The bottom panel's read-only "Gradle" console tab -- always last, no close button (it comes and
+/// goes with `IDEWorkspace.showsGradleConsoleTab`, not by user action).
+private struct IDEGradleTabItem: View {
+    let isSelected: Bool
+    let isSyncing: Bool
+    let isFailed: Bool
+    let onSelect: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            statusIcon
+                .frame(width: 12)
+
+            Text("Gradle")
+                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .overlay(alignment: .top) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 6)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isSyncing ? "Gradle, syncing" : isFailed ? "Gradle, sync failed" : "Gradle")
+        .accessibilityAddTraits(.isButton)
+        .focusable(false)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if isSyncing {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.6)
+        } else if isFailed {
+            Image(systemName: "hammer.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+        } else {
+            Image(systemName: "hammer")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
     }
 
     private var backgroundColor: Color {

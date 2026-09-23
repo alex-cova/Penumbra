@@ -318,13 +318,17 @@ struct IDETerminalPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .help("New Terminal Tab")
                 .accessibilityLabel("New Terminal Tab")
-                Button(action: workspace.restartTerminal) {
-                    Image(systemName: "arrow.clockwise")
+                if workspace.isGradleConsoleSelected {
+                    IDEGradleConsoleControls()
+                } else {
+                    Button(action: workspace.restartTerminal) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .help("Restart shell")
+                    .accessibilityLabel("Restart shell")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Restart shell")
-                .accessibilityLabel("Restart shell")
                 Button(action: workspace.hideTerminal) {
                     Image(systemName: "xmark")
                 }
@@ -338,7 +342,7 @@ struct IDETerminalPanel: View {
 
             ZStack {
                 ForEach(workspace.terminalTabs) { tab in
-                    let isSelected = tab.id == workspace.selectedTerminalTabID
+                    let isSelected = !workspace.isGradleConsoleSelected && tab.id == workspace.selectedTerminalTabID
                     IDETerminalHostRepresentable(
                         tabID: tab.id,
                         workingDirectory: tab.workingDirectory,
@@ -356,6 +360,16 @@ struct IDETerminalPanel: View {
                     .opacity(isSelected ? 1 : 0)
                     .allowsHitTesting(isSelected)
                 }
+
+                if workspace.showsGradleConsoleTab {
+                    IDEGradleConsoleView(
+                        log: workspace.javaSupport.gradleConsole,
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize
+                    )
+                    .opacity(workspace.isGradleConsoleSelected ? 1 : 0)
+                    .allowsHitTesting(workspace.isGradleConsoleSelected)
+                }
             }
         }
         .background(IDEAppearance.ColorToken.sidebar)
@@ -365,5 +379,71 @@ struct IDETerminalPanel: View {
                 .frame(height: 1)
         }
         .onExitCommand { workspace.hideTerminal() }
+    }
+}
+
+/// Header controls shown in place of the shell's restart button while the Gradle console tab is
+/// selected: elapsed time, Cancel (syncing) or Reload (idle), and Copy.
+private struct IDEGradleConsoleControls: View {
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            elapsedTimeView
+            actionButton
+            Button(action: copyOutput) {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Copy Gradle Output")
+            .accessibilityLabel("Copy Gradle Output")
+        }
+    }
+
+    @ViewBuilder
+    private var elapsedTimeView: some View {
+        if let startedAt = workspace.javaSupport.gradleConsole.startedAt {
+            if workspace.javaSupport.gradleSync.isSyncing {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text(Self.formattedElapsed(context.date.timeIntervalSince(startedAt)))
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            } else if let finishedAt = workspace.javaSupport.gradleConsole.finishedAt {
+                Text(Self.formattedElapsed(finishedAt.timeIntervalSince(startedAt)))
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        if workspace.javaSupport.gradleSync.isSyncing {
+            Button("Cancel", action: workspace.cancelGradleSync)
+                .buttonStyle(.borderless)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        } else {
+            Button(action: workspace.reloadGradleProject) {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Reload Gradle Project")
+            .accessibilityLabel("Reload Gradle Project")
+        }
+    }
+
+    private func copyOutput() {
+        let text = workspace.javaSupport.gradleConsole.lines.map(\.text).joined(separator: "\n")
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    private static func formattedElapsed(_ interval: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(interval))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 }

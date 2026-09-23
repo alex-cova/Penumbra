@@ -336,7 +336,7 @@ private struct FixtureWritingLauncher: GradleProcessLaunching {
         self.stderr = stderr
     }
 
-    func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult {
+    func launch(_ command: GradleCommand, timeout: Duration, output: GradleOutputHandler?) async throws -> GradleCommandResult {
         if let outputArg = command.arguments.first(where: { $0.hasPrefix("-PumbraModelOutput=") }) {
             let path = String(outputArg.dropFirst("-PumbraModelOutput=".count))
             try? jsonToWrite.write(to: URL(fileURLWithPath: path))
@@ -347,7 +347,7 @@ private struct FixtureWritingLauncher: GradleProcessLaunching {
 
 private struct NoOpLauncher: GradleProcessLaunching {
     let exitCode: Int32
-    func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult {
+    func launch(_ command: GradleCommand, timeout: Duration, output: GradleOutputHandler?) async throws -> GradleCommandResult {
         GradleCommandResult(exitCode: exitCode, stdout: "", stderr: "")
     }
 }

@@ -151,6 +151,11 @@ public struct SystemProcessRunner: ProcessRunning {
         process.arguments = arguments
         if let currentDirectory { process.currentDirectoryURL = currentDirectory }
         if let environment { process.environment = environment }
+        // Same reason as `SystemGradleProcessLauncher`: an inherited terminal stdin makes some
+        // tools (Gradle's client, anything that reads until EOF) block forever. This runner has
+        // no timeout, so a hang here would stick for good. Callers today are `java_home -X` and
+        // `command -v gradle`, which do not read stdin; closing it is still the safe default.
+        process.standardInput = FileHandle.nullDevice
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout

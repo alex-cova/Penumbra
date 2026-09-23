@@ -92,7 +92,9 @@ public final class IDEWorkspace {
     var chromeOpacity = 1.0
     private(set) var layoutEpoch: UInt64 = 0
     private(set) var activePaneID = UUID()
-    var showsWelcome = true
+    /// Mirrors whether any document is open. `hasOpenDocuments` reads the workbench, which is
+    /// not observable, so this stored flag is what refreshes the welcome-vs-editor switch.
+    private(set) var showsWelcome = true
     var showsFirstRunGuide = false
 
     var windowTitle = "Umbra"
@@ -120,6 +122,14 @@ public final class IDEWorkspace {
     var terminalFocusRequestID: UInt64 = 0
     var terminalTabs: [IDETerminalTab] = []
     var selectedTerminalTabID: UUID?
+    /// True when the bottom panel's read-only "Gradle" console tab is showing instead of a shell.
+    /// Not persisted in the session -- each launch starts on a shell (or no terminal at all).
+    var isGradleConsoleSelected = false
+    /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
+    /// produced output worth revisiting.
+    var showsGradleConsoleTab: Bool {
+        javaSupport.isGradleProject && (javaSupport.gradleSync.isSyncing || !javaSupport.gradleConsole.lines.isEmpty)
+    }
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
@@ -143,6 +153,9 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.requestTrust = { [weak self] url in
             guard let self else { return false }
             return await self.promptGradleTrust(for: url)
+        }
+        intelligenceServices.javaSupport.onGradleSyncFailed = { [weak self] in
+            self?.showGradleOutput()
         }
         loadSession()
         wireAdapter()
@@ -267,7 +280,6 @@ public final class IDEWorkspace {
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url, let self else { return }
             self.applyProjectRoot(url)
-            self.showsWelcome = false
             self.refreshPresentation()
         }
     }
@@ -387,6 +399,9 @@ public final class IDEWorkspace {
     }
 
     private func runInTerminal(_ command: String) {
+        // The play button always needs an actual shell, even if the Gradle console tab is what's
+        // currently showing.
+        isGradleConsoleSelected = false
         if terminalTabs.isEmpty {
             addTerminalTab(saveSession: false)
         } else if !isTerminalVisible {
@@ -400,7 +415,9 @@ public final class IDEWorkspace {
     public func toggleTerminal() {
         isTerminalVisible.toggle()
         if isTerminalVisible {
-            if terminalTabs.isEmpty {
+            // Leave the Gradle console showing if that's what's already selected; only a shell
+            // toggle (no tabs at all yet) needs a fresh tab created for it.
+            if terminalTabs.isEmpty && !isGradleConsoleSelected {
                 addTerminalTab(saveSession: false)
             }
             requestTerminalFocus()
@@ -427,6 +444,7 @@ public final class IDEWorkspace {
     }
 
     func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
+        isGradleConsoleSelected = false
         let tab = makeTerminalTab(cwd: cwd)
         terminalTabs.append(tab)
         selectedTerminalTabID = tab.id
@@ -445,7 +463,11 @@ public final class IDEWorkspace {
         if terminalTabs.count == 1 {
             terminalTabs.removeAll()
             selectedTerminalTabID = nil
-            hideTerminal()
+            if showsGradleConsoleTab {
+                isGradleConsoleSelected = true
+            } else {
+                hideTerminal()
+            }
             return
         }
 
@@ -468,9 +490,24 @@ public final class IDEWorkspace {
 
     func selectTerminalTab(_ id: UUID) {
         guard terminalTabs.contains(where: { $0.id == id }) else { return }
+        isGradleConsoleSelected = false
         selectedTerminalTabID = id
         requestTerminalFocus()
         saveSession()
+    }
+
+    /// Selects the read-only Gradle console tab -- backs both clicking it directly and
+    /// `showGradleOutput()`.
+    func selectGradleConsoleTab() {
+        isGradleConsoleSelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func cancelGradleSync() {
+        javaSupport.cancelGradleSync()
     }
 
     func restartTerminal() {
@@ -819,7 +856,6 @@ public final class IDEWorkspace {
                 }
                 if isDirectory.boolValue {
                     applyProjectRoot(url)
-                    showsWelcome = false
                 } else {
                     await openDocument(from: url)
                 }
@@ -1267,7 +1303,7 @@ public final class IDEWorkspace {
     }
 
     func showGradleOutput() {
-        IDEGradleOutputPanel.shared.show(javaSupport.gradleOutputText())
+        selectGradleConsoleTab()
     }
 
     func dismissGradleReloadBanner() {

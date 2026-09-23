@@ -15,6 +15,26 @@ public struct GradleCommandResult: Sendable {
     }
 }
 
+/// One line of live output from a running Gradle process, as it arrives -- distinct from
+/// ``GradleCommandResult``, which only exists once the process has finished. Consumers (Umbra's
+/// Gradle console tab) render these incrementally instead of waiting for the whole invocation.
+public struct GradleOutputLine: Sendable {
+    public enum Stream: Sendable, Equatable {
+        case stdout
+        case stderr
+    }
+
+    public let stream: Stream
+    public let text: String
+
+    public init(stream: Stream, text: String) {
+        self.stream = stream
+        self.text = text
+    }
+}
+
+public typealias GradleOutputHandler = @Sendable (GradleOutputLine) -> Void
+
 public enum GradleCommandError: Error, Sendable {
     /// `projectDirectory` isn't in the trust store; nothing was run.
     case untrusted(URL)
@@ -49,7 +69,14 @@ public struct GradleCommand: Sendable {
 /// without a real (slow, possibly daemon-starting) Gradle invocation. The real implementation is
 /// ``SystemGradleProcessLauncher``.
 public protocol GradleProcessLaunching: Sendable {
-    func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult
+    func launch(_ command: GradleCommand, timeout: Duration, output: GradleOutputHandler?) async throws -> GradleCommandResult
+}
+
+extension GradleProcessLaunching {
+    /// Convenience for callers that only care about the final result.
+    public func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult {
+        try await launch(command, timeout: timeout, output: nil)
+    }
 }
 
 /// Resolves which executable actually runs Gradle for a project: prefer the project's own
@@ -114,7 +141,8 @@ public actor GradleCommandRunner {
         tasks: [String],
         arguments: [String] = [],
         javaHome: URL?,
-        timeout: Duration = .seconds(120)
+        timeout: Duration = .seconds(120),
+        output: GradleOutputHandler? = nil
     ) async throws -> GradleCommandResult {
         guard trustStore.isTrusted(projectDirectory) else {
             throw GradleCommandError.untrusted(projectDirectory)
@@ -134,7 +162,7 @@ public actor GradleCommandRunner {
             currentDirectory: projectDirectory,
             environment: environment
         )
-        return try await launcher.launch(command, timeout: timeout)
+        return try await launcher.launch(command, timeout: timeout, output: output)
     }
 }
 
@@ -148,12 +176,21 @@ public actor GradleCommandRunner {
 public struct SystemGradleProcessLauncher: GradleProcessLaunching {
     public init() {}
 
-    public func launch(_ command: GradleCommand, timeout: Duration) async throws -> GradleCommandResult {
+    public func launch(_ command: GradleCommand, timeout: Duration, output: GradleOutputHandler?) async throws -> GradleCommandResult {
         let process = Process()
         process.executableURL = command.executable
         process.arguments = command.arguments
         process.currentDirectoryURL = command.currentDirectory
         process.environment = command.environment
+
+        // Without this, the child inherits Umbra's own stdin. If that's a live terminal (e.g. `swift
+        // run Umbra` from a shell), Gradle's client detects an interactive session and starts a
+        // background thread listening on stdin for keypress-based build cancellation -- even under
+        // `--console=plain`. That thread blocks on read() forever since nothing is ever typed into
+        // it, so the JVM never exits on its own even though the build itself already finished (the
+        // process just sits there until something -- our own timeout -- kills it). Closed stdin
+        // means Gradle sees EOF immediately and never starts that listener.
+        process.standardInput = FileHandle.nullDevice
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -161,20 +198,28 @@ public struct SystemGradleProcessLauncher: GradleProcessLaunching {
         process.standardError = stderrPipe
 
         let buffer = OutputBuffer()
+        let splitter = GradleOutputLineSplitter(handler: output)
         // Gradle's output can easily exceed a pipe's kernel buffer; reading only after the process
         // exits (as `SystemProcessRunner` does) would deadlock once the child blocks writing to a
         // full pipe. Drain continuously instead.
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty { buffer.appendStdout(data) }
+            if !data.isEmpty {
+                buffer.appendStdout(data)
+                splitter.append(data, stream: .stdout)
+            }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty { buffer.appendStderr(data) }
+            if !data.isEmpty {
+                buffer.appendStderr(data)
+                splitter.append(data, stream: .stderr)
+            }
         }
         defer {
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
+            splitter.flush()
         }
 
         do {
@@ -286,6 +331,80 @@ private final class TerminationCoordinator: @unchecked Sendable {
                 kill(pid, SIGKILL)
             }
         }
+    }
+}
+
+/// Splits raw stdout/stderr bytes from a running process into complete lines and reports each one
+/// through `handler` as it completes -- unlike `OutputBuffer`, which only exposes the accumulated
+/// text once the process has finished. Byte-level (not `String`-level) buffering, so a UTF-8
+/// character split across two `Pipe` reads still decodes correctly once the rest arrives; a
+/// trailing `\r` (CRLF from some Gradle/JVM output) is stripped. Each stream is buffered
+/// independently so an interleaved stdout/stderr read doesn't corrupt either one's line boundaries.
+final class GradleOutputLineSplitter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stdoutBuffer = Data()
+    private var stderrBuffer = Data()
+    private let handler: GradleOutputHandler?
+
+    init(handler: GradleOutputHandler?) {
+        self.handler = handler
+    }
+
+    func append(_ data: Data, stream: GradleOutputLine.Stream) {
+        guard let handler else { return }
+        let lines: [String] = {
+            lock.lock()
+            defer { lock.unlock() }
+            switch stream {
+            case .stdout:
+                stdoutBuffer.append(data)
+                return Self.extractLines(from: &stdoutBuffer)
+            case .stderr:
+                stderrBuffer.append(data)
+                return Self.extractLines(from: &stderrBuffer)
+            }
+        }()
+        for line in lines {
+            handler(GradleOutputLine(stream: stream, text: line))
+        }
+    }
+
+    /// Emits whatever partial line remains in either buffer (a process that exits without a final
+    /// newline still gets its last line reported). Call once, after the process has finished.
+    func flush() {
+        guard let handler else { return }
+        let (stdoutRemainder, stderrRemainder): (String?, String?) = {
+            lock.lock()
+            defer { lock.unlock() }
+            let out = Self.finalRemainder(from: &stdoutBuffer)
+            let err = Self.finalRemainder(from: &stderrBuffer)
+            return (out, err)
+        }()
+        if let stdoutRemainder { handler(GradleOutputLine(stream: .stdout, text: stdoutRemainder)) }
+        if let stderrRemainder { handler(GradleOutputLine(stream: .stderr, text: stderrRemainder)) }
+    }
+
+    /// Pulls every complete (`\n`-terminated) line out of `buffer`, leaving any trailing partial
+    /// line in place for the next call. Must be called with `lock` held.
+    private static func extractLines(from buffer: inout Data) -> [String] {
+        var lines: [String] = []
+        while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+            var lineData = buffer[buffer.startIndex..<newlineIndex]
+            if lineData.last == 0x0D { lineData = lineData.dropLast() }
+            lines.append(String(decoding: lineData, as: UTF8.self))
+            buffer.removeSubrange(buffer.startIndex...newlineIndex)
+        }
+        return lines
+    }
+
+    /// Must be called with `lock` held.
+    private static func finalRemainder(from buffer: inout Data) -> String? {
+        guard !buffer.isEmpty else { return nil }
+        var lineData = buffer[buffer.startIndex...]
+        if lineData.last == 0x0D { lineData = lineData.dropLast() }
+        buffer.removeAll()
+        guard !lineData.isEmpty else { return nil }
+        return String(decoding: lineData, as: UTF8.self)
     }
 }
 
