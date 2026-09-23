@@ -154,4 +154,123 @@ final class CommandPaletteControllerTests: XCTestCase {
         controller.dismiss()
         XCTAssertFalse(controller.isPresented)
     }
+
+    // MARK: - Tabs, file index, alternate action
+
+    private func makeFileIndex(_ paths: [String]) -> PaletteFileIndex {
+        let root = URL(fileURLWithPath: "/proj")
+        return PaletteFileIndex(entries: paths.map {
+            PaletteFileIndex.Entry(
+                url: root.appendingPathComponent($0),
+                relativePath: $0,
+                location: nil,
+                module: "proj.main",
+                icon: PaletteIcon(systemName: "doc")
+            )
+        })
+    }
+
+    private func waitForRows(_ controller: CommandPaletteController) async {
+        for _ in 0..<100 where controller.flatItems.isEmpty {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    func testTabsOnlyOfferSourcesTheHostWired() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        XCTAssertEqual(controller.availableTabs, [.all, .actions])
+
+        controller.fileIndex = makeFileIndex(["a.swift"])
+        XCTAssertEqual(controller.availableTabs, [.all, .files, .actions])
+
+        controller.projectSearchEngine = ProjectSearchEngine()
+        controller.workspaceRoot = URL(fileURLWithPath: "/proj")
+        XCTAssertEqual(controller.availableTabs, [.all, .files, .actions, .text])
+    }
+
+    func testSelectTabSwitchesModeAndKeepsTheQuery() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["a.swift"])
+        controller.presentQuickOpen()
+        XCTAssertEqual(controller.currentTab, .files)
+
+        controller.paletteModel.query = "abc"
+        controller.selectTab(.actions)
+
+        XCTAssertEqual(controller.paletteModel.mode, .commands)
+        XCTAssertEqual(controller.currentTab, .actions)
+        XCTAssertEqual(controller.paletteModel.query, "abc")
+
+        controller.selectTab(.classes)
+        XCTAssertEqual(controller.currentTab, .actions, "A tab without a source is ignored")
+    }
+
+    func testGoToLineHasNoTab() {
+        let textView = makeFocusedTextView(text: "a\nb\n")
+        let controller = CommandPaletteController(textView: textView)
+        controller.presentGoToLine()
+        XCTAssertNil(controller.currentTab)
+    }
+
+    func testFindInFilesActionIsUnhandledWhenTheHostOwnsThePanel() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.projectSearchEngine = ProjectSearchEngine()
+        controller.workspaceRoot = URL(fileURLWithPath: "/tmp")
+        controller.handlesFindInFilesAction = false
+
+        XCTAssertFalse(textView.perform(.findInFiles))
+        XCTAssertFalse(controller.isPresented)
+    }
+
+    func testIndexedFileRowsCarryColumnsAndOpenInSplit() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["src/ApiKeyController.java", "src/Other.java"])
+        var opened: [String] = []
+        var split: [String] = []
+        controller.onOpenFile = { opened.append($0.lastPathComponent) }
+        controller.onOpenFileInSplit = { split.append($0.lastPathComponent) }
+
+        controller.presentQuickOpen()
+        controller.paletteModel.query = "AKC"
+        controller.selectTab(.files)
+        await waitForRows(controller)
+
+        let item = controller.flatItems.first
+        XCTAssertEqual(item?.title, "ApiKeyController.java")
+        XCTAssertEqual(item?.trailing, "proj.main")
+        XCTAssertEqual(item?.footer, "src/ApiKeyController.java")
+        XCTAssertEqual(item?.matchedIndices, [0, 3, 6])
+        XCTAssertNotNil(item?.alternateAction)
+
+        controller.activateSelection(alternate: true)
+        XCTAssertEqual(split, ["ApiKeyController.java"])
+        XCTAssertTrue(opened.isEmpty)
+        XCTAssertFalse(controller.isPresented)
+    }
+
+    func testFileRowsOfferNoAlternateActionWithoutASplitHandler() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["a.swift"])
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+
+        XCTAssertNil(controller.flatItems.first?.alternateAction)
+        controller.activateSelection(alternate: true)
+        XCTAssertTrue(controller.isPresented, "⇧↩ on a row without a secondary action does nothing")
+    }
+
+    func testFilesProviderNarrowingMatchesAColdSearch() async {
+        let index = makeFileIndex(["a/ApiKeyService.java", "a/ApiKeyFilter.java", "b/Unrelated.java"])
+        let provider = FilesPaletteProvider(index: { index }, onOpen: { _ in })
+        _ = await provider.items(matching: "Api", limit: 10)
+        let narrowed = await provider.items(matching: "ApiKeyS", limit: 10)
+        let cold = await FilesPaletteProvider(index: { index }, onOpen: { _ in }).items(matching: "ApiKeyS", limit: 10)
+        XCTAssertEqual(narrowed.map(\.id), cold.map(\.id))
+        XCTAssertEqual(narrowed.map(\.title), ["ApiKeyService.java"])
+    }
 }

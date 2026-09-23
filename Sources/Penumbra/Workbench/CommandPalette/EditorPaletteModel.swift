@@ -5,6 +5,8 @@ public enum EditorPaletteMode: Equatable {
     case commands
     case quickOpen
     case symbols
+    /// Types only (the Classes tab).
+    case classes
     case textActions
     /// Every source at once — files, symbols, actions, recent files (double ⇧).
     case searchEverywhere
@@ -18,6 +20,51 @@ public enum EditorPaletteMode: Equatable {
     case goToLine
     /// Disk-wide project search (⌘⇧F).
     case findInFiles
+}
+
+/// The tabs of the tabbed palette (IntelliJ's All / Classes / Files / Symbols / Actions / Text).
+/// Each maps to one ``EditorPaletteMode``; the tab-less modes (go to line, recent files, fixed
+/// lists) have no tab, and the palette hides its tab strip for them.
+public enum PaletteTab: CaseIterable, Sendable {
+    case all, classes, files, symbols, actions, text
+
+    public var title: String {
+        switch self {
+        case .all: "All"
+        case .classes: "Classes"
+        case .files: "Files"
+        case .symbols: "Symbols"
+        case .actions: "Actions"
+        case .text: "Text"
+        }
+    }
+
+    public var mode: EditorPaletteMode {
+        switch self {
+        case .all: .searchEverywhere
+        case .classes: .classes
+        case .files: .quickOpen
+        case .symbols: .symbols
+        case .actions: .commands
+        case .text: .findInFiles
+        }
+    }
+
+    public init?(mode: EditorPaletteMode) {
+        guard let tab = Self.allCases.first(where: { $0.mode == mode }) else { return nil }
+        self = tab
+    }
+
+    var placeholder: String {
+        switch self {
+        case .all: "Search Everywhere"
+        case .classes: "Go to Class"
+        case .files: "Go to File"
+        case .symbols: "Go to Symbol"
+        case .actions: "Find Action"
+        case .text: "Find in Files"
+        }
+    }
 }
 
 /// Presentation/navigation state for a command palette — which mode it's in, the current query,

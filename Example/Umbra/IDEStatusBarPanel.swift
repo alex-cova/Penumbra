@@ -8,10 +8,12 @@ struct IDEStatusBarPanel: View {
             Text(leadingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text("·")
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-            syntaxPicker
+            if !workspace.showsWelcome {
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                syntaxPicker
+            }
             javaStatus
             httpStatus
             if workspace.statusSelectionLength > 0 {
@@ -35,22 +37,34 @@ struct IDEStatusBarPanel: View {
         .focusable(false)
     }
 
-    /// Sublime-style clickable syntax name — the only way to set a language on a document that
-    /// doesn't have one yet (e.g. a freshly created "Untitled" file from Cmd+N).
+    /// Sublime-style clickable syntax name for untitled or extensionless files. Known file types
+    /// (e.g. `.java`) show a read-only label instead.
+    @ViewBuilder
     private var syntaxPicker: some View {
-        Menu {
-            ForEach(IDELanguageSupport.selectableSyntaxes) { option in
-                Button(option.displayName) {
-                    workspace.setLanguage(identifier: option.id)
+        let label = Text(
+            IDELanguageSupport.displayName(
+                forIdentifier: workspace.statusLanguage.isEmpty ? nil : workspace.statusLanguage
+            )
+        )
+        .font(IDEAppearance.Typography.monoSmall)
+        .foregroundStyle(IDEAppearance.ColorToken.muted)
+
+        if workspace.canChangeActiveLanguage {
+            Menu {
+                ForEach(IDELanguageSupport.selectableSyntaxes) { option in
+                    Button(option.displayName) {
+                        workspace.setLanguage(identifier: option.id)
+                    }
                 }
+            } label: {
+                label
             }
-        } label: {
-            Text(IDELanguageSupport.displayName(forIdentifier: workspace.statusLanguage.isEmpty ? nil : workspace.statusLanguage))
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        } else {
+            label
+                .fixedSize()
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
     }
 
     @ViewBuilder

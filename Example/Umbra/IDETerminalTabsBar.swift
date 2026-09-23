@@ -11,6 +11,7 @@ struct IDETerminalTabsBar: View {
                         tab: tab,
                         isSelected: !workspace.isGradleConsoleSelected
                             && !workspace.isHTTPConsoleSelected
+                            && !workspace.isSourceControlSelected
                             && tab.id == workspace.selectedTerminalTabID,
                         onSelect: { workspace.selectTerminalTab(tab.id) },
                         onClose: { workspace.closeTerminalTab(tab.id) }
@@ -29,6 +30,14 @@ struct IDETerminalTabsBar: View {
                         isSelected: workspace.isHTTPConsoleSelected,
                         isSending: workspace.httpSupport.isSending,
                         onSelect: { workspace.selectHTTPConsoleTab() }
+                    )
+                }
+                if workspace.showsSourceControlTab {
+                    IDESourceControlTabItem(
+                        branch: workspace.gitStatus.currentBranch,
+                        isSelected: workspace.isSourceControlSelected,
+                        changeCount: workspace.gitStatus.changes.count,
+                        onSelect: { workspace.selectSourceControlTab() }
                     )
                 }
             }
@@ -209,6 +218,75 @@ private struct IDEHTTPTabItem: View {
         .accessibilityLabel(isSending ? "HTTP, sending" : "HTTP")
         .accessibilityAddTraits(.isButton)
         .focusable(false)
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return IDEAppearance.ColorToken.tabActive
+        }
+        if isHovering {
+            return IDEAppearance.ColorToken.tabHover
+        }
+        return IDEAppearance.ColorToken.tabInactive
+    }
+}
+
+private struct IDESourceControlTabItem: View {
+    let branch: String?
+    let isSelected: Bool
+    let changeCount: Int
+    let onSelect: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 12)
+
+            Text(tabTitle)
+                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .overlay(alignment: .top) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 6)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityAddTraits(.isButton)
+        .focusable(false)
+    }
+
+    private var tabTitle: String {
+        if let branch, !branch.isEmpty {
+            return changeCount > 0 ? "Source Control · \(changeCount)" : branch
+        }
+        return "Source Control"
+    }
+
+    private var accessibilityTitle: String {
+        if changeCount > 0 {
+            return "Source Control, \(changeCount) changed files"
+        }
+        if let branch, !branch.isEmpty {
+            return "Source Control on \(branch)"
+        }
+        return "Source Control"
     }
 
     private var backgroundColor: Color {

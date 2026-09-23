@@ -22,7 +22,7 @@ public enum PaletteQueryScope: Equatable {
         switch mode {
         case .commands: return .commands(query)
         case .quickOpen, .recentFiles: return .files(query)
-        case .symbols: return .symbols(query)
+        case .symbols, .classes: return .symbols(query)
         case .textActions: return .textActions(query)
         case .goToLine: return .line(query)
         // "Search Everywhere" and the fixed-list modes have no single scope; treat a

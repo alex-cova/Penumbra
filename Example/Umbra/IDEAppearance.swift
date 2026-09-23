@@ -1,4 +1,5 @@
 import AppKit
+import Penumbra
 import SwiftUI
 
 /// Shared design tokens for the Umbra shell.
@@ -112,21 +113,50 @@ extension Color {
     }
 }
 
-/// File-type SF Symbol lookup shared by the file tree and Find in Files rows, so a given
-/// extension always gets the same glyph wherever a file is listed.
+/// File-type SF Symbol lookup shared by the file tree, Find in Files rows and the Go to File
+/// palette, so a given extension always gets the same glyph wherever a file is listed.
 enum IDEFileIcon {
-    static func systemName(forFilename filename: String) -> String {
+    private static let gradleFilenames: Set<String> = [
+        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"
+    ]
+
+    nonisolated static func systemName(forFilename filename: String) -> String {
+        if gradleFilenames.contains(filename) { return "hammer" }
         switch (filename as NSString).pathExtension.lowercased() {
-        case "swift": "swift"
-        case "js", "jsx", "ts", "tsx": "curlybraces"
-        case "json": "curlybraces.square"
-        case "java": "cup.and.saucer"
-        case "kt", "kts": "k.square"
-        case "md", "markdown": "text.book.closed"
-        case "py": "chevron.left.forwardslash.chevron.right"
+        case "swift": return "swift"
+        case "js", "jsx", "ts", "tsx": return "curlybraces"
+        case "json": return "curlybraces.square"
+        case "java": return "cup.and.saucer"
+        case "kt", "kts": return "k.square"
+        case "md", "markdown": return "text.book.closed"
+        case "py": return "chevron.left.forwardslash.chevron.right"
+        case "http", "rest": return "globe"
+        case "sh", "zsh", "bash": return "terminal"
+        case "yaml", "yml": return "list.bullet.indent"
+        case "xml", "html", "htm": return "chevron.left.forwardslash.chevron.right"
+        case "properties", "toml", "ini", "conf", "env": return "gearshape"
         case "bmp", "gif", "heic", "heif", "icns", "ico", "jpeg", "jpg", "png", "tiff", "tif", "webp":
-            "photo"
-        default: "doc.text"
+            return "photo"
+        default: return "doc.text"
+        }
+    }
+
+    /// The Go to File row glyph: a lettered circle for JVM sources (IntelliJ's class icon) and the
+    /// shared per-extension symbol, tinted, for everything else.
+    nonisolated static func paletteIcon(forFilename filename: String) -> PaletteIcon {
+        if gradleFilenames.contains(filename) { return PaletteIcon(systemName: "hammer", tint: .green) }
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "java": return PaletteIcon(systemName: "c.circle.fill", tint: .blue)
+        case "kt", "kts": return PaletteIcon(systemName: "k.circle.fill", tint: .purple)
+        case "class": return PaletteIcon(systemName: "c.circle", tint: .secondary)
+        case "swift": return PaletteIcon(systemName: "swift", tint: .orange)
+        case "http", "rest": return PaletteIcon(systemName: "globe", tint: .blue)
+        case "sh", "zsh", "bash": return PaletteIcon(systemName: "terminal", tint: .green)
+        case "yaml", "yml": return PaletteIcon(systemName: "list.bullet.indent", tint: .green)
+        case "xml", "html", "htm", "json": return PaletteIcon(systemName: systemName(forFilename: filename), tint: .orange)
+        case "bmp", "gif", "heic", "heif", "icns", "ico", "jpeg", "jpg", "png", "tiff", "tif", "webp":
+            return PaletteIcon(systemName: "photo", tint: .purple)
+        default: return PaletteIcon(systemName: systemName(forFilename: filename), tint: .secondary)
         }
     }
 }

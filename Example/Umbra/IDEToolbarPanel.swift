@@ -31,6 +31,10 @@ struct IDEToolbarPanel: View {
 
             Spacer(minLength: IDEAppearance.Spacing.sm)
 
+            if let branch = workspace.gitStatus.currentBranch {
+                IDEToolbarGitBranch(name: branch, action: workspace.showSourceControl)
+            }
+
             IDEToolbarActionCluster(
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
@@ -157,6 +161,30 @@ private struct IDEToolbarBreadcrumbSegment: View {
         case .symbol:
             "Go to \(item.title)"
         }
+    }
+}
+
+private struct IDEToolbarGitBranch: View {
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Text(name)
+                    .font(IDEAppearance.Typography.tabLabel)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+            }
+            .padding(.trailing, IDEAppearance.Spacing.xs)
+        }
+        .buttonStyle(.plain)
+        .help("Show Source Control")
+        .accessibilityLabel("Git branch \(name)")
+        .accessibilityHint("Show Source Control")
     }
 }
 

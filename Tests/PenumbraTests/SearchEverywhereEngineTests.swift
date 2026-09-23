@@ -60,4 +60,34 @@ final class SearchEverywhereEngineTests: XCTestCase {
         XCTAssertEqual(delivered.count, 1, "The superseded query must not call back")
         XCTAssertEqual(delivered.first?.first?.items.map(\.title), ["two"])
     }
+
+    func testEqualScoresKeepTheProvidersOrder() async {
+        final class FlatScoreProvider: SearchEverywhereProvider {
+            let sectionTitle = "Files"
+            let titles = (0..<300).map { "file\($0)" }
+            func items(matching query: String, limit: Int) async -> [PaletteItem] {
+                titles.map { PaletteItem(id: $0, title: $0, sectionTitle: sectionTitle, score: 0, action: {}) }
+            }
+        }
+        let provider = FlatScoreProvider()
+        let engine = SearchEverywhereEngine(providers: [provider])
+        let sections = await engine.sectionsNow(for: "file")
+        XCTAssertEqual(sections.first?.items.map(\.title), provider.titles,
+                       "An unstable sort would reshuffle rows whose providers don't score them")
+    }
+
+    func testPerCallLimitOverridesTheProviderLimit() {
+        let provider = StubProvider(sectionTitle: "Files", sectionOrder: 10, titles: (0..<40).map { "row\($0)" })
+        let engine = SearchEverywhereEngine(providers: [provider])
+        let expectation = expectation(description: "result")
+        var delivered: [PaletteSection] = []
+
+        engine.search("row", debounceMilliseconds: 0, limit: 30) { sections in
+            delivered = sections
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2)
+
+        XCTAssertEqual(delivered.first?.items.count, 30)
+    }
 }

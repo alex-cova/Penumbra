@@ -34,7 +34,7 @@ struct AppSession: Codable {
             keymapPreset: .sublime
         ),
         sidebarWidth: IDEAppearance.Spacing.sidebarWidth,
-        isSidebarVisible: true,
+        isSidebarVisible: false,
         gradleSidebarWidth: IDEAppearance.Spacing.sidebarWidth,
         isGradleSidebarVisible: true,
         isTerminalVisible: false,

@@ -49,6 +49,13 @@ enum IDELanguageSupport {
             ?? "Plain Text"
     }
 
+    /// True when the document's language is inferred from its path and must not be overridden
+    /// (e.g. a `.java` file). Untitled buffers and files with unrecognized extensions stay editable.
+    static func isLanguageLocked(for document: WorkbenchDocument) -> Bool {
+        guard document.contentKind == .text, let url = document.url else { return false }
+        return LanguageIdentifier.identifier(for: url) != nil
+    }
+
     static func language(forIdentifier identifier: String?) -> TreeSitterLanguage? {
         BundledLanguages.language(forIdentifier: identifier)
     }

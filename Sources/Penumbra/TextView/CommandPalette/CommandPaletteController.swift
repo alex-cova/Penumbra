@@ -26,6 +26,29 @@ public final class CommandPaletteController {
     public var fileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
     /// Supplies most-recently-used documents for ⌘E and the Recent Files section.
     public var recentFileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
+    /// A prebuilt, host-maintained file index. When set it replaces ``fileEntriesProvider`` for the
+    /// Files section: nothing is enumerated per keystroke, rows get icons / module / path columns,
+    /// and the Text tab reuses its file list instead of walking the disk.
+    public var fileIndex: PaletteFileIndex?
+    /// Recently used / open files (most recent first) that lead an empty query and win ties.
+    public var fileBoostsProvider: (@MainActor @Sendable () -> [URL])?
+    /// Supplies the Classes tab. When `nil` the tab falls back to type symbols from ``symbolIndex``.
+    public var classesProvider: SearchEverywhereProvider?
+    /// Opens a file beside the current editor (⇧↩ / "Open In Right Split"). File rows only offer
+    /// the alternate action when this is set.
+    public var onOpenFileInSplit: ((URL) -> Void)? {
+        didSet { indexedFilesProvider = nil }
+    }
+    /// Whether ⌘⇧F (`.findInFiles`) opens the palette's Text tab. A host with its own Find in Files
+    /// panel sets this to `false`; the Text tab stays reachable from the tab strip.
+    public var handlesFindInFilesAction = true
+    /// Shows IntelliJ's "Include non-project items" checkbox. Off by default: it only matters once
+    /// a host supplies library classes.
+    public var showsNonProjectToggle = false
+    /// Current state of the "Include non-project items" checkbox.
+    public private(set) var includeNonProjectItems = false
+    /// Invoked when the user flips the "Include non-project items" checkbox.
+    public var onIncludeNonProjectItemsChanged: ((Bool) -> Void)?
     /// Workspace root, used to show file paths relative to it.
     public var workspaceRoot: URL?
     /// Workspace symbol index for the Symbols section.
@@ -39,7 +62,9 @@ public final class CommandPaletteController {
     public var onOpenProjectSearchResult: ((ProjectSearchResult) -> Void)?
     /// Extra host-supplied sections (settings, run configs, docs…).
     public var extraProviders: [SearchEverywhereProvider] = []
-    /// Max rows per section.
+    /// Max rows when the palette browses a single source (a tab other than All, or a sigil scope).
+    public var singleSourceLimit = 60
+    /// Max rows per section in the mixed All / Search Everywhere view.
     public var perSectionLimit: Int {
         get { engine.perProviderLimit }
         set { engine.perProviderLimit = newValue }
@@ -52,10 +77,39 @@ public final class CommandPaletteController {
     private var currentSections: [PaletteSection] = []
     /// Set while presenting a fixed list (`.locations` / surround templates) that bypasses the engine.
     private var isStaticList = false
+    private var indexedFilesProvider: FilesPaletteProvider?
 
-    private var flatItems: [PaletteItem] { currentSections.flatMap(\.items) }
+    var flatItems: [PaletteItem] { currentSections.flatMap(\.items) }
 
     public var isPresented: Bool { paletteModel.isPresented }
+
+    /// Tabs the strip currently offers — only those whose source the host has wired.
+    public var availableTabs: [PaletteTab] {
+        PaletteTab.allCases.filter { tab in
+            switch tab {
+            case .all, .actions: true
+            case .classes: classesProvider != nil || symbolIndex != nil
+            case .files: fileIndex != nil || fileEntriesProvider != nil
+            case .symbols: symbolIndex != nil
+            case .text: projectSearchEngine != nil && workspaceRoot != nil
+            }
+        }
+    }
+
+    /// The tab of the mode being shown, or `nil` for the tab-less modes.
+    public var currentTab: PaletteTab? {
+        isStaticList ? nil : PaletteTab(mode: paletteModel.mode)
+    }
+
+    /// Switches to `tab`, keeping the query text.
+    public func selectTab(_ tab: PaletteTab) {
+        guard paletteModel.isPresented, !isStaticList, availableTabs.contains(tab) else { return }
+        paletteModel.mode = tab.mode
+        paletteModel.selectedIndex = 0
+        paletteView.placeholder = tab.placeholder
+        paletteView.selectedTab = tab
+        runQuery(paletteModel.query)
+    }
 
     public init(textView: TextView, overlayContainer: NSView? = nil, bindActions: Bool = true) {
         self.textView = textView
@@ -135,6 +189,10 @@ public final class CommandPaletteController {
         present(mode: .quickOpen, placeholder: "Go to File")
     }
 
+    public func presentClasses() {
+        present(mode: .classes, placeholder: "Go to Class")
+    }
+
     public func presentSymbols() {
         present(mode: .symbols, placeholder: "Go to Symbol")
     }
@@ -173,6 +231,7 @@ public final class CommandPaletteController {
         paletteModel.showLocations()
         paletteView.placeholder = ""
         paletteView.query = ""
+        configureTabs()
         showOverlay()
         paletteView.update(sections: currentSections, selectedItemIndex: 0)
     }
@@ -198,7 +257,7 @@ public final class CommandPaletteController {
         case .goToSymbol: presentSymbols()
         case .surroundWith: presentSurroundWith()
         case .goToLine: presentGoToLine()
-        case .findInFiles: return presentProjectSearch()
+        case .findInFiles: return handlesFindInFilesAction && presentProjectSearch()
         default: return false
         }
         return true
@@ -226,8 +285,25 @@ public final class CommandPaletteController {
         paletteModel.isPresented = true
         paletteView.placeholder = placeholder
         paletteView.query = seed
+        configureTabs()
         showOverlay()
         runQuery(seed)
+    }
+
+    /// Shows the tab strip for the tabbed modes and hides it for go-to-line, recent files and
+    /// fixed lists.
+    private func configureTabs() {
+        if let tab = currentTab {
+            paletteView.tabs = availableTabs
+            paletteView.selectedTab = tab
+            paletteView.hint = "> actions   @ symbols   : line"
+            paletteView.showsNonProjectToggle = showsNonProjectToggle
+        } else {
+            paletteView.tabs = []
+            paletteView.selectedTab = nil
+            paletteView.hint = ""
+            paletteView.showsNonProjectToggle = false
+        }
     }
 
     private func showOverlay() {
@@ -243,6 +319,21 @@ public final class CommandPaletteController {
     }
 
     private func makeFilesProvider() -> FilesPaletteProvider? {
+        if fileIndex != nil {
+            // One long-lived provider: it reads the live `fileIndex` per query and keeps the
+            // narrowing cache that makes each extra keystroke cheaper than the last.
+            if let existing = indexedFilesProvider { return existing }
+            let index: @MainActor @Sendable () -> PaletteFileIndex? = { [weak self] in self?.fileIndex }
+            let boosts: @MainActor @Sendable () -> [URL] = { [weak self] in self?.fileBoostsProvider?() ?? [] }
+            let open: @MainActor @Sendable (URL) -> Void = { [weak self] url in self?.onOpenFile?(url) }
+            var openInSplit: (@MainActor @Sendable (URL) -> Void)?
+            if onOpenFileInSplit != nil {
+                openInSplit = { [weak self] url in self?.onOpenFileInSplit?(url) }
+            }
+            let provider = FilesPaletteProvider(index: index, boosts: boosts, onOpen: open, onOpenInSplit: openInSplit)
+            indexedFilesProvider = provider
+            return provider
+        }
         guard let entries = fileEntriesProvider else { return nil }
         let root = workspaceRoot
         return FilesPaletteProvider(files: entries, root: { root }) { [weak self] url in
@@ -260,6 +351,14 @@ public final class CommandPaletteController {
     private func makeSymbolsProvider() -> SymbolsPaletteProvider? {
         guard let index = symbolIndex else { return nil }
         return SymbolsPaletteProvider(index: index) { [weak self] symbol in
+            self?.onSelectSymbol?(symbol)
+        }
+    }
+
+    private func makeClassesProvider() -> SearchEverywhereProvider? {
+        if let classesProvider { return classesProvider }
+        guard let index = symbolIndex else { return nil }
+        return SymbolsPaletteProvider(index: index, kinds: [.type], sectionTitle: "Classes", sectionOrder: 15) { [weak self] symbol in
             self?.onSelectSymbol?(symbol)
         }
     }
@@ -285,7 +384,11 @@ public final class CommandPaletteController {
 
     private func makeProjectSearchProvider() -> ProjectSearchPaletteProvider? {
         guard let engine = projectSearchEngine, let root = workspaceRoot else { return nil }
-        return ProjectSearchPaletteProvider(engine: engine, root: root) { [weak self] result in
+        return ProjectSearchPaletteProvider(
+            engine: engine,
+            root: root,
+            files: { [weak self] in self?.fileIndex?.urls }
+        ) { [weak self] result in
             self?.onOpenProjectSearchResult?(result)
         }
     }
@@ -298,10 +401,12 @@ public final class CommandPaletteController {
             return [makeFilesProvider()].compactMap { $0 }
         case .symbols:
             return [makeSymbolsProvider()].compactMap { $0 }
+        case .classes:
+            return [makeClassesProvider()].compactMap { $0 }
         case .recentFiles:
             return [makeRecentProvider()].compactMap { $0 }
         case .searchEverywhere:
-            return ([makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
+            return ([makeClassesProvider(), makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
                 .compactMap { $0 } + [makeCommandsProvider()] + extraProviders
         case .goToLine:
             return [makeGoToLineProvider()]
@@ -343,7 +448,17 @@ public final class CommandPaletteController {
         } else {
             engine.setProviders(providers(for: paletteModel.mode))
         }
-        engine.search(effectiveQuery) { [weak self] sections in
+        let isSingleSource = paletteModel.mode != .searchEverywhere && paletteModel.mode != .textActions
+            || PaletteQueryScope.explicitScope(in: rawQuery) != nil
+        let isDiskSearch = paletteModel.mode == .findInFiles
+        // Index-backed sources are cheap enough to answer almost per keystroke; disk-wide text
+        // search keeps a longer debounce so it isn't restarted for every character.
+        let debounce: UInt64? = isDiskSearch ? 150 : (fileIndex != nil ? 10 : nil)
+        engine.search(
+            effectiveQuery,
+            debounceMilliseconds: debounce,
+            limit: isSingleSource ? max(singleSourceLimit, perSectionLimit) : nil
+        ) { [weak self] sections in
             guard let self else { return }
             self.currentSections = sections
             self.paletteModel.clampSelection(count: self.flatItems.count)
@@ -351,13 +466,32 @@ public final class CommandPaletteController {
         }
     }
 
-    private func activateSelection() {
-        let items = flatItems
-        guard items.indices.contains(paletteModel.selectedIndex) else {
+    func activateSelection(alternate: Bool = false) {
+        // Results are debounced, so Return right after typing a line number would otherwise see
+        // no rows (or the previous number's row). The line is fully determined by the query.
+        if !isStaticList,
+           case .line(let rawLine) = PaletteQueryScope.explicitScope(in: paletteModel.query)
+               ?? PaletteQueryScope.resolve(query: paletteModel.query, mode: paletteModel.mode),
+           let requested = GoToLinePaletteProvider.parse(rawLine) {
+            let target = min(requested, max(textView?.lineCount ?? 0, 1))
             dismiss()
+            textView?.goToLine(target - 1)
             return
         }
-        let action = items[paletteModel.selectedIndex].action
+        let items = flatItems
+        guard items.indices.contains(paletteModel.selectedIndex) else {
+            if !alternate { dismiss() }
+            return
+        }
+        let item = items[paletteModel.selectedIndex]
+        let action: (@MainActor @Sendable () -> Void)?
+        if alternate {
+            // Rows without a secondary action ignore ⇧↩ rather than doing something unexpected.
+            action = item.alternateAction
+        } else {
+            action = item.action
+        }
+        guard let action else { return }
         dismiss()
         action()
     }
@@ -371,9 +505,17 @@ public final class CommandPaletteController {
         paletteView.onMoveSelection = { [weak self] delta in
             guard let self else { return }
             self.paletteModel.moveSelection(by: delta, count: self.flatItems.count)
-            self.paletteView.update(sections: self.currentSections, selectedItemIndex: self.paletteModel.selectedIndex)
+            self.paletteView.updateSelection(self.paletteModel.selectedIndex)
         }
         paletteView.onConfirm = { [weak self] in self?.activateSelection() }
+        paletteView.onConfirmAlternate = { [weak self] in self?.activateSelection(alternate: true) }
+        paletteView.onSelectTab = { [weak self] tab in self?.selectTab(tab) }
+        paletteView.onToggleNonProjectItems = { [weak self] isOn in
+            guard let self else { return }
+            self.includeNonProjectItems = isOn
+            self.onIncludeNonProjectItemsChanged?(isOn)
+            self.runQuery(self.paletteModel.query)
+        }
         paletteView.onCancel = { [weak self] in self?.dismiss() }
         paletteView.onActivateItemAtIndex = { [weak self] index in
             guard let self, self.flatItems.indices.contains(index) else { return }
@@ -390,8 +532,8 @@ public final class CommandPaletteController {
     }
 
     private func layoutPalette(in container: NSView) {
-        let width = min(640, max(360, container.bounds.width - 80))
-        let height: CGFloat = min(440, max(180, container.bounds.height * 0.55))
+        let width = min(760, max(360, container.bounds.width - 80))
+        let height: CGFloat = min(560, max(220, container.bounds.height * 0.7))
         let originX = ((container.bounds.width - width) / 2).rounded()
         // AppKit Y grows upward. Extra leftover below the panel sits it slightly above center.
         let leftover = container.bounds.height - height
@@ -400,7 +542,12 @@ public final class CommandPaletteController {
         if paletteView.frame != frame {
             paletteView.frame = frame
         }
-        paletteView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
+        // The frame is recomputed on every container layout (`onLayout`), so it doesn't need
+        // flexible margins -- and those leave the origin unpinned for Auto Layout to shift
+        // (which then re-triggers this very layout pass).
+        if !paletteView.autoresizingMask.isEmpty {
+            paletteView.autoresizingMask = []
+        }
     }
 }
 

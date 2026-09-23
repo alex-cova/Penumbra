@@ -33,14 +33,23 @@ public final class SearchEverywhereEngine {
 
     /// Runs `query` after the debounce and delivers grouped results to `completion` on the main
     /// actor. A newer call supersedes an older one; the superseded call never calls back.
-    public func search(_ query: String, completion: @escaping @MainActor ([PaletteSection]) -> Void) {
+    /// - Parameters:
+    ///   - debounceMilliseconds: Overrides ``debounceMilliseconds`` for this call (index-backed
+    ///     sources are cheap enough to run almost immediately).
+    ///   - limit: Overrides ``perProviderLimit`` for this call.
+    public func search(
+        _ query: String,
+        debounceMilliseconds: UInt64? = nil,
+        limit: Int? = nil,
+        completion: @escaping @MainActor ([PaletteSection]) -> Void
+    ) {
         runToken += 1
         let token = runToken
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         pendingTask?.cancel()
         let providers = self.providers
-        let limit = perProviderLimit
-        let delay = debounceMilliseconds
+        let limit = limit ?? perProviderLimit
+        let delay = debounceMilliseconds ?? self.debounceMilliseconds
         pendingTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delay * 1_000_000)
             guard !Task.isCancelled else { return }
@@ -81,10 +90,13 @@ public final class SearchEverywhereEngine {
                 lhs.order != rhs.order ? lhs.order < rhs.order : lhs.title < rhs.title
             }
             .map { entry in
-                PaletteSection(
-                    title: entry.title,
-                    items: entry.items.sorted { $0.score > $1.score }
-                )
+                // `sorted` isn't stable, so break score ties on the provider's own order.
+                let ordered = entry.items.enumerated().sorted { lhs, rhs in
+                    lhs.element.score != rhs.element.score
+                        ? lhs.element.score > rhs.element.score
+                        : lhs.offset < rhs.offset
+                }
+                return PaletteSection(title: entry.title, items: ordered.map(\.element))
             }
     }
 }

@@ -87,12 +87,14 @@ public final class IDEWorkspace {
     let project = IDEProjectModel()
     let gitStatus = IDEGitStatusModel()
     private let projectWatcher = IDEProjectWatcher()
+    @ObservationIgnored
+    private let fileIndexer = IDEPaletteFileIndexer()
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
 
     public init() {}
 
-    var isSidebarVisible = true
+    var isSidebarVisible = false
     var isGradleSidebarVisible = true
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
@@ -139,6 +141,8 @@ public final class IDEWorkspace {
     var isGradleConsoleSelected = false
     /// True when the bottom panel's read-only "HTTP" response tab is showing instead of a shell.
     var isHTTPConsoleSelected = false
+    /// True when the bottom panel's Source Control tab is showing instead of a shell.
+    var isSourceControlSelected = false
     /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
     /// produced output worth revisiting.
     var showsGradleConsoleTab: Bool {
@@ -149,9 +153,18 @@ public final class IDEWorkspace {
     var showsHTTPTab: Bool {
         statusLanguage == "http" || httpSupport.isSending || !httpSupport.responseLog.lines.isEmpty
     }
+    /// Whether the "Source Control" tab should appear for the open git repository.
+    var showsSourceControlTab: Bool {
+        gitStatus.isRepository
+    }
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
+    /// Whether the active document's syntax can be changed from the status bar or View > Syntax.
+    var canChangeActiveLanguage: Bool {
+        guard let document = workbench.activePane.selectedDocument else { return false }
+        return !IDELanguageSupport.isLanguageLocked(for: document)
+    }
     /// What `IDERootView` should actually render — just the user's sidebar toggle. The Explorer
     /// stays visible even with no folder or documents open, showing its own empty state.
     var showsSidebar: Bool { isSidebarVisible }
@@ -187,6 +200,9 @@ public final class IDEWorkspace {
         }
         intelligenceServices.javaSupport.onGradleSyncFailed = { [weak self] in
             self?.showGradleOutput()
+        }
+        intelligenceServices.javaSupport.onGradleModelChanged = { [weak self] model in
+            self?.fileIndexer.setGradleModel(model)
         }
         loadSession()
         wireAdapter()
@@ -268,6 +284,7 @@ public final class IDEWorkspace {
     public func setLanguage(identifier: String?, in pane: EditorPane? = nil) {
         let targetPane = pane ?? workbench.activePane
         guard let document = targetPane.selectedDocument else { return }
+        guard !IDELanguageSupport.isLanguageLocked(for: document) else { return }
         document.languageIdentifier = identifier
         document.language = IDELanguageSupport.language(forIdentifier: identifier)
 
@@ -470,6 +487,7 @@ public final class IDEWorkspace {
         // currently showing.
         isGradleConsoleSelected = false
         isHTTPConsoleSelected = false
+        isSourceControlSelected = false
         if terminalTabs.isEmpty {
             addTerminalTab(saveSession: false)
         } else if !isTerminalVisible {
@@ -485,7 +503,7 @@ public final class IDEWorkspace {
         if isTerminalVisible {
             // Leave the Gradle console showing if that's what's already selected; only a shell
             // toggle (no tabs at all yet) needs a fresh tab created for it.
-            if terminalTabs.isEmpty && !isGradleConsoleSelected {
+            if terminalTabs.isEmpty && !isGradleConsoleSelected && !isHTTPConsoleSelected && !isSourceControlSelected {
                 addTerminalTab(saveSession: false)
             }
             requestTerminalFocus()
@@ -514,6 +532,7 @@ public final class IDEWorkspace {
     func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
         isGradleConsoleSelected = false
         isHTTPConsoleSelected = false
+        isSourceControlSelected = false
         let tab = makeTerminalTab(cwd: cwd)
         terminalTabs.append(tab)
         selectedTerminalTabID = tab.id
@@ -534,6 +553,8 @@ public final class IDEWorkspace {
             selectedTerminalTabID = nil
             if showsGradleConsoleTab {
                 isGradleConsoleSelected = true
+            } else if showsSourceControlTab {
+                isSourceControlSelected = true
             } else {
                 hideTerminal()
             }
@@ -561,6 +582,7 @@ public final class IDEWorkspace {
         guard terminalTabs.contains(where: { $0.id == id }) else { return }
         isGradleConsoleSelected = false
         isHTTPConsoleSelected = false
+        isSourceControlSelected = false
         selectedTerminalTabID = id
         requestTerminalFocus()
         saveSession()
@@ -571,6 +593,7 @@ public final class IDEWorkspace {
     func selectGradleConsoleTab() {
         isGradleConsoleSelected = true
         isHTTPConsoleSelected = false
+        isSourceControlSelected = false
         if !isTerminalVisible {
             isTerminalVisible = true
             saveSession()
@@ -580,9 +603,33 @@ public final class IDEWorkspace {
     func selectHTTPConsoleTab() {
         isHTTPConsoleSelected = true
         isGradleConsoleSelected = false
+        isSourceControlSelected = false
         if !isTerminalVisible {
             isTerminalVisible = true
             saveSession()
+        }
+    }
+
+    func selectSourceControlTab() {
+        isSourceControlSelected = true
+        isGradleConsoleSelected = false
+        isHTTPConsoleSelected = false
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+        gitStatus.refresh()
+    }
+
+    func showSourceControl() {
+        selectSourceControlTab()
+    }
+
+    func toggleSourceControl() {
+        if isTerminalVisible && isSourceControlSelected {
+            hideTerminal()
+        } else {
+            showSourceControl()
         }
     }
 
@@ -1242,22 +1289,45 @@ public final class IDEWorkspace {
         return controller
     }
 
-    func openDocument(from url: URL, selecting range: NSRange? = nil) async {
+    /// Loads `url` as an image or text document, not yet attached to any pane.
+    private func loadDocument(from url: URL) async throws -> WorkbenchDocument {
+        if ImageContentDetector.isImageFile(url) {
+            return WorkbenchDocument.loadImage(from: url)
+        }
+        let identifier = LanguageIdentifier.identifier(for: url)
+        let language = IDELanguageSupport.language(forIdentifier: identifier)
+        let document = try await WorkbenchDocument.load(
+            contentsOf: url,
+            theme: IDEEditorTheme.shared.current,
+            language: language,
+            languageIdentifier: identifier,
+            languageProvider: Self.languageProvider
+        )
+        document.language = language
+        return document
+    }
+
+    /// Makes the pane to the right of the active one active, splitting the active pane first when
+    /// it is the last (or only) pane — "Open In Right Split".
+    private func activatePaneToTheRight() {
+        let panes = workbench.layout.flattenedPanes()
+        if let current = panes.firstIndex(where: { $0.id == workbench.activePaneID }), current + 1 < panes.count {
+            workbench.activatePane(panes[current + 1].id)
+            return
+        }
+        // Flush the pane we're leaving so it keeps its caret and scroll position after the rebuild.
+        let sourcePane = workbench.activePane
+        if let document = sourcePane.selectedDocument {
+            syncTextViewToDocument(host(for: sourcePane.id).textView, document: document, from: host(for: sourcePane.id))
+        }
+        _ = workbench.splitActivePane(edge: .trailing)
+    }
+
+    func openDocument(from url: URL, selecting range: NSRange? = nil, inRightSplit: Bool = false) async {
         do {
-            let document: WorkbenchDocument
-            if ImageContentDetector.isImageFile(url) {
-                document = WorkbenchDocument.loadImage(from: url)
-            } else {
-                let identifier = LanguageIdentifier.identifier(for: url)
-                let language = IDELanguageSupport.language(forIdentifier: identifier)
-                document = try await WorkbenchDocument.load(
-                    contentsOf: url,
-                    theme: IDEEditorTheme.shared.current,
-                    language: language,
-                    languageIdentifier: identifier,
-                    languageProvider: Self.languageProvider
-                )
-                document.language = language
+            let document = try await loadDocument(from: url)
+            if inRightSplit {
+                activatePaneToTheRight()
             }
             workbench.openDocument(document)
             if let range, document.contentKind == .text, let selected = workbench.activePane.selectedDocument {
@@ -1282,6 +1352,22 @@ public final class IDEWorkspace {
         } catch {
             presentError(error)
         }
+    }
+
+    /// Opens a class's file with its name selected. The index reports the name as UTF-8 byte
+    /// offsets; the editor selects in UTF-16, so convert against the file's own text.
+    private func openClassDeclaration(in url: URL, utf8NameRange: Range<Int>, inRightSplit: Bool) {
+        Task {
+            let range = await Task.detached { Self.utf16Range(fromUTF8: utf8NameRange, in: url) }.value
+            await openDocument(from: url, selecting: range, inRightSplit: inRightSplit)
+        }
+    }
+
+    nonisolated private static func utf16Range(fromUTF8 range: Range<Int>, in url: URL) -> NSRange? {
+        guard let data = try? Data(contentsOf: url), range.upperBound <= data.count else { return nil }
+        let location = String(decoding: data.prefix(range.lowerBound), as: UTF8.self).utf16.count
+        let length = String(decoding: data[range], as: UTF8.self).utf16.count
+        return NSRange(location: location, length: length)
     }
 
     private func recordRecentFile(_ url: URL) {
@@ -1369,17 +1455,33 @@ public final class IDEWorkspace {
             guard let self else { return [] }
             return self.recentFiles.map { PaletteFileEntry(url: $0, displayName: $0.lastPathComponent) }
         }
-        palette.fileEntriesProvider = { [weak self] in
-            guard let self else { return [] }
-            let projectFiles = self.project.allProjectFiles().map {
-                PaletteFileEntry(url: $0, displayName: $0.lastPathComponent)
-            }
-            let openFiles = self.workbench.allDocuments().compactMap { document in
-                document.url.map { PaletteFileEntry(url: $0, displayName: document.displayName) }
-            }
-            var seen = Set<URL>()
-            return (projectFiles + openFiles).filter { seen.insert($0.url).inserted }
+        palette.fileIndex = fileIndexer.index
+        fileIndexer.onIndexChanged = { [weak palette] index in
+            palette?.fileIndex = index
         }
+        palette.fileBoostsProvider = { [weak self] in
+            guard let self else { return [] }
+            var seen = Set<URL>()
+            let open = self.workbench.recentDocuments(limit: 30).compactMap(\.url)
+            return (open + self.recentFiles).filter { seen.insert($0).inserted }
+        }
+        palette.projectSearchEngine = ProjectSearchEngine()
+        // ⌘⇧F keeps Umbra's own Find in Files panel; the palette's Text tab stays a tab.
+        palette.handlesFindInFilesAction = false
+        palette.onOpenProjectSearchResult = { [weak self] result in
+            self?.openFindInFilesHit(result)
+        }
+        palette.onOpenFileInSplit = { [weak self] url in
+            guard let self else { return }
+            Task { await self.openDocument(from: url, inRightSplit: true) }
+        }
+        palette.classesProvider = IDEJavaClassesPaletteProvider(
+            javaIndex: intelligenceServices.javaSupport.javaIndex,
+            fileIndex: { [weak self] in self?.fileIndexer.index },
+            onOpen: { [weak self] url, nameRange, inSplit in
+                self?.openClassDeclaration(in: url, utf8NameRange: nameRange, inRightSplit: inSplit)
+            }
+        )
         palette.symbolIndex = intelligenceServices.symbolIndex
         palette.workspaceRoot = project.rootURL
         palette.onOpenFile = { [weak self] url in
@@ -1424,6 +1526,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleMetalRendering() }),
             EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
                           action: { [weak self] in self?.toggleTerminal() }),
+            EditorCommand(id: "app.toggleSourceControl", title: "Toggle Source Control", group: "View",
+                          action: { [weak self] in self?.toggleSourceControl() }),
             EditorCommand(id: "app.newTerminalTab", title: "New Terminal Tab", group: "View",
                           action: { [weak self] in self?.addTerminalTab() }),
             EditorCommand(id: "app.closeTerminalTab", title: "Close Terminal Tab", group: "View",
@@ -1463,10 +1567,12 @@ public final class IDEWorkspace {
     private func applyProjectRoot(_ url: URL?) {
         project.setRoot(url)
         gitStatus.setRoot(url)
+        fileIndexer.setRoot(url)
         projectWatcher.onBatch = [{ [weak self] batch in
             guard let self else { return }
             self.project.applyChanges(in: batch.affectedDirectories)
             self.gitStatus.refresh()
+            self.fileIndexer.handle(batch)
         }]
         if let url {
             _ = url.startAccessingSecurityScopedResource()

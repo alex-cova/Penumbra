@@ -128,6 +128,9 @@ struct UmbraApp: App {
                     .keyboardShortcut("b", modifiers: .command)
                 Button("Toggle Terminal", systemImage: "terminal", action: workspace.toggleTerminal)
                     .keyboardShortcut("`", modifiers: .control)
+                Button("Toggle Source Control", systemImage: "arrow.triangle.branch", action: workspace.toggleSourceControl)
+                    .disabled(!workspace.showsSourceControlTab)
+                    .keyboardShortcut("g", modifiers: [.command, .control])
                 Button("New Terminal Tab", systemImage: "plus.rectangle.on.rectangle") {
                     workspace.addTerminalTab()
                 }
@@ -152,8 +155,10 @@ struct UmbraApp: App {
                         Button(option.displayName) {
                             workspace.setLanguage(identifier: option.id)
                         }
+                        .disabled(!workspace.canChangeActiveLanguage)
                     }
                 }
+                .disabled(!workspace.canChangeActiveLanguage)
                 Divider()
                 Toggle("Typewriter Scrolling", isOn: workspace.isTypewriterScrollingEnabledBinding)
                 Toggle("Distraction Free", isOn: workspace.isDistractionFreeModeEnabledBinding)

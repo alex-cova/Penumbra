@@ -53,10 +53,9 @@ final class IDEProjectModel {
         let token = UUID()
     }
 
-    /// Directory names skipped when building the sidebar tree and the Go to File candidate
-    /// list. Kept local rather than shared with `ProjectSearchEngine`'s `FileEnumerationPolicy`:
-    /// this walk needs to stay synchronous (it feeds `CommandPaletteController.fileEntriesProvider`
-    /// directly), while project search runs off the main actor.
+    /// Directory names skipped when building the sidebar tree and the Go to File index. Kept local
+    /// rather than shared with `ProjectSearchEngine`'s `FileEnumerationPolicy` so the Explorer and
+    /// Go to File agree on exactly one list.
     nonisolated static let ignoredDirectoryNames: Set<String> = [
         ".git", ".build", "node_modules", "DerivedData", ".swiftpm", "Pods", ".cursor"
     ]
@@ -362,35 +361,6 @@ final class IDEProjectModel {
     /// Scrolls `path` into view without changing expansion or selection (keyboard navigation).
     func requestScroll(to path: String) {
         revealRequest = RevealRequest(path: path, centered: false)
-    }
-
-    func allProjectFiles() -> [URL] {
-        guard let rootURL else { return [] }
-        var files: [URL] = []
-        collectFiles(at: rootURL, into: &files)
-        return files.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
-    }
-
-    private func collectFiles(at url: URL, into files: inout [URL]) {
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-        for entry in entries {
-            let name = entry.lastPathComponent
-            if name.hasPrefix(".") || Self.ignoredDirectoryNames.contains(name) {
-                continue
-            }
-            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-            if isDirectory {
-                collectFiles(at: entry, into: &files)
-            } else {
-                files.append(entry)
-            }
-        }
     }
 
     nonisolated private static func allDirectoryPaths(in node: IDEFileNode) -> Set<String> {

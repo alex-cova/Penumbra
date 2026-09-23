@@ -41,14 +41,20 @@ public final class CommandsPaletteProvider: SearchEverywhereProvider {
     }
 }
 
-/// Fuzzy file lookup over a caller-supplied list of URLs (Penumbra has no on-disk index).
-/// The list and root are snapshotted on the main actor per query.
+/// Fuzzy file lookup. Two backends:
+/// - a prebuilt ``PaletteFileIndex`` (fast path: no per-query enumeration, IntelliJ-style
+///   name matching, icons / module / footer columns, narrowing between keystrokes), or
+/// - a caller-supplied list of URLs, snapshotted on the main actor per query (legacy path).
 public final class FilesPaletteProvider: SearchEverywhereProvider {
     public let sectionTitle = "Files"
     public let sectionOrder = 20
-    private let files: @MainActor @Sendable () -> [PaletteFileEntry]
+    private let files: (@MainActor @Sendable () -> [PaletteFileEntry])?
     private let root: @MainActor @Sendable () -> URL?
     private let onOpen: @MainActor @Sendable (URL) -> Void
+    private let indexProvider: (@MainActor @Sendable () -> PaletteFileIndex?)?
+    private let boostsProvider: @MainActor @Sendable () -> [URL]
+    private let onOpenInSplit: (@MainActor @Sendable (URL) -> Void)?
+    private let narrowing = NarrowingCache()
 
     public init(
         files: @escaping @MainActor @Sendable () -> [PaletteFileEntry],
@@ -58,22 +64,118 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
         self.files = files
         self.root = root
         self.onOpen = onOpen
+        self.indexProvider = nil
+        self.boostsProvider = { [] }
+        self.onOpenInSplit = nil
+    }
+
+    /// Index-backed provider. `index` and `boosts` are read on the main actor per query, so the
+    /// same provider instance keeps serving as the host swaps in a fresh index.
+    public init(
+        index: @escaping @MainActor @Sendable () -> PaletteFileIndex?,
+        boosts: @escaping @MainActor @Sendable () -> [URL] = { [] },
+        onOpen: @escaping @MainActor @Sendable (URL) -> Void,
+        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil
+    ) {
+        self.files = nil
+        self.root = { nil }
+        self.onOpen = onOpen
+        self.indexProvider = index
+        self.boostsProvider = boosts
+        self.onOpenInSplit = onOpenInSplit
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
-        let files = self.files
+        if let indexProvider {
+            return await indexedItems(matching: query, limit: limit, indexProvider: indexProvider)
+        }
+        guard let files else { return [] }
         let root = self.root
         let (entries, rootURL) = await MainActor.run { (files(), root()) }
         let ranked = QuickOpenFileRanker.rank(query: query, files: entries.map(\.url), root: rootURL, limit: limit)
-        return ranked.map { url in
+        let names = Dictionary(entries.compactMap { entry in entry.displayName.map { (entry.url, $0) } },
+                               uniquingKeysWith: { first, _ in first })
+        return ranked.enumerated().map { rank, url in
             let onOpen = self.onOpen
             return PaletteItem(
                 id: "file:\(url.path)",
-                title: entries.first { $0.url == url }?.displayName ?? url.lastPathComponent,
+                title: names[url] ?? url.lastPathComponent,
                 subtitle: Self.relativeDirectory(of: url, root: rootURL),
                 sectionTitle: sectionTitle,
+                score: limit - rank,
                 action: { onOpen(url) }
             )
+        }
+    }
+
+    private func indexedItems(
+        matching query: String,
+        limit: Int,
+        indexProvider: @MainActor @Sendable () -> PaletteFileIndex?
+    ) async -> [PaletteItem] {
+        let boostsProvider = self.boostsProvider
+        let (indexOrNil, boosts) = await MainActor.run { (indexProvider(), boostsProvider()) }
+        guard let index = indexOrNil else { return [] }
+        let candidates = narrowing.candidates(for: index, query: query)
+        let result = index.search(query, limit: limit, boosts: boosts, among: candidates)
+        narrowing.store(index: index, query: query, candidates: result.candidates)
+        guard !Task.isCancelled else { return [] }
+
+        let onOpen = self.onOpen
+        let onOpenInSplit = self.onOpenInSplit
+        var items: [PaletteItem] = []
+        items.reserveCapacity(result.hits.count)
+        for hit in result.hits {
+            let entry = index.entry(at: hit.index)
+            let url = entry.url
+            var alternate: (@MainActor @Sendable () -> Void)?
+            if let onOpenInSplit {
+                alternate = { onOpenInSplit(url) }
+            }
+            items.append(PaletteItem(
+                id: "file:\(url.path)",
+                title: url.lastPathComponent,
+                sectionTitle: sectionTitle,
+                matchedIndices: index.highlightOffsets(forEntryAt: hit.index, query: query),
+                score: hit.score,
+                action: { onOpen(url) },
+                icon: entry.icon,
+                location: entry.location,
+                trailing: entry.module,
+                footer: entry.relativePath,
+                alternateAction: alternate
+            ))
+        }
+        return items
+    }
+
+    /// Remembers which entries matched the previous query so a query that merely extends it only
+    /// rescans those. Guarded by a lock because provider calls may overlap.
+    private final class NarrowingCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var indexID: ObjectIdentifier?
+        private var query = ""
+        private var matched: [Int32]?
+
+        func candidates(for index: PaletteFileIndex, query newQuery: String) -> [Int32]? {
+            guard Self.isNarrowable(newQuery) else { return nil }
+            lock.lock()
+            defer { lock.unlock() }
+            guard indexID == ObjectIdentifier(index), let matched, !query.isEmpty,
+                  newQuery.lowercased().hasPrefix(query) else { return nil }
+            return matched
+        }
+
+        func store(index: PaletteFileIndex, query newQuery: String, candidates: [Int32]?) {
+            lock.lock()
+            defer { lock.unlock() }
+            indexID = ObjectIdentifier(index)
+            query = newQuery.lowercased()
+            matched = Self.isNarrowable(newQuery) ? candidates : nil
+        }
+
+        private static func isNarrowable(_ query: String) -> Bool {
+            !query.isEmpty && !query.contains { $0 == " " || $0 == "\t" || $0 == "/" }
         }
     }
 
@@ -221,18 +323,33 @@ public final class ProjectSearchPaletteProvider: SearchEverywhereProvider {
     public let sectionOrder = 20
     private let engine: ProjectSearchEngine
     private let root: URL
+    private let files: (@MainActor @Sendable () -> [URL]?)?
     private let onSelect: @MainActor @Sendable (ProjectSearchResult) -> Void
 
-    public init(engine: ProjectSearchEngine, root: URL, onSelect: @escaping @MainActor @Sendable (ProjectSearchResult) -> Void) {
+    /// - Parameter files: An already-enumerated candidate list (e.g. ``PaletteFileIndex/urls``).
+    ///   When it returns a list the disk tree is not walked again for every query.
+    public init(
+        engine: ProjectSearchEngine,
+        root: URL,
+        files: (@MainActor @Sendable () -> [URL]?)? = nil,
+        onSelect: @escaping @MainActor @Sendable (ProjectSearchResult) -> Void
+    ) {
         self.engine = engine
         self.root = root
+        self.files = files
         self.onSelect = onSelect
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
         guard !query.isEmpty else { return [] }
         let searchQuery = WorkspaceSearchQuery(text: query)
-        let results = await engine.search(searchQuery, in: root, maxResults: limit)
+        let candidates = await MainActor.run { files?() }
+        let results: [ProjectSearchResult]
+        if let candidates {
+            results = await engine.search(searchQuery, files: candidates, maxResults: limit)
+        } else {
+            results = await engine.search(searchQuery, in: root, maxResults: limit)
+        }
         let onSelect = self.onSelect
         return results.map { result in
             PaletteItem(
@@ -249,21 +366,33 @@ public final class ProjectSearchPaletteProvider: SearchEverywhereProvider {
 /// Workspace symbols. `SymbolIndex` only does prefix/exact lookups, so this layers
 /// ``FuzzyMatcher`` over `allSymbols()`.
 public final class SymbolsPaletteProvider: SearchEverywhereProvider {
-    public let sectionTitle = "Symbols"
-    public let sectionOrder = 30
+    public let sectionTitle: String
+    public let sectionOrder: Int
     private let index: SymbolIndex
+    private let kinds: Set<SymbolKind>?
     private let onSelect: @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
 
-    public init(index: SymbolIndex, onSelect: @escaping @MainActor @Sendable (EditorIntelligence.Symbol) -> Void) {
+    /// - Parameter kinds: Restricts results to these kinds (the Classes tab passes `[.type]`).
+    public init(
+        index: SymbolIndex,
+        kinds: Set<SymbolKind>? = nil,
+        sectionTitle: String = "Symbols",
+        sectionOrder: Int = 30,
+        onSelect: @escaping @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
+    ) {
         self.index = index
+        self.kinds = kinds
+        self.sectionTitle = sectionTitle
+        self.sectionOrder = sectionOrder
         self.onSelect = onSelect
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
         guard !query.isEmpty else { return [] }
-        let all = await index.allSymbols()
+        var all = await index.allSymbols()
+        if let kinds { all = all.filter { kinds.contains($0.kind) } }
         let ranked = FuzzyMatcher.rankedWithMatches(query: query, items: all, key: { $0.name }, limit: limit)
-        return ranked.map { entry in
+        return ranked.enumerated().map { rank, entry in
             let onSelect = self.onSelect
             let symbol = entry.item
             return PaletteItem(
@@ -272,6 +401,7 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
                 subtitle: symbol.signature ?? String(describing: symbol.kind),
                 sectionTitle: sectionTitle,
                 matchedIndices: entry.match.matchedIndices,
+                score: limit - rank,
                 action: { onSelect(symbol) }
             )
         }

@@ -62,7 +62,7 @@ struct IDEFileTreeView: View {
                             }
                         }
                         .padding(.vertical, IDEAppearance.Spacing.xs)
-                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+                        .frame(minWidth: max(proxy.size.width, contentWidth(of: nodes)), minHeight: proxy.size.height, alignment: .topLeading)
                         .contentShape(Rectangle())
                         .contextMenu { creationContextMenu(for: creationDirectory) }
                     }
@@ -87,6 +87,18 @@ struct IDEFileTreeView: View {
         }
         .onChange(of: filterNeedle) { _, _ in
             collapsedWhileFiltering.removeAll()
+        }
+    }
+
+    /// A `LazyVStack` only measures the rows it has realized, so the scrollable width would change
+    /// while scrolling and the horizontal scroller would come and go. Size it from every row instead.
+    private func contentWidth(of nodes: [FlatNode]) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1, weight: .semibold)
+        let chrome = 12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2
+        return nodes.reduce(0) { widest, item in
+            let name = (item.node.displayName ?? item.node.name) as NSString
+            let textWidth = name.size(withAttributes: [.font: font]).width.rounded(.up)
+            return max(widest, CGFloat(item.depth) * 14 + chrome + textWidth)
         }
     }
 

@@ -1,5 +1,22 @@
 import Foundation
 
+/// A small glyph shown at the start of a palette row. The tint is a semantic name (not an
+/// `NSColor`) so ``PaletteItem`` stays `Sendable` and free of AppKit.
+public struct PaletteIcon: Sendable, Hashable {
+    public enum Tint: Sendable, Hashable {
+        case accent, blue, orange, green, purple, red, secondary
+    }
+
+    /// SF Symbol name.
+    public let systemName: String
+    public let tint: Tint
+
+    public init(systemName: String, tint: Tint = .secondary) {
+        self.systemName = systemName
+        self.tint = tint
+    }
+}
+
 /// A single row in a "Search Everywhere" / "Find Action" style palette.
 ///
 /// Sources produce `PaletteItem`s (a file, a symbol, a command, a surround template, …); the
@@ -18,6 +35,17 @@ public struct PaletteItem: Identifiable, Sendable {
     /// Higher sorts first within a section.
     public let score: Int
     public let action: @MainActor @Sendable () -> Void
+    /// Glyph shown before the title.
+    public let icon: PaletteIcon?
+    /// Dimmed text after the title (a file's folder inside its module, a class's package).
+    /// Takes the place of ``subtitle`` in the row when set.
+    public let location: String?
+    /// Right-aligned secondary column (a file's module).
+    public let trailing: String?
+    /// Full description of the row shown in the palette footer (a file's path).
+    public let footer: String?
+    /// Secondary way to open the row (⇧↩ — "Open In Right Split"). `nil` when unsupported.
+    public let alternateAction: (@MainActor @Sendable () -> Void)?
 
     public init(
         id: String,
@@ -26,7 +54,12 @@ public struct PaletteItem: Identifiable, Sendable {
         sectionTitle: String,
         matchedIndices: [Int] = [],
         score: Int = 0,
-        action: @escaping @MainActor @Sendable () -> Void
+        action: @escaping @MainActor @Sendable () -> Void,
+        icon: PaletteIcon? = nil,
+        location: String? = nil,
+        trailing: String? = nil,
+        footer: String? = nil,
+        alternateAction: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.id = id
         self.title = title
@@ -35,6 +68,11 @@ public struct PaletteItem: Identifiable, Sendable {
         self.matchedIndices = matchedIndices
         self.score = score
         self.action = action
+        self.icon = icon
+        self.location = location
+        self.trailing = trailing
+        self.footer = footer
+        self.alternateAction = alternateAction
     }
 }
 
