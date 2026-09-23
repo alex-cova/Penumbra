@@ -25,6 +25,7 @@ struct IDESidebarPanel: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Toggle("Flatten Packages", isOn: $preferences.flattenJavaPackages)
+                Toggle("Auto-Reveal Active File", isOn: $preferences.explorerAutoReveal)
             }
 
             if isSearchPresented {
@@ -45,9 +46,23 @@ struct IDESidebarPanel: View {
                 },
                 flattenPackages: preferences.flattenJavaPackages,
                 javaSourceRootPaths: workspace.javaSupport.javaSourceRootPaths,
-                nameFilter: searchQuery
+                nameFilter: searchQuery,
+                gitStatus: workspace.gitStatus,
+                openPaths: workspace.openDocumentPaths,
+                actions: IDEFileTreeActions(
+                    newItem: { workspace.createExplorerItem(in: $0, isDirectory: $1) },
+                    beginRename: { workspace.beginExplorerRename($0) },
+                    commitRename: { workspace.commitExplorerRename(of: $0, to: $1) },
+                    cancelRename: { workspace.cancelExplorerRename() },
+                    duplicate: { workspace.duplicateExplorerItem($0) },
+                    trash: { workspace.trashExplorerItem($0) },
+                    copyPath: { workspace.copyExplorerPath($0, relative: $1) }
+                )
             )
-            .focusable(false)
+        }
+        .onChange(of: workspace.project.revealRequest) { _, request in
+            // A filter would hide the revealed row.
+            if request?.centered == true, !searchQuery.isEmpty { searchQuery.removeAll() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.sidebar)

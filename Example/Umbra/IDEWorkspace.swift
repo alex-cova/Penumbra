@@ -83,6 +83,8 @@ public final class IDEWorkspace {
 
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
+    let gitStatus = IDEGitStatusModel()
+    private let projectWatcher = IDEProjectWatcher()
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
 
@@ -113,6 +115,9 @@ public final class IDEWorkspace {
     var statusSelectionLength = 0
     var statusRenderer = "Core Graphics"
     var tabsByPane: [UUID: [IDETabRow]] = [:]
+    /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
+    private(set) var openDocumentPaths: Set<String> = []
+    @ObservationIgnored private var lastAutoRevealedDocumentID: UUID?
     var isFindInFilesVisible = false
     var findInFilesQuery = ""
     var findInFilesHits: [ProjectSearchResult] = []
@@ -317,6 +322,7 @@ public final class IDEWorkspace {
         do {
             _ = try await document.save(from: textView, to: destination)
             recordRecentFile(destination!)
+            gitStatus.refresh()
             refreshPresentation()
         } catch {
             presentError(error)
@@ -334,6 +340,7 @@ public final class IDEWorkspace {
         do {
             _ = try await document.save(from: textView, to: url)
             recordRecentFile(url)
+            gitStatus.refresh()
             refreshPresentation()
         } catch {
             presentError(error)
@@ -1281,6 +1288,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.splitDown() }),
             EditorCommand(id: "app.toggleSidebar", title: "Toggle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleSidebar() }),
+            EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
+                          action: { [weak self] in self?.revealActiveFileInExplorer() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
                           action: { [weak self] in self?.toggleMinimap() }),
             EditorCommand(id: "app.toggleLineNumbers", title: "Toggle Line Numbers", group: "View",
@@ -1333,6 +1342,17 @@ public final class IDEWorkspace {
 
     private func applyProjectRoot(_ url: URL?) {
         project.setRoot(url)
+        gitStatus.setRoot(url)
+        projectWatcher.onBatch = [{ [weak self] batch in
+            guard let self else { return }
+            self.project.applyChanges(in: batch.affectedDirectories)
+            self.gitStatus.refresh()
+        }]
+        if let url {
+            projectWatcher.start(root: url)
+        } else {
+            projectWatcher.stop()
+        }
         syncTerminalWorkingDirectory()
         intelligenceServices.javaSupport.setProjectRoot(url)
     }
@@ -1383,6 +1403,9 @@ public final class IDEWorkspace {
             }
         }
         tabsByPane = tabs
+        let openPaths = Set(workbench.panes.flatMap(\.documents).compactMap { $0.url?.standardizedFileURL.path })
+        if openPaths != openDocumentPaths { openDocumentPaths = openPaths }
+        autoRevealActiveDocumentIfNeeded()
         isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · Umbra"
@@ -1424,6 +1447,205 @@ public final class IDEWorkspace {
         }
         guard headerContext.symbolItems != items else { return }
         headerContext.symbolItems = items
+    }
+
+    // MARK: - Explorer file operations
+
+    private var fileOperations: IDEFileOperations? {
+        project.rootURL.map(IDEFileOperations.init(rootURL:))
+    }
+
+    /// Creates an empty file or folder named `untitled…` in `directory` and opens the inline rename
+    /// field on its row. Cancelling that rename removes the placeholder again.
+    func createExplorerItem(in directory: URL, isDirectory: Bool) {
+        guard let operations = fileOperations else { return }
+        cancelExplorerRename()
+        do {
+            let name = operations.uniqueName(base: isDirectory ? "untitled folder" : "untitled", in: directory)
+            let url = isDirectory
+                ? try operations.createDirectory(in: directory, name: name)
+                : try operations.createFile(in: directory, name: name)
+            project.reveal(url: directory)
+            Task {
+                await project.refresh(directories: [directory.path])
+                project.pendingCreationPath = url.path
+                project.renamingPath = url.path
+                project.revealAndSelect(url: url, centered: false)
+                gitStatus.refresh()
+            }
+        } catch {
+            presentError(error)
+        }
+    }
+
+    func beginExplorerRename(_ url: URL) {
+        guard let root = project.rootURL, url.standardizedFileURL.path != root.standardizedFileURL.path else { return }
+        cancelExplorerRename()
+        project.selectedPath = url.path
+        project.renamingPath = url.path
+    }
+
+    /// Applies the inline rename. For a fresh placeholder this names it (and opens files); an
+    /// empty or unchanged name on a placeholder keeps its default name only when non-empty.
+    func commitExplorerRename(of url: URL, to newName: String) {
+        guard let operations = fileOperations else { return }
+        let isPlaceholder = project.pendingCreationPath == url.path
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        project.renamingPath = nil
+        project.pendingCreationPath = nil
+        if trimmed.isEmpty {
+            if isPlaceholder { discardPlaceholder(url) }
+            return
+        }
+        var result = url
+        if trimmed != url.lastPathComponent {
+            do {
+                result = try operations.rename(url, to: trimmed)
+            } catch {
+                presentError(error)
+                if isPlaceholder { discardPlaceholder(url) }
+                return
+            }
+            retargetOpenDocuments(from: url, to: result)
+            project.didMove(from: url.path, to: result.path)
+            recentFiles = recentFiles.map { retargeted($0, from: url, to: result) }
+        }
+        let parent = url.deletingLastPathComponent().path
+        Task {
+            await project.refresh(directories: [parent])
+            project.revealAndSelect(url: result, centered: false)
+            gitStatus.refresh()
+            refreshPresentation()
+            if isPlaceholder {
+                let isDirectory = (try? result.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                if !isDirectory { await openDocument(from: result) }
+            }
+        }
+    }
+
+    func cancelExplorerRename() {
+        guard let path = project.renamingPath else { return }
+        let placeholder = project.pendingCreationPath == path
+        project.renamingPath = nil
+        project.pendingCreationPath = nil
+        if placeholder { discardPlaceholder(URL(fileURLWithPath: path)) }
+    }
+
+    func duplicateExplorerItem(_ url: URL) {
+        guard let operations = fileOperations else { return }
+        do {
+            let copy = try operations.duplicate(url)
+            Task {
+                await project.refresh(directories: [url.deletingLastPathComponent().path])
+                project.revealAndSelect(url: copy, centered: false)
+                gitStatus.refresh()
+            }
+        } catch {
+            presentError(error)
+        }
+    }
+
+    /// Always asks first. Open editors on the item (or inside a trashed folder) are closed.
+    func trashExplorerItem(_ url: URL) {
+        guard let operations = fileOperations else { return }
+        let affected = openDocuments(at: url)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
+        var details = "You can restore it from the Trash in Finder."
+        let dirty = affected.filter { $0.document.isDirty }.count
+        if dirty > 0 {
+            details += " \(dirty) open editor\(dirty == 1 ? " has" : "s have") unsaved changes that will be lost."
+        }
+        alert.informativeText = details
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try operations.trash(url)
+        } catch {
+            presentError(error)
+            return
+        }
+        for (pane, document) in affected { closeDocument(document.id, in: pane) }
+        if project.selectedPath == url.path { project.selectedPath = nil }
+        project.removeExpanded(under: url.path)
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
+    }
+
+    func copyExplorerPath(_ url: URL, relative: Bool) {
+        let value = relative ? (fileOperations?.relativePath(of: url) ?? url.path) : url.path
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func discardPlaceholder(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
+    }
+
+    private func openDocuments(at url: URL) -> [(pane: EditorPane, document: WorkbenchDocument)] {
+        let path = url.standardizedFileURL.path
+        return workbench.panes.flatMap { pane in
+            pane.documents.compactMap { document -> (EditorPane, WorkbenchDocument)? in
+                guard let documentPath = document.url?.standardizedFileURL.path else { return nil }
+                return documentPath == path || documentPath.hasPrefix(path + "/") ? (pane, document) : nil
+            }
+        }
+    }
+
+    private func retargeted(_ url: URL, from old: URL, to new: URL) -> URL {
+        let path = url.standardizedFileURL.path
+        let oldPath = old.standardizedFileURL.path
+        if path == oldPath { return new }
+        if path.hasPrefix(oldPath + "/") {
+            return URL(fileURLWithPath: new.standardizedFileURL.path + path.dropFirst(oldPath.count))
+        }
+        return url
+    }
+
+    /// Points open tabs at the renamed file (or at files inside a renamed folder). Buffers,
+    /// including unsaved edits, are kept.
+    private func retargetOpenDocuments(from old: URL, to new: URL) {
+        for (_, document) in openDocuments(at: old) {
+            guard let current = document.url else { continue }
+            let updated = retargeted(current, from: old, to: new)
+            document.url = updated
+            if current.standardizedFileURL.path == old.standardizedFileURL.path {
+                document.displayName = updated.lastPathComponent
+            }
+        }
+        refreshPresentation()
+        for pane in workbench.panes {
+            Task { await workspaceBridge.syncPane(pane) }
+        }
+    }
+
+    /// Explorer's "Reveal Active File": shows the sidebar, expands to the active tab's file, and
+    /// scrolls it to the center.
+    func revealActiveFileInExplorer() {
+        guard let url = workbench.activePane.selectedDocument?.url else { return }
+        guard project.rootURL != nil else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+        isSidebarVisible = true
+        project.revealAndSelect(url: url, centered: true)
+    }
+
+    private func autoRevealActiveDocumentIfNeeded() {
+        let document = workbench.activePane.selectedDocument
+        guard document?.id != lastAutoRevealedDocumentID else { return }
+        lastAutoRevealedDocumentID = document?.id
+        guard IDEPreferences.shared.explorerAutoReveal, project.renamingPath == nil,
+              let url = document?.url, project.rootURL != nil else { return }
+        project.revealAndSelect(url: url, centered: false)
     }
 
     private func revealInSidebar(_ url: URL) {

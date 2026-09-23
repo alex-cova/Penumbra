@@ -21,6 +21,7 @@ public final class IDEPreferences {
         static let showMinimap = "com.umbra.editor.showMinimap"
         static let showScrollbars = "com.umbra.editor.showScrollbars"
         static let flattenJavaPackages = "com.umbra.editor.flattenJavaPackages"
+        static let explorerAutoReveal = "com.umbra.editor.explorerAutoReveal"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
@@ -89,6 +90,11 @@ public final class IDEPreferences {
     /// "Flatten Packages") instead of nested folders.
     var flattenJavaPackages: Bool {
         didSet { UserDefaults.standard.set(flattenJavaPackages, forKey: Keys.flattenJavaPackages) }
+    }
+
+    /// Explorer selects and scrolls to the active editor tab's file whenever the tab changes.
+    var explorerAutoReveal: Bool {
+        didSet { UserDefaults.standard.set(explorerAutoReveal, forKey: Keys.explorerAutoReveal) }
     }
 
     var isMetalRenderingEnabled: Bool {
@@ -178,6 +184,7 @@ public final class IDEPreferences {
         showMinimap = defaults.object(forKey: Keys.showMinimap) as? Bool ?? true
         showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
         flattenJavaPackages = defaults.object(forKey: Keys.flattenJavaPackages) as? Bool ?? false
+        explorerAutoReveal = defaults.object(forKey: Keys.explorerAutoReveal) as? Bool ?? true
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime

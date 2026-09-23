@@ -102,6 +102,8 @@ struct UmbraApp: App {
                 Divider()
                 Button("Toggle Sidebar", systemImage: "sidebar.leading", action: workspace.toggleSidebar)
                     .keyboardShortcut("0", modifiers: .command)
+                Button("Reveal Active File in Explorer", systemImage: "scope", action: workspace.revealActiveFileInExplorer)
+                    .keyboardShortcut("e", modifiers: [.command, .option])
                 Button("Markdown Preview", systemImage: "doc.richtext", action: workspace.toggleMarkdownPreview)
                     .keyboardShortcut("b", modifiers: .command)
                 Button("Toggle Terminal", systemImage: "terminal", action: workspace.toggleTerminal)

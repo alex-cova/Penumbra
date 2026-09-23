@@ -71,6 +71,14 @@ enum IDEAppearance {
         static let muted = Color(hex: 0x8A8F98)
         static let selection = Color(hex: 0x74ADE8).opacity(0.18)
         static let error = Color(hex: 0xE5484D)
+        static let gitModified = Color(hex: 0xE2C08D)
+        static let gitAdded = Color(hex: 0x73C991)
+        static let gitUntracked = Color(hex: 0x73C991)
+        static let gitConflict = Color(hex: 0xE5484D)
+        static let gitIgnored = Color(hex: 0x8A8F98).opacity(0.55)
+        static let sourceRoot = Color(hex: 0x74ADE8)
+        static let testSourceRoot = Color(hex: 0x73C991)
+        static let resourcesFolder = Color(hex: 0xD7A35B)
     }
 
     enum NSToken {
@@ -112,6 +120,8 @@ enum IDEFileIcon {
         case "swift": "swift"
         case "js", "jsx", "ts", "tsx": "curlybraces"
         case "json": "curlybraces.square"
+        case "java": "cup.and.saucer"
+        case "kt", "kts": "k.square"
         case "md", "markdown": "text.book.closed"
         case "py": "chevron.left.forwardslash.chevron.right"
         case "bmp", "gif", "heic", "heif", "icns", "ico", "jpeg", "jpg", "png", "tiff", "tif", "webp":
