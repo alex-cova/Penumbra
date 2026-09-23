@@ -82,6 +82,9 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
     public let triggersSignatureHelp: Bool
     /// Selected by default when the popup opens, e.g. an expected-type match.
     public let preselect: Bool
+    /// A lone explicit completion may insert this item immediately. Class names, chains, and
+    /// generated templates stay in the popup.
+    public let allowsAutoInsert: Bool
 
     public init(
         id: UUID = UUID(),
@@ -101,7 +104,8 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         priority: Double = 0,
         caretOffset: Int? = nil,
         triggersSignatureHelp: Bool = false,
-        preselect: Bool = false
+        preselect: Bool = false,
+        allowsAutoInsert: Bool = true
     ) {
         self.id = id
         self.label = label
@@ -121,6 +125,7 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         self.caretOffset = caretOffset
         self.triggersSignatureHelp = triggersSignatureHelp
         self.preselect = preselect
+        self.allowsAutoInsert = allowsAutoInsert
     }
 
     /// Whether `insertText` must be expanded as a snippet.

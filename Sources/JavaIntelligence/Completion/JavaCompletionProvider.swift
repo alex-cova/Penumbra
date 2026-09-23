@@ -54,7 +54,31 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     public func provide(context: CompletionContext) async -> [CompletionItem] {
-        guard context.document.languageIdentifier == "java" else { return [] }
+        var items: [CompletionItem] = []
+        for await update in provideUpdates(context: context) {
+            items = update.items
+        }
+        return items
+    }
+
+    public nonisolated func provideUpdates(context: CompletionContext) -> AsyncStream<CompletionUpdate> {
+        AsyncStream { continuation in
+            let task = Task {
+                let updates = await self.updates(for: context)
+                for update in updates {
+                    if Task.isCancelled { break }
+                    continuation.yield(update)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func updates(for context: CompletionContext) async -> [CompletionUpdate] {
+        guard context.document.languageIdentifier == "java" else {
+            return [CompletionUpdate(items: [], isFinished: true)]
+        }
         // A second Ctrl+Space looks past the source set's classpath, like IntelliJ's second
         // basic-completion invocation.
         if context.invocationCount < 2, let scope = scope(for: context.document.url) {
@@ -99,6 +123,7 @@ public actor JavaCompletionProvider: CompletionProvider {
         let factory: JavaCompletionItemFactory
         let importer: JavaImportInserter
         let invocationCount: Int
+        let mode: CompletionMode
         let isManual: Bool
 
         var semantic: JavaSemanticRequest {
@@ -151,11 +176,15 @@ public actor JavaCompletionProvider: CompletionProvider {
         return !methodDepths.isEmpty
     }
 
-    private func provideInScope(context: CompletionContext) async -> [CompletionItem] {
-        guard !context.document.contentSnapshot.isElided else { return [] }
-        let text = Self.repairedText(context.document.text, insertingDummyAt: context.cursor.position.utf16Offset)
+    private func provideInScope(context: CompletionContext) async -> [CompletionUpdate] {
+        // Open project files are file-backed: the snapshot keeps the bytes behind a range reader
+        // and `text` is nil. Completion still has to parse the buffer the caret is in.
+        let text = Self.repairedText(
+            JavaNavigationText.fullText(of: context.document),
+            insertingDummyAt: context.cursor.position.utf16Offset
+        )
         let fileURL = context.document.url ?? URL(fileURLWithPath: "/unsaved/\(context.document.id).java")
-        guard let (tree, fileStubs) = parse(text, url: fileURL) else { return [] }
+        guard let (tree, fileStubs) = parse(text, url: fileURL) else { return finished([]) }
 
         let bytes = Array(text.utf8)
         let prefixStart = Self.utf8ByteOffset(forUTF16Offset: context.range.start.utf16Offset, in: text)
@@ -167,6 +196,7 @@ public actor JavaCompletionProvider: CompletionProvider {
             factory: JavaCompletionItemFactory(range: context.range, source: name),
             importer: JavaImportInserter(text: text, bytes: bytes, tree: tree, fileStubs: fileStubs),
             invocationCount: context.invocationCount,
+            mode: context.mode,
             isManual: context.trigger == .manual,
             index: index
         )
@@ -175,33 +205,40 @@ public actor JavaCompletionProvider: CompletionProvider {
         javaCompletionLog.debug("java site=\(String(describing: site), privacy: .public) enclosing=\(resolutionContext.enclosingTypeQualifiedNames, privacy: .public)")
         switch site {
         case .stringOrComment:
-            return []
+            return finished([])
         case .memberAccess(let dotOffset):
-            return await memberAccessItems(dotOffset: dotOffset, source: text, request: request)
+            return finished(await memberAccessItems(dotOffset: dotOffset, source: text, request: request))
         case .methodReference(let colonOffset):
-            return await methodReferenceItems(colonOffset: colonOffset, request: request)
+            return finished(await methodReferenceItems(colonOffset: colonOffset, request: request))
         case .importPath(let qualifier, let isStatic):
-            return await importItems(qualifier: qualifier, isStatic: isStatic, request: request)
+            return finished(await importItems(qualifier: qualifier, isStatic: isStatic, request: request))
         case .packagePath(let qualifier):
-            return await index.subpackages(of: qualifier).map { request.factory.packageItem($0) }
+            return finished(await index.subpackages(of: qualifier).map { request.factory.packageItem($0) })
         case .annotation:
-            return await annotationItems(request: request)
+            return await annotationUpdates(request: request)
         case .annotationAttribute(let annotationName):
-            return await annotationAttributeItems(annotationName: annotationName, request: request)
+            return finished(await annotationAttributeItems(annotationName: annotationName, request: request))
         case .newExpression:
-            return await newExpressionItems(request: request)
+            return await newExpressionUpdates(request: request)
         case .typeOnly(let keyword):
-            return await typeOnlyItems(keyword: keyword, request: request)
+            return await typeOnlyUpdates(keyword: keyword, request: request)
         case .caseLabel(let selectorText):
             let items = await caseLabelItems(selectorText: selectorText, request: request)
-            return items.isEmpty ? await statementItems(request: request) : items
+            if !items.isEmpty { return finished(items) }
+            return await statementUpdates(request: request)
         case .classBody:
-            return await classBodyItems(request: request)
+            return await classBodyUpdates(request: request)
         case .topLevel:
-            return Self.topLevelKeywords.map { request.factory.keywordItem($0) }
+            return finished(Self.topLevelKeywords.map { request.factory.keywordItem($0) })
         case .statement:
-            return await statementItems(request: request)
+            return await statementUpdates(request: request)
+        case .cast:
+            return await castUpdates(request: request)
         }
+    }
+
+    private func finished(_ items: [CompletionItem], advertisement: String? = nil, emptyText: String? = nil) -> [CompletionUpdate] {
+        [CompletionUpdate(items: items, isFinished: true, advertisement: advertisement, emptyText: emptyText)]
     }
 
     /// Resolution context at `byteOffset`: package-qualified enclosing types (innermost first)
@@ -373,28 +410,76 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     // MARK: - new
 
-    private func newExpressionItems(request: Request) async -> [CompletionItem] {
+    private func newExpressionUpdates(request: Request) async -> [CompletionUpdate] {
         let expected = await JavaExpectedType.infer(at: Self.newKeywordStart(before: request.prefixStart, bytes: request.bytes), request: request.semantic)
         let assignability = JavaAssignability(index: index, context: request.context)
-        var stubs: [JavaClassStub] = []
+        var fastStubs: [JavaClassStub] = []
+        var seen = Set<String>()
+        func add(_ stub: JavaClassStub?) {
+            guard let stub, stub.kind != .enumKind, stub.kind != .annotationKind, seen.insert(stub.qualifiedName).inserted else { return }
+            fastStubs.append(stub)
+        }
+        for type in expected {
+            if let name = type.erasedQualifiedName {
+                add(await index.classStub(qualifiedName: name))
+                if let standIn = JavaCompletionSuggestions.jdkImplementations[name] {
+                    add(await index.classStub(qualifiedName: standIn))
+                }
+            }
+        }
         if request.prefix.isEmpty {
-            // Smart `new |`: the expected class itself (when instantiable).
-            for type in expected {
-                if let name = type.erasedQualifiedName, let stub = await index.classStub(qualifiedName: name) {
-                    stubs.append(stub)
+            for stub in await index.classes(inPackage: request.context.packageName) {
+                let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
+                if await Self.matchesExpected(classType, expected: expected, assignability: assignability) {
+                    add(stub)
                 }
             }
         } else {
-            stubs = await index.classes(matching: request.prefix, limit: classNameLimit(request)).map(\.stub)
+            for stub in await inScopeClassStubs(request: request) {
+                let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
+                if await Self.matchesExpected(classType, expected: expected, assignability: assignability) {
+                    add(stub)
+                }
+            }
         }
+        let fast = await constructorItems(fastStubs, expected: expected, assignability: assignability, request: request)
+        let slowStubs = await extraNewStubs(request: request, expected: expected, assignability: assignability, excluding: seen)
+        let slow = await constructorItems(slowStubs, expected: expected, assignability: assignability, request: request)
+        return phased(fast: fast, slow: slow, request: request, expected: expected, offersClasses: false)
+    }
+
+    private func constructorItems(
+        _ stubs: [JavaClassStub], expected: [JavaTypeRef], assignability: JavaAssignability, request: Request
+    ) async -> [CompletionItem] {
         var items: [CompletionItem] = []
         for stub in stubs where stub.kind != .enumKind && stub.kind != .annotationKind {
             let decision = request.importer.decision(for: stub)
             let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
-            let matches = await Self.matchesExpected(classType, expected: expected, assignability: assignability)
-            items.append(request.factory.constructorItem(stub, importDecision: decision, priority: classPriority(stub, decision: decision), expectedMatch: matches))
+            let decisionForNew = await Self.newTypeDecision(classType, expected: expected, assignability: assignability)
+            guard decisionForNew.keep else { continue }
+            items.append(request.factory.constructorItem(
+                stub, importDecision: decision, priority: classPriority(stub, decision: decision),
+                expectedMatch: decisionForNew.matches, anonymous: JavaCompletionSuggestions.isAnonymous(stub)
+            ))
         }
         return items
+    }
+
+    /// Prefix search for `new`, kept to types assignable to the expected type.
+    private func extraNewStubs(
+        request: Request, expected: [JavaTypeRef], assignability: JavaAssignability, excluding: Set<String>
+    ) async -> [JavaClassStub] {
+        guard !request.prefix.isEmpty else { return [] }
+        var stubs: [JavaClassStub] = []
+        for match in await index.classes(matching: request.prefix, limit: classNameLimit(request)) {
+            let stub = match.stub
+            guard !excluding.contains(stub.qualifiedName), stub.kind != .enumKind, stub.kind != .annotationKind else { continue }
+            let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
+            let decisionForNew = await Self.newTypeDecision(classType, expected: expected, assignability: assignability)
+            guard decisionForNew.keep else { continue }
+            stubs.append(stub)
+        }
+        return stubs
     }
 
     private static func newKeywordStart(before prefixStart: Int, bytes: [UInt8]) -> Int {
@@ -404,7 +489,15 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     // MARK: - Type-only positions
 
-    private func typeOnlyItems(keyword: String, request: Request) async -> [CompletionItem] {
+    private func typeOnlyUpdates(keyword: String, request: Request) async -> [CompletionUpdate] {
+        let inScope = await inScopeClassStubs(request: request)
+        let fast = await typeOnlyItems(keyword: keyword, request: request, stubs: inScope)
+        let extra = await extraClassStubs(request: request, existing: fast)
+        let slow = await typeOnlyClassItems(keyword: keyword, request: request, stubs: extra)
+        return phased(fast: fast, slow: slow, request: request, expected: [], offersClasses: true)
+    }
+
+    private func typeOnlyItems(keyword: String, request: Request, stubs: [JavaClassStub]) async -> [CompletionItem] {
         var items: [CompletionItem] = []
         for typeParameter in request.context.typeParameterNames.sorted() {
             items.append(CompletionItem(
@@ -413,8 +506,13 @@ public actor JavaCompletionProvider: CompletionProvider {
             ))
         }
         guard !request.prefix.isEmpty else { return items }
-        for match in await index.classes(matching: request.prefix, limit: classNameLimit(request)) {
-            let stub = match.stub
+        items += await typeOnlyClassItems(keyword: keyword, request: request, stubs: stubs)
+        return items
+    }
+
+    private func typeOnlyClassItems(keyword: String, request: Request, stubs: [JavaClassStub]) async -> [CompletionItem] {
+        var items: [CompletionItem] = []
+        for stub in stubs {
             switch keyword {
             case "implements":
                 guard stub.kind == .interfaceKind else { continue }
@@ -458,9 +556,16 @@ public actor JavaCompletionProvider: CompletionProvider {
         "boolean", "byte", "char", "short", "int", "long", "float", "double"
     ]
 
-    private func classBodyItems(request: Request) async -> [CompletionItem] {
+    private func classBodyUpdates(request: Request) async -> [CompletionUpdate] {
+        let base = await classBodyItems(request: request, classes: [])
+        let inScope = await inScopeClassNameItems(request: request)
+        let extra = await extraClassNameItems(request: request, existing: base + inScope)
+        return phased(fast: base + inScope, slow: extra, request: request, expected: [], offersClasses: true)
+    }
+
+    private func classBodyItems(request: Request, classes: [CompletionItem]) async -> [CompletionItem] {
         var items = Self.memberModifierKeywords.map { request.factory.keywordItem($0) }
-        items += await classNameItems(request: request)
+        items += classes
         for typeParameter in request.context.typeParameterNames.sorted() {
             items.append(CompletionItem(label: typeParameter, insertText: typeParameter, kind: .type, range: request.factory.range, source: name, priority: JavaCompletionPriority.local))
         }
@@ -513,13 +618,32 @@ public actor JavaCompletionProvider: CompletionProvider {
         "package", "import", "public", "final", "abstract", "sealed", "class", "interface", "enum", "record"
     ]
 
+    private func statementUpdates(request: Request) async -> [CompletionUpdate] {
+        let draft = await statementDraft(request: request)
+        let extras = await statementExtras(request: request, draft: draft)
+        return phased(fast: draft.items, slow: extras, request: request, expected: draft.expected, offersClasses: draft.expected.isEmpty)
+    }
+
+    private struct StatementDraft {
+        var items: [CompletionItem]
+        var expected: [JavaTypeRef]
+        var locals: [JavaLocalVariable]
+        var members: [JavaResolvedMember]
+    }
+
     private func statementItems(request: Request) async -> [CompletionItem] {
+        await statementDraft(request: request).items
+    }
+
+    private func statementDraft(request: Request) async -> StatementDraft {
         let rawLocals = JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor)
         let locals = await JavaExpressionTyper.resolvingVarLocals(rawLocals, context: request.context, index: index)
         let semantic = JavaSemanticRequest(source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index)
         let expected = await JavaExpectedType.infer(at: request.prefixStart, request: semantic)
+        let assignedName = JavaExpectedType.assignedName(at: request.prefixStart, bytes: request.bytes)
         let assignability = JavaAssignability(index: index, context: request.context)
         var items: [CompletionItem] = []
+        var members: [JavaResolvedMember] = []
 
         for local in locals {
             let matches = await Self.matchesExpected(local.type, expected: expected, assignability: assignability)
@@ -531,12 +655,19 @@ public actor JavaCompletionProvider: CompletionProvider {
         for (depth, enclosing) in request.context.enclosingTypeQualifiedNames.enumerated() {
             let selfType = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
             let mode: JavaMemberLookupMode = isStatic ? .staticOnly : .instance
-            for member in await JavaMemberLookup.members(of: selfType, mode: mode, context: request.context, index: index) {
+            let visible = await JavaMemberLookup.members(
+                of: selfType, mode: mode, context: request.context, index: index, checkAccess: request.invocationCount <= 1
+            )
+            if depth == 0 { members = visible }
+            for member in visible {
                 let key = Self.memberKey(member)
                 guard seenMembers.insert(key).inserted else { continue }
                 let matches = await Self.matchesExpected(member.valueType, expected: expected, assignability: assignability)
                 let base: Double? = depth == 0 ? nil : JavaCompletionPriority.outerMember
-                items.append(request.factory.memberItem(member, receiverQualifiedName: enclosing, basePriority: base, expectedMatch: matches))
+                items.append(request.factory.memberItem(
+                    member, receiverQualifiedName: enclosing, basePriority: base, expectedMatch: matches,
+                    priorityAdjustment: Self.memberAdjustment(member: member, expected: expected, assignedName: assignedName)
+                ))
             }
         }
         for member in await JavaStaticImports.members(context: request.context, index: index) {
@@ -545,7 +676,7 @@ public actor JavaCompletionProvider: CompletionProvider {
             items.append(request.factory.memberItem(member, receiverQualifiedName: nil, basePriority: JavaCompletionPriority.staticImport, expectedMatch: matches))
         }
 
-        items += await classNameItems(request: request)
+        items += await inScopeClassNameItems(request: request)
 
         if !request.prefix.isEmpty || request.isManual {
             let expectsBoolean = expected.contains(.primitive(.boolean)) || expected.contains { $0.erasedQualifiedName == "java.lang.Boolean" }
@@ -556,6 +687,25 @@ public actor JavaCompletionProvider: CompletionProvider {
                 items.append(request.factory.keywordItem(keyword, priority: priority))
             }
         }
+        return StatementDraft(items: items, expected: expected, locals: locals, members: members)
+    }
+
+    private func statementExtras(request: Request, draft: StatementDraft) async -> [CompletionItem] {
+        let assignability = JavaAssignability(index: index, context: request.context)
+        var items = await extraClassNameItems(request: request, existing: draft.items)
+        let fastMatched = draft.items.contains(where: \.preselect)
+        items += await JavaCompletionSuggestions.chains(
+            locals: draft.locals, members: draft.members, expected: draft.expected,
+            invocationCount: request.invocationCount, mode: request.mode, fastHasExpectedMatch: fastMatched,
+            factory: request.factory, context: request.context, index: index, assignability: assignability
+        )
+        items += JavaCompletionSuggestions.toArrayConversions(locals: draft.locals, expected: draft.expected, factory: request.factory)
+        items += JavaCompletionSuggestions.collectionFactories(
+            expected: draft.expected, prefix: request.prefix, imports: request.context.imports, factory: request.factory, importer: request.importer
+        )
+        items += await JavaCompletionSuggestions.functionalTemplates(
+            expected: draft.expected, members: draft.members, factory: request.factory, context: request.context, index: index
+        )
         return items
     }
 
@@ -576,6 +726,126 @@ public actor JavaCompletionProvider: CompletionProvider {
         request.invocationCount >= 2 ? classNameCompletionLimit * 4 : classNameCompletionLimit
     }
 
+    private func inScopeClassNameItems(request: Request) async -> [CompletionItem] {
+        classItems(stubs: await inScopeClassStubs(request: request), request: request)
+    }
+
+    private func extraClassNameItems(request: Request, existing: [CompletionItem]) async -> [CompletionItem] {
+        classItems(stubs: await extraClassStubs(request: request, existing: existing), request: request)
+    }
+
+    private func classItems(stubs: [JavaClassStub], request: Request) -> [CompletionItem] {
+        let ownNames = Set(request.context.enclosingTypeQualifiedNames)
+        return stubs.map { stub in
+            let decision = ownNames.contains(stub.qualifiedName) ? JavaImportInserter.Decision.none : request.importer.decision(for: stub)
+            return request.factory.classItem(stub, importDecision: decision, priority: classPriority(stub, decision: decision))
+        }
+    }
+
+    /// Same package, `java.lang`, explicit and on-demand imports, and types declared in this file.
+    private func inScopeClassStubs(request: Request) async -> [JavaClassStub] {
+        guard !request.prefix.isEmpty else { return [] }
+        var seen = Set<String>()
+        var stubs: [JavaClassStub] = []
+        func consider(_ stub: JavaClassStub) {
+            guard JavaCompletionSuggestions.prefixMatches(request.prefix, stub.simpleName) else { return }
+            guard seen.insert(stub.qualifiedName).inserted else { return }
+            if case .none = request.importer.decision(for: stub) {
+                stubs.append(stub)
+            }
+        }
+        for stub in await index.classes(inPackage: request.context.packageName) { consider(stub) }
+        if request.context.packageName != "java.lang" {
+            for stub in await index.classes(inPackage: "java.lang") { consider(stub) }
+        }
+        for declaration in request.context.imports where !declaration.isStatic {
+            if declaration.isOnDemand {
+                for stub in await index.classes(inPackage: declaration.qualifiedName) { consider(stub) }
+            } else if let stub = await index.classStub(qualifiedName: declaration.qualifiedName) {
+                consider(stub)
+            }
+        }
+        for stub in request.fileStubs.classes { consider(stub) }
+        return stubs
+    }
+
+    /// Classpath classes that clear the better-prefix bar, or every prefix match on a second Ctrl+Space.
+    private func extraClassStubs(request: Request, existing: [CompletionItem]) async -> [JavaClassStub] {
+        guard !request.prefix.isEmpty else { return [] }
+        let best = JavaCompletionSuggestions.bestDegree(prefix: request.prefix, items: existing)
+        let present = Set(existing.map(\.label))
+        var stubs: [JavaClassStub] = []
+        for match in await index.classes(matching: request.prefix, limit: classNameLimit(request)) {
+            let stub = match.stub
+            guard !present.contains(stub.simpleName) else { continue }
+            guard JavaCompletionSuggestions.admitsExtraClass(
+                prefix: request.prefix, simpleName: stub.simpleName, invocationCount: request.invocationCount, best: best
+            ) else { continue }
+            stubs.append(stub)
+        }
+        return stubs
+    }
+
+    private func annotationUpdates(request: Request) async -> [CompletionUpdate] {
+        if request.prefix.isEmpty {
+            return finished(await annotationItems(request: request))
+        }
+        let fast = classItems(
+            stubs: await inScopeClassStubs(request: request).filter { $0.kind == .annotationKind }, request: request
+        )
+        let slow = classItems(
+            stubs: await extraClassStubs(request: request, existing: fast).filter { $0.kind == .annotationKind }, request: request
+        )
+        return phased(fast: fast, slow: slow, request: request, expected: [], offersClasses: true)
+    }
+
+    private func castUpdates(request: Request) async -> [CompletionUpdate] {
+        let rawLocals = JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor)
+        let locals = await JavaExpressionTyper.resolvingVarLocals(rawLocals, context: request.context, index: index)
+        let semantic = JavaSemanticRequest(
+            source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index
+        )
+        let paren = max(0, request.prefixStart - 1)
+        let expected = await JavaExpectedType.infer(at: paren, request: semantic)
+        let items = JavaCompletionSuggestions.casts(expected: expected, factory: request.factory)
+        return phased(fast: items, slow: [], request: request, expected: expected, offersClasses: false)
+    }
+
+    private func phased(
+        fast: [CompletionItem], slow: [CompletionItem], request: Request, expected: [JavaTypeRef], offersClasses: Bool
+    ) -> [CompletionUpdate] {
+        let advertisement = JavaCompletionSuggestions.advertisement(
+            mode: request.mode, prefix: request.prefix, invocationCount: request.invocationCount,
+            expected: expected, offersClasses: offersClasses
+        )
+        let emptyText = request.mode == .smart ? JavaCompletionSuggestions.smartEmptyText(expected: expected) : nil
+        let first = applyMode(fast, request: request, expected: expected)
+        if slow.isEmpty {
+            return [CompletionUpdate(items: first, isFinished: true, advertisement: advertisement, emptyText: emptyText)]
+        }
+        let merged = applyMode(fast + slow, request: request, expected: expected)
+        return [
+            CompletionUpdate(items: first, isFinished: false, advertisement: advertisement),
+            CompletionUpdate(items: merged, isFinished: true, advertisement: advertisement, emptyText: emptyText)
+        ]
+    }
+
+    private func applyMode(_ items: [CompletionItem], request: Request, expected: [JavaTypeRef]) -> [CompletionItem] {
+        guard request.mode == .smart else { return items }
+        return JavaCompletionSuggestions.filterSmart(items, expected: expected, prefix: request.prefix)
+    }
+
+    /// Sinks void methods in an expression, and lifts a method whose name ends like the assigned variable.
+    private static func memberAdjustment(member: JavaResolvedMember, expected: [JavaTypeRef], assignedName: String?) -> Double {
+        guard case .method(let method, _) = member else { return 0 }
+        var adjustment = 0.0
+        if !expected.isEmpty, method.returnType == .void { adjustment -= 2 }
+        if let assignedName, method.name.lowercased().hasSuffix(assignedName.lowercased()), method.name.count > assignedName.count {
+            adjustment += 0.4
+        }
+        return adjustment
+    }
+
     /// Same package or already imported ranks above `java.*`, which ranks above everything else.
     private func classPriority(_ stub: JavaClassStub, decision: JavaImportInserter.Decision) -> Double {
         if case .none = decision { return JavaCompletionPriority.classInScope }
@@ -591,6 +861,23 @@ public actor JavaCompletionProvider: CompletionProvider {
         case .field(let field, _): return "f:\(field.name)"
         case .method(let method, _): return "m:\(method.name)\(JavaCompletionItemFactory.parameterList(method))"
         }
+    }
+
+    /// Keep a `new` candidate when it is assignable, or when the expected type never resolved
+    /// (a missing `Object` stub must not hide every constructor).
+    static func newTypeDecision(
+        _ type: JavaTypeRef, expected: [JavaTypeRef], assignability: JavaAssignability
+    ) async -> (keep: Bool, matches: Bool) {
+        guard !expected.isEmpty else { return (true, false) }
+        let matches = await matchesExpected(type, expected: expected, assignability: assignability)
+        if matches { return (true, true) }
+        let canFilter = expected.contains {
+            switch $0 {
+            case .classType, .primitive, .array: return true
+            default: return false
+            }
+        }
+        return (keep: !canFilter, matches: false)
     }
 
     static func matchesExpected(_ type: JavaTypeRef?, expected: [JavaTypeRef], assignability: JavaAssignability) async -> Bool {

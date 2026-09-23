@@ -6,7 +6,7 @@ import Foundation
 /// index and source-set scope.
 extension JavaCompletionProvider: SignatureHelpProviding {
     public func signatureHelp(for document: Document, at position: TextPosition) async -> ParameterHintsModel? {
-        guard document.languageIdentifier == "java", !document.contentSnapshot.isElided else { return nil }
+        guard document.languageIdentifier == "java" else { return nil }
         if let scope = scope(for: document.url) {
             return await JavaIndex.$queryScope.withValue(scope) {
                 await self.signatureHelpInScope(for: document, at: position)
@@ -16,7 +16,7 @@ extension JavaCompletionProvider: SignatureHelpProviding {
     }
 
     private func signatureHelpInScope(for document: Document, at position: TextPosition) async -> ParameterHintsModel? {
-        let text = document.text
+        let text = JavaNavigationText.fullText(of: document)
         let url = document.url ?? URL(fileURLWithPath: "/unsaved/\(document.id).java")
         guard let (tree, fileStubs) = parse(text, url: url) else { return nil }
         let offset = Self.utf8ByteOffset(forUTF16Offset: position.utf16Offset, in: text)

@@ -93,6 +93,14 @@ struct UmbraApp: App {
                     .disabled(workspace.javaSupport.gradleConsole.lines.isEmpty)
             }
 
+            CommandMenu("HTTP") {
+                Button("Send Request", systemImage: "paperplane.fill", action: workspace.sendActiveHTTPRequest)
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(!workspace.httpFileCanSend)
+                Button("Show Response", action: workspace.showHTTPResponse)
+                    .disabled(workspace.httpSupport.responseLog.lines.isEmpty)
+            }
+
             CommandMenu("View") {
                 Button("Split Editor Right", systemImage: "rectangle.split.2x1", action: workspace.splitRight)
                     .keyboardShortcut("\\", modifiers: .command)

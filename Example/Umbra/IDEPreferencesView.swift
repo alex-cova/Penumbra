@@ -137,17 +137,34 @@ public struct IDEPreferencesView: View {
                             isOn: $preferences.showInvisibleCharacters
                         )
                         IDESettingsSeparator()
-                        IDESettingsToggleRow(title: "Page Guide", isOn: $preferences.showPageGuide)
+                        IDESettingsToggleRow(
+                            title: "Right Margin",
+                            caption: "Show a vertical guide at the preferred line length.",
+                            isOn: $preferences.showPageGuide
+                        )
                         IDESettingsSeparator()
-                        IDESettingsRow(title: "Guide Column") {
+                        IDESettingsRow(title: "Margin Column") {
                             HStack(spacing: IDEAppearance.Spacing.xs) {
+                                ForEach([80, 120], id: \.self) { preset in
+                                    Button("\(preset)") {
+                                        preferences.pageGuideColumn = preset
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(IDEAppearance.Typography.monoCaption)
+                                    .foregroundStyle(
+                                        preferences.pageGuideColumn == preset
+                                            ? IDEAppearance.ColorToken.accent
+                                            : IDEAppearance.ColorToken.muted
+                                    )
+                                    .disabled(!preferences.showPageGuide)
+                                }
                                 Text(preferences.pageGuideColumn, format: .number)
                                     .font(IDEAppearance.Typography.monoCaption)
                                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                                     .monospacedDigit()
                                     .frame(width: 28, alignment: .trailing)
                                     .accessibilityHidden(true)
-                                Stepper("Guide Column", value: $preferences.pageGuideColumn, in: 40...200)
+                                Stepper("Margin Column", value: $preferences.pageGuideColumn, in: 40...200)
                                     .labelsHidden()
                                     .controlSize(.small)
                                     .disabled(!preferences.showPageGuide)

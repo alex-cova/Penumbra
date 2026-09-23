@@ -29,7 +29,7 @@ struct JavaCompletionItemFactory {
 
     func memberItem(
         _ member: JavaResolvedMember, receiverQualifiedName: String?, basePriority: Double? = nil,
-        expectedMatch: Bool = false, asMethodReference: Bool = false
+        expectedMatch: Bool = false, asMethodReference: Bool = false, priorityAdjustment: Double = 0
     ) -> CompletionItem {
         let declaringClass = member.declaringClass
         var priority: Double
@@ -45,6 +45,7 @@ struct JavaCompletionItemFactory {
         let deprecated = member.modifiers.contains(.deprecatedFlag)
         if deprecated { priority += JavaCompletionPriority.deprecatedPenalty }
         if expectedMatch { priority += JavaCompletionPriority.expectedTypeBonus }
+        priority += priorityAdjustment
 
         switch member {
         case .field(let field, _):
@@ -127,14 +128,16 @@ struct JavaCompletionItemFactory {
             isDeprecated: deprecated,
             additionalEdits: edits,
             priority: finalPriority,
-            preselect: expectedMatch
+            preselect: expectedMatch,
+            allowsAutoInsert: false
         )
     }
 
     /// `new Foo|` → `Foo()` / `Foo<>()`, caret inside the parentheses when a constructor takes
     /// arguments.
     func constructorItem(
-        _ stub: JavaClassStub, importDecision: JavaImportInserter.Decision, priority: Double, expectedMatch: Bool
+        _ stub: JavaClassStub, importDecision: JavaImportInserter.Decision, priority: Double, expectedMatch: Bool,
+        anonymous: Bool = false
     ) -> CompletionItem {
         var name = stub.simpleName
         var edits: [TextEdit] = []
@@ -146,7 +149,7 @@ struct JavaCompletionItemFactory {
         let constructors = stub.methods.filter { $0.isConstructor && !$0.modifiers.contains(.privateFlag) }
         let diamond = stub.typeParameters.isEmpty ? "" : "<>"
         let takesArguments = constructors.contains { !$0.parameters.isEmpty }
-        let insertText = "\(name)\(diamond)()"
+        let insertText = anonymous ? "\(name)\(diamond)() {\n    $0\n}" : "\(name)\(diamond)()"
         let tail: String
         if constructors.count == 1, let only = constructors.first {
             tail = "\(Self.parameterList(only))\(Self.classTail(stub))"
@@ -168,11 +171,13 @@ struct JavaCompletionItemFactory {
             filterText: stub.simpleName,
             labelDetail: tail,
             isDeprecated: deprecated,
+            insertTextIsSnippet: anonymous,
             additionalEdits: edits,
             priority: finalPriority,
-            caretOffset: takesArguments ? (insertText as NSString).length - 1 : nil,
-            triggersSignatureHelp: takesArguments,
-            preselect: expectedMatch
+            caretOffset: anonymous || !takesArguments ? nil : (insertText as NSString).length - 1,
+            triggersSignatureHelp: !anonymous && takesArguments,
+            preselect: expectedMatch,
+            allowsAutoInsert: false
         )
     }
 

@@ -37,7 +37,12 @@ public struct DefaultRanker: Ranker {
             if lhsLabel != rhsLabel { return lhsLabel < rhsLabel }
             return (lhs.0.item.labelDetail ?? "") < (rhs.0.item.labelDetail ?? "")
         }
-        return scored.map(\.0)
+        // Middle matches (a later word start) stay out while a short list of start matches is
+        // already showing, so they don't crowd the top. With no start matches, or more than ten,
+        // they are included.
+        let startCount = scored.filter { $0.1.tier >= .camelHump }.count
+        let visible = (startCount > 0 && startCount <= 10) ? scored.filter { $0.1.tier != .wordStart } : scored
+        return visible.map(\.0)
     }
 
     /// Scores are always positive for matching items: the tier dominates (100 apart), and

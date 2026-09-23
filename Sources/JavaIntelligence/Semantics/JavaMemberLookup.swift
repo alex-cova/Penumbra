@@ -55,14 +55,18 @@ public enum JavaMemberLookup {
     /// deduplicated so an override hides its superclass/interface original (matched by name +
     /// erased parameter list) and filtered by ``JavaMemberLookupMode`` and access.
     public static func members(
-        of type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex
+        of type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex,
+        checkAccess: Bool = true
     ) async -> [JavaResolvedMember] {
         if case .array(let element) = type {
             return arrayMembers(elementType: element)
         }
         if case .typeVariable = type {
             // No bound information travels with a type variable reference; offer `Object`'s.
-            return await members(of: .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil), mode: mode, context: context, index: index)
+            return await members(
+                of: .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil),
+                mode: mode, context: context, index: index, checkAccess: checkAccess
+            )
         }
         guard case .classType(let qualifiedName, let arguments, _) = type else {
             return []
@@ -91,7 +95,9 @@ public enum JavaMemberLookup {
 
             for field in stub.fields where !field.modifiers.contains(.synthetic) {
                 guard mode == .instance || field.modifiers.contains(.staticFlag) || field.modifiers.contains(.enumConstant) else { continue }
-                guard await isAccessible(field.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                if checkAccess {
+                    guard await isAccessible(field.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                }
                 let key = "field:\(field.name)"
                 guard seenSignatures.insert(key).inserted else { continue }
                 let substituted = substitute(await resolvedDeclaration(field.type, in: declaringContext, index: index), using: substitution)
@@ -99,7 +105,9 @@ public enum JavaMemberLookup {
             }
             for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
                 guard mode == .instance || method.modifiers.contains(.staticFlag) else { continue }
-                guard await isAccessible(method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                if checkAccess {
+                    guard await isAccessible(method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                }
                 let methodContext = declaringContext?.entering(methodTypeParameters: method.typeParameters)
                 var substitutedParams: [JavaParameterStub] = []
                 for parameter in method.parameters {

@@ -1679,7 +1679,7 @@ private extension TextInputView {
         indentController.indentFont = theme.font
         pageGuideController.font = theme.font
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
-        pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor
+        pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor.withAlphaComponent(0.45)
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
         pageGuideController.guideView.shadingColor = theme.pageGuideBackgroundColor.withAlphaComponent(0.35)
         selectionHighlightColor = theme.selectionColor

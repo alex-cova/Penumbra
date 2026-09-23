@@ -95,6 +95,8 @@ public extension EditorActionID {
     static let navigateForward = EditorActionID("navigateForward")
     /// Show completions at the caret. Bound to Control-Space in the shipped keymaps.
     static let triggerCompletion = EditorActionID("triggerCompletion")
+    /// Completions of the expected type. Bound to Control-Shift-Space.
+    static let triggerSmartCompletion = EditorActionID("triggerSmartCompletion")
 
     internal static let builtInTitles: [EditorActionID: String] = [
         .selectLines: "Select Line(s)",
@@ -141,6 +143,7 @@ public extension EditorActionID {
         .findUsages: "Find Usages",
         .navigateBack: "Back",
         .navigateForward: "Forward",
-        .triggerCompletion: "Complete"
+        .triggerCompletion: "Complete",
+        .triggerSmartCompletion: "Smart Type Completion"
     ]
 }

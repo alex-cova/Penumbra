@@ -13,6 +13,18 @@ Penumbra is a Swift Package Manager library: a high-performance plain text/code 
 
 Requires macOS 14+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in `Packages/TreeSitter` as a local SPM package.
 
+## App Store safety
+
+**`Penumbra` must stay App Store–safe.** Umbra and other apps built on this framework are intended for Mac App Store distribution (Runestone ships the same engine on the App Store). Treat this as a hard constraint on every change to `Sources/Penumbra`, `Sources/EditorIntelligence`, and shared dependencies:
+
+- **Public APIs only** — no private Apple SPI, no undocumented runtime hooks, no entitlement bypasses.
+- **Sandbox-compatible** — do not assume disabled App Sandbox, arbitrary filesystem access, or elevated privileges. Use standard security-scoped bookmarks, open/save panels, and user-granted folder access patterns.
+- **Hardened Runtime** — avoid JIT, dynamic code loading, or `NSTask`/`Process` usage inside the library targets; host apps may spawn tools (e.g. Gradle, JDK) only with explicit user consent and outside the core editor engine where possible.
+- **Licensed dependencies** — vendored code must be App Store–compatible (see `THIRD_PARTY_NOTICES.md`). Do not add GPL or otherwise incompatible libraries to `Penumbra` itself.
+- **Review-friendly behavior** — no hidden network calls, telemetry, or background activity from the framework; optional features (LSP, AI, Java sync) stay opt-in and clearly user-initiated in the host app.
+
+When a feature cannot be implemented in an App Store–safe way inside `Penumbra`, keep it in the host app layer (`Example/Umbra`) or behind an explicit, user-controlled capability.
+
 ## Features
 
 ### Penumbra text engine (`TextView`)
@@ -47,7 +59,7 @@ Requires macOS 14+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 
 **Layout & display**
 - Red-black-tree-backed `LineManager` for O(log n) line lookups on large documents.
-- Line wrapping with configurable break mode; optional page guide column with reformatting-guide shading.
+- Line wrapping with configurable break mode; optional right-margin ruler at a configurable column (hairline-only by default, with optional reformatting-guide shading).
 - Gutter with dynamic-width line numbers, leading/trailing padding, and line-selection highlights.
 - Customizable themes (`Theme`, `DefaultTheme`, `HighlightName`) with font trait overrides, line height, and kern.
 - Invisible-character rendering (tabs, spaces, non-breaking spaces, line breaks, soft line breaks) with custom symbols.

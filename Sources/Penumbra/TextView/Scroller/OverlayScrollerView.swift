@@ -355,9 +355,11 @@ final class OverlayScrollerView: UIView {
         }
         onUserScroll?()
         let current = scrollView.contentOffset
+        scrollView.isUserInitiatedScroll = true
         scrollView.contentOffset = axis == .vertical
             ? CGPoint(x: current.x, y: target)
             : CGPoint(x: target, y: current.y)
+        scrollView.isUserInitiatedScroll = false
         updateKnob()
     }
 }

@@ -9,7 +9,9 @@ struct IDETerminalTabsBar: View {
                 ForEach(workspace.terminalTabs) { tab in
                     IDETerminalTabItem(
                         tab: tab,
-                        isSelected: !workspace.isGradleConsoleSelected && tab.id == workspace.selectedTerminalTabID,
+                        isSelected: !workspace.isGradleConsoleSelected
+                            && !workspace.isHTTPConsoleSelected
+                            && tab.id == workspace.selectedTerminalTabID,
                         onSelect: { workspace.selectTerminalTab(tab.id) },
                         onClose: { workspace.closeTerminalTab(tab.id) }
                     )
@@ -20,6 +22,13 @@ struct IDETerminalTabsBar: View {
                         isSyncing: workspace.javaSupport.gradleSync.isSyncing,
                         isFailed: workspace.javaSupport.gradleSync.isFailed,
                         onSelect: { workspace.selectGradleConsoleTab() }
+                    )
+                }
+                if workspace.showsHTTPTab {
+                    IDEHTTPTabItem(
+                        isSelected: workspace.isHTTPConsoleSelected,
+                        isSending: workspace.httpSupport.isSending,
+                        onSelect: { workspace.selectHTTPConsoleTab() }
                     )
                 }
             }
@@ -141,6 +150,65 @@ private struct IDEGradleTabItem: View {
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return IDEAppearance.ColorToken.tabActive
+        }
+        if isHovering {
+            return IDEAppearance.ColorToken.tabHover
+        }
+        return IDEAppearance.ColorToken.tabInactive
+    }
+}
+
+private struct IDEHTTPTabItem: View {
+    let isSelected: Bool
+    let isSending: Bool
+    let onSelect: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Group {
+                if isSending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                } else {
+                    Image(systemName: "paperplane")
+                        .font(.system(size: 10))
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            }
+            .frame(width: 12)
+
+            Text("HTTP")
+                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .overlay(alignment: .top) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 6)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isSending ? "HTTP, sending" : "HTTP")
+        .accessibilityAddTraits(.isButton)
+        .focusable(false)
     }
 
     private var backgroundColor: Color {

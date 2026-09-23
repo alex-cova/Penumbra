@@ -22,7 +22,8 @@ let package = Package(
         .library(name: "PenumbraGraphQLLanguage", targets: ["PenumbraGraphQLLanguage"]),
         .library(name: "PenumbraMarkdownLanguage", targets: ["PenumbraMarkdownLanguage"]),
         .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"]),
-        .library(name: "JavaIntelligence", targets: ["JavaIntelligence"])
+        .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
+        .library(name: "HTTPClient", targets: ["HTTPClient"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -111,6 +112,7 @@ let package = Package(
                 "PenumbraLanguages",
                 "PenumbraMarkdownLanguage",
                 "JavaIntelligence",
+                "HTTPClient",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Example/Umbra",
@@ -223,10 +225,15 @@ let package = Package(
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterHTTP", cSettings: [.headerSearchPath("src")]),
-        .target(name: "TreeSitterHTTPQueries", resources: [.copy("highlights.scm")]),
+        .target(name: "TreeSitterHTTPQueries", resources: [.copy("highlights.scm"), .copy("injections.scm")]),
         .target(
             name: "TreeSitterHTTPPenumbra",
             dependencies: ["Penumbra", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
+            swiftSettings: swift6
+        ),
+        .target(
+            name: "HTTPClient",
+            dependencies: ["TreeSitter", "TreeSitterHTTP"],
             swiftSettings: swift6
         ),
         .target(name: "TreeSitterMermaid", cSettings: [.headerSearchPath("src")]),
@@ -326,6 +333,7 @@ let package = Package(
             "PenumbraLanguages",
             "PenumbraBeautifulMermaid",
             "JavaIntelligence",
+            "HTTPClient",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle")], swiftSettings: swift6)
     ]

@@ -55,6 +55,17 @@ enum JavaExpectedType {
         return []
     }
 
+    /// The variable name immediately before `=`, so `String name = get|` can prefer `getName`.
+    static func assignedName(at prefixStart: Int, bytes: [UInt8]) -> String? {
+        let before = JavaCompletionContextClassifier.skipWhitespace(backwardFrom: prefixStart, in: bytes)
+        guard before > 0, bytes[before - 1] == UInt8(ascii: "="), before >= 2,
+              !"!=<>+-*/&|^%".utf8.contains(bytes[before - 2]) else { return nil }
+        let nameEnd = JavaCompletionContextClassifier.skipWhitespace(backwardFrom: before - 1, in: bytes)
+        let name = JavaCompletionContextClassifier.word(endingAt: nameEnd, in: bytes)
+        guard let name, name.count >= 2 else { return nil }
+        return name
+    }
+
     static func parameterType(of method: JavaMethodStub, at position: Int) -> JavaTypeRef? {
         if position < method.parameters.count {
             let type = method.parameters[position].type

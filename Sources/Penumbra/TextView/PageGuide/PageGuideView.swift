@@ -26,7 +26,7 @@ final class PageGuideView: UIView {
         }
     }
 
-    var showReformattingGuideShading = true {
+    var showReformattingGuideShading = false {
         didSet {
             if showReformattingGuideShading != oldValue {
                 setNeedsDisplay()

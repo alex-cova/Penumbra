@@ -80,6 +80,17 @@ final class IDEEditorPaneHost: NSView {
         }
     }
 
+    func wireHTTPActions(sendRequest: @escaping () -> Void) {
+        let previousHandler = textView.editorActionHandler
+        textView.editorActionHandler = { action in
+            if action.rawValue == "sendHTTPRequest" {
+                sendRequest()
+                return true
+            }
+            return previousHandler?(action) ?? false
+        }
+    }
+
     @objc private func paneClicked() {
         onActivated?()
     }

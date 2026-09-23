@@ -28,20 +28,32 @@ final class JavaCompletionProviderTests: XCTestCase {
         index: JavaIndex,
         trigger: RequestTrigger = .manual,
         url: URL? = URL(fileURLWithPath: "/tmp/Test.java"),
-        provider: JavaCompletionProvider? = nil
+        provider: JavaCompletionProvider? = nil,
+        invocationCount: Int = 1,
+        mode: CompletionMode = .basic,
+        elided: Bool = false
     ) async -> [CompletionItem] {
         let markerRange = source.range(of: "€")!
         let withoutMarker = source.replacingOccurrences(of: "€", with: "")
         let utf16Offset = source.utf16.distance(from: source.utf16.startIndex, to: markerRange.lowerBound.samePosition(in: source.utf16)!)
         let position = textPosition(in: withoutMarker, utf16Offset: utf16Offset)
-        let snapshot = TextSnapshot(version: 0, text: withoutMarker)
+        let snapshot = elided
+            ? TextSnapshot(
+                version: 0,
+                utf16Length: (withoutMarker as NSString).length,
+                text: nil,
+                rangeReader: TextRangeReader(utf16Length: (withoutMarker as NSString).length) { offset, length in
+                    (withoutMarker as NSString).substring(with: NSRange(location: offset, length: length))
+                }
+            )
+            : TextSnapshot(version: 0, text: withoutMarker)
         let document = Document(
             id: DocumentID(), url: url, displayName: url?.lastPathComponent ?? "Test.java",
             contentSnapshot: snapshot, selection: Selection(range: TextRange(start: position, end: position)),
             cursor: Cursor(position: position), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
             languageIdentifier: "java"
         )
-        let context = makeCompletionContext(document: document, trigger: trigger)
+        let context = makeCompletionContext(document: document, trigger: trigger, invocationCount: invocationCount, mode: mode)
         let resolved = provider ?? JavaCompletionProvider(index: index)
         return await resolved.provide(context: context)
     }
@@ -147,6 +159,22 @@ final class JavaCompletionProviderTests: XCTestCase {
         let items = await complete("class Foo { void m() { Util.€ } }", index: index)
         XCTAssertTrue(names(items).contains("staticHelper"))
         XCTAssertFalse(names(items).contains("instanceHelper"))
+    }
+
+    /// Open project files keep the source behind a range reader (`text == nil`). `sku.` must still
+    /// offer `String`'s members.
+    func testMemberAccessOnElidedFileBackedBufferOffersStringMethods() async throws {
+        let index = try await makeIndex(withStubs: [stringStub()])
+        let source = """
+        class Foo {
+            protected boolean requiresObservation(String sku) {
+                sku.€
+                return medicationRepository.requiresObservation(sku);
+            }
+        }
+        """
+        let items = await complete(source, index: index, elided: true)
+        XCTAssertTrue(names(items).isSuperset(of: ["length", "trim"]))
     }
 
     func testMemberAccessOnUnresolvableReceiverReturnsEmpty() async throws {
@@ -290,6 +318,149 @@ final class JavaCompletionProviderTests: XCTestCase {
         let fromTest = await complete("class Foo { Te€ }", index: index, url: testDir.appendingPathComponent("AppTest.java"), provider: provider)
         XCTAssertFalse(names(fromMain).contains("TestOnly"))
         XCTAssertTrue(names(fromTest).contains("TestOnly"))
+    }
+
+    // MARK: - Phased suggestions
+
+    func testFirstBatchOmitsUnrelatedClasspathClasses() async throws {
+        let arrayList = classStub("java.util.ArrayList")
+        let index = try await makeIndex(withStubs: [arrayList, stringStub()])
+        let provider = JavaCompletionProvider(index: index)
+        let context = contextFor("class Foo { void m() { String name = null; Arr€ } }")
+        var batches: [[String]] = []
+        for await update in provider.provideUpdates(context: context) {
+            batches.append(update.items.map(\.label))
+        }
+        XCTAssertGreaterThanOrEqual(batches.count, 2)
+        XCTAssertTrue(batches[0].contains("name"))
+        XCTAssertFalse(batches[0].contains("ArrayList"))
+        XCTAssertTrue(batches.last?.contains("ArrayList") == true)
+    }
+
+    func testSecondInvocationIncludesWeakerClassNames() async throws {
+        let arrayList = classStub("java.util.ArrayList")
+        let index = try await makeIndex(withStubs: [arrayList])
+        let source = "class Foo { void m() { String Array = null; Array€ } }"
+        let first = await complete(source, index: index, invocationCount: 1)
+        let second = await complete(source, index: index, invocationCount: 2)
+        XCTAssertFalse(names(first).contains("ArrayList"))
+        XCTAssertTrue(names(second).contains("ArrayList"))
+    }
+
+    func testNewOffersUsualImplementationOfExpectedInterface() async throws {
+        let list = classStub("java.util.List", kind: .interfaceKind)
+        let arrayList = classStub(
+            "java.util.ArrayList",
+            interfaces: [.classType(qualifiedName: "java.util.List", arguments: [], outer: nil)]
+        )
+        let index = try await makeIndex(withStubs: [list, arrayList])
+        let items = await complete("import java.util.List;\nclass Foo { void m() { List<String> xs = new € } }", index: index)
+        XCTAssertTrue(names(items).contains("ArrayList"))
+        XCTAssertFalse(names(items).contains("HashMap"))
+    }
+
+    func testNewPrefixKeepsOnlyAssignableTypes() async throws {
+        let list = classStub("java.util.List", kind: .interfaceKind)
+        let arrayList = classStub(
+            "java.util.ArrayList",
+            interfaces: [.classType(qualifiedName: "java.util.List", arguments: [], outer: nil)]
+        )
+        let arrays = classStub("java.util.Arrays")
+        let index = try await makeIndex(withStubs: [list, arrayList, arrays])
+        let items = await complete("import java.util.List;\nclass Foo { void m() { List<String> xs = new Arr€ } }", index: index)
+        XCTAssertTrue(names(items).contains("ArrayList"))
+        XCTAssertFalse(names(items).contains("Arrays"))
+    }
+
+    func testInterfaceConstructorInsertsAnonymousBody() async throws {
+        let runnable = classStub("Runnable", kind: .interfaceKind, methods: [
+            JavaMethodStub(name: "run", parameters: [], returnType: .void, modifiers: [.publicFlag, .abstractFlag])
+        ])
+        let index = try await makeIndex(withStubs: [runnable])
+        let items = await complete("class Foo { void m() { new Run€ } }", index: index)
+        let item = try XCTUnwrap(items.first { $0.label == "Runnable" })
+        XCTAssertTrue(item.insertText.contains("$0"))
+        XCTAssertFalse(item.allowsAutoInsert)
+    }
+
+    func testChainOffersQualifierMethodOfExpectedType() async throws {
+        let person = classStub("com.acme.Person", methods: [
+            JavaMethodStub(name: "getName", parameters: [], returnType: classType("java.lang.String"), modifiers: [.publicFlag])
+        ])
+        let index = try await makeIndex(withStubs: [person, stringStub()])
+        let items = await complete(
+            "package com.acme;\nclass Foo { void m(Person person) { String title = person€ } }", index: index
+        )
+        XCTAssertTrue(names(items).contains("person.getName"), "labels \(names(items))")
+    }
+
+    func testSmartCompletionKeepsOnlyTheExpectedType() async throws {
+        let index = try await makeIndex(withStubs: [stringStub()])
+        let source = "class Foo { void m() { String name = null; Object other = null; String s = € } }"
+        let items = await complete(source, index: index, mode: .smart)
+        XCTAssertTrue(names(items).contains("name"))
+        XCTAssertFalse(names(items).contains("other"))
+        let untyped = await complete("class Foo { void m() { € } }", index: index, mode: .smart)
+        XCTAssertTrue(untyped.isEmpty)
+    }
+
+    func testCollectionFactoryOffersEmptyList() async throws {
+        let list = classStub("java.util.List", kind: .interfaceKind)
+        let index = try await makeIndex(withStubs: [list])
+        let items = await complete("import java.util.List;\nclass Foo { void m() { List<String> xs = € } }", index: index)
+        let item = try XCTUnwrap(items.first { $0.label == "emptyList" })
+        XCTAssertEqual(item.insertText, "Collections.emptyList()")
+        XCTAssertFalse(item.allowsAutoInsert)
+    }
+
+    func testFunctionalParameterOffersLambda() async throws {
+        let consumer = classStub("java.util.function.Consumer", kind: .interfaceKind, methods: [
+            JavaMethodStub(
+                name: "accept",
+                parameters: [JavaParameterStub(name: "t", type: classType("java.lang.String"))],
+                returnType: .void, modifiers: [.publicFlag, .abstractFlag]
+            )
+        ])
+        let index = try await makeIndex(withStubs: [consumer, stringStub()])
+        let items = await complete(
+            "import java.util.function.Consumer;\nclass Foo { void m() { Consumer<String> c = € } }",
+            index: index
+        )
+        XCTAssertTrue(items.contains { $0.kind == .snippet && $0.insertText.contains("->") })
+    }
+
+    func testCastOffersExpectedType() async throws {
+        let index = try await makeIndex(withStubs: [stringStub()])
+        let items = await complete("class Foo { void m() { String s = (€ } }", index: index)
+        let item = try XCTUnwrap(items.first { $0.label == "String" })
+        XCTAssertEqual(item.insertText, "String) ")
+    }
+
+    private func contextFor(_ source: String) -> CompletionContext {
+        let markerRange = source.range(of: "€")!
+        let withoutMarker = source.replacingOccurrences(of: "€", with: "")
+        let utf16Offset = source.utf16.distance(from: source.utf16.startIndex, to: markerRange.lowerBound.samePosition(in: source.utf16)!)
+        let position = textPosition(in: withoutMarker, utf16Offset: utf16Offset)
+        let document = Document(
+            id: DocumentID(), url: URL(fileURLWithPath: "/tmp/Test.java"), displayName: "Test.java",
+            contentSnapshot: TextSnapshot(version: 0, text: withoutMarker),
+            selection: Selection(range: TextRange(start: position, end: position)),
+            cursor: Cursor(position: position), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+            languageIdentifier: "java"
+        )
+        return makeCompletionContext(document: document, trigger: .manual)
+    }
+
+    private func classStub(
+        _ qualifiedName: String, kind: JavaTypeKind = .classKind, interfaces: [JavaTypeRef] = [], methods: [JavaMethodStub] = []
+    ) -> JavaClassStub {
+        let simpleName = String(qualifiedName.split(separator: ".").last!)
+        let packageName = qualifiedName.split(separator: ".").dropLast().joined(separator: ".")
+        return JavaClassStub(
+            binaryName: qualifiedName, qualifiedName: qualifiedName, simpleName: simpleName, packageName: packageName,
+            kind: kind, modifiers: kind == .interfaceKind ? [.publicFlag, .abstractFlag] : [.publicFlag],
+            interfaces: interfaces, methods: methods, origin: .jdkModule("test")
+        )
     }
 
     // MARK: - Real JDK, end-to-end (opt-in)

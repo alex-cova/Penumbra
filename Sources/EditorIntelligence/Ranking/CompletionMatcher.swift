@@ -31,6 +31,28 @@ public enum CompletionMatcher {
         /// UTF-16 offsets of the matched candidate characters, ascending.
         public let matchedOffsets: [Int]
 
+        /// A match anchored at the first character. A later word start (`Name` in `getName`) is not.
+        public var isStartMatch: Bool {
+            switch tier {
+            case .camelHump, .prefix, .exactIgnoringCase, .exact: return true
+            case .any, .wordStart: return false
+            }
+        }
+
+        /// Higher is a tighter match, used to gate non-imported classes against the best in-scope item.
+        public var degree: Int {
+            let base: Int
+            switch tier {
+            case .exact: base = 10_000
+            case .exactIgnoringCase: base = 8_000
+            case .prefix: base = 5_000
+            case .camelHump: base = 2_000
+            case .wordStart: base = 100
+            case .any: base = 0
+            }
+            return base + matchedOffsets.count * 10 + (firstCharacterCaseMatches ? 5 : 0)
+        }
+
         /// Contiguous matched runs, for highlighting.
         public var matchedRanges: [NSRange] {
             var ranges: [NSRange] = []

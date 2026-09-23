@@ -10,6 +10,10 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
     public let prefix: String
     /// Shown instead of rows when `items` is empty, e.g. "No suggestions".
     public let emptyText: String?
+    /// A contributor is still producing a later batch.
+    public let isComputing: Bool
+    /// Hint under the list: a second Ctrl+Space, or smart completion.
+    public let advertisement: String?
 
     public init(
         id: UUID = UUID(),
@@ -17,7 +21,9 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
         selectedIndex: Int? = nil,
         replacementRange: TextRange,
         prefix: String = "",
-        emptyText: String? = nil
+        emptyText: String? = nil,
+        isComputing: Bool = false,
+        advertisement: String? = nil
     ) {
         self.id = id
         self.items = items
@@ -25,6 +31,12 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
         self.replacementRange = replacementRange
         self.prefix = prefix
         self.emptyText = emptyText
+        self.isComputing = isComputing
+        self.advertisement = advertisement
+    }
+
+    public var showsFooter: Bool {
+        isComputing || (advertisement?.isEmpty == false)
     }
 
     public var description: String {

@@ -63,6 +63,11 @@ public struct MetalPerformanceStats: Sendable {
         typingObservers.append(observer)
     }
     private var scrollObservers: [() -> Void] = []
+    /// True while a wheel or overlay-scroller drag is assigning `contentOffset`. Programmatic
+    /// scrolls, including `scrollRangeToVisible`, leave it false.
+    public internal(set) var isUserInitiatedScroll = false
+    /// A click that moves the caret. Completion uses it to dismiss without consuming the click.
+    public var onCaretRepositioningClick: (() -> Void)?
 
     /// Registers an observer called whenever the visible content scrolls (programmatic, animated
     /// or user scrolls). Overlays anchored to text use it to follow the text.
@@ -1336,7 +1341,9 @@ public struct MetalPerformanceStats: Sendable {
             suspendTypewriterScrollingForUserInteraction()
             cancelAnimatedScrolling()
         }
+        isUserInitiatedScroll = true
         super.scrollWheel(with: event)
+        isUserInitiatedScroll = false
         if showMinimap {
             minimapView.setNeedsDisplayForContentChange()
         }
@@ -2685,6 +2692,7 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView) {
         resumeTypewriterScrollingAfterCaretRepositioning()
+        onCaretRepositioningClick?()
     }
 
     func textInputViewDidFinishSyntaxParse(_ view: TextInputView) {

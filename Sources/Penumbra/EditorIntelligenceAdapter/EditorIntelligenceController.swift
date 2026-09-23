@@ -94,8 +94,23 @@ public final class EditorIntelligenceController {
     private var currentReplacementRange: EditorIntelligence.TextRange?
     /// UTF-16 offset where the identifier being completed starts.
     private var completionAnchor: Int?
-    /// 2 after a second Ctrl+Space in the same session (broader results).
+    /// 0 while typing, 1 for the first explicit completion, 2 after a noticeable repeated one.
     private var completionInvocationCount = 1
+    private var completionMode: CompletionMode = .basic
+    private var completionShownAt: Date?
+    private var completionPainted = false
+    private var frozenCompletionKeys: [String] = []
+    private var frozenPrefix: String?
+    private var completionGeneration = 0
+    private var completionAdvertisement: String?
+    private var completionIsComputing = false
+    private var completionEmptyText: String?
+    private var completionHoldTask: Task<Void, Never>?
+    private var pendingCompletionUpdate: CompletionUpdate?
+    private var resizeObserver: NSObjectProtocol?
+    private var completionWindowFrame: NSRect?
+    /// Scrolling lays the text out and can post a window-resize notification for the same frame.
+    private var suppressResizeDismissal = false
     /// The session was opened explicitly (Ctrl+Space) or the user moved the selection, so the
     /// selected item may be committed by `.`, `(` or `;`.
     private var isCompletionSelectionExplicit = false
@@ -171,6 +186,10 @@ public final class EditorIntelligenceController {
         textView.addTypingObserver { [weak self] event in
             self?.handleTypingEvent(event)
         }
+        textView.onCaretRepositioningClick = { [weak self] in
+            guard let self, self.isCompletionVisible || self.completionAnchor != nil else { return }
+            self.dismissCompletion()
+        }
         windowObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
         ) { [weak self] notification in
@@ -182,6 +201,21 @@ public final class EditorIntelligenceController {
                 if self.isCompletionVisible {
                     self.dismissCompletion()
                 }
+            }
+        }
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let resizedWindowID = (notification.object as? NSWindow).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let resizedWindowID,
+                      resizedWindowID == self.textView?.window.map(ObjectIdentifier.init),
+                      self.isCompletionVisible, !self.suppressResizeDismissal else { return }
+                guard let frame = self.textView?.window?.frame else { return }
+                // Layout during scrolling can post this without the window frame changing.
+                guard frame != self.completionWindowFrame else { return }
+                self.completionWindowFrame = frame
+                self.dismissCompletion()
             }
         }
         let previousActionHandler = textView.editorActionHandler
@@ -248,6 +282,9 @@ public final class EditorIntelligenceController {
             return navigate(kind: .references)
         case .triggerCompletion:
             triggerCompletion()
+            return true
+        case .triggerSmartCompletion:
+            triggerSmartCompletion()
             return true
         case .findInFiles:
             guard let onRequestProjectSearch else { return false }
@@ -323,6 +360,10 @@ public final class EditorIntelligenceController {
         if let windowObserver {
             NotificationCenter.default.removeObserver(windowObserver)
         }
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+        }
+        completionHoldTask?.cancel()
         emptyCompletionHintTask?.cancel()
         eventTask?.cancel()
         hoverTask?.cancel()
@@ -338,7 +379,23 @@ public final class EditorIntelligenceController {
     /// again while the popup is open asks providers for a broader result, like IntelliJ's second
     /// Ctrl+Space (e.g. classes that aren't imported yet).
     public func triggerCompletion() {
-        completionInvocationCount = isCompletionVisible ? min(completionInvocationCount + 1, 2) : 1
+        beginExplicitCompletion(mode: .basic)
+    }
+
+    /// Smart type completion (Ctrl+Shift+Space): only suggestions of the expected type.
+    public func triggerSmartCompletion() {
+        beginExplicitCompletion(mode: .smart)
+    }
+
+    private func beginExplicitCompletion(mode: CompletionMode) {
+        let noticeable = isCompletionVisible && completionMode == mode
+            && completionShownAt.map { Date().timeIntervalSince($0) >= 0.3 } == true
+        if completionMode != mode {
+            frozenCompletionKeys = []
+            frozenPrefix = nil
+        }
+        completionMode = mode
+        completionInvocationCount = noticeable ? max(completionInvocationCount + 1, 2) : 1
         isCompletionSelectionExplicit = true
         requestCompletion(trigger: .manual)
     }
@@ -646,7 +703,16 @@ public final class EditorIntelligenceController {
             overlayContainer.addSubview(view)
         }
         textView.addScrollObserver { [weak self] in
-            self?.repositionAnchoredPanels()
+            guard let self else { return }
+            self.suppressResizeDismissal = true
+            if textView.isUserInitiatedScroll, self.isCompletionVisible || self.completionAnchor != nil {
+                self.dismissCompletion()
+            } else {
+                self.repositionAnchoredPanels()
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.suppressResizeDismissal = false
+            }
         }
     }
 
@@ -703,6 +769,10 @@ public final class EditorIntelligenceController {
 
     /// A document built from the live text view rather than the adapter's snapshot, which lags
     /// edits by up to 200 ms: completion must see the character that was just typed.
+    ///
+    /// File-backed buffers are not copied into `TextSnapshot.text` (that materializes the whole
+    /// file on the main thread). A fresh piece-tree reader is taken instead, so the provider can
+    /// read the live source — including the `.` just typed — without using the lagging snapshot.
     private func makeLiveDocument() -> Document? {
         guard let textView, let base = adapter.currentDocument else {
             return adapter.currentDocument
@@ -710,12 +780,16 @@ public final class EditorIntelligenceController {
         let caret = textView.selectedRange
         let position = livePosition(at: caret.location, in: textView)
         let endPosition = livePosition(at: caret.upperBound, in: textView)
+        liveDocumentVersion += 1
+        let version = base.version &+ liveDocumentVersion
         let snapshot: TextSnapshot
-        if textView.isFileBacked {
-            snapshot = base.contentSnapshot
+        if textView.isFileBacked, let piece = textView.pieceTreeContentSnapshot() {
+            let reader = TextRangeReader(utf16Length: piece.utf16Length) { offset, length in
+                piece.substring(utf16Offset: offset, length: length)
+            }
+            snapshot = TextSnapshot(version: version, utf16Length: piece.utf16Length, text: nil, rangeReader: reader)
         } else {
-            liveDocumentVersion += 1
-            snapshot = TextSnapshot(version: base.version &+ liveDocumentVersion, text: textView.text)
+            snapshot = TextSnapshot(version: version, text: textView.text)
         }
         return Document(
             id: base.id,
@@ -739,16 +813,33 @@ public final class EditorIntelligenceController {
             completionLog.debug("request skipped: adapter has no current document")
             return
         }
-        let context = makeCompletionContext(document: document, trigger: trigger, invocationCount: completionInvocationCount)
+        if !isCompletionVisible {
+            completionPainted = false
+            completionShownAt = nil
+            frozenCompletionKeys = []
+            frozenPrefix = nil
+        }
+        completionGeneration += 1
+        let generation = completionGeneration
+        pendingCompletionUpdate = nil
+        completionHoldTask?.cancel()
+        completionHoldTask = nil
+        completionIsComputing = true
+        let context = makeCompletionContext(
+            document: document, trigger: trigger, invocationCount: completionInvocationCount, mode: completionMode
+        )
         completionLog.debug("request \(String(describing: trigger), privacy: .public) language=\(document.languageIdentifier ?? "nil", privacy: .public) prefix='\(context.prefix, privacy: .public)' memberAccess=\(context.isMemberAccess)")
         completionTask?.cancel()
         emptyCompletionHintTask?.cancel()
+        let started = Date()
         completionTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let items = try await completionEngine.complete(context: context)
-                await MainActor.run {
-                    self.receiveCompletion(items, context: context)
+                for try await update in await self.completionEngine.completeUpdates(context: context) {
+                    let elapsed = Date().timeIntervalSince(started)
+                    await MainActor.run {
+                        self.ingestCompletion(update, context: context, generation: generation, elapsed: elapsed)
+                    }
                 }
             } catch {
                 // Cancelled by a newer request; that request owns the popup now.
@@ -756,34 +847,63 @@ public final class EditorIntelligenceController {
         }
     }
 
-    private func receiveCompletion(_ items: [CompletionItem], context: CompletionContext) {
-        guard let textView, !Task.isCancelled else { return }
-        completionLog.debug("received \(items.count) items for prefix '\(context.prefix, privacy: .public)'")
-        // Drop results computed for another identifier (the user typed `.` or moved on).
-        guard let live = liveIdentifierRange(), live.location == context.range.start.utf16Offset,
+    private func ingestCompletion(_ update: CompletionUpdate, context: CompletionContext, generation: Int, elapsed: TimeInterval) {
+        guard generation == completionGeneration else { return }
+        guard let textView, let live = liveIdentifierRange(), live.location == context.range.start.utf16Offset,
               textView.selectedRange.length == 0 else {
-            completionLog.debug("dropped: caret moved to another identifier")
             return
         }
-        let isManual = context.trigger == .manual
-        if isManual, items.count == 1, !isCompletionVisible, !context.prefix.isEmpty || context.isMemberAccess {
-            // IntelliJ inserts a lone explicit suggestion straight away.
-            applyCompletion(items[0], replacingIdentifier: false)
-            return
-        }
-        if !isManual, !isCompletionVisible, !items.isEmpty, items.allSatisfy({ $0.kind == .text }) {
-            // Plain buffer words alone don't warrant an auto-popup while typing prose.
-            return
-        }
-        unfilteredCompletionItems = items
-        completionAnchor = context.range.start.utf16Offset
-        if items.isEmpty {
-            hideCompletionPanel()
-            if isManual {
-                showEmptyCompletionHint(at: context.range.end)
+        if let advertisement = update.advertisement { completionAdvertisement = advertisement }
+        if let emptyText = update.emptyText { completionEmptyText = emptyText }
+        completionIsComputing = !update.isFinished
+        let ready = update.isFinished || completionPainted || isCompletionVisible || elapsed >= 0.3
+        if !ready {
+            if update.items.isEmpty { return }
+            pendingCompletionUpdate = update
+            if completionHoldTask == nil {
+                completionHoldTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard let self, generation == self.completionGeneration, !self.completionPainted,
+                              let pending = self.pendingCompletionUpdate else { return }
+                        self.presentCompletion(pending, context: context)
+                    }
+                }
             }
             return
         }
+        completionHoldTask?.cancel()
+        completionHoldTask = nil
+        presentCompletion(update, context: context)
+    }
+
+    private func presentCompletion(_ update: CompletionUpdate, context: CompletionContext) {
+        let isManual = context.trigger == .manual
+        let items = update.items
+        if items.isEmpty {
+            guard update.isFinished else { return }
+            completionPainted = true
+            completionIsComputing = false
+            hideCompletionPanel()
+            if isManual {
+                showEmptyCompletionHint(at: context.range.end, text: update.emptyText ?? completionEmptyText ?? "No suggestions")
+            }
+            return
+        }
+        if isManual, items.count == 1, items[0].allowsAutoInsert, !isCompletionVisible,
+           !context.prefix.isEmpty || context.isMemberAccess {
+            applyCompletion(items[0], replacingIdentifier: false)
+            return
+        }
+        if !isManual, !isCompletionVisible, items.allSatisfy({ $0.kind == .text }) {
+            return
+        }
+        completionPainted = true
+        if completionShownAt == nil { completionShownAt = Date() }
+        completionWindowFrame = textView?.window?.frame
+        unfilteredCompletionItems = items
+        completionAnchor = context.range.start.utf16Offset
         refilterCompletion()
     }
 
@@ -800,11 +920,21 @@ public final class EditorIntelligenceController {
             return
         }
         let prefix = textView.text(in: NSRange(location: anchor, length: caret - anchor)) ?? ""
-        let ranked: [CompletionItem]
+        if let frozenPrefix, prefix != frozenPrefix {
+            frozenCompletionKeys = []
+            self.frozenPrefix = nil
+        }
+        var ranked: [CompletionItem]
         if let ranker = completionEngine.ranker as? DefaultRanker {
             ranked = ranker.rankSynchronously(items: unfilteredCompletionItems, prefix: prefix).map(\.item)
         } else {
             ranked = unfilteredCompletionItems.filter { CompletionMatcher.matches(prefix, $0.matchText) }
+        }
+        if !frozenCompletionKeys.isEmpty {
+            ranked = freezeCompletion(ranked)
+        } else if !ranked.isEmpty {
+            frozenCompletionKeys = ranked.map(\.identityKey)
+            frozenPrefix = prefix
         }
         guard !ranked.isEmpty else {
             hideCompletionPanel(keepingSession: true)
@@ -835,7 +965,9 @@ public final class EditorIntelligenceController {
             items: completionItems,
             selectedIndex: selectedCompletionIndex,
             replacementRange: replacementRange,
-            prefix: typedPrefix
+            prefix: typedPrefix,
+            isComputing: completionIsComputing,
+            advertisement: completionAdvertisement
         )
         completionPanelView.update(model: model)
         if reposition || completionPanelView.isHidden {
@@ -853,9 +985,23 @@ public final class EditorIntelligenceController {
         return textView.text(in: NSRange(location: anchor, length: caret - anchor)) ?? ""
     }
 
-    private func showEmptyCompletionHint(at position: TextPosition) {
+    private func freezeCompletion(_ ranked: [CompletionItem]) -> [CompletionItem] {
+        let byKey = Dictionary(ranked.map { ($0.identityKey, $0) }, uniquingKeysWith: { first, _ in first })
+        var used = Set<String>()
+        var frozen: [CompletionItem] = []
+        for key in frozenCompletionKeys {
+            if let item = byKey[key] {
+                frozen.append(item)
+                used.insert(key)
+            }
+        }
+        frozen.append(contentsOf: ranked.filter { !used.contains($0.identityKey) })
+        return frozen
+    }
+
+    private func showEmptyCompletionHint(at position: TextPosition, text: String = "No suggestions") {
         guard let textView else { return }
-        let model = CompletionPanelModel(items: [], replacementRange: EditorIntelligence.TextRange(start: position, end: position), emptyText: "No suggestions")
+        let model = CompletionPanelModel(items: [], replacementRange: EditorIntelligence.TextRange(start: position, end: position), emptyText: text)
         completionPanelView.update(model: model)
         positionPanel(completionPanelView, near: position.utf16Offset, in: textView, size: CompletionPanelView.preferredSize(for: model))
         completionPanelView.isHidden = false
@@ -881,6 +1027,16 @@ public final class EditorIntelligenceController {
             completionAnchor = nil
             isCompletionSelectionExplicit = false
             completionInvocationCount = 1
+            completionMode = .basic
+            completionShownAt = nil
+            completionPainted = false
+            frozenCompletionKeys = []
+            frozenPrefix = nil
+            completionIsComputing = false
+            completionAdvertisement = nil
+            completionEmptyText = nil
+            completionHoldTask?.cancel()
+            completionHoldTask = nil
         }
         completionPanelView.isHidden = true
         hideGhostText()
@@ -1341,12 +1497,14 @@ public final class EditorIntelligenceController {
                CharacterSet.decimalDigits.contains(first) {
                 return
             }
-            completionInvocationCount = 1
+            completionMode = .basic
+            completionInvocationCount = 0
             isCompletionSelectionExplicit = false
             requestCompletion(trigger: .keystroke(text))
         } else if isCompletionTriggerCharacter(text) {
             hideCompletionPanel()
-            completionInvocationCount = 1
+            completionMode = .basic
+            completionInvocationCount = 0
             isCompletionSelectionExplicit = false
             requestCompletion(trigger: .keystroke(text))
         } else if isCompletionVisible || completionAnchor != nil {

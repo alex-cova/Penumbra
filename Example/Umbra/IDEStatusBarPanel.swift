@@ -13,6 +13,7 @@ struct IDEStatusBarPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             syntaxPicker
             javaStatus
+            httpStatus
             if workspace.statusSelectionLength > 0 {
                 Text("·  \(workspace.statusSelectionLength) selected")
                     .font(IDEAppearance.Typography.monoSmall)
@@ -114,6 +115,34 @@ struct IDEStatusBarPanel: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 280, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var httpStatus: some View {
+        if workspace.statusLanguage == "http" {
+            if workspace.httpSupport.isSending {
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Button("Sending HTTP request…") {
+                    workspace.showHTTPResponse()
+                }
+                .buttonStyle(.borderless)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else if let statusCode = workspace.httpSupport.lastStatusCode,
+                      let duration = workspace.httpSupport.lastDuration {
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Button("HTTP \(statusCode) (\(Int(duration * 1000)) ms)") {
+                    workspace.showHTTPResponse()
+                }
+                .buttonStyle(.borderless)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
     }

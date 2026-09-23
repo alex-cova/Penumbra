@@ -5,7 +5,9 @@ import Foundation
 /// The cursor position is read from the document, and the prefix is the contiguous run of word
 /// characters (letters, digits, `_`, `$`) immediately before the cursor. The returned `range` is the document range that should
 /// be replaced by the chosen completion.
-public func makeCompletionContext(document: Document, trigger: RequestTrigger, invocationCount: Int = 1) -> CompletionContext {
+public func makeCompletionContext(
+    document: Document, trigger: RequestTrigger, invocationCount: Int = 1, mode: CompletionMode = .basic
+) -> CompletionContext {
     let cursor = document.cursor
     let offset = cursor.position.utf16Offset
     let windowStart = max(0, offset - 256)
@@ -24,7 +26,8 @@ public func makeCompletionContext(document: Document, trigger: RequestTrigger, i
         trigger: trigger,
         prefix: prefix,
         range: range,
-        invocationCount: invocationCount
+        invocationCount: invocationCount,
+        mode: mode
     )
 }
 

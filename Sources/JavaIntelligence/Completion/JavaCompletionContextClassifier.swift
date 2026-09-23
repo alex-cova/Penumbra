@@ -28,6 +28,8 @@ public enum JavaCompletionSite: Equatable, Sendable {
     case topLevel
     /// Inside a method body, initializer, or field initializer.
     case statement
+    /// `(String|` or a parenthesized expression, where a cast to the expected type can be inserted.
+    case cast
     /// Inside a string literal or comment: no Java completion.
     case stringOrComment
 }
@@ -35,6 +37,11 @@ public enum JavaCompletionSite: Equatable, Sendable {
 /// Classifies the completion position from the live tree plus a short textual look-back (the tree
 /// is unreliable right after a trigger character, see ``JavaReceiverScanner``).
 public enum JavaCompletionContextClassifier {
+    /// Words that can precede `(` without it being a method call.
+    private static let nonCallKeywords: Set<String> = [
+        "if", "for", "while", "switch", "return", "throw", "synchronized", "assert", "try", "new", "else", "do"
+    ]
+
     public static func classify(bytes: [UInt8], tree: JavaSyntaxTree, prefixStart: Int) -> JavaCompletionSite {
         if isInsideStringOrComment(tree: tree, bytes: bytes, offset: prefixStart) {
             return .stringOrComment
@@ -72,8 +79,14 @@ public enum JavaCompletionContextClassifier {
         default:
             break
         }
-        if previousByte == UInt8(ascii: "("), word(endingAt: skipWhitespace(backwardFrom: before - 1, in: bytes), in: bytes) == "catch" {
-            return .typeOnly(keyword: "catch")
+        if previousByte == UInt8(ascii: "(") {
+            let wordBefore = word(endingAt: skipWhitespace(backwardFrom: before - 1, in: bytes), in: bytes)
+            if wordBefore == "catch" {
+                return .typeOnly(keyword: "catch")
+            }
+            if wordBefore == nil || nonCallKeywords.contains(wordBefore!) {
+                return .cast
+            }
         }
         if previousByte == UInt8(ascii: "|"), isInsideCatchParameter(bytes: bytes, before: before) {
             return .typeOnly(keyword: "catch")

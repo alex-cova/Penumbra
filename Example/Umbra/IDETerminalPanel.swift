@@ -320,6 +320,8 @@ struct IDETerminalPanel: View {
                 .accessibilityLabel("New Terminal Tab")
                 if workspace.isGradleConsoleSelected {
                     IDEGradleConsoleControls()
+                } else if workspace.isHTTPConsoleSelected {
+                    IDEHTTPConsoleControls()
                 } else {
                     Button(action: workspace.restartTerminal) {
                         Image(systemName: "arrow.clockwise")
@@ -342,7 +344,9 @@ struct IDETerminalPanel: View {
 
             ZStack {
                 ForEach(workspace.terminalTabs) { tab in
-                    let isSelected = !workspace.isGradleConsoleSelected && tab.id == workspace.selectedTerminalTabID
+                    let isSelected = !workspace.isGradleConsoleSelected
+                        && !workspace.isHTTPConsoleSelected
+                        && tab.id == workspace.selectedTerminalTabID
                     IDETerminalHostRepresentable(
                         tabID: tab.id,
                         workingDirectory: tab.workingDirectory,
@@ -369,6 +373,16 @@ struct IDETerminalPanel: View {
                     )
                     .opacity(workspace.isGradleConsoleSelected ? 1 : 0)
                     .allowsHitTesting(workspace.isGradleConsoleSelected)
+                }
+
+                if workspace.showsHTTPTab {
+                    IDEHTTPResponseView(
+                        log: workspace.httpSupport.responseLog,
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize
+                    )
+                    .opacity(workspace.isHTTPConsoleSelected ? 1 : 0)
+                    .allowsHitTesting(workspace.isHTTPConsoleSelected)
                 }
             }
         }
@@ -445,5 +459,42 @@ private struct IDEGradleConsoleControls: View {
     private static func formattedElapsed(_ interval: TimeInterval) -> String {
         let totalSeconds = max(0, Int(interval))
         return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
+private struct IDEHTTPConsoleControls: View {
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            if let statusCode = workspace.httpSupport.lastStatusCode {
+                Text("HTTP \(statusCode)")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else if workspace.httpSupport.isSending {
+                Text("Sending…")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            if let duration = workspace.httpSupport.lastDuration {
+                Text(String(format: "%.0f ms", duration * 1000))
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            Button(action: copyOutput) {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Copy HTTP Response")
+            .accessibilityLabel("Copy HTTP Response")
+        }
+    }
+
+    private func copyOutput() {
+        let text = workspace.httpSupport.responseLog.lines.map(\.text).joined(separator: "\n")
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 }

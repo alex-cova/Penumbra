@@ -82,6 +82,31 @@ final class CompletionEngineTests: XCTestCase {
         XCTAssertEqual(results, [])
     }
 
+    func testLaterYieldReplacesTheSnapshot() async throws {
+        let provider = TwoStepProvider()
+        let engine = CompletionEngine(providers: [provider], debounceInterval: 0)
+        var labels: [[String]] = []
+        for try await update in await engine.completeUpdates(context: makeContext(prefix: "a")) {
+            labels.append(update.items.map(\.label))
+        }
+        XCTAssertEqual(labels.first, ["alpha"])
+        XCTAssertEqual(Set(labels.last ?? []), ["alpha", "able"])
+    }
+
+    func testWordStartStaysWhenNothingElseMatches() {
+        let ranker = DefaultRanker()
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let range = TextRange(start: position, end: position)
+        let items = [
+            CompletionItem(label: "getName", insertText: "getName", kind: .method, range: range, source: "Test"),
+            CompletionItem(label: "Name", insertText: "Name", kind: .method, range: range, source: "Test")
+        ]
+        let onlyMiddle = ranker.rankSynchronously(items: [items[0]], prefix: "Name").map(\.item.label)
+        XCTAssertEqual(onlyMiddle, ["getName"])
+        let withStart = ranker.rankSynchronously(items: items, prefix: "Name").map(\.item.label)
+        XCTAssertEqual(withStart, ["Name"])
+    }
+
     func testCancellation() async throws {
         let provider = MockCompletionProvider(name: "Test", items: [])
         let engine = CompletionEngine(providers: [provider], debounceInterval: 0.1)
@@ -96,6 +121,26 @@ final class CompletionEngineTests: XCTestCase {
             XCTFail("Should have been cancelled")
         } catch is CancellationError {
             // expected
+        }
+    }
+}
+
+private struct TwoStepProvider: CompletionProvider {
+    let name = "TwoStep"
+
+    func provide(context: CompletionContext) async -> [CompletionItem] { [] }
+
+    func provideUpdates(context: CompletionContext) -> AsyncStream<CompletionUpdate> {
+        let range = context.range
+        return AsyncStream { continuation in
+            continuation.yield(CompletionUpdate(items: [
+                CompletionItem(label: "alpha", insertText: "alpha", kind: .method, range: range, source: name)
+            ], isFinished: false))
+            continuation.yield(CompletionUpdate(items: [
+                CompletionItem(label: "alpha", insertText: "alpha", kind: .method, range: range, source: name),
+                CompletionItem(label: "able", insertText: "able", kind: .method, range: range, source: name)
+            ], isFinished: true))
+            continuation.finish()
         }
     }
 }

@@ -351,7 +351,7 @@ final class TextViewMetalSmokeTests: XCTestCase {
         textView.lineSelectionDisplayType = .line
         textView.selectedRange = NSRange(location: 0, length: 0)
         textView.pageGuideColumn = 10
-        textView.showReformattingGuideShading = true
+        textView.showReformattingGuideShading = false
         textView.showPageGuide = true
         textView.layoutIfNeeded()
         pumpMainRunLoop(for: 0.05)
@@ -359,8 +359,8 @@ final class TextViewMetalSmokeTests: XCTestCase {
         let after = try XCTUnwrap(textView.captureMetalPresentedLayer())
         XCTAssertGreaterThan(
             differingPixelCount(before, after),
-            1_000,
-            "Metal must paint the current-line band and page-guide shading before becoming opaque"
+            100,
+            "Metal must paint the current-line band and page-guide hairline before becoming opaque"
         )
         let canvas = try XCTUnwrap(findMetalCanvas(in: textView))
         XCTAssertTrue(canvas.isOpaque)

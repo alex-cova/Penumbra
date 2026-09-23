@@ -218,6 +218,7 @@ public final class IDEPreferences {
         textView.showSpaces = showInvisibleCharacters
         textView.showPageGuide = showPageGuide
         textView.pageGuideColumn = pageGuideColumn
+        textView.showReformattingGuideShading = false
         textView.lineHeightMultiplier = CGFloat(lineHeightMultiplier)
         textView.isTypewriterScrollingEnabled = isTypewriterScrollingEnabled
         if isTypewriterScrollingEnabled {

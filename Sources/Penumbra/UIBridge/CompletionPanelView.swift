@@ -10,6 +10,7 @@ import EditorIntelligence
 public final class CompletionPanelView: NSView {
     private var model: CompletionPanelModel
     private var hoveredIndex: Int?
+    private let spinner = NSProgressIndicator()
     private var trackingArea: NSTrackingArea?
     /// Index of the first drawn row.
     private(set) var firstVisibleIndex = 0
@@ -21,6 +22,7 @@ public final class CompletionPanelView: NSView {
     public var onAcceptRow: ((Int) -> Void)?
 
     public static let rowHeight: CGFloat = 22
+    public static let footerHeight: CGFloat = 18
     public static let maxVisibleRows = 12
     public static let minimumWidth: CGFloat = 280
     public static let maximumWidth: CGFloat = 640
@@ -42,6 +44,11 @@ public final class CompletionPanelView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 4
         layer?.masksToBounds = true
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.isHidden = true
+        addSubview(spinner)
     }
 
     @available(*, unavailable)
@@ -61,14 +68,28 @@ public final class CompletionPanelView: NSView {
             firstVisibleIndex = 0
         }
         scrollSelectionIntoView()
+        if model.isComputing {
+            spinner.startAnimation(nil)
+            spinner.isHidden = false
+        } else {
+            spinner.stopAnimation(nil)
+            spinner.isHidden = true
+        }
+        needsLayout = true
         needsDisplay = true
+    }
+
+    public override func layout() {
+        super.layout()
+        spinner.frame = NSRect(x: Self.horizontalPadding, y: bounds.height - Self.footerHeight + 2, width: 14, height: 14)
     }
 
     /// The size this panel should have for `model`: up to `maxVisibleRows` rows, and wide enough
     /// for the widest row's label, tail and type (clamped to `minimumWidth...maximumWidth`).
     public static func preferredSize(for model: CompletionPanelModel, width: CGFloat? = nil) -> NSSize {
         let rows = max(1, min(model.items.count, maxVisibleRows))
-        let height = CGFloat(rows) * rowHeight + 2
+        let footer: CGFloat = model.showsFooter ? footerHeight : 0
+        let height = CGFloat(rows) * rowHeight + 2 + footer
         if let width {
             return NSSize(width: width, height: height)
         }
@@ -161,6 +182,7 @@ public final class CompletionPanelView: NSView {
 
     private func rowIndex(at point: NSPoint) -> Int? {
         guard bounds.contains(point) else { return nil }
+        if model.showsFooter, point.y >= bounds.height - Self.footerHeight { return nil }
         let row = Int((point.y - 1) / Self.rowHeight)
         let index = firstVisibleIndex + row
         guard row >= 0, row < visibleRowCount, model.items.indices.contains(index) else { return nil }
@@ -191,6 +213,17 @@ public final class CompletionPanelView: NSView {
             let index = firstVisibleIndex + row
             guard model.items.indices.contains(index) else { break }
             draw(item: model.items[index], in: rowRect(forVisibleRow: row), isSelected: index == model.selectedIndex, isHovered: index == hoveredIndex)
+        }
+
+        if model.showsFooter {
+            let footer = NSRect(x: 0, y: bounds.height - Self.footerHeight, width: bounds.width, height: Self.footerHeight)
+            NSColor.separatorColor.setFill()
+            NSRect(x: 0, y: footer.minY, width: bounds.width, height: 1).fill()
+            if let advertisement = model.advertisement, !advertisement.isEmpty {
+                let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: NSColor.secondaryLabelColor]
+                let x = model.isComputing ? Self.horizontalPadding + 16 : Self.horizontalPadding
+                (advertisement as NSString).draw(at: NSPoint(x: x, y: footer.minY + 2), withAttributes: attributes)
+            }
         }
 
         drawScrollIndicator()

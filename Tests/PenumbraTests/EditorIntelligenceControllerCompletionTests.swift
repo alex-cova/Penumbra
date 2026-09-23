@@ -203,6 +203,72 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         XCTAssertFalse(controller.isShowingCompletion)
     }
 
+    func testUnfinishedCompletionWaitsBeforePainting() async throws {
+        let textView = makeTextView("", caret: 0)
+        let controller = try await makeController(textView, provider: HoldingProvider())
+        textView.insertText("a")
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertFalse(controller.isShowingCompletion)
+        try await waitUntil { controller.isShowingCompletion }
+        XCTAssertEqual(labels(controller), ["alpha"])
+    }
+
+    func testLaterBatchDoesNotReorderFrozenRows() async throws {
+        let textView = makeTextView("", caret: 0)
+        let controller = try await makeController(textView, provider: HoldingProvider(second: "alpine"))
+        textView.insertText("a")
+        try await waitUntil { labels(controller) == ["alpha"] }
+        try await waitUntil { labels(controller).count == 2 }
+        XCTAssertEqual(labels(controller), ["alpha", "alpine"])
+    }
+
+    func testClickUserScrollAndResizeDismissThePopup() async throws {
+        let lines = (0..<80).map { _ in "padding" }.joined(separator: "\n") + "\na"
+        let caret = (lines as NSString).length
+        let textView = makeTextView(lines, caret: caret)
+        textView.layoutSubtreeIfNeeded()
+        let provider = StubProvider(items: { range in
+            [CompletionItem(label: "alpha", insertText: "alpha", kind: .function, range: range, source: "Stub", allowsAutoInsert: false)]
+        })
+        let controller = try await makeController(textView, provider: provider)
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        XCTAssertTrue(controller.isShowingCompletion)
+
+        textView.onCaretRepositioningClick?()
+        XCTAssertFalse(controller.isShowingCompletion)
+
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        let offset = textView.contentOffset
+        textView.isUserInitiatedScroll = true
+        textView.contentOffset = CGPoint(x: offset.x, y: max(0, offset.y - 40))
+        textView.isUserInitiatedScroll = false
+        XCTAssertFalse(controller.isShowingCompletion)
+
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        XCTAssertTrue(controller.isShowingCompletion, "programmatic scrolling keeps the popup")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let frame = try XCTUnwrap(textView.window).frame
+        textView.window?.setFrame(frame.insetBy(dx: 20, dy: 20), display: true)
+        XCTAssertFalse(controller.isShowingCompletion)
+    }
+
+    func testClassNameIsNotAutoInserted() async throws {
+        let textView = makeTextView("Arr", caret: 3)
+        let provider = StubProvider(items: { range in
+            [CompletionItem(label: "ArrayList", insertText: "ArrayList", kind: .class, range: range, source: "Stub", allowsAutoInsert: false)]
+        })
+        let controller = try await makeController(textView, provider: provider)
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        XCTAssertEqual(textView.text, "Arr")
+        XCTAssertEqual(labels(controller), ["ArrayList"])
+    }
+
     func testDigitsDoNotAutoOpenPopup() async throws {
         let textView = makeTextView("", caret: 0)
         let provider = StubProvider { _ in ["one"] }
@@ -211,6 +277,35 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         textView.insertText("1")
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertFalse(controller.isShowingCompletion)
+    }
+}
+
+/// Yields one row immediately, unfinished, then a second row after the popup has had time to paint.
+private struct HoldingProvider: CompletionProvider {
+    let name = "Holding"
+    var second: String?
+
+    func provide(context: CompletionContext) async -> [CompletionItem] { [] }
+
+    func provideUpdates(context: CompletionContext) -> AsyncStream<CompletionUpdate> {
+        let range = context.range
+        let second = second
+        return AsyncStream { continuation in
+            let task = Task {
+                let first = CompletionItem(label: "alpha", insertText: "alpha", kind: .method, range: range, source: "Holding", priority: 1)
+                continuation.yield(CompletionUpdate(items: [first], isFinished: false))
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                var items = [first]
+                if let second {
+                    items.append(CompletionItem(
+                        label: second, insertText: second, kind: .method, range: range, source: "Holding", priority: 50
+                    ))
+                }
+                continuation.yield(CompletionUpdate(items: items, isFinished: true))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

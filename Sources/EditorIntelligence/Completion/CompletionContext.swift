@@ -1,5 +1,11 @@
 import Foundation
 
+/// Basic completion (Ctrl+Space) versus smart type (Ctrl+Shift+Space).
+public enum CompletionMode: Hashable, Sendable {
+    case basic
+    case smart
+}
+
 /// Context passed to completion providers.
 public struct CompletionContext: Sendable, CustomStringConvertible {
     public let document: Document
@@ -7,10 +13,11 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
     public let trigger: RequestTrigger
     public let prefix: String
     public let range: TextRange
-    /// How many times completion was invoked in a row without the popup closing: 2 for a
-    /// second Ctrl+Space, which asks providers for a broader result (IntelliJ's "all classes,
-    /// not only the imported ones").
+    /// IntelliJ's invocation count. `0` is an autopopup while typing. `1` is the first explicit
+    /// Ctrl+Space. `2` or more is a repeated explicit completion (non-imported classes, inaccessible
+    /// members) once the popup has been noticeable.
     public let invocationCount: Int
+    public let mode: CompletionMode
 
     public init(
         document: Document,
@@ -18,7 +25,8 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         trigger: RequestTrigger,
         prefix: String,
         range: TextRange,
-        invocationCount: Int = 1
+        invocationCount: Int = 1,
+        mode: CompletionMode = .basic
     ) {
         self.document = document
         self.cursor = cursor
@@ -26,6 +34,7 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         self.prefix = prefix
         self.range = range
         self.invocationCount = invocationCount
+        self.mode = mode
     }
 
     /// The character just before the prefix is a member-access `.` (or `::`).

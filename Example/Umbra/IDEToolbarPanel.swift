@@ -31,11 +31,14 @@ struct IDEToolbarPanel: View {
                 isGradleProject: workspace.javaSupport.isGradleProject,
                 isJavaRunnable: workspace.javaFileCanRun,
                 javaRunHelp: workspace.javaRunHelp,
+                isHTTPFile: workspace.statusLanguage == "http",
+                isHTTPSendable: workspace.httpFileCanSend,
                 isTerminalVisible: workspace.isTerminalVisible,
                 showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
                 buildGradle: workspace.buildGradleProject,
                 runJava: workspace.runActiveJava,
+                sendHTTPRequest: workspace.sendActiveHTTPRequest,
                 toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
@@ -143,11 +146,14 @@ private struct IDEToolbarActionCluster: View {
     let isGradleProject: Bool
     let isJavaRunnable: Bool
     let javaRunHelp: String
+    let isHTTPFile: Bool
+    let isHTTPSendable: Bool
     let isTerminalVisible: Bool
     let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
+    let sendHTTPRequest: () -> Void
     let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
@@ -188,6 +194,15 @@ private struct IDEToolbarActionCluster: View {
                     tint: IDEAppearance.ColorToken.run,
                     help: javaRunHelp,
                     action: runJava
+                )
+            }
+
+            if isHTTPFile && isHTTPSendable {
+                IDEToolbarIconButton(
+                    systemName: "paperplane.fill",
+                    tint: IDEAppearance.ColorToken.accent,
+                    help: "Send HTTP Request",
+                    action: sendHTTPRequest
                 )
             }
 

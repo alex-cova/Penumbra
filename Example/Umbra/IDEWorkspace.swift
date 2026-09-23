@@ -1,5 +1,6 @@
 import AppKit
 import EditorIntelligence
+import HTTPClient
 import JavaIntelligence
 import Observation
 import Penumbra
@@ -108,6 +109,9 @@ public final class IDEWorkspace {
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
     var javaFileCanRun = false
     private var javaRunFileURL: URL?
+    /// True when the active editor is an HTTP request file with a parsable request at the caret.
+    var httpFileCanSend = false
+    let httpSupport = IDEHTTPSupport()
     /// Bumped when the play button should type a command into the selected terminal.
     var terminalCommandTicket: UInt64 = 0
     var pendingTerminalCommand: String?
@@ -130,10 +134,16 @@ public final class IDEWorkspace {
     /// True when the bottom panel's read-only "Gradle" console tab is showing instead of a shell.
     /// Not persisted in the session -- each launch starts on a shell (or no terminal at all).
     var isGradleConsoleSelected = false
+    /// True when the bottom panel's read-only "HTTP" response tab is showing instead of a shell.
+    var isHTTPConsoleSelected = false
     /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
     /// produced output worth revisiting.
     var showsGradleConsoleTab: Bool {
         javaSupport.isGradleProject && (javaSupport.gradleSync.isSyncing || !javaSupport.gradleConsole.lines.isEmpty)
+    }
+    /// Whether the "HTTP" tab should appear for the active `.http` file or after a request runs.
+    var showsHTTPTab: Bool {
+        statusLanguage == "http" || httpSupport.isSending || !httpSupport.responseLog.lines.isEmpty
     }
 
     var editorLayout: EditorLayout { workbench.layout }
@@ -424,10 +434,28 @@ public final class IDEWorkspace {
         runInTerminal(command.shellCommand)
     }
 
+    public func sendActiveHTTPRequest() {
+        guard httpFileCanSend else { return }
+        let host = host(for: workbench.activePaneID)
+        let textView = host.textView
+        let fileURL = workbench.activePane.selectedDocument?.url
+        showHTTPResponse()
+        httpSupport.send(
+            text: textView.text,
+            caretUTF16Offset: textView.selectedRange.location,
+            fileURL: fileURL
+        )
+    }
+
+    func showHTTPResponse() {
+        selectHTTPConsoleTab()
+    }
+
     private func runInTerminal(_ command: String) {
         // Build and run always need an actual shell, even if the Gradle console tab is what's
         // currently showing.
         isGradleConsoleSelected = false
+        isHTTPConsoleSelected = false
         if terminalTabs.isEmpty {
             addTerminalTab(saveSession: false)
         } else if !isTerminalVisible {
@@ -471,6 +499,7 @@ public final class IDEWorkspace {
 
     func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
         isGradleConsoleSelected = false
+        isHTTPConsoleSelected = false
         let tab = makeTerminalTab(cwd: cwd)
         terminalTabs.append(tab)
         selectedTerminalTabID = tab.id
@@ -517,6 +546,7 @@ public final class IDEWorkspace {
     func selectTerminalTab(_ id: UUID) {
         guard terminalTabs.contains(where: { $0.id == id }) else { return }
         isGradleConsoleSelected = false
+        isHTTPConsoleSelected = false
         selectedTerminalTabID = id
         requestTerminalFocus()
         saveSession()
@@ -526,6 +556,16 @@ public final class IDEWorkspace {
     /// `showGradleOutput()`.
     func selectGradleConsoleTab() {
         isGradleConsoleSelected = true
+        isHTTPConsoleSelected = false
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func selectHTTPConsoleTab() {
+        isHTTPConsoleSelected = true
+        isGradleConsoleSelected = false
         if !isTerminalVisible {
             isTerminalVisible = true
             saveSession()
@@ -1096,6 +1136,9 @@ public final class IDEWorkspace {
             self?.presentNavigationChoices(locations)
         }
         host.wireMarkdownPreview()
+        host.wireHTTPActions(sendRequest: { [weak self] in
+            self?.sendActiveHTTPRequest()
+        })
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
         // `.goToLine` natively.
@@ -1324,7 +1367,11 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
                           action: { [weak self] in self?.reloadGradleProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
-                          action: { [weak self] in self?.showGradleOutput() })
+                          action: { [weak self] in self?.showGradleOutput() }),
+            EditorCommand(id: "app.http.sendRequest", title: "HTTP: Send Request", group: "HTTP",
+                          action: { [weak self] in self?.sendActiveHTTPRequest() }),
+            EditorCommand(id: "app.http.showResponse", title: "HTTP: Show Response", group: "HTTP",
+                          action: { [weak self] in self?.showHTTPResponse() })
         ])
     }
 
@@ -1741,6 +1788,20 @@ public final class IDEWorkspace {
         statusSelectionLength = range.length
         statusRenderer = textView.isMetalRenderingActive ? "Metal" : "Core Graphics"
         refreshJavaRunAvailability(from: textView)
+        refreshHTTPSendAvailability(from: textView)
+    }
+
+    private func refreshHTTPSendAvailability(from textView: TextView) {
+        let document = workbench.activePane.selectedDocument
+        guard document?.languageIdentifier == "http" else {
+            httpFileCanSend = false
+            return
+        }
+        httpFileCanSend = HTTPRequestParser.canParseRequest(
+            in: textView.text,
+            caretUTF16Offset: textView.selectedRange.location,
+            fileURL: document?.url
+        )
     }
 
     private func refreshJavaRunAvailability(from textView: TextView) {
@@ -2022,6 +2083,7 @@ extension IDEWorkspace: TextViewDelegate {
 
     public func textViewDidChange(_ textView: TextView) {
         refreshJavaRunAvailability(from: textView)
+        refreshHTTPSendAvailability(from: textView)
         refreshPresentation()
     }
 

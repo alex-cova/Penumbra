@@ -32,7 +32,7 @@ final class LanguagePackTests: XCTestCase {
             ("c", .c),
             ("cpp", .cpp)
         ]
-        let languagesWithInjections: Set<String> = ["javascript", "html", "markdown", "cpp"]
+        let languagesWithInjections: Set<String> = ["javascript", "html", "markdown", "cpp", "http"]
         for (name, language) in languages {
             XCTAssertNotNil(language.highlightsQuery, name)
             language.prepare()
