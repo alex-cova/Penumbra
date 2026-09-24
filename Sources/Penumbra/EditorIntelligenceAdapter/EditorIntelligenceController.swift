@@ -272,6 +272,10 @@ public final class EditorIntelligenceController {
     /// `true` once handled. Left `nil`, the action falls through to the command palette's own
     /// `.findInFiles` handling instead.
     public var onRequestProjectSearch: (() -> Bool)?
+    /// Invoked for `.typeHierarchy` (⌃H in the IntelliJ keymap). The host resolves the type at the
+    /// caret and shows its hierarchy; return `true` once handled. Left `nil`, the action is not
+    /// handled.
+    public var onRequestTypeHierarchy: (() -> Bool)?
     /// Invoked whenever enclosing-symbol breadcrumbs are recomputed. Hosts that render their own
     /// trail (rather than ``breadcrumbBarView``) should assign this and ignore the AppKit bar.
     public var onBreadcrumbsUpdated: (([BreadcrumbSegment]) -> Void)?
@@ -319,6 +323,9 @@ public final class EditorIntelligenceController {
         case .findInFiles:
             guard let onRequestProjectSearch else { return false }
             return onRequestProjectSearch()
+        case .typeHierarchy:
+            guard let onRequestTypeHierarchy else { return false }
+            return onRequestTypeHierarchy()
         default:
             return false
         }

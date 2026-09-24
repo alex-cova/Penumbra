@@ -87,6 +87,8 @@ public final class IDEWorkspace {
     let project = IDEProjectModel()
     let gitStatus = IDEGitStatusModel()
     let problems = IDEProblemsStore()
+    /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
+    let typeHierarchy = IDETypeHierarchyStore()
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
@@ -168,6 +170,14 @@ public final class IDEWorkspace {
         get { selectedBottomTab == .problems }
         set { setBottomTab(.problems, selected: newValue) }
     }
+    /// True when the bottom panel's Type Hierarchy tab is showing instead of a shell.
+    var isTypeHierarchySelected: Bool {
+        get { selectedBottomTab == .typeHierarchy }
+        set { setBottomTab(.typeHierarchy, selected: newValue) }
+    }
+    /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
+    /// been requested, and goes when it is closed.
+    var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
 
@@ -281,6 +291,11 @@ public final class IDEWorkspace {
                 await MainActor.run {
                     let preferences = IDEPreferences.shared
                     return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
+                }
+            }
+            await intelligenceServices.javaSupport.hierarchyProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
                 }
             }
             await intelligenceServices.javaSupport.hoverProvider.setOpenBufferLookup { [navigationBuffers] url in
@@ -780,6 +795,74 @@ public final class IDEWorkspace {
 
     func showProblems() {
         selectProblemsTab()
+    }
+
+    // MARK: Type hierarchy
+
+    func selectTypeHierarchyTab() {
+        isTypeHierarchySelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    /// Shows the hierarchy of the type at the active editor's caret (⌃H). Always handles the
+    /// request: outside a Java type the tab says so instead of the key doing nothing.
+    @discardableResult
+    func showTypeHierarchy() -> Bool {
+        if typeHierarchy.loader == nil {
+            typeHierarchy.loader = { [javaSupport] node, direction, file in
+                switch direction {
+                case .supertypes: return await javaSupport.hierarchyProvider.supertypes(of: node, file: file)
+                case .subtypes: return await javaSupport.hierarchyProvider.subtypes(of: node, file: file)
+                }
+            }
+        }
+        let host = host(for: workbench.activePane.id)
+        let textView = host.textView
+        let url = textView.documentURL
+        guard workbench.activePane.selectedDocument?.languageIdentifier == "java" else {
+            typeHierarchy.show(message: "Type Hierarchy works in Java files")
+            selectTypeHierarchyTab()
+            return true
+        }
+        let source = textView.text
+        let offset = textView.selectedRange.location
+        let provider = javaSupport.hierarchyProvider
+        Task { [weak self] in
+            let root = await provider.rootType(source: source, fileURL: url, utf16Offset: offset)
+            guard let self else { return }
+            if let root {
+                self.typeHierarchy.show(root: root, file: url)
+            } else {
+                self.typeHierarchy.show(message: "No Java type at the caret")
+            }
+            self.selectTypeHierarchyTab()
+        }
+        return true
+    }
+
+    /// Closes the Type Hierarchy tab, back to whichever shell was showing.
+    func closeTypeHierarchy() {
+        typeHierarchy.clear()
+        isTypeHierarchySelected = false
+    }
+
+    /// Opens the declaration of a hierarchy node: in the project, or in an attached source. A type
+    /// with no source (a class file) has nowhere to go, so the system beeps.
+    func openTypeHierarchyNode(_ node: JavaTypeHierarchyNode) {
+        let provider = javaSupport.hierarchyProvider
+        let file = typeHierarchy.file
+        Task { [weak self] in
+            guard let location = await provider.location(of: node, file: file), let url = location.url else {
+                NSSound.beep()
+                return
+            }
+            _ = self?.openNavigationLocation(Location(
+                documentID: DocumentID(), url: url, range: location.range, displayName: node.displayName
+            ))
+        }
     }
 
     func toggleProblems() {
@@ -1454,6 +1537,9 @@ public final class IDEWorkspace {
         host.intelligenceController?.onRequestProjectSearch = { [weak self] in
             self?.showFindInFiles()
             return true
+        }
+        host.intelligenceController?.onRequestTypeHierarchy = { [weak self] in
+            self?.showTypeHierarchy() ?? false
         }
         host.intelligenceController?.onBreadcrumbsUpdated = { [weak self] segments in
             self?.applySymbolBreadcrumbs(segments)

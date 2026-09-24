@@ -340,10 +340,22 @@ public enum JavaMemberLookup {
             file = JavaSourceStubBuilder.build(source: text, url: url)
             cache.files[key] = file
         }
+        // A nested type sees the types declared in the classes around it (`Outer.Handler` from
+        // `Outer.Mode`), innermost first.
+        var enclosing = [stub.qualifiedName]
+        var outer = stub.outerQualifiedName
+        while let name = outer {
+            enclosing.append(name)
+            outer = nil
+            if let dot = name.lastIndex(of: ".") {
+                let parent = String(name[..<dot])
+                if parent.count > file.packageName.count { outer = parent }
+            }
+        }
         return JavaResolutionContext(
             packageName: file.packageName,
             imports: file.imports,
-            enclosingTypeQualifiedNames: [stub.qualifiedName],
+            enclosingTypeQualifiedNames: enclosing,
             typeParameterNames: Set(stub.typeParameters.map(\.name))
         )
     }
@@ -427,5 +439,32 @@ public enum JavaMemberLookup {
         case .wildcard: return "Object"
         case .unresolved(let simpleName, _): return simpleName
         }
+    }
+}
+
+// MARK: - Direct supertypes
+
+extension JavaMemberLookup {
+    /// The types `qualifiedName` directly extends or implements, superclass first, each resolved
+    /// against the declaring file's package and imports. A class with no declared superclass
+    /// extends `java.lang.Object`; an interface does not. Supertypes that cannot be resolved are
+    /// left out.
+    public static func directSupertypeNames(of qualifiedName: String, index: JavaIndex) async -> [String] {
+        guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
+        let cache = DeclaringFileCache()
+        let fallback = JavaResolutionContext(packageName: stub.packageName, imports: [])
+        var names: [String] = []
+        if let superclass = stub.superclass {
+            let resolved = await resolveSupertype(superclass, declaredOn: stub, context: fallback, index: index, cache: cache)
+            if let name = resolved.erasedQualifiedName { names.append(name) }
+        } else if qualifiedName != "java.lang.Object",
+                  stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind {
+            names.append("java.lang.Object")
+        }
+        for interface in stub.interfaces {
+            let resolved = await resolveSupertype(interface, declaredOn: stub, context: fallback, index: index, cache: cache)
+            if let name = resolved.erasedQualifiedName, !names.contains(name) { names.append(name) }
+        }
+        return names
     }
 }

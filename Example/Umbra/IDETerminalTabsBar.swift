@@ -38,6 +38,13 @@ struct IDETerminalTabsBar: View {
                         onSelect: { workspace.selectProblemsTab() }
                     )
                 }
+                if workspace.showsTypeHierarchyTab {
+                    IDETypeHierarchyTabItem(
+                        title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.displayName)" } ?? "Hierarchy",
+                        isSelected: workspace.isTypeHierarchySelected,
+                        onSelect: { workspace.selectTypeHierarchyTab() }
+                    )
+                }
                 if workspace.showsSourceControlTab {
                     IDESourceControlTabItem(
                         branch: workspace.gitStatus.currentBranch,

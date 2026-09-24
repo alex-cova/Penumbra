@@ -98,6 +98,7 @@ struct UmbraApp: App {
                 Button("Show Context Actions", action: workspace.showContextActions)
                     .keyboardShortcut(.return, modifiers: .option)
                 Button("Reformat Code", action: workspace.reformatCode)
+                Button("Type Hierarchy") { workspace.showTypeHierarchy() }
                 Button("Optimize Imports", action: workspace.optimizeImports)
                 Divider()
                 Button("Run Last Configuration", action: workspace.runLastRunConfiguration)
