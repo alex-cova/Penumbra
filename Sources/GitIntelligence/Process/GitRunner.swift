@@ -62,6 +62,12 @@ public struct SystemGitRunner: GitRunning {
                 let group = DispatchGroup()
                 let queue = DispatchQueue.global(qos: .utility)
 
+                // `waitUntilExit` spins a run loop that can miss the exit of a process that finishes
+                // almost immediately (a fast-failing git command), blocking forever; the
+                // termination handler is registered before launch, so it cannot be missed.
+                let exited = DispatchSemaphore(value: 0)
+                process.terminationHandler = { _ in exited.signal() }
+
                 do {
                     try process.run()
                 } catch {
@@ -87,7 +93,7 @@ public struct SystemGitRunner: GitRunning {
                     }
                 }
                 queue.async {
-                    process.waitUntilExit()
+                    exited.wait()
                     group.wait()
                     let (out, errData) = box.snapshot()
                     let err = String(decoding: errData, as: UTF8.self)

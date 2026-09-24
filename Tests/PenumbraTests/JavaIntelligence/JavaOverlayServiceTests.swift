@@ -103,6 +103,56 @@ final class JavaOverlayServiceTests: XCTestCase {
         XCTAssertNotNil(bar, "other open documents' overlay entries should be unaffected")
     }
 
+    func testClosingOneOfTwoDocumentsDefiningSameClassKeepsTheOther() async throws {
+        let index = JavaIndex()
+        let service = JavaOverlayService(index: index)
+        let workspace = Workspace()
+        let task = await service.connect(to: workspace)
+        defer { task.cancel() }
+
+        let first = makeDocument(text: "package p;\nclass Dup { int a; }")
+        let second = makeDocument(text: "package p;\nclass Dup { int a; int b; }")
+        await workspace.openDocument(first)
+        await workspace.openDocument(second)
+        try await waitBriefly()
+
+        await workspace.closeDocument(second.id)
+        try await waitBriefly()
+        let afterSecondClosed = await index.classStub(qualifiedName: "p.Dup")
+        XCTAssertEqual(afterSecondClosed?.fields.count, 1, "the still-open document's definition should remain")
+
+        await workspace.closeDocument(first.id)
+        try await waitBriefly()
+        let afterBothClosed = await index.classStub(qualifiedName: "p.Dup")
+        XCTAssertNil(afterBothClosed)
+    }
+
+    func testEditThatRenamesClassRemovesOldName() async throws {
+        let index = JavaIndex()
+        let service = JavaOverlayService(index: index, debounceMilliseconds: 50)
+        let workspace = Workspace()
+        let task = await service.connect(to: workspace)
+        defer { task.cancel() }
+
+        let opened = makeDocument(text: "class OldName {}", version: 0)
+        await workspace.openDocument(opened)
+        try await waitBriefly()
+
+        let edited = Document(
+            id: opened.id, url: opened.url, displayName: opened.displayName,
+            contentSnapshot: TextSnapshot(version: 1, text: "class NewName {}"),
+            selection: opened.selection, cursor: opened.cursor, viewport: opened.viewport,
+            languageIdentifier: "java"
+        )
+        await workspace.updateDocument(edited)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let oldStub = await index.classStub(qualifiedName: "OldName")
+        let newStub = await index.classStub(qualifiedName: "NewName")
+        XCTAssertNil(oldStub)
+        XCTAssertNotNil(newStub)
+    }
+
     func testFileStubsQueryReturnsPackageAndImports() async throws {
         let index = JavaIndex()
         let service = JavaOverlayService(index: index)

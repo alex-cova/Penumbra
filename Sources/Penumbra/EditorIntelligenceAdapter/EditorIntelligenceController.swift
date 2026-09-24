@@ -119,6 +119,7 @@ public final class EditorIntelligenceController {
     private var windowObserver: NSObjectProtocol?
     private var ghostTextModel: GhostTextModel?
     private var latestDiagnostics: [Diagnostic] = []
+    private var diagnosticsTask: Task<Void, Never>?
     private let forwardingDelegateBox: EditorIntelligenceForwardingDelegate
 
     /// Create a controller that connects EIP services to a text view.
@@ -267,6 +268,10 @@ public final class EditorIntelligenceController {
     /// Invoked whenever enclosing-symbol breadcrumbs are recomputed. Hosts that render their own
     /// trail (rather than ``breadcrumbBarView``) should assign this and ignore the AppKit bar.
     public var onBreadcrumbsUpdated: (([BreadcrumbSegment]) -> Void)?
+    /// Invoked on the main actor after each diagnostics refresh with the active document's report,
+    /// so a host can list problems (e.g. a Problems panel). Only the latest refresh is delivered:
+    /// a refresh superseded by a newer one is cancelled and never reported.
+    public var onDiagnosticsUpdated: ((DiagnosticReport) -> Void)?
 
     private func handleEditorAction(_ action: EditorActionID) -> Bool {
         switch action {
@@ -473,12 +478,13 @@ public final class EditorIntelligenceController {
         guard let document = adapter.currentDocument, let textView else {
             return
         }
-        Task {
+        diagnosticsTask?.cancel()
+        diagnosticsTask = Task { [weak self, diagnosticEngine] in
             let report = await diagnosticEngine.diagnostics(for: document)
-            await MainActor.run {
-                self.latestDiagnostics = report.diagnostics
-                textView.diagnostics = report.diagnostics.map { TextViewDiagnostic($0, in: textView) }
-            }
+            guard !Task.isCancelled, let self, let textView = self.textView else { return }
+            self.latestDiagnostics = report.diagnostics
+            textView.diagnostics = report.diagnostics.map { TextViewDiagnostic($0, in: textView) }
+            self.onDiagnosticsUpdated?(report)
         }
     }
 

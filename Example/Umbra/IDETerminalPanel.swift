@@ -318,7 +318,9 @@ struct IDETerminalPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .help("New Terminal Tab")
                 .accessibilityLabel("New Terminal Tab")
-                if workspace.isSourceControlSelected {
+                if workspace.isProblemsSelected {
+                    IDEProblemsControls()
+                } else if workspace.isSourceControlSelected {
                     IDESourceControlControls()
                 } else if workspace.isGradleConsoleSelected {
                     IDEGradleConsoleControls()
@@ -346,9 +348,7 @@ struct IDETerminalPanel: View {
 
             ZStack {
                 ForEach(workspace.terminalTabs) { tab in
-                    let isSelected = !workspace.isGradleConsoleSelected
-                        && !workspace.isHTTPConsoleSelected
-                        && !workspace.isSourceControlSelected
+                    let isSelected = workspace.isTerminalTabSelected
                         && tab.id == workspace.selectedTerminalTabID
                     IDETerminalHostRepresentable(
                         tabID: tab.id,
@@ -386,6 +386,12 @@ struct IDETerminalPanel: View {
                     )
                     .opacity(workspace.isHTTPConsoleSelected ? 1 : 0)
                     .allowsHitTesting(workspace.isHTTPConsoleSelected)
+                }
+
+                if workspace.showsProblemsTab {
+                    IDEProblemsPanel()
+                        .opacity(workspace.isProblemsSelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isProblemsSelected)
                 }
 
                 if workspace.showsSourceControlTab {

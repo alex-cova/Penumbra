@@ -7,9 +7,9 @@ import EditorIntelligence
 ///
 /// Each open document is re-parsed independently (`documentEdited`/`documentOpened`/
 /// `documentChanged` are debounced per document, keyed by `DocumentID`, and skipped entirely if the
-/// document's `version` hasn't advanced since the last rebuild), and the merged result across every
-/// currently-open Java document is republished to `JavaIndex.setOverlay` after each change -- so
-/// one document's overlay entries never get clobbered by another's rebuild.
+/// document's `version` hasn't advanced since the last rebuild). Each change is applied as a delta
+/// (`JavaIndex.replaceOverlay`) covering just that document's classes, so one document's overlay
+/// entries never get clobbered by another's rebuild and the classpath name table is never rebuilt.
 public actor JavaOverlayService {
     private let index: JavaIndex
     private let debounceNanoseconds: UInt64
@@ -58,7 +58,7 @@ public actor JavaOverlayService {
             guard isJava(document) else { return }
             scheduleRebuild(for: document, debounced: true)
         case .documentClosed(let documentID):
-            removeDocument(documentID)
+            await removeDocument(documentID)
         default:
             break
         }
@@ -86,26 +86,45 @@ public actor JavaOverlayService {
         guard !document.contentSnapshot.isElided else { return }
         let url = document.url ?? URL(fileURLWithPath: "/unsaved/\(document.id).java")
         let fileStubs = JavaSourceStubBuilder.build(source: document.text, url: url)
+        let previousNames = Set(fileStubsByDocument[document.id]?.classes.map(\.qualifiedName) ?? [])
         fileStubsByDocument[document.id] = fileStubs
         lastIndexedVersion[document.id] = document.version
-        await publishOverlay()
+        await applyDelta(previousNames: previousNames, for: document.id)
     }
 
-    private func removeDocument(_ documentID: DocumentID) {
+    private func removeDocument(_ documentID: DocumentID) async {
         debounceTasks[documentID]?.cancel()
         debounceTasks[documentID] = nil
-        guard fileStubsByDocument.removeValue(forKey: documentID) != nil else { return }
+        guard let removed = fileStubsByDocument.removeValue(forKey: documentID) else { return }
         lastIndexedVersion[documentID] = nil
-        Task { await self.publishOverlay() }
+        await applyDelta(previousNames: Set(removed.classes.map(\.qualifiedName)), for: documentID)
     }
 
-    private func publishOverlay() async {
-        var merged: [String: JavaClassStub] = [:]
-        for fileStubs in fileStubsByDocument.values {
-            for stub in fileStubs.classes {
-                merged[stub.qualifiedName] = stub
+    /// Pushes one document's change into the index. A name the document no longer defines is only
+    /// removed if no other open document still defines it; in that case the other document's stub
+    /// is put back, so duplicate definitions resolve deterministically instead of by dictionary
+    /// order.
+    private func applyDelta(previousNames: Set<String>, for documentID: DocumentID) async {
+        let current = fileStubsByDocument[documentID]?.classes ?? []
+        let currentNames = Set(current.map(\.qualifiedName))
+        var adding = current
+        var removing = Set<String>()
+        for name in previousNames.subtracting(currentNames) {
+            if let survivor = otherDefinition(of: name, excluding: documentID) {
+                adding.append(survivor)
+            } else {
+                removing.insert(name)
             }
         }
-        await index.setOverlay(merged)
+        await index.replaceOverlay(removing: removing, adding: adding)
+    }
+
+    private func otherDefinition(of qualifiedName: String, excluding documentID: DocumentID) -> JavaClassStub? {
+        for (id, fileStubs) in fileStubsByDocument where id != documentID {
+            if let stub = fileStubs.classes.first(where: { $0.qualifiedName == qualifiedName }) {
+                return stub
+            }
+        }
+        return nil
     }
 }

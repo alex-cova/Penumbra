@@ -9,9 +9,7 @@ struct IDETerminalTabsBar: View {
                 ForEach(workspace.terminalTabs) { tab in
                     IDETerminalTabItem(
                         tab: tab,
-                        isSelected: !workspace.isGradleConsoleSelected
-                            && !workspace.isHTTPConsoleSelected
-                            && !workspace.isSourceControlSelected
+                        isSelected: workspace.isTerminalTabSelected
                             && tab.id == workspace.selectedTerminalTabID,
                         onSelect: { workspace.selectTerminalTab(tab.id) },
                         onClose: { workspace.closeTerminalTab(tab.id) }
@@ -30,6 +28,14 @@ struct IDETerminalTabsBar: View {
                         isSelected: workspace.isHTTPConsoleSelected,
                         isSending: workspace.httpSupport.isSending,
                         onSelect: { workspace.selectHTTPConsoleTab() }
+                    )
+                }
+                if workspace.showsProblemsTab {
+                    IDEProblemsTabItem(
+                        isSelected: workspace.isProblemsSelected,
+                        errorCount: workspace.problems.errorCount,
+                        warningCount: workspace.problems.warningCount,
+                        onSelect: { workspace.selectProblemsTab() }
                     )
                 }
                 if workspace.showsSourceControlTab {

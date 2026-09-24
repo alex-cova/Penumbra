@@ -29,7 +29,8 @@ final class IDEIntelligenceServices {
             SymbolHoverProvider(index: symbolIndex)
         ])
         diagnosticEngine = DiagnosticEngine(providers: [
-            DuplicateSymbolDiagnosticProvider(index: symbolIndex)
+            DuplicateSymbolDiagnosticProvider(index: symbolIndex),
+            javaSupport.compilerDiagnostics
         ])
         navigationEngine = NavigationEngine(providers: [
             javaSupport.navigationProvider,

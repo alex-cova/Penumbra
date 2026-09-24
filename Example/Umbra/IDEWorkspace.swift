@@ -86,6 +86,7 @@ public final class IDEWorkspace {
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
     let gitStatus = IDEGitStatusModel()
+    let problems = IDEProblemsStore()
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
@@ -136,13 +137,42 @@ public final class IDEWorkspace {
     var terminalFocusRequestID: UInt64 = 0
     var terminalTabs: [IDETerminalTab] = []
     var selectedTerminalTabID: UUID?
+    /// Which tab the bottom panel is showing. Not persisted in the session -- each launch starts on
+    /// a shell (or no terminal at all).
+    var selectedBottomTab: IDEBottomPanelTab = .terminal
     /// True when the bottom panel's read-only "Gradle" console tab is showing instead of a shell.
-    /// Not persisted in the session -- each launch starts on a shell (or no terminal at all).
-    var isGradleConsoleSelected = false
+    /// The `is*Selected` flags are views over `selectedBottomTab`: setting one `true` selects that
+    /// tab, setting it `false` only matters when it is the selected tab (falling back to the shell).
+    var isGradleConsoleSelected: Bool {
+        get { selectedBottomTab == .gradle }
+        set { setBottomTab(.gradle, selected: newValue) }
+    }
     /// True when the bottom panel's read-only "HTTP" response tab is showing instead of a shell.
-    var isHTTPConsoleSelected = false
+    var isHTTPConsoleSelected: Bool {
+        get { selectedBottomTab == .http }
+        set { setBottomTab(.http, selected: newValue) }
+    }
     /// True when the bottom panel's Source Control tab is showing instead of a shell.
-    var isSourceControlSelected = false
+    var isSourceControlSelected: Bool {
+        get { selectedBottomTab == .sourceControl }
+        set { setBottomTab(.sourceControl, selected: newValue) }
+    }
+    /// True when the bottom panel's Problems tab is showing instead of a shell.
+    var isProblemsSelected: Bool {
+        get { selectedBottomTab == .problems }
+        set { setBottomTab(.problems, selected: newValue) }
+    }
+    /// True when a terminal tab (rather than one of the read-only tabs) is showing.
+    var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
+
+    private func setBottomTab(_ tab: IDEBottomPanelTab, selected: Bool) {
+        if selected {
+            selectedBottomTab = tab
+        } else if selectedBottomTab == tab {
+            selectedBottomTab = .terminal
+        }
+    }
+
     /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
     /// produced output worth revisiting.
     var showsGradleConsoleTab: Bool {
@@ -153,6 +183,8 @@ public final class IDEWorkspace {
     var showsHTTPTab: Bool {
         statusLanguage == "http" || httpSupport.isSending || !httpSupport.responseLog.lines.isEmpty
     }
+    /// The Problems tab is always offered; it shows an empty state when there is nothing to report.
+    var showsProblemsTab: Bool { true }
     /// Whether the "Source Control" tab should appear for the open git repository.
     var showsSourceControlTab: Bool {
         gitStatus.isRepository
@@ -203,6 +235,12 @@ public final class IDEWorkspace {
         }
         intelligenceServices.javaSupport.onGradleModelChanged = { [weak self] model in
             self?.fileIndexer.setGradleModel(model)
+        }
+        intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
+            self?.applyCompilerDiagnostics(diagnostics, for: url)
+        }
+        intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
+            self?.compilerDidReconfigure()
         }
         loadSession()
         wireAdapter()
@@ -364,6 +402,7 @@ public final class IDEWorkspace {
             recordRecentFile(destination!)
             gitStatus.refresh()
             refreshPresentation()
+            recheckJavaAfterSave()
         } catch {
             presentError(error)
         }
@@ -382,6 +421,7 @@ public final class IDEWorkspace {
             recordRecentFile(url)
             gitStatus.refresh()
             refreshPresentation()
+            recheckJavaAfterSave()
         } catch {
             presentError(error)
         }
@@ -502,7 +542,7 @@ public final class IDEWorkspace {
         if isTerminalVisible {
             // Leave the Gradle console showing if that's what's already selected; only a shell
             // toggle (no tabs at all yet) needs a fresh tab created for it.
-            if terminalTabs.isEmpty && !isGradleConsoleSelected && !isHTTPConsoleSelected && !isSourceControlSelected {
+            if terminalTabs.isEmpty && isTerminalTabSelected {
                 addTerminalTab(saveSession: false)
             }
             requestTerminalFocus()
@@ -632,6 +672,26 @@ public final class IDEWorkspace {
         }
     }
 
+    func selectProblemsTab() {
+        isProblemsSelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func showProblems() {
+        selectProblemsTab()
+    }
+
+    func toggleProblems() {
+        if isTerminalVisible && isProblemsSelected {
+            hideTerminal()
+        } else {
+            showProblems()
+        }
+    }
+
     func cancelGradleSync() {
         javaSupport.cancelGradleSync()
     }
@@ -757,6 +817,35 @@ public final class IDEWorkspace {
         current.textView.scrollRangeToVisible(nsRange)
         _ = current.textView.focusTextInput()
         return true
+    }
+
+    /// Opens the file behind a Problems row with the problem selected. The range comes from the
+    /// diagnostic's line and column resolved against the file's text, not its `utf16Offset`, which
+    /// providers don't all fill in as an absolute offset.
+    func openProblem(_ row: ProblemRow) {
+        let text = openBufferText(for: row.url)
+            ?? (try? String(contentsOf: row.url, encoding: .utf8))
+            ?? ""
+        let nsRange = ProblemLocator.nsRange(for: row.diagnostic.range, in: text)
+        let start = TextPosition(line: row.diagnostic.range.start.line, column: row.diagnostic.range.start.column, utf16Offset: nsRange.location)
+        let end = TextPosition(line: row.diagnostic.range.end.line, column: row.diagnostic.range.end.column, utf16Offset: nsRange.location + nsRange.length)
+        let document = workbench.allDocuments().first { $0.url?.standardizedFileURL == row.url.standardizedFileURL }
+        _ = openNavigationLocation(Location(
+            documentID: document?.documentID ?? DocumentID(),
+            url: row.url,
+            range: EditorIntelligence.TextRange(start: start, end: end),
+            displayName: row.url.lastPathComponent
+        ))
+    }
+
+    /// A file's directory relative to the open project (or abbreviated home) for compact display.
+    func displayDirectory(of url: URL) -> String {
+        let directory = url.deletingLastPathComponent().standardizedFileURL.path
+        if let root = project.rootURL?.standardizedFileURL.path, directory.hasPrefix(root) {
+            let relative = String(directory.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return relative.isEmpty ? "" : relative
+        }
+        return (directory as NSString).abbreviatingWithTildeInPath
     }
 
     func presentNavigationChoices(_ locations: [Location]) {
@@ -1258,6 +1347,9 @@ public final class IDEWorkspace {
         host.intelligenceController?.onBreadcrumbsUpdated = { [weak self] segments in
             self?.applySymbolBreadcrumbs(segments)
         }
+        host.intelligenceController?.onDiagnosticsUpdated = { [weak self] report in
+            self?.applyEditorDiagnostics(report)
+        }
         _ = sharedPalette(for: host)
         preferences.apply(to: host.textView)
         return host
@@ -1409,8 +1501,51 @@ public final class IDEWorkspace {
         return true
     }
 
+    /// A finished compile: list its problems, and redraw the squiggles if that file is showing.
+    private func applyCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
+        problems.setCompilerDiagnostics(diagnostics, for: url)
+        if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
+            host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
+        }
+    }
+
+    /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
+    /// start over and check what is open.
+    private func compilerDidReconfigure() {
+        problems.clearCompilerDiagnostics()
+        host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
+        javaSupport.compileNow(openJavaDocuments())
+    }
+
+    /// Open Java documents with the active one first, so a save reports on what the user is
+    /// looking at before the rest.
+    private func openJavaDocuments() -> [EditorIntelligence.Document] {
+        let activeURL = workbench.activePane.selectedDocument?.url?.standardizedFileURL
+        let documents = adapter?.openDocuments.filter { $0.languageIdentifier == "java" } ?? []
+        return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }
+    }
+
+    /// After a save, recheck every open Java file: one that didn't change can still break because a
+    /// file it depends on did.
+    private func recheckJavaAfterSave() {
+        javaSupport.compileNow(openJavaDocuments(), force: true)
+    }
+
+    func javaCompilerDiagnosticsPreferenceChanged() {
+        javaSupport.refreshCompilerDiagnostics()
+    }
+
+    private func applyEditorDiagnostics(_ report: DiagnosticReport) {
+        guard let url = workbench.allDocuments().first(where: { $0.documentID == report.documentID })?.url else { return }
+        problems.setEditorDiagnostics(report.diagnostics, for: url)
+    }
+
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
+        let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
         pane.closeDocument(documentID)
+        if let closingURL, paneAndDocument(matching: closingURL) == nil {
+            problems.clearEditorDiagnostics(for: closingURL)
+        }
         if pane.documents.isEmpty {
             closePane(pane.id)
             showsWelcome = !hasOpenDocuments
@@ -1526,6 +1661,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleMetalRendering() }),
             EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
                           action: { [weak self] in self?.toggleTerminal() }),
+            EditorCommand(id: "app.toggleProblems", title: "Toggle Problems", group: "View",
+                          action: { [weak self] in self?.toggleProblems() }),
             EditorCommand(id: "app.toggleSourceControl", title: "Toggle Source Control", group: "View",
                           action: { [weak self] in self?.toggleSourceControl() }),
             EditorCommand(id: "app.newTerminalTab", title: "New Terminal Tab", group: "View",

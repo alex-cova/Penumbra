@@ -22,6 +22,7 @@ struct IDEStatusBarPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             Spacer()
+            problemsStatus
             Text(trailingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -64,6 +65,41 @@ struct IDEStatusBarPanel: View {
         } else {
             label
                 .fixedSize()
+        }
+    }
+
+    /// Error and warning totals; clicking opens the Problems tab. Hidden while there is nothing to
+    /// report so a clean project keeps a quiet status bar.
+    @ViewBuilder
+    private var problemsStatus: some View {
+        let errors = workspace.problems.errorCount
+        let warnings = workspace.problems.warningCount
+        if errors > 0 || warnings > 0 {
+            Button {
+                workspace.showProblems()
+            } label: {
+                HStack(spacing: 8) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "xmark.octagon.fill")
+                            .foregroundStyle(errors > 0 ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                        Text("\(errors)")
+                    }
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(warnings > 0 ? IDEAppearance.ColorToken.gitModified : IDEAppearance.ColorToken.muted)
+                        Text("\(warnings)")
+                    }
+                }
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            .buttonStyle(.borderless)
+            .help("Show Problems")
+            .accessibilityLabel("\(errors) errors, \(warnings) warnings")
+            .accessibilityHint("Show Problems")
+            Text("·")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
     }
 

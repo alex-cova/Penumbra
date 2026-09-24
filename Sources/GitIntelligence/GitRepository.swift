@@ -137,9 +137,12 @@ public struct GitRepository: Sendable {
         if !untrackedPaths.isEmpty {
             _ = try await runner.run(["add", "--"] + untrackedPaths, in: root, stdin: nil, environment: nil)
         }
-        var args = ["commit", "--only"]
+        // `--only` commits just `paths` and is an error without any; with none, commit what is staged.
+        var args = ["commit"]
+        if !paths.isEmpty { args.append("--only") }
         if amend { args.append("--amend") }
-        args += ["-m", message, "--"] + paths
+        args += ["-m", message]
+        if !paths.isEmpty { args += ["--"] + paths }
         let out = try await runner.run(args, in: root, stdin: nil, environment: nil)
         return out.text
     }

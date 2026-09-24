@@ -35,6 +35,7 @@ public final class IDEPreferences {
         static let isFocusModeEnabled = "com.umbra.editor.isFocusModeEnabled"
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
+        static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
     }
@@ -155,6 +156,13 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaGradleAutoSync, forKey: Keys.javaGradleAutoSync) }
     }
 
+    /// Check open Java files with the JDK's `javac` and list the errors as Problems. Runs only in
+    /// folders that are not Gradle projects, or in Gradle projects that have synced (which needs the
+    /// trust prompt to be accepted). Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaCompilerDiagnostics: Bool {
+        didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
+    }
+
     /// How long one Gradle project-model sync may run before it is killed. A first sync may
     /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
     var javaGradleSyncTimeoutSeconds: Int {
@@ -199,6 +207,7 @@ public final class IDEPreferences {
         isFocusModeEnabled = defaults.object(forKey: Keys.isFocusModeEnabled) as? Bool ?? false
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
+        javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         applyTheme()

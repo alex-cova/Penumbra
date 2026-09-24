@@ -24,6 +24,12 @@ public struct JDKInstallation: Hashable, Sendable {
     public var jmodsDir: URL { home.appendingPathComponent("jmods") }
     public var modulesImage: URL { home.appendingPathComponent("lib/modules") }
 
+    /// `bin/javac` when this home ships a compiler (a JRE-only home doesn't), otherwise `nil`.
+    public var javac: URL? {
+        let url = home.appendingPathComponent("bin/javac")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
     public var hasCtSym: Bool { FileManager.default.fileExists(atPath: ctSym.path) }
     public var hasJmods: Bool { FileManager.default.fileExists(atPath: jmodsDir.path) }
     public var hasSrcZip: Bool { FileManager.default.fileExists(atPath: srcZip.path) }

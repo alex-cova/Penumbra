@@ -38,7 +38,12 @@ final class LineSyntaxHighlightSchedulingTests: XCTestCase, LineControllerStorag
         let delegate = RefreshCountingDelegate()
         let controller = makeLineController(text: "let value = 42", delegate: delegate)
         controller.prepareToDisplayString(toLocation: 14, syntaxHighlightAsynchronously: true)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        // The completion hops to the main actor; poll instead of trusting a fixed wait under load.
+        let deadline = Date().addingTimeInterval(3)
+        while delegate.refreshCount == 0, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(delegate.refreshCount, 1, "async highlight completion must refresh Metal/CG paint")
     }
 

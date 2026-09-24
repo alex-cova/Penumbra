@@ -128,6 +128,8 @@ struct UmbraApp: App {
                     .keyboardShortcut("b", modifiers: .command)
                 Button("Toggle Terminal", systemImage: "terminal", action: workspace.toggleTerminal)
                     .keyboardShortcut("`", modifiers: .control)
+                Button("Toggle Problems", systemImage: "exclamationmark.triangle", action: workspace.toggleProblems)
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Toggle Source Control", systemImage: "arrow.triangle.branch", action: workspace.toggleSourceControl)
                     .disabled(!workspace.showsSourceControlTab)
                     .keyboardShortcut("g", modifiers: [.command, .control])

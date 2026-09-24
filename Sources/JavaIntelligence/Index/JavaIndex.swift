@@ -7,8 +7,8 @@ import EditorIntelligence
 ///
 /// Precedence when the same qualified name appears in more than one source (a class shadowing a
 /// same-named JDK/JAR class, or an open document's live overlay shadowing what's on disk):
-/// lower ``Source/precedence`` wins. Callers assign 0 = overlay, 1 = project sources, 2 = JARs,
-/// 3 = JDK, per the plan's overlay > sources > JARs > JDK ordering.
+/// lower ``Source/precedence`` wins. The overlay always wins (it sits at -1 internally); callers
+/// assign 1 = project sources, 2 = JARs, 3 = JDK, per the overlay > sources > JARs > JDK ordering.
 public actor JavaIndex {
     public struct Source: Sendable {
         public let precedence: Int
@@ -29,11 +29,14 @@ public actor JavaIndex {
     @TaskLocal public static var queryScope: Set<String>?
 
     private var sources: [Source] = []
+    /// `sources` ordered by precedence, cached by `setSources` so `classStub` doesn't re-sort on
+    /// every lookup.
+    private var sortedSources: [Source] = []
     private var overlay: [String: JavaClassStub] = [:]
 
-    /// Sorted by lowercased simple name for binary-search prefix scans; rebuilt whenever sources or
-    /// the overlay change. `precedence` lets `classes(simpleNamePrefix:)` prefer the higher-priority
-    /// definition when several sources define the same qualified name.
+    /// Sorted by lowercased simple name for binary-search prefix scans. `precedence` lets
+    /// `classes(simpleNamePrefix:)` prefer the higher-priority definition when several sources
+    /// define the same qualified name.
     private struct NameEntry {
         let lowerSimpleName: String
         let simpleName: String
@@ -41,8 +44,14 @@ public actor JavaIndex {
         let precedence: Int
         let shardPath: String
     }
-    private var nameIndex: [NameEntry] = []
-    private var packages: Set<String> = []
+    /// Names from every shard. Large (the whole JDK + classpath), so it is rebuilt only when the
+    /// sources change -- never on an overlay edit.
+    private var baseNameIndex: [NameEntry] = []
+    private var basePackages: Set<String> = []
+    /// Names from the open-document overlay (precedence -1). Small, and rebuilt from `overlay` on
+    /// every overlay change, which is what keeps typing cheap on a large classpath.
+    private var overlayNameIndex: [NameEntry] = []
+    private var overlayPackages: Set<String> = []
 
     public init() {}
 
@@ -50,27 +59,37 @@ public actor JavaIndex {
 
     public func setSources(_ sources: [Source]) {
         self.sources = sources
-        rebuildIndexes()
+        self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
+        rebuildBaseIndex()
     }
 
     public func setOverlay(_ stubs: [String: JavaClassStub]) {
         self.overlay = stubs
-        rebuildIndexes()
+        rebuildOverlayIndex()
     }
 
     public func updateOverlay(qualifiedName: String, stub: JavaClassStub?) {
         overlay[qualifiedName] = stub
-        rebuildIndexes()
+        rebuildOverlayIndex()
     }
 
-    private func rebuildIndexes() {
+    /// Applies one document's overlay change: drops `removing`, then adds (or replaces) `adding`.
+    /// Only the overlay table is touched, so the cost scales with the number of open classes
+    /// rather than with the classpath.
+    public func replaceOverlay(removing: Set<String>, adding: [JavaClassStub]) {
+        for name in removing {
+            overlay[name] = nil
+        }
+        for stub in adding {
+            overlay[stub.qualifiedName] = stub
+        }
+        rebuildOverlayIndex()
+    }
+
+    private func rebuildBaseIndex() {
         var entries: [NameEntry] = []
         var pkgs: Set<String> = []
 
-        for (name, stub) in overlay {
-            entries.append(NameEntry(lowerSimpleName: stub.simpleName.lowercased(), simpleName: stub.simpleName, qualifiedName: name, precedence: -1, shardPath: ""))
-            insertPackages(of: stub.packageName, into: &pkgs)
-        }
         for source in sources {
             for qualifiedName in source.reader.allQualifiedNames {
                 let simpleName = String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName))
@@ -89,21 +108,37 @@ public actor JavaIndex {
             }
         }
         entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
-        self.nameIndex = entries
-        self.packages = pkgs
+        self.baseNameIndex = entries
+        self.basePackages = pkgs
     }
 
-    /// The cached package set when unscoped. Under a query scope, only packages that still have a
-    /// visible class, so import completion doesn't offer a test-only package from `src/main`.
-    private func visiblePackages() -> Set<String> {
-        guard Self.queryScope != nil else { return packages }
+    private func rebuildOverlayIndex() {
+        var entries: [NameEntry] = []
+        var pkgs: Set<String> = []
+        entries.reserveCapacity(overlay.count)
+        for (name, stub) in overlay {
+            entries.append(NameEntry(lowerSimpleName: stub.simpleName.lowercased(), simpleName: stub.simpleName, qualifiedName: name, precedence: -1, shardPath: ""))
+            insertPackages(of: stub.packageName, into: &pkgs)
+        }
+        entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
+        self.overlayNameIndex = entries
+        self.overlayPackages = pkgs
+    }
+
+    /// Package sets to search. Unscoped, the cached base and overlay sets; under a query scope,
+    /// only packages that still have a visible class, so import completion doesn't offer a
+    /// test-only package from `src/main`.
+    private func visiblePackagePools() -> [Set<String>] {
+        guard Self.queryScope != nil else { return [basePackages, overlayPackages] }
         var scoped = Set<String>()
-        for entry in nameIndex where isVisible(shardPath: entry.shardPath, precedence: entry.precedence) {
-            if let lastDot = entry.qualifiedName.range(of: ".", options: .backwards) {
-                insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
+        for table in [baseNameIndex, overlayNameIndex] {
+            for entry in table where isVisible(shardPath: entry.shardPath, precedence: entry.precedence) {
+                if let lastDot = entry.qualifiedName.range(of: ".", options: .backwards) {
+                    insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
+                }
             }
         }
-        return scoped
+        return [scoped]
     }
 
     private func insertPackages(of packageName: String, into set: inout Set<String>) {
@@ -123,7 +158,7 @@ public actor JavaIndex {
         if let overlaid = overlay[qualifiedName] {
             return overlaid
         }
-        for source in sources.sorted(by: { $0.precedence < $1.precedence }) {
+        for source in sortedSources {
             guard isVisible(shardPath: source.shardPath, precedence: source.precedence) else { continue }
             if let stub = source.reader.classStub(named: qualifiedName) {
                 return stub
@@ -150,22 +185,25 @@ public actor JavaIndex {
         var bestPrecedence: [String: Int] = [:]
         var matchedNames: [String] = []
 
-        let startIndex = lowerBoundIndex(for: lowerPrefix)
-        var i = startIndex
-        while i < nameIndex.count, nameIndex[i].lowerSimpleName.hasPrefix(lowerPrefix) {
-            if isVisible(shardPath: nameIndex[i].shardPath, precedence: nameIndex[i].precedence) {
-                considerMatch(nameIndex[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+        for table in [baseNameIndex, overlayNameIndex] {
+            var i = lowerBoundIndex(for: lowerPrefix, in: table)
+            while i < table.count, table[i].lowerSimpleName.hasPrefix(lowerPrefix) {
+                if isVisible(shardPath: table[i].shardPath, precedence: table[i].precedence) {
+                    considerMatch(table[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                }
+                i += 1
             }
-            i += 1
         }
         // Camel-hump: only worth scanning the rest of the table when the prefix looks like an
         // all-uppercase abbreviation, since a full scan is O(n) and `matchesCamelHump` rejects
         // anything else immediately anyway.
         if prefix.count > 1, prefix.allSatisfy(\.isUppercase) {
-            for entry in nameIndex where bestPrecedence[entry.qualifiedName] == nil {
-                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
-                if matchesCamelHump(prefix, entry.simpleName) {
-                    considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+            for table in [baseNameIndex, overlayNameIndex] {
+                for entry in table where bestPrecedence[entry.qualifiedName] == nil {
+                    guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
+                    if matchesCamelHump(prefix, entry.simpleName) {
+                        considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                    }
                 }
             }
         }
@@ -195,13 +233,15 @@ public actor JavaIndex {
     public func classes(matching query: String, limit: Int = 150) -> [ClassMatch] {
         guard let firstQueryCharacter = query.lowercased().first else { return [] }
         var best: [String: (entry: NameEntry, tier: CompletionMatcher.Tier)] = [:]
-        for entry in nameIndex where entry.lowerSimpleName.contains(firstQueryCharacter) {
-            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
-                  let match = CompletionMatcher.match(query, in: entry.simpleName) else { continue }
-            if let existing = best[entry.qualifiedName], existing.entry.precedence <= entry.precedence {
-                continue
+        for table in [baseNameIndex, overlayNameIndex] {
+            for entry in table where entry.lowerSimpleName.contains(firstQueryCharacter) {
+                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                      let match = CompletionMatcher.match(query, in: entry.simpleName) else { continue }
+                if let existing = best[entry.qualifiedName], existing.entry.precedence <= entry.precedence {
+                    continue
+                }
+                best[entry.qualifiedName] = (entry, match.tier)
             }
-            best[entry.qualifiedName] = (entry, match.tier)
         }
         let ordered = best.values.sorted { lhs, rhs in
             if lhs.tier != rhs.tier { return lhs.tier > rhs.tier }
@@ -230,12 +270,12 @@ public actor JavaIndex {
     }
 
     /// Binary search for the first entry whose lowercased simple name is `>= prefix`.
-    private func lowerBoundIndex(for lowerPrefix: String) -> Int {
+    private func lowerBoundIndex(for lowerPrefix: String, in table: [NameEntry]) -> Int {
         var low = 0
-        var high = nameIndex.count
+        var high = table.count
         while low < high {
             let mid = (low + high) / 2
-            if nameIndex[mid].lowerSimpleName < lowerPrefix {
+            if table[mid].lowerSimpleName < lowerPrefix {
                 low = mid + 1
             } else {
                 high = mid
@@ -263,11 +303,13 @@ public actor JavaIndex {
     public func classes(inPackage packageName: String) -> [JavaClassStub] {
         var seenQualified = Set<String>()
         var results: [JavaClassStub] = []
-        for entry in nameIndex {
-            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
-            guard seenQualified.insert(entry.qualifiedName).inserted else { continue }
-            guard let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
-            results.append(stub)
+        for table in [overlayNameIndex, baseNameIndex] {
+            for entry in table {
+                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
+                guard seenQualified.insert(entry.qualifiedName).inserted else { continue }
+                guard let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
+                results.append(stub)
+            }
         }
         return results
     }
@@ -278,12 +320,13 @@ public actor JavaIndex {
     public func subpackages(of prefix: String) -> [String] {
         let searchPrefix = prefix.isEmpty ? "" : "\(prefix)."
         var result = Set<String>()
-        let pool = visiblePackages()
-        for package in pool {
-            guard package.hasPrefix(searchPrefix), package != prefix else { continue }
-            let remainder = package.dropFirst(searchPrefix.count)
-            guard !remainder.contains(".") else { continue }
-            result.insert(package)
+        for pool in visiblePackagePools() {
+            for package in pool {
+                guard package.hasPrefix(searchPrefix), package != prefix else { continue }
+                let remainder = package.dropFirst(searchPrefix.count)
+                guard !remainder.contains(".") else { continue }
+                result.insert(package)
+            }
         }
         return Array(result).sorted()
     }

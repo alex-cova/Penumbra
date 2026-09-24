@@ -221,6 +221,15 @@ public struct IDEPreferencesView: View {
                             isOn: $preferences.javaGradleAutoSync
                         )
                         IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Compiler Diagnostics",
+                            caption: "Check open Java files with the JDK's javac and list errors under Problems. Gradle projects are checked once they have synced.",
+                            isOn: $preferences.javaCompilerDiagnostics
+                        )
+                        .onChange(of: preferences.javaCompilerDiagnostics) {
+                            workspace.javaCompilerDiagnosticsPreferenceChanged()
+                        }
+                        IDESettingsSeparator()
                         IDESettingsRow(title: "Gradle Sync Timeout") {
                             HStack(spacing: IDEAppearance.Spacing.xs) {
                                 Text("\(preferences.javaGradleSyncTimeoutSeconds)s")

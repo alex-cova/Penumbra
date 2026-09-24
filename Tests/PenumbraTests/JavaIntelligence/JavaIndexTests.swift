@@ -134,4 +134,74 @@ final class JavaIndexTests: XCTestCase {
         found = await index.classStub(qualifiedName: "com.example.Foo")
         XCTAssertNil(found)
     }
+
+    // MARK: - Incremental overlay
+
+    /// Every query surface, so incremental overlay updates can be compared with a from-scratch build.
+    private func snapshot(_ index: JavaIndex) async -> [String] {
+        var lines: [String] = []
+        for prefix in ["Foo", "F", "FB", "Bar", "java"] {
+            lines.append("prefix \(prefix): " + (await index.classes(simpleNamePrefix: prefix)).map(\.qualifiedName).sorted().joined(separator: ","))
+        }
+        lines.append("matching oo: " + (await index.classes(matching: "oo")).map(\.stub.qualifiedName).joined(separator: ","))
+        lines.append("inPackage: " + (await index.classes(inPackage: "com.example")).map(\.qualifiedName).sorted().joined(separator: ","))
+        lines.append("sub root: " + (await index.subpackages(of: "")).joined(separator: ","))
+        lines.append("sub com: " + (await index.subpackages(of: "com")).joined(separator: ","))
+        return lines
+    }
+
+    func testReplaceOverlayMatchesFromScratchBuild() async throws {
+        let reader = try writeShard([stub("java.lang.String"), stub("com.example.FooBar")])
+        let sources: [JavaIndex.Source] = [.init(precedence: 3, reader: reader)]
+
+        let incremental = JavaIndex()
+        await incremental.setSources(sources)
+        await incremental.replaceOverlay(removing: [], adding: [stub("com.example.Foo"), stub("com.other.Baz")])
+        await incremental.replaceOverlay(removing: ["com.other.Baz"], adding: [stub("com.example.Bar")])
+
+        let scratch = JavaIndex()
+        await scratch.setSources(sources)
+        await scratch.setOverlay([
+            "com.example.Foo": stub("com.example.Foo"),
+            "com.example.Bar": stub("com.example.Bar"),
+        ])
+
+        let lhs = await snapshot(incremental)
+        let rhs = await snapshot(scratch)
+        XCTAssertEqual(lhs, rhs)
+        XCTAssertTrue(lhs.contains { $0.hasPrefix("prefix Foo:") && $0.contains("com.example.Foo") })
+    }
+
+    func testOverlayOnlyPackageDisappearsWhenLastClassIsRemoved() async throws {
+        let index = JavaIndex()
+        await index.replaceOverlay(removing: [], adding: [stub("com.only.Thing")])
+        var subpackages = await index.subpackages(of: "com")
+        XCTAssertEqual(subpackages, ["com.only"])
+
+        await index.replaceOverlay(removing: ["com.only.Thing"], adding: [])
+        subpackages = await index.subpackages(of: "com")
+        XCTAssertEqual(subpackages, [])
+        let topLevel = await index.subpackages(of: "")
+        XCTAssertEqual(topLevel, [])
+    }
+
+    func testReplaceOverlayDoesNotDisturbSourcePackagesOrShadowing() async throws {
+        let reader = try writeShard([stub("com.example.Foo")])
+        let index = JavaIndex()
+        await index.setSources([.init(precedence: 3, reader: reader)])
+
+        let overlaid = JavaClassStub(
+            binaryName: "com.example.Foo", qualifiedName: "com.example.Foo", simpleName: "Foo", packageName: "com.example",
+            kind: .classKind, modifiers: [.publicFlag, .finalFlag], origin: .source(URL(fileURLWithPath: "/tmp/Foo.java"), nameRange: 0..<3)
+        )
+        await index.replaceOverlay(removing: [], adding: [overlaid])
+        var found = await index.classStub(qualifiedName: "com.example.Foo")
+        XCTAssertTrue(found?.modifiers.contains(.finalFlag) == true)
+
+        await index.replaceOverlay(removing: ["com.example.Foo"], adding: [])
+        found = await index.classStub(qualifiedName: "com.example.Foo")
+        XCTAssertFalse(found?.modifiers.contains(.finalFlag) == true, "shard definition returns once the overlay entry is gone")
+        let subpackages = await index.subpackages(of: "com")
+        XCTAssertEqual(subpackages, ["com.example"])
+    }
 }

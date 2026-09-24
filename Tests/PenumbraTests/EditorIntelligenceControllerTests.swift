@@ -112,6 +112,73 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         XCTAssertEqual(textView.diagnostics.count, 1)
         XCTAssertEqual(textView.diagnostics.first?.severity, .error)
     }
+
+    func testControllerReportsDiagnosticsToHost() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "error"
+
+        let provider = MockDiagnosticProvider(diagnostics: [
+            Diagnostic(severity: .warning, message: "Careful", range: makeRange(start: 0, end: 5), source: "Test")
+        ])
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [provider])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var reports: [DiagnosticReport] = []
+        controller.onDiagnosticsUpdated = { reports.append($0) }
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertEqual(reports.first?.diagnostics.map(\.message), ["Careful"])
+    }
+
+    func testSupersededDiagnosticsRefreshIsNeverReported() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "error"
+
+        let provider = ScriptedDiagnosticProvider()
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [provider])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var messages: [String] = []
+        controller.onDiagnosticsUpdated = { messages.append(contentsOf: $0.diagnostics.map(\.message)) }
+        await provider.enqueue([(delayMilliseconds: 300, message: "old"), (delayMilliseconds: 0, message: "new")])
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(messages, ["new"])
+        XCTAssertEqual(textView.diagnostics.count, 1)
+    }
+}
+
+private actor ScriptedDiagnosticProvider: DiagnosticProvider {
+    let name = "Scripted"
+    private var script: [(delayMilliseconds: UInt64, message: String)] = []
+
+    func enqueue(_ steps: [(delayMilliseconds: UInt64, message: String)]) { script = steps }
+
+    func diagnostics(for document: Document) async -> [Diagnostic] {
+        guard !script.isEmpty else { return [] }
+        let step = script.removeFirst()
+        if step.delayMilliseconds > 0 {
+            try? await Task.sleep(nanoseconds: step.delayMilliseconds * 1_000_000)
+        }
+        return [Diagnostic(severity: .error, message: step.message, range: makeRange(start: 0, end: 5), source: "Test")]
+    }
 }
 
 private actor MockCompletionProvider: CompletionProvider {

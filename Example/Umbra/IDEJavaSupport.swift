@@ -51,6 +51,9 @@ final class IDEJavaSupport {
     let overlayService: JavaOverlayService
     let completionProvider: JavaCompletionProvider
     let navigationProvider: JavaGoToDefinitionProvider
+    /// `javac`-backed diagnostics for open Java files. Idle until ``refreshCompilerDiagnostics()``
+    /// finds a project state it may check: a plain folder, or a Gradle project that has synced.
+    let compilerDiagnostics = JavaCompilerDiagnosticsService()
 
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
@@ -101,6 +104,11 @@ final class IDEJavaSupport {
     /// Called whenever a sync sets or clears ``gradleModel`` (the Go to File index labels files
     /// with their module).
     @ObservationIgnored var onGradleModelChanged: (@MainActor (JavaGradleProjectModel?) -> Void)?
+    /// Called with each finished compile's diagnostics for one file (empty when it is clean).
+    @ObservationIgnored var onCompilerDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
+    /// Called once the compiler is (re)configured, so the host can check the files already open.
+    @ObservationIgnored var onCompilerConfigured: (@MainActor () -> Void)?
+    @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
     /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
     /// tab in the bottom panel. Reset at the start of every sync.
     private(set) var gradleConsole = IDEGradleConsoleLog()
@@ -133,6 +141,67 @@ final class IDEJavaSupport {
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
         gradleRunner = runner
         gradleExtractor = GradleProjectModelExtractor(runner: runner)
+        Task { [weak self] in await self?.installCompilerResultHandler() }
+    }
+
+    private func installCompilerResultHandler() async {
+        await compilerDiagnostics.setResultHandler { [weak self] url, diagnostics in
+            Task { @MainActor in self?.onCompilerDiagnostics?(url, diagnostics) }
+        }
+    }
+
+    /// Scratch space for `javac` buffer copies, under the app's Caches directory.
+    static var compilerWorkDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.umbra.editor", isDirectory: true)
+            .appendingPathComponent("javac", isDirectory: true)
+    }
+
+    /// Points the compiler at the current project, or turns it off. Nothing is checked in a Gradle
+    /// project until its sync has produced a model (which needs the trust prompt), nor when the
+    /// user has turned the preference off, nor when no installed JDK ships a `javac`.
+    func refreshCompilerDiagnostics() {
+        compilerConfigurationTask?.cancel()
+        let generation = projectGeneration
+        let root = projectRootURL
+        let model = gradleModel
+        let waitingOnGradle = isGradleProject && model == nil
+        let enabled = IDEPreferences.shared.javaCompilerDiagnostics
+        compilerConfigurationTask = Task { [compilerDiagnostics] in
+            guard enabled, !waitingOnGradle else {
+                await compilerDiagnostics.configure(nil)
+                guard isCurrent(generation), !Task.isCancelled else { return }
+                onCompilerConfigured?()
+                return
+            }
+            // `JDKLocator.select()` does synchronous filesystem and process work.
+            let jdk = await Task.detached(priority: .utility) {
+                JDKLocator().select(minimumFeatureVersion: model?.maxLanguageLevel)
+            }.value
+            guard isCurrent(generation), !Task.isCancelled else { return }
+            guard let jdk, jdk.javac != nil else {
+                await compilerDiagnostics.configure(nil)
+                return
+            }
+            await compilerDiagnostics.configure(.init(
+                kind: model.map { .gradle($0) } ?? .plainFolder,
+                jdk: jdk,
+                projectRoot: root ?? FileManager.default.temporaryDirectory,
+                workDirectory: Self.compilerWorkDirectory
+            ))
+            guard isCurrent(generation), !Task.isCancelled else { return }
+            onCompilerConfigured?()
+        }
+    }
+
+    /// Checks `documents` now instead of waiting for the editor to go idle -- after a save, or once
+    /// the compiler is configured. `force` rechecks files whose own text did not change.
+    func compileNow(_ documents: [EditorIntelligence.Document], force: Bool = false) {
+        Task { [compilerDiagnostics] in
+            for document in documents {
+                await compilerDiagnostics.compileNow(document, force: force)
+            }
+        }
     }
 
     /// `~/Library/Application Support/com.umbra.editor/gradle-trust.json`, alongside
@@ -206,6 +275,7 @@ final class IDEJavaSupport {
             projectSources = []
             gradleSync = .notGradle
             Task { await publishSources() }
+            refreshCompilerDiagnostics()
             return
         }
 
@@ -215,10 +285,14 @@ final class IDEJavaSupport {
             if hadJars {
                 Task { await publishSources() }
             }
+            refreshCompilerDiagnostics()
             return
         }
 
         gradleSync = .awaitingTrust
+        // Off until a sync produces a model: a failed or declined sync must not flood files with
+        // false "cannot find symbol" errors.
+        refreshCompilerDiagnostics()
         startBuildFileWatcher(root: url)
         if hadJars {
             Task { await publishSources() }
@@ -587,6 +661,7 @@ final class IDEJavaSupport {
         await publishSources()
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
+        refreshCompilerDiagnostics()
     }
 
     private static func modelsAreEqual(_ lhs: JavaGradleProjectModel, _ rhs: JavaGradleProjectModel) -> Bool {

@@ -85,7 +85,10 @@ public struct GitGraphLayout: Sendable {
 
         // Parents: the first continues in the node's lane, the rest branch off or join existing lanes.
         for (position, parent) in commit.parents.enumerated() {
-            if let existing = lanes.indices.first(where: { lanes[$0]?.expecting == parent }), let lane = lanes[existing] {
+            // Only a later parent joins a lane that already waits for it. The first parent always keeps
+            // the node's own lane, so two lanes may wait for one commit; they converge, leftmost wins,
+            // when it arrives (as `git log --graph` draws it).
+            if position > 0, let existing = lanes.indices.first(where: { lanes[$0]?.expecting == parent }), let lane = lanes[existing] {
                 segments.append(GitGraphSegment(fromLane: nodeLane, fromAnchor: .center, toLane: existing, toAnchor: .bottom, colorIndex: lane.color))
                 continue
             }
