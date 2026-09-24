@@ -56,13 +56,14 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Go to definition | **Implemented** — sources, attached JAR sources, gated decompilation |
 | Go to declaration | **Partial** — folded into definition provider |
 | Go to implementation | **Implemented** — subtypes and overrides (generic overrides, anonymous classes, enum constant bodies) in project sources; scans project classes per request, no persistent index |
-| Find usages | **Not available for Java** — the name-matching provider is disabled for `.java`; needs the reference index |
+| Find usages | **Implemented** — identifier index plus on-demand resolution (`JavaFindUsagesProvider`), override families for methods, Usages tab; ambiguous overload/receiver cases are flagged, anonymous-class members are not covered |
 | Symbol search | **Partial** — palette class search via `JavaIndex` |
 | Type / call hierarchy | **Type hierarchy implemented** (⌃H, Hierarchy tab; project subtypes only); call hierarchy missing |
-| Override navigation | **Partial** — `@Override` completion stubs only |
+| Override navigation | **Implemented** — Go to Super Method (⌘U in the IntelliJ keymap) for methods and types; no gutter override markers |
 | Error diagnostics | **Partial** — `javac` per open file (idle, save, post-sync) plus Gradle build errors in Problems; no inspections |
 | Quick fixes / code actions | **Partial** — import a class, remove unused imports |
-| Rename / extract / inline / change signature | **Missing** |
+| Rename | **Implemented** — types (imports, Javadoc, file rename), locals, parameters, methods (whole override family), fields, enum constants, record components; preview with ambiguous/read-only entries; blocked for library and generated declarations |
+| Extract / inline / change signature | **Missing** |
 | Import optimization | **Implemented** — removes unused, duplicate and redundant imports and sorts the rest (other, `javax`/`java`, static); no `*` collapsing |
 | Type inference / generics | **Partial** — erased assignability; documented simplifications |
 | Annotation awareness | **Partial** — completion at `@` sites |
@@ -77,8 +78,8 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Gradle discovery & sync | **Implemented** — trust gate, fingerprint cache, init script |
 | Multi-module / source sets | **Implemented** |
 | Compile classpath / dependencies | **Implemented** — `lenient(true)` resolution |
-| Runtime classpath / `runtimeOnly` | **Model only** — synced per source set with output dirs; `runtimeClasspath(forFile:)` builds the `-cp` order; nothing launches with it yet |
-| Generated sources / annotation processors | **Partial** |
+| Runtime classpath / `runtimeOnly` | **Implemented** — synced per source set with output dirs; `runtimeClasspath(forFile:)` builds the `-cp` order used by the classpath run target |
+| Generated sources / annotation processors | **Implemented (indexing)** — generated source dirs indexed as read-only roots, Lombok taken from `annotationProcessor` jars; other processors are not run |
 | Java toolchains | **Partial** — language level only |
 | Kotlin interoperability | **Missing** |
 | Gradle tasks & console | **Implemented** |
@@ -90,7 +91,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 |---|---|
 | File/class/symbol search, recent files, palette | **Implemented** |
 | Module navigation | **Partial** — Gradle sidebar only |
-| All semantic refactorings | **Missing** |
+| Semantic refactorings | **Partial** — rename only; extract, inline, change signature, move are missing |
 | Run configurations | **Implemented** — named/multiple configurations, toolbar picker, Gradle run / single file / class with runtime classpath; no debug configurations |
 | Application / Gradle execution | **Partial** — terminal-injected commands, with saved program args, VM options and environment |
 | Test discovery / JUnit / results | **Missing** |
@@ -112,8 +113,8 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 ## Major Gaps
 
 1. **No inspections** — compiler errors (`javac`, Gradle builds) are listed, but there are no unresolved-symbol or style inspections beyond what `javac` reports.
-2. **No semantic Find Usages** — the name-matching provider is switched off for Java, so Find Usages says it is unavailable rather than guessing.
-3. **No Java refactoring** — rename/move/extract require a reference graph.
+2. **Find Usages resolution gaps** — usages are resolved on demand over an identifier index, so members of anonymous classes are not covered and unresolvable overloads or untyped receivers are shown as ambiguous.
+3. **Refactoring is rename only** — extract, inline, change signature and move need a refactoring transaction layer.
 4. **No debugger or test runner** — run is terminal-injected commands only.
 5. **Navigation depth** — go to implementation and type hierarchy scan project classes per request (no persistent index); no call hierarchy or override markers.
 6. **Import handling stops at sorting** — no `*` collapsing, and the layout is fixed rather than configurable.
@@ -128,7 +129,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 | Infrastructure | Current state | Unlocks |
 |---|---|---|
-| **Reference / usage index** | None | Find usages, safe rename, inline, move, call hierarchy |
+| **Reference / usage index** | Identifier index (`refs.idx`) with on-demand verification; no stored symbol→usage edges | Find usages, safe rename done; inline, move, call hierarchy still need more |
 | **Compiler or analysis frontend** | None | Diagnostics, quick fixes, compile errors |
 | **Persistent cross-file semantic model** | Class stubs only | Refactoring, dataflow, inspections |
 | **Incremental Java parse** | Whole-document tree-sitter per request | Completion latency at scale |
@@ -262,13 +263,13 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Current state | Work required | Complexity | Dependencies |
 |---|---|---|---|---|---|
-| 4.1 | **Reference index (design + storage)** | Missing | Persistent shard format for symbol→usage mappings; build from parse pass | High | Chunk 2 analysis |
-| 4.2 | **Reference index (build pipeline)** | Missing | Background indexer: scan sources, record references per classpath scope | High | 4.1 |
-| 4.3 | **Semantic Find Usages** | Missing | `JavaFindReferencesProvider` on reference index | High | 4.2 |
-| 4.4 | **Safe rename (classes)** | Missing | `JavaRenameOperation`: preview, reference rewrite, import updates | High | 4.2 |
-| 4.5 | **Safe rename (methods/fields)** | Missing | Extend rename to members with overload disambiguation | High | 4.4 |
-| 4.6 | **Override / super method navigation** | Missing | Walk inheritance for `@Override` targets | Medium | JavaIndex |
-| 4.7 | **Annotation processor / generated sources** | Missing | Extend Gradle model for processor output dirs; index as source roots | High | Gradle sync |
+| 4.1 | **Reference index (design + storage)** ✅ done | Missing | Persistent shard format for symbol→usage mappings; build from parse pass | High | Chunk 2 analysis |
+| 4.2 | **Reference index (build pipeline)** ✅ done | Missing | Background indexer: scan sources, record references per classpath scope | High | 4.1 |
+| 4.3 | **Semantic Find Usages** ✅ done | Missing | `JavaFindReferencesProvider` on reference index | High | 4.2 |
+| 4.4 | **Safe rename (classes)** ✅ done | Missing | `JavaRenameOperation`: preview, reference rewrite, import updates | High | 4.2 |
+| 4.5 | **Safe rename (methods/fields)** ✅ done | Missing | Extend rename to members with overload disambiguation | High | 4.4 |
+| 4.6 | **Override / super method navigation** ✅ done | Missing | Walk inheritance for `@Override` targets | Medium | JavaIndex |
+| 4.7 | **Annotation processor / generated sources** ✅ done | Missing | Extend Gradle model for processor output dirs; index as source roots | High | Gradle sync |
 
 **Chunk exit criteria:** Find Usages returns type-accurate results; rename class/method/field safely across project.
 
@@ -388,7 +389,7 @@ Keep the three-library split (Penumbra / EditorIntelligence / JavaIntelligence).
 
 ## Suggested Next Step
 
-Chunks 1, 2 and 3 are complete. The next foundational investment is Chunk 4 (reference index, semantic Find Usages, rename), which would also replace the per-request scans behind go to implementation and type hierarchy.
+Chunks 1–4 are complete. Chunk 4 deviated from the roadmap wording: instead of persisting resolved symbol→usage mappings (which go stale when any dependency changes), it stores a per-file identifier index and verifies candidates on demand. Go to implementation and type hierarchy still scan project classes per request and could reuse it. The next step is Chunk 5 (test discovery and runner, structured Gradle problems, incremental sync).
 
 ---
 
