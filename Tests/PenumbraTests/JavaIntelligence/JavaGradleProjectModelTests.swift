@@ -228,7 +228,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
         let extra = ", \"generatedSourceDirs\": [\"file:///p/build/gen/\"], \"annotationProcessorJars\": [\"file:///ap/lombok.jar\"]"
         let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: sourceSetJSON(extra: extra))
         let set = try XCTUnwrap(model.subprojects.first?.sourceSets.first)
-        XCTAssertEqual(set.generatedSourceDirs.map(\.path), ["/p/build/gen/"].map { $0 })
+        XCTAssertEqual(set.generatedSourceDirs.map(\.path), ["/p/build/gen"])
         XCTAssertEqual(set.annotationProcessorJars.map(\.lastPathComponent), ["lombok.jar"])
     }
 
