@@ -308,6 +308,25 @@ public enum JavaMemberLookup {
         )
     }
 
+    /// `methods` (declared on `stub`) with their parameter types resolved against the declaring
+    /// file, so overload choice can compare them with argument types.
+    static func resolvingParameters(of methods: [JavaMethodStub], declaredOn stub: JavaClassStub, index: JavaIndex) async -> [JavaMethodStub] {
+        guard let base = await sourceDeclarationContext(of: stub, cache: DeclaringFileCache()) else { return methods }
+        var result: [JavaMethodStub] = []
+        for method in methods {
+            let context = base.entering(methodTypeParameters: method.typeParameters)
+            var parameters: [JavaParameterStub] = []
+            for parameter in method.parameters {
+                parameters.append(JavaParameterStub(name: parameter.name, type: await resolvedDeclaration(parameter.type, in: context, index: index)))
+            }
+            result.append(JavaMethodStub(
+                name: method.name, typeParameters: method.typeParameters, parameters: parameters, returnType: method.returnType,
+                thrownTypes: method.thrownTypes, modifiers: method.modifiers, isConstructor: method.isConstructor, javadoc: method.javadoc
+            ))
+        }
+        return result
+    }
+
     private static func resolvedDeclaration(_ type: JavaTypeRef, in context: JavaResolutionContext?, index: JavaIndex) async -> JavaTypeRef {
         guard let context, containsUnresolved(type) else { return type }
         return await JavaTypeResolver.resolve(type, context: context, index: index)

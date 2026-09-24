@@ -281,6 +281,28 @@ extension JavaGradleProjectModel {
         return shards
     }
 
+    /// The inverse of ``visibleShardPaths(forFile:paths:)``: every source set that can see the
+    /// shard at `shardPath` (its own directories, or a dependency's), the shard's own set included.
+    /// A symbol declared in that shard can only be referenced from these source sets.
+    public func sourceSets(seeing shardPath: String, paths: JavaIndexPaths) -> [(subproject: Subproject, sourceSet: SourceSet)] {
+        var result: [(subproject: Subproject, sourceSet: SourceSet)] = []
+        for subproject in subprojects {
+            for sourceSet in subproject.sourceSets {
+                var shards = Set<String>()
+                addSourceDirShards(sourceSet.sourceDirs, to: &shards, paths: paths)
+                for jar in sourceSet.compileClasspathJars { shards.insert(paths.jarShard(jar).path) }
+                for dependency in sourceSet.projectDependencies {
+                    guard let target = subprojects.first(where: { $0.path == dependency.projectPath }) else { continue }
+                    let set = target.sourceSets.first { $0.name == dependency.sourceSetName }
+                        ?? target.sourceSets.first { $0.name == "main" }
+                    if let set { addSourceDirShards(set.sourceDirs, to: &shards, paths: paths) }
+                }
+                if shards.contains(shardPath) { result.append((subproject, sourceSet)) }
+            }
+        }
+        return result
+    }
+
     /// Every source set's directories that actually exist on disk, deduplicated, with any directory
     /// nested inside another one already kept dropped -- overlapping `SourceRoot`s would otherwise
     /// walk (and index) the same `.java` files twice.

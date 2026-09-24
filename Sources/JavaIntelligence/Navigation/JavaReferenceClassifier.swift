@@ -25,6 +25,11 @@ enum JavaReferenceClassifier {
     static func classify(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> JavaReference? {
         let leaf = tree.node(atByteOffset: byteOffset)
         guard let token = nameToken(leaf, byteOffset: byteOffset) else { return nil }
+        return classify(token: token)
+    }
+
+    /// Classifies a name token (identifier, type identifier, `this`, `super`) already in hand.
+    static func classify(token: SyntaxNode) -> JavaReference? {
         if ancestor(of: token, type: "package_declaration") != nil {
             return nil
         }

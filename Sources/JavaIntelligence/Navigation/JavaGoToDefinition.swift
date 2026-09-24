@@ -60,6 +60,20 @@ struct JavaNavigationSession {
         index: JavaIndex, jdkHome: URL?, cacheRoot: URL, openBuffer: (@Sendable (URL) async -> String?)?,
         decompile: JavaDecompileGate
     ) {
+        let file = JavaSourceStubBuilder.build(tree: tree, url: fileURL ?? URL(fileURLWithPath: "/unsaved/Navigation.java"))
+        self.init(
+            source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset, fileStubs: file,
+            index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer, decompile: decompile
+        )
+    }
+
+    /// - Parameter fileStubs: the stubs of `tree`, built once by a caller that resolves many
+    ///   offsets in the same file (one session per offset, one stub build per file).
+    init(
+        source: String, fileURL: URL?, tree: JavaSyntaxTree, byteOffset: Int, fileStubs file: JavaSourceFileStubs,
+        index: JavaIndex, jdkHome: URL?, cacheRoot: URL, openBuffer: (@Sendable (URL) async -> String?)?,
+        decompile: JavaDecompileGate
+    ) {
         self.source = source
         self.fileURL = fileURL
         self.tree = tree
@@ -69,7 +83,6 @@ struct JavaNavigationSession {
         self.cacheRoot = cacheRoot
         self.openBuffer = openBuffer
         self.decompile = decompile
-        let file = JavaSourceStubBuilder.build(tree: tree, url: fileURL ?? URL(fileURLWithPath: "/unsaved/Navigation.java"))
         let enclosing = JavaCompletionProvider.enclosingTypeContext(in: tree, atByteOffset: byteOffset)
         let qualified = enclosing.qualifiedNames.map { name in
             file.packageName.isEmpty ? name : "\(file.packageName).\(name)"
@@ -178,13 +191,33 @@ struct JavaNavigationSession {
 
     /// The declarations a method call can bind to, narrowed by argument count.
     func methodCallTargets(_ invocation: SyntaxNode) async -> [MethodTarget] {
-        guard let nameNode = invocation.child(byFieldName: "name") else { return [] }
+        await methodCallResolution(invocation).targets
+    }
+
+    /// `receiverKnown` is false when the call's receiver expression could not be typed, so an
+    /// empty `targets` means "unknown" rather than "no such method".
+    func methodCallResolution(_ invocation: SyntaxNode) async -> (targets: [MethodTarget], receiverKnown: Bool) {
+        guard let nameNode = invocation.child(byFieldName: "name") else { return ([], true) }
         let argumentCount = invocation.child(byFieldName: "arguments")?.namedChildCount ?? 0
         guard let receiver = await receiverInfo(of: invocation, nameNode: nameNode) else {
-            return choose(primary: [], secondary: await staticImportMethods(named: nameNode.text), argumentCount: argumentCount)
+            let imported = await staticImportMethods(named: nameNode.text)
+            return (choose(primary: [], secondary: imported, argumentCount: argumentCount), false)
         }
+        return (await methodCallTargets(invocation, receiver: receiver, nameNode: nameNode, argumentCount: argumentCount), true)
+    }
+
+    private func methodCallTargets(
+        _ invocation: SyntaxNode, receiver: JavaReceiverInfo, nameNode: SyntaxNode, argumentCount: Int
+    ) async -> [MethodTarget] {
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        let primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
+        var primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
+        if primary.isEmpty, invocation.child(byFieldName: "object") == nil {
+            // An unqualified call may name a method of an enclosing class.
+            for outer in context.enclosingTypeQualifiedNames.dropFirst() where primary.isEmpty {
+                let outerType = JavaTypeRef.classType(qualifiedName: outer, arguments: [], outer: nil)
+                primary = await allMethods(named: nameNode.text, on: outerType, mode: .instance)
+            }
+        }
         let secondary: [MethodTarget]
         if invocation.child(byFieldName: "object") == nil {
             secondary = await staticImportMethods(named: nameNode.text)
@@ -221,7 +254,7 @@ struct JavaNavigationSession {
         if let range = JavaDeclarationLocator.localDeclarationRange(name: name, in: tree, atByteOffset: byteOffset) {
             return [hit(text: source, url: fileURL, byteRange: range, displayName: name)]
         }
-        if let enclosing = context.enclosingTypeQualifiedNames.first {
+        for enclosing in context.enclosingTypeQualifiedNames {
             let type = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
             let fields = await fieldHits(named: name, on: type, mode: .instance)
             if !fields.isEmpty { return fields }
