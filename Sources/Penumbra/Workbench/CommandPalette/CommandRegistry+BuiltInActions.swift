@@ -20,6 +20,7 @@ public extension CommandRegistry {
         .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward,
         .triggerCompletion, .triggerSmartCompletion,
         .quickDocumentation, .showContextActions, .optimizeImports,
+        .rename,
         .typeHierarchy
     ]
 

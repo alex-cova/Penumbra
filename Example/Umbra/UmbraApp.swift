@@ -97,6 +97,7 @@ struct UmbraApp: App {
             CommandMenu("Java") {
                 Button("Show Context Actions", action: workspace.showContextActions)
                     .keyboardShortcut(.return, modifiers: .option)
+                Button("Rename…", action: workspace.renameSymbol)
                 Button("Reformat Code", action: workspace.reformatCode)
                 Button("Type Hierarchy") { workspace.showTypeHierarchy() }
                 Button("Optimize Imports", action: workspace.optimizeImports)

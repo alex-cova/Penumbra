@@ -12,6 +12,8 @@ public struct EditorIntelligenceServices {
     /// ``SignatureHelpProviding`` works: ``LSPSignatureHelpProvider`` or a native one.
     public var signatureHelpProvider: (any SignatureHelpProviding)?
     public var codeActionProvider: (any CodeActionProviding)?
+    /// Language-aware rename behind ``EditorActionID/rename``.
+    public var renameProvider: (any RenameProviding)?
     /// Language-aware breadcrumbs, tried before the ones derived from ``symbolIndex``.
     public var breadcrumbProvider: (any BreadcrumbProviding)?
     /// Parameter-name hints drawn inline at call sites (see ``TextView/inlayHints``).
@@ -27,6 +29,7 @@ public struct EditorIntelligenceServices {
         formattingProvider: (any FormattingProviding)? = nil,
         signatureHelpProvider: (any SignatureHelpProviding)? = nil,
         codeActionProvider: (any CodeActionProviding)? = nil,
+        renameProvider: (any RenameProviding)? = nil,
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         inlayHintProvider: (any InlayHintProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
@@ -36,6 +39,7 @@ public struct EditorIntelligenceServices {
         self.formattingProvider = formattingProvider
         self.signatureHelpProvider = signatureHelpProvider
         self.codeActionProvider = codeActionProvider
+        self.renameProvider = renameProvider
         self.breadcrumbProvider = breadcrumbProvider
         self.inlayHintProvider = inlayHintProvider
         self.symbolIndex = symbolIndex
@@ -57,11 +61,8 @@ public final class EditorIntelligenceController {
     public let diagnosticEngine: DiagnosticEngine
     public let navigationEngine: NavigationEngine?
     /// Not currently invoked from anywhere in this controller — stored for callers who drive
-    /// refactoring themselves. Whoever wires up a rename invocation: `RenameOperation`/
-    /// `LSPRenameProvider` both take a single cursor position (EIP's `Cursor` is single-position
-    /// by construction; there's no multi-position `textDocument/rename` request in LSP), so
-    /// `collapseMultiSelectionToPrimary()` before requesting and apply the result through
-    /// `TextEditApplicator` — don't attempt to extend rename itself to multiple sites.
+    /// refactoring themselves. Rename does not go through it: see ``rename()`` and
+    /// ``RenameProviding`` (a rename is one caret position, like LSP's `textDocument/rename`).
     public let refactoringEngine: RefactoringEngine?
 
     public let breadcrumbBarView = BreadcrumbBarView()
@@ -81,6 +82,7 @@ public final class EditorIntelligenceController {
     private let formattingProvider: (any FormattingProviding)?
     private let signatureHelpProvider: (any SignatureHelpProviding)?
     private let codeActionProvider: (any CodeActionProviding)?
+    private let renameProvider: (any RenameProviding)?
     private let breadcrumbProvider: (any BreadcrumbProviding)?
     private var inlayHintProvider: (any InlayHintProviding)?
     private var inlayHintTask: Task<Void, Never>?
@@ -165,6 +167,7 @@ public final class EditorIntelligenceController {
         self.formattingProvider = services.formattingProvider
         self.signatureHelpProvider = services.signatureHelpProvider
         self.codeActionProvider = services.codeActionProvider
+        self.renameProvider = services.renameProvider
         self.breadcrumbProvider = services.breadcrumbProvider
         self.inlayHintProvider = services.inlayHintProvider
         self.symbolIndex = services.symbolIndex
@@ -297,6 +300,115 @@ public final class EditorIntelligenceController {
     /// a refresh superseded by a newer one is cancelled and never reported.
     public var onDiagnosticsUpdated: ((DiagnosticReport) -> Void)?
 
+    // MARK: - Rename
+
+    /// Asks the user for the new name of `target` (an inline prompt near the caret). Call
+    /// `completion` once with the entered name, or `nil` when cancelled. `target.validate` checks
+    /// a candidate name as the user types. Left `nil`, rename shows a hint and does nothing.
+    public var onRequestRename: ((_ target: RenameTarget, _ completion: @escaping (String?) -> Void) -> Void)?
+    /// Shows the preview of `plan` (changes grouped by file, ambiguous entries unchecked…). The
+    /// host calls `apply` with the ``WorkspaceEdit`` the user confirmed (usually
+    /// ``RenamePlan/workspaceEdit(including:)``) and gets the outcome back. `apply` runs
+    /// ``onApplyWorkspaceEdit``, or, when that is unset, edits only the current document.
+    public var onPresentRenamePlan: ((_ plan: RenamePlan, _ apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) -> Void)?
+    /// Applies a workspace edit that touches files beyond the current text view (open documents
+    /// and files on disk). Without it, only edits to the current document are applied.
+    public var onApplyWorkspaceEdit: ((WorkspaceEdit) async -> WorkspaceEditApplyResult)?
+    /// Told why a rename couldn't proceed (the provider's blocking error, or a failure). Left
+    /// `nil`, the message is shown as a short hint at the caret.
+    public var onRenameFailed: ((String) -> Void)?
+
+    /// Runs rename at the caret: `prepareRename` → name prompt → `rename(to:)` → plan preview.
+    /// Returns `false` when there is no document to rename in.
+    @discardableResult
+    public func rename() -> Bool {
+        guard let renameProvider else {
+            showTransientHint("Rename isn't available for this file")
+            return true
+        }
+        guard let document = liveDocument() else { return false }
+        let context = NavigationContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            trigger: .manual,
+            kind: .definition
+        )
+        Task { [weak self] in
+            guard let target = await renameProvider.prepareRename(context) else {
+                self?.showTransientHint("Nothing to rename here")
+                return
+            }
+            guard let self else { return }
+            guard let onRequestRename = self.onRequestRename else {
+                self.showTransientHint("Rename isn't set up in this app")
+                return
+            }
+            onRequestRename(target) { [weak self] newName in
+                guard let self, let newName, newName != target.currentName else { return }
+                self.planRename(provider: renameProvider, context: context, newName: newName)
+            }
+        }
+        return true
+    }
+
+    private func planRename(provider: any RenameProviding, context: NavigationContext, newName: String) {
+        Task { [weak self] in
+            let plan: RenamePlan
+            do {
+                plan = try await provider.rename(context, to: newName)
+            } catch {
+                self?.reportRenameFailure(error.localizedDescription)
+                return
+            }
+            guard let self else { return }
+            if let blocking = plan.blockingError {
+                self.reportRenameFailure(blocking)
+                return
+            }
+            guard !plan.entries.isEmpty || !plan.fileRenames.isEmpty else {
+                self.reportRenameFailure("Nothing to rename")
+                return
+            }
+            guard let present = self.onPresentRenamePlan else {
+                self.showTransientHint("Rename isn't set up in this app")
+                return
+            }
+            present(plan) { [weak self] edit in
+                guard let self else { return WorkspaceEditApplyResult() }
+                return await self.applyWorkspaceEdit(edit)
+            }
+        }
+    }
+
+    private func reportRenameFailure(_ message: String) {
+        if let onRenameFailed {
+            onRenameFailed(message)
+        } else {
+            showTransientHint(message)
+        }
+    }
+
+    private func applyWorkspaceEdit(_ edit: WorkspaceEdit) async -> WorkspaceEditApplyResult {
+        if let onApplyWorkspaceEdit {
+            return await onApplyWorkspaceEdit(edit)
+        }
+        // No host applier: edit the current document only.
+        guard let textView, let url = textView.documentURL else {
+            return WorkspaceEditApplyResult(failures: [URL(fileURLWithPath: "/"): "No document to edit"])
+        }
+        var result = WorkspaceEditApplyResult()
+        for changed in edit.affectedURLs {
+            if changed.standardizedFileURL == url.standardizedFileURL {
+                TextEditApplicator.apply(edit.changes[changed] ?? [], in: textView)
+                result.appliedFiles.append(changed)
+            } else {
+                result.failures[changed] = "Not open in this editor"
+            }
+        }
+        return result
+    }
+
     private func handleEditorAction(_ action: EditorActionID) -> Bool {
         switch action {
         case .reformatCode:
@@ -333,6 +445,8 @@ public final class EditorIntelligenceController {
                 }
             }
             return true
+        case .rename:
+            return rename()
         case .findInFiles:
             guard let onRequestProjectSearch else { return false }
             return onRequestProjectSearch()
