@@ -197,4 +197,30 @@ public struct GitRepository: Sendable {
         // git reports push progress on stderr.
         return out.stderr.isEmpty ? out.text : out.stderr
     }
+
+    /// Checks out a local branch. Refuses to discard or overwrite local changes; git's error is returned as-is.
+    public func switchBranch(_ name: String) async throws -> String {
+        let branch = try validatedBranchName(name)
+        let out = try await runner.run(["switch", "--", branch], in: root, stdin: nil, environment: nil)
+        return out.stderr.isEmpty ? out.text : out.stderr
+    }
+
+    /// Creates `name` at `HEAD` and switches to it. A name that starts with `-` is rejected before git runs.
+    public func createBranch(_ name: String) async throws -> String {
+        let branch = try validatedBranchName(name)
+        let out = try await runner.run(["switch", "-c", branch], in: root, stdin: nil, environment: nil)
+        return out.stderr.isEmpty ? out.text : out.stderr
+    }
+
+    /// Fast-forward only. A diverged branch fails and leaves the history unmerged.
+    public func pull() async throws -> String {
+        let out = try await runner.run(["pull", "--ff-only"], in: root, stdin: nil, environment: Self.nonInteractive)
+        return out.stderr.isEmpty ? out.text : out.stderr
+    }
+
+    private func validatedBranchName(_ name: String) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("-") else { throw GitError.invalidBranchName }
+        return trimmed
+    }
 }

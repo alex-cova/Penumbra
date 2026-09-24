@@ -2,7 +2,7 @@
 
 > Gap analysis for bringing Umbra's Java development experience closer to IntelliJ IDEA.
 > Based on repository inspection (Penumbra, EditorIntelligence, JavaIntelligence, Packages/GitIntelligence, Example/Umbra).
-> Last updated: 2026-09-24 (Chunk 7 MVP).
+> Last updated: 2026-09-24 (Chunk 8).
 
 ---
 
@@ -16,7 +16,7 @@ Umbra + Penumbra + JavaIntelligence form a **credible lightweight Java editor**,
 | IDE platform (EditorIntelligence) | **High (generic)** | Engines/protocols exist; LSP adapters unused in Umbra |
 | Java intelligence (JavaIntelligence) | **Medium** | Strong completion; weak diagnostics/refactoring/navigation depth |
 | IDE shell (Umbra) | **Medium–High** | Gradle, terminal, Problems, run configs, test runner, minimal debugger, in-app `.http` client |
-| Git (GitIntelligence package) | **Medium** | Status, stage, commit, diff, history, lane graph. No push/pull/branch UI |
+| Git (GitIntelligence package) | **Medium** | Status, stage, commit, diff, history, lane graph, local branch switch, push, fast-forward pull |
 
 The largest gap is not UI polish — it is **missing semantic analysis infrastructure**: no compiler-backed diagnostics, no reference index, no Java-aware rename/refactor, and no debugger. IntelliJ's day-to-day feel depends on a persistent PSI + stub-index model; this editor has **class stubs + on-demand tree-sitter parsing**, which is enough for smart completion but not for inspections, usages, or safe refactorings.
 
@@ -102,7 +102,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 | Capability | State |
 |---|---|
-| Git (status, stage, commit, diff, history) | **Implemented** — `Packages/GitIntelligence` via `IDEGitStatus`. `GitRepository.push()` is not in the panel; no pull or branch UI |
+| Git (status, stage, commit, diff, history, branch, push, pull) | **Implemented** — local branch switch and create, push, fast-forward pull (`--ff-only`). No force-push, merge, or remote-branch checkout |
 | Terminal | **Implemented** |
 | Problems panel | **Implemented** — bottom-panel tab, ⌘⇧M, status-bar counts |
 | Build output | **Implemented** — Build Project runs through the Gradle console; compiler errors land in Problems |
@@ -338,13 +338,17 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Notes | Complexity |
 |---|---|---|---|
-| 8.1 | **Large-file editing performance** | Market Penumbra piece-tree + viewport rendering | Low (existing) |
-| 8.2 | **Lightweight Gradle sync** | Trust-gated, no import wizard — already implemented | Low (existing) |
-| 8.3 | **Native Git panel** | `Packages/GitIntelligence` (`GitRepository`, `GitGraphLayout`) wired by `Example/Umbra/IDEGitStatus.swift`. Extend with branch/push | Medium |
-| 8.4 | **Integrated HTTP client** | In the Umbra target (`Example/Umbra/HTTP/`), shown in the bottom panel. Not a library and not part of JavaIntelligence | Low (existing) |
-| 8.5 | **Sandbox-safe architecture** | App Store distribution vs IntelliJ filesystem access | Low (existing) |
-| 8.6 | **Palette-first UX** | Search Everywhere + minimal chrome | Low (existing) |
-| 8.7 | **Session restore** | Layout, tabs, terminals — already implemented | Low (existing) |
+| 8.1 | **Large-file editing performance** ✅ done | Penumbra piece-tree + viewport rendering | Low (existing) |
+| 8.2 | **Lightweight Gradle sync** ✅ done | Trust-gated, no import wizard | Low (existing) |
+| 8.3 | **Native Git panel** ✅ done | Branch menu (switch and create), push, and fast-forward pull in the Changes tab. `Packages/GitIntelligence` via `IDEGitStatus` | Medium |
+| 8.4 | **Integrated HTTP client** ✅ done | In the Umbra target (`Example/Umbra/HTTP/`), shown in the bottom panel. Not a library and not part of JavaIntelligence | Low (existing) |
+| 8.5 | **Sandbox-safe architecture** ✅ done | App Store distribution vs IntelliJ filesystem access | Low (existing) |
+| 8.6 | **Palette-first UX** ✅ done | Search Everywhere + minimal chrome | Low (existing) |
+| 8.7 | **Session restore** ✅ done | Layout, tabs, terminals | Low (existing) |
+
+**Chunk 8 notes:** Switch and pull are refused while an editor in the repository has unsaved changes; clean buffers are then reloaded from disk. Pull is `git pull --ff-only`. Deferred: force-push, merge, rebase, delete/rename, and remote-tracking checkout.
+
+**Chunk exit criteria:** User can create and switch local branches, push, and fast-forward pull from Source Control, with git's errors shown in the panel.
 
 ---
 
@@ -362,7 +366,7 @@ The `.http` parser and `URLSession` send live in the Umbra executable (`Example/
              │                               │
 ┌────────────▼──────────────┐  ┌─────────────▼─────────────────┐
 │ GitIntelligence package   │  │ EditorIntelligence            │
-│ status, stage, diff, log, │  │ engines, Workspace, palette,  │
+│ branch, push, pull, log,  │  │ engines, Workspace, palette,  │
 │ GitGraphLayout            │  │ LSP hooks                     │
 └───────────────────────────┘  └──────────────┬────────────────┘
                                               │ EditorAdapter / provider protocols
@@ -397,7 +401,7 @@ The `.http` parser and `URLSession` send live in the Umbra executable (`Example/
 
 ## Suggested Next Step
 
-Chunks 1–7 are largely complete. Remaining high-value work: conditional breakpoints, watches, attach-to-process, custom Gradle debug ports, project-wide inspections, 5.5 incremental Gradle sync, 7.6 JPMS, and completion-path incremental parse.
+Chunks 1–7 are largely complete, and chunk 8 is done. Remaining high-value work: conditional breakpoints, watches, attach-to-process, custom Gradle debug ports, project-wide inspections, 5.5 incremental Gradle sync, 7.6 JPMS, and completion-path incremental parse.
 
 ---
 

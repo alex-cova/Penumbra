@@ -6,6 +6,8 @@ struct IDESourceControlPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @Bindable private var gitStatus: IDEGitStatusModel
     @State private var mode = Mode.changes
+    @State private var creatingBranch = false
+    @State private var newBranchName = ""
 
     private enum Mode: String, CaseIterable, Identifiable {
         case changes = "Changes"
@@ -52,11 +54,12 @@ struct IDESourceControlPanel: View {
 
     private var changesContent: some View {
         VStack(spacing: 0) {
+            branchBar
             commitBar
             if !gitStatus.actionStatus.isEmpty {
                 Text(gitStatus.actionStatus)
                     .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .foregroundStyle(gitStatus.actionFailed ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, IDEAppearance.Spacing.md)
@@ -66,6 +69,61 @@ struct IDESourceControlPanel: View {
                 list: changeList,
                 text: gitStatus.diffText ?? "Select a changed file to preview its diff."
             )
+        }
+    }
+
+    private var branchBar: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Menu {
+                ForEach(gitStatus.localBranches, id: \.self) { branch in
+                    Button {
+                        gitStatus.switchBranch(branch)
+                    } label: {
+                        if branch == gitStatus.currentBranch {
+                            Label(branch, systemImage: "checkmark")
+                        } else {
+                            Text(branch)
+                        }
+                    }
+                }
+                if !gitStatus.localBranches.isEmpty {
+                    Divider()
+                }
+                Button("New Branch…") {
+                    newBranchName = ""
+                    creatingBranch = true
+                }
+            } label: {
+                Label(gitStatus.currentBranch ?? "Branch", systemImage: "arrow.triangle.branch")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(gitStatus.isBusy)
+            .help("Switch branch")
+            .accessibilityLabel("Current branch \(gitStatus.currentBranch ?? "none")")
+
+            Spacer(minLength: 0)
+
+            Button("Pull") { gitStatus.pull() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(gitStatus.isBusy)
+                .help("Pull, fast-forward only")
+            Button("Push") { gitStatus.push() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(gitStatus.isBusy)
+                .help("Push the current branch")
+        }
+        .font(IDEAppearance.Typography.caption)
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.top, IDEAppearance.Spacing.sm)
+        .alert("New Branch", isPresented: $creatingBranch) {
+            TextField("Branch name", text: $newBranchName)
+            Button("Create") { gitStatus.createBranch(newBranchName) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Create a branch at the current commit and switch to it.")
         }
     }
 

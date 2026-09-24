@@ -11,11 +11,13 @@ public enum GitError: Error, Sendable, LocalizedError {
     case gitNotFound
     case failed(status: Int32, stderr: String, stdout: Data)
     case notARepository
+    case invalidBranchName
 
     public var errorDescription: String? {
         switch self {
         case .gitNotFound: return "git was not found at /usr/bin/git."
         case .notARepository: return "This folder is not a git repository."
+        case .invalidBranchName: return "Enter a valid branch name."
         case .failed(let status, let stderr, _):
             let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return message.isEmpty ? "git exited with status \(status)." : message

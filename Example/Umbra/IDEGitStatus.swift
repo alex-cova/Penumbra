@@ -47,16 +47,25 @@ final class IDEGitStatusModel {
     private(set) var commits: [IDEGitCommit] = []
     private(set) var commitDetailText: String?
     private(set) var branches: [String] = []
+    private(set) var localBranches: [String] = []
     private(set) var authors: [String] = []
     var historyBranch: String?
     var historyAuthor: String?
     var historySearch = ""
     private(set) var isBusy = false
     private(set) var actionStatus = ""
+    /// False when `actionStatus` is a successful git report rather than a failure.
+    private(set) var actionFailed = false
     var commitMessage = ""
     var selectedChangePath: String?
     var selectedCommitHash: String?
     var isRepository: Bool { repositoryRoot != nil }
+    var repositoryRootPath: String? { repositoryRoot }
+
+    /// True when an open editor inside the repository still has unsaved edits. Switch and pull refuse then.
+    @ObservationIgnored var hasUnsavedEditors: (@MainActor () -> Bool)?
+    /// Reloads clean editor buffers after a switch or pull has changed files on disk.
+    @ObservationIgnored var onWorkingTreeChanged: (@MainActor () -> Void)?
 
     private var repositoryRoot: String?
 
@@ -101,6 +110,7 @@ final class IDEGitStatusModel {
         selectedChangePath = nil
         diffText = nil
         actionStatus = ""
+        actionFailed = false
         apply(GitSnapshot())
         guard rootURL != nil else { return }
         refresh()
@@ -178,36 +188,64 @@ final class IDEGitStatusModel {
 
     func stage(path: String) {
         guard let relative = relativePath(for: path) else { return }
-        runGitAction { try await $0.stage(paths: [relative]) }
+        runGitAction { try await $0.stage(paths: [relative]); return "" }
     }
 
     func unstage(path: String) {
         guard let relative = relativePath(for: path) else { return }
-        runGitAction { try await $0.unstage(paths: [relative]) }
+        runGitAction { try await $0.unstage(paths: [relative]); return "" }
     }
 
     func stageAll() {
-        runGitAction { try await $0.stageAll() }
+        runGitAction { try await $0.stageAll(); return "" }
     }
 
     func unstageAll() {
-        runGitAction { try await $0.unstageAll() }
+        runGitAction { try await $0.unstageAll(); return "" }
     }
 
     func commit() {
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else {
-            actionStatus = "Enter a commit message."
+            fail("Enter a commit message.")
             return
         }
         guard changes.contains(where: { $0.staged != nil }) else {
-            actionStatus = "Nothing staged to commit."
+            fail("Nothing staged to commit.")
             return
         }
-        runGitAction { _ = try await $0.commit(message: message, paths: [], untrackedPaths: [], amend: false) } onSuccess: { [weak self] in
+        runGitAction { _ = try await $0.commit(message: message, paths: [], untrackedPaths: [], amend: false); return "" } onSuccess: { [weak self] in
             self?.commitMessage = ""
             self?.selectedChangePath = nil
             self?.diffText = nil
+        }
+    }
+
+    func switchBranch(_ name: String) {
+        guard name != currentBranch else { return }
+        guard !refuseUnsaved(before: "switching branches") else { return }
+        runGitAction({ try await $0.switchBranch(name) }) { [weak self] in
+            self?.onWorkingTreeChanged?()
+        }
+    }
+
+    func createBranch(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            fail("Enter a branch name.")
+            return
+        }
+        runGitAction { try await $0.createBranch(trimmed) }
+    }
+
+    func push() {
+        runGitAction { try await $0.push() }
+    }
+
+    func pull() {
+        guard !refuseUnsaved(before: "pulling") else { return }
+        runGitAction({ try await $0.pull() }) { [weak self] in
+            self?.onWorkingTreeChanged?()
         }
     }
 
@@ -235,7 +273,19 @@ final class IDEGitStatusModel {
         if snapshot.dirtyDirectories != dirtyDirectories { dirtyDirectories = snapshot.dirtyDirectories }
         if snapshot.repositoryRoot != repositoryRoot { repositoryRoot = snapshot.repositoryRoot }
         if snapshot.currentBranch != currentBranch { currentBranch = snapshot.currentBranch }
+        if snapshot.localBranches != localBranches { localBranches = snapshot.localBranches }
         if snapshot.changes != changes { changes = snapshot.changes }
+    }
+
+    private func refuseUnsaved(before action: String) -> Bool {
+        guard hasUnsavedEditors?() == true else { return false }
+        fail("Save unsaved changes before \(action).")
+        return true
+    }
+
+    private func fail(_ message: String) {
+        actionStatus = message
+        actionFailed = true
     }
 
     private func loadDiff(for path: String?) {
@@ -254,27 +304,34 @@ final class IDEGitStatusModel {
     }
 
     private func runGitAction(
-        _ action: @escaping @Sendable (GitRepository) async throws -> Void,
+        _ action: @escaping @Sendable (GitRepository) async throws -> String,
         onSuccess: (@MainActor () -> Void)? = nil
     ) {
         guard let rootURL else { return }
         actionTask?.cancel()
         isBusy = true
         actionStatus = ""
+        actionFailed = false
         let existing = repository
         actionTask = Task { [weak self] in
             guard let self else { return }
             defer { self.isBusy = false }
             do {
                 let repo = try await Self.repository(for: rootURL, existing: existing)
-                try await action(repo)
+                let reported = try await action(repo)
                 guard !Task.isCancelled else { return }
                 self.repository = repo
+                let line = Self.statusLine(reported)
+                if !line.isEmpty {
+                    self.actionStatus = line
+                    self.actionFailed = false
+                }
                 onSuccess?()
                 self.refresh()
             } catch {
                 guard !Task.isCancelled else { return }
                 self.actionStatus = Self.describe(error)
+                self.actionFailed = true
             }
         }
     }
@@ -293,6 +350,7 @@ final class IDEGitStatusModel {
         var dirtyDirectories: Set<String> = []
         var repositoryRoot: String?
         var currentBranch: String?
+        var localBranches: [String] = []
         var changes: [IDEGitChange] = []
     }
 
@@ -346,7 +404,11 @@ final class IDEGitStatusModel {
             return (nil, GitSnapshot())
         }
         let branch = await repo.currentBranch()
-        return (repo, parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch))
+        var snapshot = parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch)
+        snapshot.localBranches = ((try? await repo.branches()) ?? [])
+            .compactMap { $0.kind == .localBranch ? $0.name : nil }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return (repo, snapshot)
     }
 
     nonisolated private static func loadHistory(
@@ -409,6 +471,13 @@ final class IDEGitStatusModel {
         guard absolutePath == repositoryRoot || absolutePath.hasPrefix(repositoryRoot + "/") else { return nil }
         if absolutePath == repositoryRoot { return "." }
         return String(absolutePath.dropFirst(repositoryRoot.count + 1))
+    }
+
+    nonisolated private static func statusLine(_ text: String) -> String {
+        let line = text.split(whereSeparator: \.isNewline).first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if line.count <= 200 { return line }
+        return String(line.prefix(200))
     }
 
     nonisolated private static func describe(_ error: Error) -> String {

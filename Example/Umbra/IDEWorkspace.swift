@@ -101,7 +101,14 @@ public final class IDEWorkspace {
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
 
-    public init() {}
+    public init() {
+        gitStatus.hasUnsavedEditors = { [weak self] in
+            self?.hasUnsavedEditorsInRepository() ?? false
+        }
+        gitStatus.onWorkingTreeChanged = { [weak self] in
+            self?.reloadOpenEditorsAfterGitChange()
+        }
+    }
 
     var isSidebarVisible = false
     var isGradleSidebarVisible = true
@@ -1194,6 +1201,87 @@ public final class IDEWorkspace {
 
     func showSourceControl() {
         selectSourceControlTab()
+    }
+
+    /// Switch and pull rewrite files on disk. An unsaved editor in the repository would be saved
+    /// over that result, or reloaded out from under the user, so those actions wait for a save.
+    private func hasUnsavedEditorsInRepository() -> Bool {
+        guard let root = gitStatus.repositoryRootPath else { return false }
+        return workbench.panes.contains { pane in
+            pane.documents.contains { document in
+                guard document.isDirty, document.contentKind == .text,
+                      let path = document.url?.standardizedFileURL.path else { return false }
+                return path == root || path.hasPrefix(root + "/")
+            }
+        }
+    }
+
+    /// Reloads clean text tabs from disk after a branch switch or fast-forward pull, and closes
+    /// tabs whose files the new tree removed. Dirty buffers are left untouched.
+    private func reloadOpenEditorsAfterGitChange() {
+        guard let root = gitStatus.repositoryRootPath else { return }
+        let open = workbench.panes.flatMap { pane in
+            pane.documents.compactMap { document -> (EditorPane, WorkbenchDocument)? in
+                guard let path = document.url?.standardizedFileURL.path else { return nil }
+                guard path == root || path.hasPrefix(root + "/") else { return nil }
+                return (pane, document)
+            }
+        }
+        var seen = Set<ObjectIdentifier>()
+        let documents = open.compactMap { pair -> WorkbenchDocument? in
+            seen.insert(ObjectIdentifier(pair.1)).inserted ? pair.1 : nil
+        }
+        Task {
+            var missing: [(EditorPane, WorkbenchDocument)] = []
+            for document in documents {
+                guard let url = document.url else { continue }
+                guard workbench.panes.contains(where: { $0.documents.contains { $0 === document } }) else { continue }
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    missing.append(contentsOf: open.filter { $0.1 === document })
+                    continue
+                }
+                guard document.contentKind == .text, !document.isDirty else { continue }
+                let showing = workbench.panes.filter { $0.selectedDocument === document }
+                if showing.isEmpty {
+                    do {
+                        let loaded = try await loadDocument(from: url)
+                        installReloaded(loaded, onto: document)
+                        document.contentGeneration &+= 1
+                    } catch {
+                        continue
+                    }
+                } else {
+                    var bumped = false
+                    for pane in showing {
+                        do {
+                            let loaded = try await loadDocument(from: url)
+                            installReloaded(loaded, onto: document)
+                            if !bumped {
+                                document.contentGeneration &+= 1
+                                bumped = true
+                            }
+                            showDocument(in: pane, host: host(for: pane.id))
+                        } catch {
+                            continue
+                        }
+                    }
+                }
+            }
+            for (pane, document) in missing {
+                guard workbench.panes.contains(where: { $0.id == pane.id }),
+                      pane.documents.contains(where: { $0.id == document.id }) else { continue }
+                closeDocument(document.id, in: pane)
+            }
+            refreshPresentation()
+        }
+    }
+
+    private func installReloaded(_ loaded: WorkbenchDocument, onto document: WorkbenchDocument) {
+        document.pendingState = loaded.pendingState
+        document.isFileBacked = loaded.isFileBacked
+        document.rangeReader = loaded.rangeReader
+        document.text = loaded.text
+        document.isDirty = false
     }
 
     func toggleSourceControl() {
