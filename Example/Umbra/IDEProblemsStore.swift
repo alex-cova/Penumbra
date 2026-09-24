@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import JavaIntelligence
 import Observation
 
 /// What the Problems tab lists: diagnostics from the active editors (duplicate symbols, LSP…) and
@@ -18,6 +19,11 @@ final class IDEProblemsStore {
     /// `compilerDiagnostics` because an editor report rewrites a file's `javac` entry. A file's
     /// entry is dropped once the file is saved, when the in-editor compile takes over.
     private(set) var buildDiagnostics: [URL: [Diagnostic]] = [:]
+    /// Project-level messages from the last Gradle run (failed tasks, dependency and build-script
+    /// errors, the test summary): replaced on each run, cleared with the build set.
+    private(set) var buildMessages: [GradleProblem] = []
+    /// Called when the "Show Test Results" message is clicked; wired to the Tests tab by the host.
+    var onShowTestResults: (() -> Void)?
     var visibleSeverities: Set<DiagnosticSeverity> = [.error, .warning, .information, .hint]
 
     /// Every file with problems, ignoring the severity filter -- the basis for the badge counts.
@@ -30,9 +36,26 @@ final class IDEProblemsStore {
         DiagnosticGrouping.files(from: [editorDiagnostics, compilerDiagnostics, buildDiagnostics], severities: visibleSeverities)
     }
 
-    var errorCount: Int { DiagnosticGrouping.counts(in: allFiles).errors }
-    var warningCount: Int { DiagnosticGrouping.counts(in: allFiles).warnings }
-    var isEmpty: Bool { editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && buildDiagnostics.isEmpty }
+    var errorCount: Int { DiagnosticGrouping.counts(in: allFiles).errors + buildMessages.filter { $0.severity == .error }.count }
+    var warningCount: Int { DiagnosticGrouping.counts(in: allFiles).warnings + buildMessages.filter { $0.severity == .warning }.count }
+    var isEmpty: Bool {
+        editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && buildDiagnostics.isEmpty && buildMessages.isEmpty
+    }
+
+    /// Project messages to list, after the severity filter.
+    var visibleBuildMessages: [GradleProblem] {
+        buildMessages.filter { message in
+            switch message.severity {
+            case .error: visibleSeverities.contains(.error)
+            case .warning: visibleSeverities.contains(.warning)
+            case .info: visibleSeverities.contains(.information)
+            }
+        }
+    }
+
+    func setBuildMessages(_ messages: [GradleProblem]) {
+        buildMessages = messages
+    }
 
     /// Takes an active editor's report. Compiler results in it are the service's cached ones for
     /// that file (which is how a re-opened file gets its problems back); the rest are the editor's.
@@ -68,6 +91,7 @@ final class IDEProblemsStore {
             buildDiagnostics[url.standardizedFileURL] = nil
         } else {
             buildDiagnostics = [:]
+            buildMessages = []
         }
     }
 

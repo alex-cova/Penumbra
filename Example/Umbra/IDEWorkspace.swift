@@ -1921,16 +1921,30 @@ public final class IDEWorkspace {
     /// not, and surface the tab when there are errors. Each stream is parsed on its own so a
     /// compiler message and its caret line are never split by interleaved task output.
     private func applyGradleBuildOutput(_ result: GradleCommandResult, projectRoot: URL) {
-        let messages = JavacOutputParser.parse(result.stderr) + JavacOutputParser.parse(result.stdout)
-        let byFile = JavacDiagnosticsMapper.diagnostics(
-            from: messages, source: "gradle", baseDirectory: projectRoot
-        ) { [weak self] url in
+        let matches = GradleProblemMatcher.match(result, source: "gradle", baseDirectory: projectRoot) { [weak self] url in
             self?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
         }
-        problems.setBuildDiagnostics(byFile)
-        if byFile.values.contains(where: { $0.contains { $0.severity == .error } }) {
+        problems.setBuildDiagnostics(matches.diagnostics)
+        problems.setBuildMessages(matches.problems)
+        if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
+            || matches.problems.contains(where: { $0.severity == .error }) {
             showProblems()
         }
+    }
+
+    /// A project-level Problems row was clicked: the test summary shows the results, a message
+    /// with a file opens it at its line.
+    func openBuildMessage(_ message: GradleProblem) {
+        if message.kind == .testFailures { problems.onShowTestResults?() }
+        guard let url = message.file else { return }
+        let position = TextPosition(line: max(0, (message.line ?? 1) - 1), column: 0, utf16Offset: 0)
+        let document = workbench.allDocuments().first { $0.url?.standardizedFileURL == url.standardizedFileURL }
+        _ = openNavigationLocation(Location(
+            documentID: document?.documentID ?? DocumentID(),
+            url: url,
+            range: EditorIntelligence.TextRange(start: position, end: position),
+            displayName: url.lastPathComponent
+        ))
     }
 
     /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
