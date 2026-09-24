@@ -110,6 +110,28 @@ public extension EditorActionID {
     /// IntelliJ keymap; needs a ``RenameProviding`` and the host hooks on
     /// ``EditorIntelligenceController`` (`onRequestRename`, `onPresentRenamePlan`).
     static let rename = EditorActionID("rename")
+    /// Extracts the selected expression into a local variable. Bound to ⌥⌘V in the IntelliJ keymap.
+    static let extractVariable = EditorActionID("extractVariable")
+    /// Extracts the selected expression into an instance field (⌥⌘F in the IntelliJ keymap).
+    static let extractField = EditorActionID("extractField")
+    /// Extracts the selected expression into a static final constant (⌥⌘C in the IntelliJ keymap).
+    static let extractConstant = EditorActionID("extractConstant")
+    /// Extracts the selection into a new private method (⌥⌘M in the IntelliJ keymap).
+    static let extractMethod = EditorActionID("extractMethod")
+    /// Inlines a local variable at the caret (⌥⌘N in the IntelliJ keymap).
+    static let inlineVariable = EditorActionID("inlineVariable")
+    /// Inlines a private method at the caret (⌥⌘N in the IntelliJ keymap).
+    static let inlineMethod = EditorActionID("inlineMethod")
+    /// Changes the method signature at the caret (⌃F6 in the IntelliJ keymap).
+    static let changeSignature = EditorActionID("changeSignature")
+    /// Encapsulates the field at the caret (⌥⌘E in the IntelliJ keymap).
+    static let encapsulateField = EditorActionID("encapsulateField")
+    /// Inserts getter/setter methods for the field at the caret.
+    static let generateAccessors = EditorActionID("generateAccessors")
+    /// Moves the top-level class at the caret to another package (F6 in the IntelliJ keymap).
+    static let moveClass = EditorActionID("moveClass")
+    /// Deletes the symbol at the caret when it has no usages.
+    static let safeDelete = EditorActionID("safeDelete")
     /// Completions of the expected type. Bound to Control-Shift-Space.
     static let triggerSmartCompletion = EditorActionID("triggerSmartCompletion")
 
@@ -162,6 +184,17 @@ public extension EditorActionID {
         .triggerCompletion: "Complete",
         .triggerSmartCompletion: "Smart Type Completion",
         .rename: "Rename…",
+        .extractVariable: "Extract Variable…",
+        .extractField: "Extract Field…",
+        .extractConstant: "Extract Constant…",
+        .extractMethod: "Extract Method…",
+        .inlineVariable: "Inline Variable",
+        .inlineMethod: "Inline Method",
+        .changeSignature: "Change Method Signature…",
+        .encapsulateField: "Encapsulate Field",
+        .generateAccessors: "Generate Getter and Setter",
+        .moveClass: "Move Class…",
+        .safeDelete: "Safe Delete",
         .typeHierarchy: "Type Hierarchy",
         .quickDocumentation: "Quick Documentation",
         .showContextActions: "Show Context Actions",

@@ -136,6 +136,13 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
         map.bind(KeyStroke(KeyChord("h", .control)), to: .typeHierarchy)
         map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .shift)), to: .rename)
+        map.bind(KeyStroke(KeyChord("v", [.command, .option])), to: .extractVariable)
+        map.bind(KeyStroke(KeyChord("f", [.command, .option, .shift])), to: .extractField)
+        map.bind(KeyStroke(KeyChord("c", [.command, .option])), to: .extractConstant)
+        map.bind(KeyStroke(KeyChord("m", [.command, .option])), to: .extractMethod)
+        map.bind(KeyStroke(KeyChord("n", [.command, .option])), to: .inlineVariable)
+        map.bind(KeyStroke(KeyChord("e", [.command, .option])), to: .encapsulateField)
+        map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .control)), to: .changeSignature)
 
         return map
     }()

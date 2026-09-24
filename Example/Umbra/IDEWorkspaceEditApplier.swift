@@ -19,6 +19,10 @@ protocol IDEWorkspaceEditHost: AnyObject {
     func editTarget(for url: URL) async -> IDEWorkspaceEditTarget
     /// Renames a file within its folder and retargets open tabs, like the Explorer's rename.
     func renameFile(from: URL, to: URL) throws
+    /// Moves a file to another folder (and retargets open tabs).
+    func moveFile(from: URL, to: URL) throws
+    /// Moves a file to the Trash and closes any open editors on it.
+    func deleteFile(at: URL) throws
 }
 
 /// Applies a ``WorkspaceEdit``: files with a live editor go through `TextEditApplicator`, the
@@ -32,6 +36,7 @@ struct IDEWorkspaceEditApplier {
         case noProject
         case invalidEdit(String)
         case moveNotSupported
+        case deleteFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -40,6 +45,7 @@ struct IDEWorkspaceEditApplier {
             case .noProject: return "Open a project folder to edit files that aren't open."
             case .invalidEdit(let detail): return "The rename is inconsistent: \(detail)"
             case .moveNotSupported: return "Moving a file to another folder isn't supported."
+            case .deleteFailed(let detail): return detail
             }
         }
     }
@@ -56,6 +62,8 @@ struct IDEWorkspaceEditApplier {
                     result.failures[url] = Failure.invalidEdit("overlapping or inverted edits").localizedDescription
                 case .duplicateFileRenameSource(let url), .duplicateFileRenameTarget(let url):
                     result.failures[url] = Failure.invalidEdit("conflicting file renames").localizedDescription
+                case .duplicateFileDeletion(let url):
+                    result.failures[url] = Failure.invalidEdit("conflicting file deletions").localizedDescription
                 }
             }
             return result
@@ -83,14 +91,26 @@ struct IDEWorkspaceEditApplier {
             // A file whose edits failed is left where it is.
             guard result.failures[rename.from] == nil else { continue }
             do {
-                guard rename.from.deletingLastPathComponent().standardizedFileURL
-                        == rename.to.deletingLastPathComponent().standardizedFileURL else {
-                    throw Failure.moveNotSupported
+                let sameFolder = rename.from.deletingLastPathComponent().standardizedFileURL
+                    == rename.to.deletingLastPathComponent().standardizedFileURL
+                if sameFolder {
+                    try host.renameFile(from: rename.from, to: rename.to)
+                } else {
+                    try host.moveFile(from: rename.from, to: rename.to)
                 }
-                try host.renameFile(from: rename.from, to: rename.to)
                 result.renamedFiles.append(rename)
             } catch {
                 result.failures[rename.from] = error.localizedDescription
+            }
+        }
+
+        for url in edit.fileDeletions {
+            guard result.failures[url] == nil else { continue }
+            do {
+                try host.deleteFile(at: url)
+                result.deletedFiles.append(url)
+            } catch {
+                result.failures[url] = error.localizedDescription
             }
         }
         return result

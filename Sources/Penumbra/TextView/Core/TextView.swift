@@ -506,6 +506,22 @@ public struct MetalPerformanceStats: Sendable {
         textInputView.refreshGutterChrome()
     }
 
+    /// Icons shown in the gutter beside specific lines (e.g. run-test affordances).
+    public var gutterDecorations: [GutterDecoration] {
+        get { textInputView.gutterDecorations }
+        set { textInputView.gutterDecorations = newValue }
+    }
+
+    /// Called when the user clicks a gutter decoration; the argument is the 1-based line number.
+    public var gutterDecorationHandler: ((Int) -> Void)? {
+        get { textInputView.gutterDecorationHandler }
+        set { textInputView.gutterDecorationHandler = newValue }
+    }
+
+    public func setGutterDecorations(_ decorations: [GutterDecoration]) {
+        gutterDecorations = decorations
+    }
+
     /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
     /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
     /// simply take up zero height, so scrolling and hit-testing already skip them for free — with

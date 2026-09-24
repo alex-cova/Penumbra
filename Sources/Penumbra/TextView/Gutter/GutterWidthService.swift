@@ -30,6 +30,20 @@ final class GutterWidthService {
             }
         }
     }
+    var showGutterDecorations = false {
+        didSet {
+            if showGutterDecorations != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
+    var gutterDecorationColumnWidth: CGFloat = 16 {
+        didSet {
+            if gutterDecorationColumnWidth != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
     var foldingRibbonWidth: CGFloat = 9 {
         didSet {
             if foldingRibbonWidth != oldValue {
@@ -43,6 +57,9 @@ final class GutterWidthService {
         var width: CGFloat = 0
         if showLineNumbers {
             width += lineNumberWidth + gutterLeadingPadding + gutterTrailingPadding
+        }
+        if showGutterDecorations {
+            width += gutterDecorationColumnWidth
         }
         if showFoldingRibbon {
             width += foldingRibbonWidth

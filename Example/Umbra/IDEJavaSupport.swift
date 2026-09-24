@@ -63,10 +63,12 @@ final class IDEJavaSupport {
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
     let inlayHintProvider: JavaInlayHintProvider
-    /// Rename for classes, interfaces, enums, records, annotations, locals and parameters. Candidate
-    /// files come from a text scan of the project roots, which is always fresh and needs no index
-    /// (a `JavaUsageCandidateSource` such as the name index can replace it without other changes).
+    /// Rename for classes, interfaces, enums, records, annotations, locals and parameters.
     let renameProvider: JavaRenameProvider
+    /// Selection-based refactorings (extract variable, …).
+    let refactoringProvider: JavaRefactoringProvider
+    /// Discovered JUnit tests in test source roots.
+    let testIndex = JavaTestIndex()
     /// Reformats Java files (⌥⌘L) with the built-in formatter.
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
@@ -129,7 +131,10 @@ final class IDEJavaSupport {
             if oldValue == nil, gradleModel == nil { return }
             onGradleModelChanged?(gradleModel)
             let model = gradleModel
-            Task { [renameProvider] in await renameProvider.setGradleModel(model) }
+            Task { [renameProvider, refactoringProvider] in
+                await renameProvider.setGradleModel(model)
+                await refactoringProvider.setGradleModel(model)
+            }
         }
     }
     /// Called whenever a sync sets or clears ``gradleModel`` (the Go to File index labels files
@@ -162,6 +167,8 @@ final class IDEJavaSupport {
     /// A Gradle task run ended (finished, timed out or cancelled), with whatever output it
     /// produced, so the host can pull compiler errors out of it.
     @ObservationIgnored var onGradleTasksFinished: (@MainActor (_ tasks: [String], _ projectRoot: URL, _ result: GradleCommandResult) -> Void)?
+    /// When set, the finished Gradle run's XML reports are parsed into test results.
+    private(set) var pendingTestRunRequest: JavaTestRunRequest?
 
     init(
         gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL,
@@ -176,13 +183,58 @@ final class IDEJavaSupport {
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
-        renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: JavaTextScanCandidateSource())
+        let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
+        renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
+        refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
         gradleRunner = runner
         gradleExtractor = GradleProjectModelExtractor(runner: runner)
         Task { [weak self] in await self?.installCompilerResultHandler() }
+        Task { [overlayService, testIndex] in
+            await overlayService.setOnDocumentIndexed { _, url, text in
+                await testIndex.scheduleRescan(file: url, source: text)
+            }
+        }
+    }
+
+    func tests(for file: URL) async -> JavaTestClass? {
+        await testIndex.testClass(for: file)
+    }
+
+    func allTestClasses() async -> [JavaTestClass] {
+        await testIndex.allTestClasses()
+    }
+
+    func isTestSource(file: URL) async -> Bool {
+        await testIndex.isTestSource(file: file)
+    }
+
+    func runTests(scope: JavaTestRunScope) {
+        guard let url = projectRootURL else { return }
+        guard let request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradleModel) else { return }
+        pendingTestRunRequest = request
+        let args = JavaTestRunner.gradleArguments(for: request)
+        runGradleTasks([request.gradleTaskPath], extraArguments: args)
+    }
+
+    func takePendingTestRunRequest() -> JavaTestRunRequest? {
+        defer { pendingTestRunRequest = nil }
+        return pendingTestRunRequest
+    }
+
+    var hasPendingTestRun: Bool { pendingTestRunRequest != nil }
+
+    private func reindexTests(model: JavaGradleProjectModel) {
+        Task {
+            await testIndex.setGradleModel(model)
+            await testIndex.reindexAll(in: model.existingTestSourceDirectories)
+        }
+    }
+
+    private func clearTestIndex() {
+        Task { await testIndex.setGradleModel(nil) }
     }
 
     private func installCompilerResultHandler() async {
@@ -310,6 +362,7 @@ final class IDEJavaSupport {
         gradleBuildFilesChanged = false
         projectRootURL = url
         gradleModel = nil
+        clearTestIndex()
         let hadJars = !jarSources.isEmpty
         jarSources = []
         gradleConsole = IDEGradleConsoleLog()
@@ -392,12 +445,13 @@ final class IDEJavaSupport {
     /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
     /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
     /// first when the project has not been trusted yet.
-    func runGradleTasks(_ taskPaths: [String]) {
+    func runGradleTasks(_ taskPaths: [String], extraArguments: [String] = []) {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         guard !taskPaths.isEmpty else { return }
         guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
 
         gradleRunTask?.cancel()
+        let arguments = extraArguments.isEmpty ? ["--no-configuration-cache"] : extraArguments
         gradleRunTask = Task { [gradleRunner] in
             isRunningGradleTasks = true
             runningGradleTaskPaths = taskPaths
@@ -434,7 +488,7 @@ final class IDEJavaSupport {
                 let result = try await gradleRunner.run(
                     projectDirectory: url,
                     tasks: taskPaths,
-                    arguments: ["--no-configuration-cache"],
+                    arguments: arguments,
                     javaHome: javaHome,
                     timeout: timeout,
                     output: { line in
@@ -494,7 +548,10 @@ final class IDEJavaSupport {
         let searchRoots = nameIndexRoots
         Task { [findUsagesProvider] in await findUsagesProvider.setProjectRoots(searchRoots) }
         let renameRoots = nameIndexRoots
-        Task { [renameProvider] in await renameProvider.setRoots(renameRoots) }
+        Task { [renameProvider, refactoringProvider] in
+            await renameProvider.setRoots(renameRoots)
+            await refactoringProvider.setRoots(renameRoots)
+        }
         nameIndexTask = Task { [nameIndex] in
             for await _ in await nameIndex.build(roots: roots) {
                 guard isCurrent(generation) else { return }
@@ -629,6 +686,7 @@ final class IDEJavaSupport {
                 )
                 await applyGradleModel(
                     bootstrapModel,
+                    previousModel: nil,
                     generation: generation,
                     logToConsole: false,
                     paths: paths,
@@ -694,7 +752,14 @@ final class IDEJavaSupport {
                 }
 
                 gradleModel = model
-                await applyGradleModel(model, generation: generation, logToConsole: !silent, paths: paths, scheduler: scheduler)
+                await applyGradleModel(
+                    model,
+                    previousModel: previousModel,
+                    generation: generation,
+                    logToConsole: !silent,
+                    paths: paths,
+                    scheduler: scheduler
+                )
                 guard isCurrent(generation) else { return }
 
                 gradleSync = .synced(subprojects: model.subprojects.count, jars: model.classpathJars.count)
@@ -729,6 +794,7 @@ final class IDEJavaSupport {
 
     private func applyGradleModel(
         _ model: JavaGradleProjectModel,
+        previousModel: JavaGradleProjectModel?,
         generation: Int,
         logToConsole: Bool,
         paths: JavaIndexPaths,
@@ -737,15 +803,73 @@ final class IDEJavaSupport {
         await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
         guard isCurrent(generation) else { return }
 
-        buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+        let diff = JavaGradleProjectModel.diff(old: previousModel, new: model)
         let sourceTargets = model.sourceIndexTargets(paths: paths)
         let jarTargets = model.jarIndexTargets(paths: paths)
-        let totalTargets = sourceTargets.count + jarTargets.count
+        let shouldFullRebuild = previousModel == nil
+            || diff.shouldForceFullRebuild(totalSourceRoots: sourceTargets.count, totalJars: jarTargets.count)
+
+        if shouldFullRebuild {
+            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+            await indexAllTargets(sourceTargets + jarTargets, model: model, generation: generation, logToConsole: logToConsole, paths: paths, scheduler: scheduler)
+        } else if !diff.isEmpty {
+            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+            for directory in diff.removedSourceDirectories {
+                try? FileManager.default.removeItem(at: paths.projectSourcesShard(for: directory))
+            }
+            for jar in diff.removedJars {
+                try? FileManager.default.removeItem(at: paths.jarShard(jar))
+            }
+            let reindexDirs = diff.addedSourceDirectories + diff.changedSourceDirectories
+            let reindexSources = reindexDirs.map { directory in
+                (SourceRoot(directory: directory) as any JavaIndexableRoot, paths.projectSourcesShard(for: directory))
+            }
+            let reindexJars = diff.addedJars.map { jar in
+                (JarRoot(jarURL: jar, languageLevel: model.maxLanguageLevel ?? Int.max) as any JavaIndexableRoot, paths.jarShard(jar))
+            }
+            await indexAllTargets(reindexSources + reindexJars, model: model, generation: generation, logToConsole: logToConsole, paths: paths, scheduler: scheduler)
+            projectSources = sourceTargets.compactMap { target in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+            }
+            jarSources = jarTargets.compactMap { target in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
+            }
+        } else {
+            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+        }
+
+        guard isCurrent(generation) else { return }
+        if statusMessage?.hasPrefix("Indexing dependencies…") == true {
+            statusMessage = nil
+        }
+        await publishSources()
+        await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await findUsagesProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
+        reindexTests(model: model)
+        refreshCompilerDiagnostics()
+    }
+
+    private func indexAllTargets(
+        _ targets: [(root: any JavaIndexableRoot, shardURL: URL)],
+        model: JavaGradleProjectModel,
+        generation: Int,
+        logToConsole: Bool,
+        paths: JavaIndexPaths,
+        scheduler: JavaIndexScheduler
+    ) async {
+        let totalTargets = targets.count
         if logToConsole {
             gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
         }
         var completedTargets = 0
-        for await progress in await scheduler.index(sourceTargets + jarTargets) {
+        for await progress in await scheduler.index(targets) {
             guard isCurrent(generation) else { return }
             switch progress {
             case .allFinished:
@@ -780,6 +904,8 @@ final class IDEJavaSupport {
         }
         guard isCurrent(generation) else { return }
 
+        let sourceTargets = model.sourceIndexTargets(paths: paths)
+        let jarTargets = model.jarIndexTargets(paths: paths)
         projectSources = sourceTargets.compactMap { target in
             guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
             return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
@@ -788,18 +914,6 @@ final class IDEJavaSupport {
             guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
             return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
         }
-        if statusMessage?.hasPrefix("Indexing dependencies…") == true {
-            statusMessage = nil
-        }
-        await publishSources()
-        await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await findUsagesProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
-        await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
-        refreshCompilerDiagnostics()
     }
 
     /// After a build, annotation processors may have written (or rewritten) sources under the
@@ -972,6 +1086,7 @@ final class IDEJavaSupport {
             await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await renameProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await refactoringProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
     }
 

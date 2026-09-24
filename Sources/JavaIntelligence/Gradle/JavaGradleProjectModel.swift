@@ -303,6 +303,34 @@ extension JavaGradleProjectModel {
         return result
     }
 
+    /// Gradle task path for a source set, e.g. `:test` or `:app:integrationTest`.
+    public func gradleTaskPath(subproject: Subproject, sourceSet: SourceSet) -> String {
+        subproject.path == ":" ? ":\(sourceSet.name)" : "\(subproject.path):\(sourceSet.name)"
+    }
+
+    /// Gradle verification task for tests in `file`, or `nil` when the file is not in a source set.
+    public func gradleTaskPath(forFile file: URL) -> String? {
+        guard let match = sourceSet(containing: file) else { return nil }
+        return gradleTaskPath(subproject: match.subproject, sourceSet: match.sourceSet)
+    }
+
+    /// Every non-`main` source set directory that exists on disk (typically `src/test/java`, …).
+    public var existingTestSourceDirectories: [URL] {
+        var all: [URL] = []
+        var seen = Set<URL>()
+        for subproject in subprojects {
+            for sourceSet in subproject.sourceSets where sourceSet.name != "main" {
+                for directory in sourceSet.sourceDirs {
+                    let standardized = directory.standardizedFileURL
+                    guard FileManager.default.fileExists(atPath: standardized.path) else { continue }
+                    guard seen.insert(standardized).inserted else { continue }
+                    all.append(standardized)
+                }
+            }
+        }
+        return all.sorted { $0.path.count < $1.path.count }
+    }
+
     /// Every source set's directories that actually exist on disk, deduplicated, with any directory
     /// nested inside another one already kept dropped -- overlapping `SourceRoot`s would otherwise
     /// walk (and index) the same `.java` files twice.

@@ -14,6 +14,8 @@ public struct EditorIntelligenceServices {
     public var codeActionProvider: (any CodeActionProviding)?
     /// Language-aware rename behind ``EditorActionID/rename``.
     public var renameProvider: (any RenameProviding)?
+    /// Selection-based refactorings (extract variable, …).
+    public var refactoringProvider: (any RefactoringProviding)?
     /// Language-aware breadcrumbs, tried before the ones derived from ``symbolIndex``.
     public var breadcrumbProvider: (any BreadcrumbProviding)?
     /// Parameter-name hints drawn inline at call sites (see ``TextView/inlayHints``).
@@ -30,6 +32,7 @@ public struct EditorIntelligenceServices {
         signatureHelpProvider: (any SignatureHelpProviding)? = nil,
         codeActionProvider: (any CodeActionProviding)? = nil,
         renameProvider: (any RenameProviding)? = nil,
+        refactoringProvider: (any RefactoringProviding)? = nil,
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         inlayHintProvider: (any InlayHintProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
@@ -40,6 +43,7 @@ public struct EditorIntelligenceServices {
         self.signatureHelpProvider = signatureHelpProvider
         self.codeActionProvider = codeActionProvider
         self.renameProvider = renameProvider
+        self.refactoringProvider = refactoringProvider
         self.breadcrumbProvider = breadcrumbProvider
         self.inlayHintProvider = inlayHintProvider
         self.symbolIndex = symbolIndex
@@ -83,6 +87,7 @@ public final class EditorIntelligenceController {
     private let signatureHelpProvider: (any SignatureHelpProviding)?
     private let codeActionProvider: (any CodeActionProviding)?
     private let renameProvider: (any RenameProviding)?
+    private let refactoringProvider: (any RefactoringProviding)?
     private let breadcrumbProvider: (any BreadcrumbProviding)?
     private var inlayHintProvider: (any InlayHintProviding)?
     private var inlayHintTask: Task<Void, Never>?
@@ -168,6 +173,7 @@ public final class EditorIntelligenceController {
         self.signatureHelpProvider = services.signatureHelpProvider
         self.codeActionProvider = services.codeActionProvider
         self.renameProvider = services.renameProvider
+        self.refactoringProvider = services.refactoringProvider
         self.breadcrumbProvider = services.breadcrumbProvider
         self.inlayHintProvider = services.inlayHintProvider
         self.symbolIndex = services.symbolIndex
@@ -313,15 +319,145 @@ public final class EditorIntelligenceController {
     public var onRequestRename: ((_ target: RenameTarget, _ completion: @escaping (String?) -> Void) -> Void)?
     /// Shows the preview of `plan` (changes grouped by file, ambiguous entries unchecked…). The
     /// host calls `apply` with the ``WorkspaceEdit`` the user confirmed (usually
-    /// ``RenamePlan/workspaceEdit(including:)``) and gets the outcome back. `apply` runs
+    /// ``WorkspaceEditPlan/workspaceEdit(including:)``) and gets the outcome back. `apply` runs
     /// ``onApplyWorkspaceEdit``, or, when that is unset, edits only the current document.
     public var onPresentRenamePlan: ((_ plan: RenamePlan, _ apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) -> Void)?
+    /// Same as ``onPresentRenamePlan`` for non-rename workspace edit plans.
+    public var onPresentWorkspaceEditPlan: ((_ plan: WorkspaceEditPlan, _ apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) -> Void)?
     /// Applies a workspace edit that touches files beyond the current text view (open documents
     /// and files on disk). Without it, only edits to the current document are applied.
     public var onApplyWorkspaceEdit: ((WorkspaceEdit) async -> WorkspaceEditApplyResult)?
     /// Told why a rename couldn't proceed (the provider's blocking error, or a failure). Left
     /// `nil`, the message is shown as a short hint at the caret.
     public var onRenameFailed: ((String) -> Void)?
+    /// Name prompt for refactorings that need a new identifier. Pass the suggested name and a
+    /// validate closure; call `completion` once with the entered name or `nil` when cancelled.
+    public var onRequestRefactoringName: ((
+        _ title: String, _ suggestedName: String, _ validate: @escaping @Sendable (String) -> String?,
+        _ completion: @escaping (String?) -> Void
+    ) -> Void)?
+    /// Multi-field prompt for refactorings whose ``RefactoringDescriptor/parameterKeys`` are not
+    /// the single `name` key (e.g. Change Method Signature). Call `completion` with the entered
+    /// values, or `nil` when cancelled.
+    public var onRequestRefactoringParameters: ((
+        _ descriptor: RefactoringDescriptor, _ completion: @escaping ([String: String]?) -> Void
+    ) -> Void)?
+
+    /// Lists refactorings available at the current selection.
+    public func availableRefactorings() async -> [RefactoringDescriptor] {
+        guard let refactoringProvider, let document = liveDocument() else { return [] }
+        let context = RefactoringContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            workspace: workspace,
+            index: symbolIndex
+        )
+        return await refactoringProvider.availableRefactorings(context)
+    }
+
+    /// Runs a refactoring: optional name prompt → plan preview → apply.
+    @discardableResult
+    public func performRefactoring(_ id: RefactoringID) -> Bool {
+        guard let refactoringProvider else {
+            showTransientHint("Refactoring isn't available for this file")
+            return true
+        }
+        guard let document = liveDocument() else { return false }
+        let context = RefactoringContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            workspace: workspace,
+            index: symbolIndex
+        )
+        Task { [weak self] in
+            guard let self else { return }
+            let available = await refactoringProvider.availableRefactorings(context)
+            guard let descriptor = available.first(where: { $0.id == id }) else {
+                self.showTransientHint("That refactoring isn't available here")
+                return
+            }
+            if descriptor.parameterKeys == ["name"] {
+                guard let prompt = self.onRequestRefactoringName else {
+                    self.showTransientHint("Refactoring isn't set up in this app")
+                    return
+                }
+                let suggested = descriptor.suggestedParameters["name"] ?? "result"
+                prompt(descriptor.title, suggested, RenameTarget.validateIdentifier) { [weak self] name in
+                    guard let self, let name else { return }
+                    self.planRefactoring(
+                        provider: refactoringProvider, context: context, id: id, parameters: ["name": name]
+                    )
+                }
+            } else if descriptor.parameterKeys == ["targetPackage"] {
+                guard let prompt = self.onRequestRefactoringName else {
+                    self.showTransientHint("Refactoring isn't set up in this app")
+                    return
+                }
+                let suggested = descriptor.suggestedParameters["targetPackage"] ?? ""
+                prompt(descriptor.title, suggested, RenameTarget.validatePackageName) { [weak self] package in
+                    guard let self else { return }
+                    self.planRefactoring(
+                        provider: refactoringProvider, context: context, id: id,
+                        parameters: ["targetPackage": package ?? ""]
+                    )
+                }
+            } else if !descriptor.parameterKeys.isEmpty {
+                guard let prompt = self.onRequestRefactoringParameters else {
+                    self.showTransientHint("Refactoring isn't set up in this app")
+                    return
+                }
+                prompt(descriptor) { [weak self] parameters in
+                    guard let self, let parameters else { return }
+                    self.planRefactoring(
+                        provider: refactoringProvider, context: context, id: id, parameters: parameters
+                    )
+                }
+            } else {
+                self.planRefactoring(provider: refactoringProvider, context: context, id: id, parameters: [:])
+            }
+        }
+        return true
+    }
+
+    private func planRefactoring(
+        provider: any RefactoringProviding, context: RefactoringContext, id: RefactoringID, parameters: [String: String]
+    ) {
+        Task { [weak self] in
+            let plan: WorkspaceEditPlan
+            do {
+                plan = try await provider.plan(id, context: context, parameters: parameters)
+            } catch {
+                self?.reportRenameFailure(error.localizedDescription)
+                return
+            }
+            guard let self else { return }
+            if let blocking = plan.blockingError {
+                self.reportRenameFailure(blocking)
+                return
+            }
+            guard !plan.entries.isEmpty || !plan.fileRenames.isEmpty || !plan.fileDeletions.isEmpty else {
+                self.reportRenameFailure("Nothing to change")
+                return
+            }
+            self.presentWorkspaceEditPlan(plan)
+        }
+    }
+
+    private func presentWorkspaceEditPlan(_ plan: WorkspaceEditPlan) {
+        let apply: (WorkspaceEdit) async -> WorkspaceEditApplyResult = { [weak self] edit in
+            guard let self else { return WorkspaceEditApplyResult() }
+            return await self.applyWorkspaceEdit(edit)
+        }
+        if let present = onPresentWorkspaceEditPlan {
+            present(plan, apply)
+        } else if let present = onPresentRenamePlan {
+            present(plan, apply)
+        } else {
+            showTransientHint("Refactoring isn't set up in this app")
+        }
+    }
 
     /// Runs rename at the caret: `prepareRename` → name prompt → `rename(to:)` → plan preview.
     /// Returns `false` when there is no document to rename in.
@@ -375,14 +511,7 @@ public final class EditorIntelligenceController {
                 self.reportRenameFailure("Nothing to rename")
                 return
             }
-            guard let present = self.onPresentRenamePlan else {
-                self.showTransientHint("Rename isn't set up in this app")
-                return
-            }
-            present(plan) { [weak self] edit in
-                guard let self else { return WorkspaceEditApplyResult() }
-                return await self.applyWorkspaceEdit(edit)
-            }
+            self.presentWorkspaceEditPlan(plan)
         }
     }
 
@@ -454,6 +583,28 @@ public final class EditorIntelligenceController {
             return true
         case .rename:
             return rename()
+        case .extractVariable:
+            return performRefactoring(.extractVariable)
+        case .extractField:
+            return performRefactoring(.extractField)
+        case .extractConstant:
+            return performRefactoring(.extractConstant)
+        case .extractMethod:
+            return performRefactoring(.extractMethod)
+        case .inlineVariable:
+            return performRefactoring(.inlineVariable)
+        case .inlineMethod:
+            return performRefactoring(.inlineMethod)
+        case .changeSignature:
+            return performRefactoring(.changeSignature)
+        case .encapsulateField:
+            return performRefactoring(.encapsulateField)
+        case .generateAccessors:
+            return performRefactoring(.generateAccessors)
+        case .moveClass:
+            return performRefactoring(.moveClass)
+        case .safeDelete:
+            return performRefactoring(.safeDelete)
         case .findInFiles:
             guard let onRequestProjectSearch else { return false }
             return onRequestProjectSearch()

@@ -35,78 +35,16 @@ public struct RenameTarget: Sendable {
         }
         return nil
     }
-}
 
-/// One occurrence a rename would change.
-public struct RenamePlanEntry: Identifiable, Sendable {
-    public let id: UUID
-    public let url: URL
-    public let range: TextRange
-    public let oldText: String
-    public let newText: String
-    /// The full text of the line, for the preview.
-    public let lineText: String
-    /// The provider could not pin this occurrence to the renamed symbol; shown unchecked.
-    public let isAmbiguous: Bool
-    /// In a file that must not be edited (generated sources, JARs); shown disabled.
-    public let isReadOnly: Bool
-
-    public init(
-        id: UUID = UUID(),
-        url: URL,
-        range: TextRange,
-        oldText: String,
-        newText: String,
-        lineText: String,
-        isAmbiguous: Bool = false,
-        isReadOnly: Bool = false
-    ) {
-        self.id = id
-        self.url = url
-        self.range = range
-        self.oldText = oldText
-        self.newText = newText
-        self.lineText = lineText
-        self.isAmbiguous = isAmbiguous
-        self.isReadOnly = isReadOnly
-    }
-
-    /// Whether the entry is applied unless the user changes it.
-    public var isSelectedByDefault: Bool { !isAmbiguous && !isReadOnly }
-}
-
-/// What a rename would do, for preview before anything is edited.
-public struct RenamePlan: Sendable {
-    public var entries: [RenamePlanEntry]
-    public var fileRenames: [(from: URL, to: URL)]
-    public var warnings: [String]
-    /// Set when the rename must not proceed ("overrides a library method", invalid name…).
-    public var blockingError: String?
-
-    public init(
-        entries: [RenamePlanEntry] = [],
-        fileRenames: [(from: URL, to: URL)] = [],
-        warnings: [String] = [],
-        blockingError: String? = nil
-    ) {
-        self.entries = entries
-        self.fileRenames = fileRenames
-        self.warnings = warnings
-        self.blockingError = blockingError
-    }
-
-    public var isBlocked: Bool { blockingError != nil }
-
-    /// The workspace edit for the entries in `selection` (default: those selected by default).
-    /// Read-only entries are never included.
-    public func workspaceEdit(including selection: Set<RenamePlanEntry.ID>? = nil) -> WorkspaceEdit {
-        var changes: [URL: [TextEdit]] = [:]
-        for entry in entries where !entry.isReadOnly {
-            let included = selection.map { $0.contains(entry.id) } ?? entry.isSelectedByDefault
-            guard included else { continue }
-            changes[entry.url, default: []].append(TextEdit(range: entry.range, replacement: entry.newText))
+    /// Java package name: empty (default package) or dot-separated identifiers.
+    @Sendable
+    public static func validatePackageName(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        for segment in trimmed.split(separator: ".") {
+            if let problem = validateIdentifier(String(segment)) { return problem }
         }
-        return WorkspaceEdit(changes: changes, fileRenames: fileRenames, warnings: warnings)
+        return nil
     }
 }
 
@@ -116,6 +54,6 @@ public protocol RenameProviding: Sendable {
     /// The symbol at the context's caret, or `nil` when nothing there can be renamed.
     func prepareRename(_ context: NavigationContext) async -> RenameTarget?
     /// Everything a rename to `newName` would change. Problems that forbid the rename are reported
-    /// through ``RenamePlan/blockingError``; throw only for unexpected failures.
+    /// through ``WorkspaceEditPlan/blockingError``; throw only for unexpected failures.
     func rename(_ context: NavigationContext, to newName: String) async throws -> RenamePlan
 }

@@ -1,34 +1,34 @@
 import EditorIntelligence
 import SwiftUI
 
-/// State behind the rename preview sheet.
+/// State behind the workspace edit preview sheet.
 @MainActor
 @Observable
-final class IDERenamePreviewModel: Identifiable {
+final class IDEWorkspaceEditPreviewModel: Identifiable {
     let id = UUID()
-    let plan: RenamePlan
-    var selection: Set<RenamePlanEntry.ID>
+    let plan: WorkspaceEditPlan
+    var selection: Set<WorkspaceEditPlanEntry.ID>
     private(set) var isApplying = false
     private(set) var errorSummary: String?
     private let applyHandler: (WorkspaceEdit) async -> WorkspaceEditApplyResult
 
-    init(plan: RenamePlan, apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) {
+    init(plan: WorkspaceEditPlan, apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) {
         self.plan = plan
         self.selection = Set(plan.entries.filter(\.isSelectedByDefault).map(\.id))
         self.applyHandler = apply
     }
 
-    var groups: [(url: URL, entries: [RenamePlanEntry])] {
+    var groups: [(url: URL, entries: [WorkspaceEditPlanEntry])] {
         Dictionary(grouping: plan.entries, by: \.url)
             .map { (url: $0.key, entries: $0.value.sorted { ($0.range.start.line, $0.range.start.column) < ($1.range.start.line, $1.range.start.column) }) }
             .sorted { $0.url.path < $1.url.path }
     }
 
     var canApply: Bool {
-        !isApplying && (!selection.isEmpty || !plan.fileRenames.isEmpty)
+        !isApplying && (!selection.isEmpty || !plan.fileRenames.isEmpty || !plan.fileDeletions.isEmpty)
     }
 
-    func toggle(_ entry: RenamePlanEntry) {
+    func toggle(_ entry: WorkspaceEditPlanEntry) {
         guard !entry.isReadOnly else { return }
         if selection.contains(entry.id) {
             selection.remove(entry.id)
@@ -37,8 +37,6 @@ final class IDERenamePreviewModel: Identifiable {
         }
     }
 
-    /// Applies the checked entries. Returns `true` when everything succeeded and the sheet can
-    /// close; otherwise the failures are listed in ``errorSummary``.
     func apply() async -> Bool {
         isApplying = true
         errorSummary = nil
@@ -53,11 +51,12 @@ final class IDERenamePreviewModel: Identifiable {
     }
 }
 
-/// Lists what a rename would change, grouped by file, before anything is edited. Ambiguous
-/// occurrences start unchecked, read-only ones can't be checked.
-struct IDERenamePreviewSheet: View {
+typealias IDERenamePreviewModel = IDEWorkspaceEditPreviewModel
+
+/// Lists what a workspace edit would change, grouped by file, before anything is edited.
+struct IDEWorkspaceEditPreviewSheet: View {
     @Environment(IDEWorkspace.self) private var workspace
-    let model: IDERenamePreviewModel
+    let model: IDEWorkspaceEditPreviewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
@@ -75,15 +74,22 @@ struct IDERenamePreviewSheet: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(model.plan.fileRenames.indices, id: \.self) { index in
                         let rename = model.plan.fileRenames[index]
-                        Label("Rename file \(rename.from.lastPathComponent) to \(rename.to.lastPathComponent)", systemImage: "doc.badge.gearshape")
+                        Label("Move file \(rename.from.lastPathComponent) to \(rename.to.path)", systemImage: "doc.badge.gearshape")
                             .font(IDEAppearance.Typography.body)
+                            .padding(.horizontal, IDEAppearance.Spacing.md)
+                            .padding(.vertical, 4)
+                    }
+                    ForEach(model.plan.fileDeletions, id: \.path) { url in
+                        Label("Delete file \(url.lastPathComponent)", systemImage: "trash")
+                            .font(IDEAppearance.Typography.body)
+                            .foregroundStyle(IDEAppearance.ColorToken.error)
                             .padding(.horizontal, IDEAppearance.Spacing.md)
                             .padding(.vertical, 4)
                     }
                     ForEach(model.groups, id: \.url) { group in
                         fileHeader(group.url, count: group.entries.count)
                         ForEach(group.entries) { entry in
-                            IDERenamePreviewRow(entry: entry, isOn: model.selection.contains(entry.id)) {
+                            IDEWorkspaceEditPreviewRow(entry: entry, isOn: model.selection.contains(entry.id)) {
                                 model.toggle(entry)
                             }
                         }
@@ -103,11 +109,11 @@ struct IDERenamePreviewSheet: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Spacer()
-                Button("Cancel", role: .cancel) { workspace.dismissRenamePreview() }
+                Button("Cancel", role: .cancel) { workspace.dismissWorkspaceEditPreview() }
                     .keyboardShortcut(.cancelAction)
                 Button("Apply") {
                     Task {
-                        if await model.apply() { workspace.dismissRenamePreview() }
+                        if await model.apply() { workspace.dismissWorkspaceEditPreview() }
                     }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -119,7 +125,7 @@ struct IDERenamePreviewSheet: View {
     }
 
     private var header: some View {
-        Text("Rename Preview")
+        Text(model.plan.title ?? "Rename Preview")
             .font(IDEAppearance.Typography.sectionHeader)
             .foregroundStyle(IDEAppearance.ColorToken.foreground)
     }
@@ -150,8 +156,10 @@ struct IDERenamePreviewSheet: View {
     }
 }
 
-private struct IDERenamePreviewRow: View {
-    let entry: RenamePlanEntry
+typealias IDERenamePreviewSheet = IDEWorkspaceEditPreviewSheet
+
+private struct IDEWorkspaceEditPreviewRow: View {
+    let entry: WorkspaceEditPlanEntry
     let isOn: Bool
     let onToggle: () -> Void
 
@@ -165,6 +173,12 @@ private struct IDERenamePreviewRow: View {
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(minWidth: 32, alignment: .trailing)
+            if let description = entry.description {
+                Text(description)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(minWidth: 88, alignment: .leading)
+            }
             Text(highlightedLine)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -190,13 +204,15 @@ private struct IDERenamePreviewRow: View {
         .accessibilityLabel("Line \(entry.range.start.line + 1): \(entry.lineText.trimmingCharacters(in: .whitespaces))")
     }
 
-    /// The line with the old text bolded at the match.
     private var highlightedLine: AttributedString {
         let line = entry.lineText.replacingOccurrences(of: "\t", with: "    ")
         var text = AttributedString(line)
-        if let range = text.range(of: entry.oldText) {
+        if !entry.oldText.isEmpty, let range = text.range(of: entry.oldText) {
             text[range].font = IDEAppearance.Typography.monoSmall.bold()
             text[range].foregroundColor = IDEAppearance.ColorToken.accent
+        } else if !entry.newText.isEmpty {
+            text.font = IDEAppearance.Typography.monoSmall.bold()
+            text.foregroundColor = IDEAppearance.ColorToken.accent
         }
         return text
     }

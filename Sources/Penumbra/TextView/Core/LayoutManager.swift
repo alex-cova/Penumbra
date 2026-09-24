@@ -203,6 +203,17 @@ final class LayoutManager {
     private let gutterSelectionBackgroundView = UIView()
     private let lineSelectionBackgroundView = UIView()
     private let foldRibbonView = FoldRibbonView()
+    private let gutterDecorationView = GutterDecorationView()
+    var gutterDecorations: [GutterDecoration] = [] {
+        didSet {
+            gutterDecorationView.decorations = gutterDecorations
+            gutterWidthService.showGutterDecorations = !gutterDecorations.isEmpty
+            setNeedsLayout()
+        }
+    }
+    var gutterDecorationHandler: ((Int) -> Void)? {
+        didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
+    }
     let methodSeparatorView = MethodSeparatorView()
     var showMethodSeparators = false {
         didSet {
@@ -285,6 +296,7 @@ final class LayoutManager {
         self.gutterSelectionBackgroundView.isUserInteractionEnabled = false
         self.lineSelectionBackgroundView.isUserInteractionEnabled = false
         self.foldRibbonView.lineManager = lineManager
+        self.gutterDecorationView.lineManager = lineManager
         self.methodSeparatorView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
@@ -654,15 +666,24 @@ extension LayoutManager {
         gutterContainerView.frame = CGRect(x: viewport.minX, y: 0, width: totalGutterWidth, height: contentSize.height)
         gutterBackgroundView.frame = CGRect(x: 0, y: viewport.minY, width: totalGutterWidth, height: viewport.height)
         lineNumbersContainerView.frame = CGRect(x: 0, y: 0, width: totalGutterWidth, height: contentSize.height)
+        let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
+        if gutterWidthService.showGutterDecorations {
+            gutterDecorationView.frame = CGRect(x: 0, y: 0, width: decorationWidth, height: contentSize.height)
+            gutterDecorationView.textContainerInsetTop = textContainerInset.top
+        }
+        var interactive: CGRect?
         if showFoldingRibbon {
             let ribbonWidth = gutterWidthService.foldingRibbonWidth
             let ribbonFrame = CGRect(x: totalGutterWidth - ribbonWidth, y: 0, width: ribbonWidth, height: contentSize.height)
             foldRibbonView.frame = ribbonFrame
             foldRibbonView.textContainerInsetTop = textContainerInset.top
-            gutterContainerView.interactiveRect = ribbonFrame
-        } else {
-            gutterContainerView.interactiveRect = nil
+            interactive = ribbonFrame
         }
+        if gutterWidthService.showGutterDecorations {
+            let decorationFrame = CGRect(x: 0, y: 0, width: decorationWidth, height: contentSize.height)
+            interactive = interactive.map { $0.union(decorationFrame) } ?? decorationFrame
+        }
+        gutterContainerView.interactiveRect = interactive
     }
 
     private func layoutLineSelection() {
@@ -898,7 +919,8 @@ extension LayoutManager {
         }
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
         let fontLineHeight = theme.lineNumberFont.lineHeight
-        let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding
+        let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
+        let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
         var yPosition = textContainerInset.top + line.yPosition
         if lineController.numberOfLineFragments > 1 {
             // There are more than one line fragments, so we align the line number at the top.
@@ -1118,6 +1140,7 @@ extension LayoutManager {
         gutterSelectionBackgroundView.removeFromSuperview()
         lineNumbersContainerView.removeFromSuperview()
         foldRibbonView.removeFromSuperview()
+        gutterDecorationView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
         // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
         // views (which paint the glyphs). When Metal is active it is a viewport-sized overlay on
@@ -1138,6 +1161,7 @@ extension LayoutManager {
         gutterParentView?.addSubview(gutterContainerView)
         gutterContainerView.addSubview(gutterBackgroundView)
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
+        gutterContainerView.addSubview(gutterDecorationView)
         gutterContainerView.addSubview(lineNumbersContainerView)
         gutterContainerView.addSubview(foldRibbonView)
     }
@@ -1168,6 +1192,7 @@ extension LayoutManager {
         gutterBackgroundView.isHidden = !showLineNumbers
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
+        gutterDecorationView.isHidden = gutterDecorations.isEmpty
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing

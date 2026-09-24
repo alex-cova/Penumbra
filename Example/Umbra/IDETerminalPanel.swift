@@ -408,6 +408,12 @@ struct IDETerminalPanel: View {
                         .allowsHitTesting(workspace.isUsagesSelected)
                 }
 
+                if workspace.showsTestResultsTab {
+                    IDETestResultsPanel()
+                        .opacity(workspace.isTestResultsSelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isTestResultsSelected)
+                }
+
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
                         .opacity(workspace.isSourceControlSelected ? 1 : 0)

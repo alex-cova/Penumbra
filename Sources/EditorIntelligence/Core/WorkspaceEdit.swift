@@ -10,21 +10,25 @@ public struct WorkspaceEdit: Sendable {
     public var changes: [URL: [TextEdit]]
     /// File renames to perform after the text edits, in order. Edits address the old URLs.
     public var fileRenames: [(from: URL, to: URL)]
+    /// Files to delete after text edits and renames (e.g. safe delete of a top-level class).
+    public var fileDeletions: [URL]
     /// Non-fatal notes for the user (name conflicts, skipped read-only files).
     public var warnings: [String]
 
     public init(
         changes: [URL: [TextEdit]] = [:],
         fileRenames: [(from: URL, to: URL)] = [],
+        fileDeletions: [URL] = [],
         warnings: [String] = []
     ) {
         self.changes = changes
         self.fileRenames = fileRenames
+        self.fileDeletions = fileDeletions
         self.warnings = warnings
     }
 
     public var isEmpty: Bool {
-        fileRenames.isEmpty && changes.values.allSatisfy(\.isEmpty)
+        fileRenames.isEmpty && fileDeletions.isEmpty && changes.values.allSatisfy(\.isEmpty)
     }
 
     public var editCount: Int {
@@ -55,6 +59,7 @@ public struct WorkspaceEdit: Sendable {
         case invalidRange(url: URL, range: TextRange)
         case duplicateFileRenameSource(URL)
         case duplicateFileRenameTarget(URL)
+        case duplicateFileDeletion(URL)
     }
 
     /// Checks that no two edits in a file overlap, no range is inverted, and file renames don't
@@ -86,6 +91,12 @@ public struct WorkspaceEdit: Sendable {
             }
             if !targets.insert(rename.to.standardizedFileURL).inserted {
                 issues.append(.duplicateFileRenameTarget(rename.to))
+            }
+        }
+        var deletions = Set<URL>()
+        for url in fileDeletions {
+            if !deletions.insert(url.standardizedFileURL).inserted {
+                issues.append(.duplicateFileDeletion(url))
             }
         }
         return issues
@@ -166,15 +177,18 @@ public struct WorkspaceEdit: Sendable {
 public struct WorkspaceEditApplyResult: Sendable {
     public var appliedFiles: [URL]
     public var renamedFiles: [(from: URL, to: URL)]
+    public var deletedFiles: [URL]
     public var failures: [URL: String]
 
     public init(
         appliedFiles: [URL] = [],
         renamedFiles: [(from: URL, to: URL)] = [],
+        deletedFiles: [URL] = [],
         failures: [URL: String] = [:]
     ) {
         self.appliedFiles = appliedFiles
         self.renamedFiles = renamedFiles
+        self.deletedFiles = deletedFiles
         self.failures = failures
     }
 

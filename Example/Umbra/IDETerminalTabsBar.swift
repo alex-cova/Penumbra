@@ -52,6 +52,15 @@ struct IDETerminalTabsBar: View {
                         onSelect: { workspace.selectUsagesTab() }
                     )
                 }
+                if workspace.showsTestResultsTab {
+                    IDETestResultsTabItem(
+                        title: workspace.testResults.isRunning
+                            ? "Tests · …"
+                            : "Tests · \(workspace.testResults.passedCount)/\(workspace.testResults.passedCount + workspace.testResults.failedCount + workspace.testResults.skippedCount)",
+                        isSelected: workspace.isTestResultsSelected,
+                        onSelect: { workspace.selectTestResultsTab() }
+                    )
+                }
                 if workspace.showsSourceControlTab {
                     IDESourceControlTabItem(
                         branch: workspace.gitStatus.currentBranch,

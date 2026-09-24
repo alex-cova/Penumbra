@@ -1639,6 +1639,16 @@ final class TextInputView: UIView, UITextInput {
         setNeedsLayout()
     }
 
+    var gutterDecorations: [GutterDecoration] {
+        get { layoutManager.gutterDecorations }
+        set { layoutManager.gutterDecorations = newValue }
+    }
+
+    var gutterDecorationHandler: ((Int) -> Void)? {
+        get { layoutManager.gutterDecorationHandler }
+        set { layoutManager.gutterDecorationHandler = newValue }
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if hasPendingFullLayout && window != nil {

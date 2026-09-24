@@ -18,6 +18,9 @@ public actor JavaOverlayService {
     private var lastIndexedVersion: [DocumentID: Int] = [:]
     private var fileStubsByDocument: [DocumentID: JavaSourceFileStubs] = [:]
     private var workspaceEventTask: Task<Void, Never>?
+    /// Called after a document's overlay stubs are rebuilt. Host apps (Umbra) use this to refresh
+    /// auxiliary indexes such as JUnit test discovery.
+    public var onDocumentIndexed: (@Sendable (_ document: Document, _ url: URL, _ text: String) async -> Void)?
 
     public init(index: JavaIndex, debounceMilliseconds: UInt64 = 300) {
         self.index = index
@@ -45,6 +48,10 @@ public actor JavaOverlayService {
     /// least once (or if it was never a Java document).
     public func fileStubs(for documentID: DocumentID) -> JavaSourceFileStubs? {
         fileStubsByDocument[documentID]
+    }
+
+    public func setOnDocumentIndexed(_ handler: (@Sendable (Document, URL, String) async -> Void)?) {
+        onDocumentIndexed = handler
     }
 
     // MARK: - Event handling
@@ -90,6 +97,9 @@ public actor JavaOverlayService {
         fileStubsByDocument[document.id] = fileStubs
         lastIndexedVersion[document.id] = document.version
         await applyDelta(previousNames: previousNames, for: document.id)
+        if let onDocumentIndexed {
+            await onDocumentIndexed(document, url, document.text)
+        }
     }
 
     private func removeDocument(_ documentID: DocumentID) async {

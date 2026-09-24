@@ -51,6 +51,7 @@ final class IDEIntelligenceServices {
             signatureHelpProvider: javaSupport.completionProvider,
             codeActionProvider: javaSupport.codeActionProvider,
             renameProvider: javaSupport.renameProvider,
+            refactoringProvider: javaSupport.refactoringProvider,
             breadcrumbProvider: javaSupport.breadcrumbProvider,
             inlayHintProvider: javaSupport.inlayHintProvider,
             symbolIndex: symbolIndex,

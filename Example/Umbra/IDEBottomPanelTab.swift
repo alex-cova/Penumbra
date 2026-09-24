@@ -10,4 +10,6 @@ enum IDEBottomPanelTab: Hashable {
     case typeHierarchy
     /// The results of the last Find Usages.
     case usages
+    /// The results of the last test run.
+    case testResults
 }

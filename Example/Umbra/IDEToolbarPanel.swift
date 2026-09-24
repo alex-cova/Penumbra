@@ -41,6 +41,7 @@ struct IDEToolbarPanel: View {
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
                 isGradleProject: workspace.javaSupport.isGradleProject,
                 isJavaRunnable: workspace.javaFileCanRun,
+                isJavaTestable: workspace.javaFileCanTest,
                 javaRunHelp: workspace.javaRunHelp,
                 isHTTPFile: workspace.statusLanguage == "http",
                 isHTTPSendable: workspace.httpFileCanSend,
@@ -49,6 +50,7 @@ struct IDEToolbarPanel: View {
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
                 buildGradle: workspace.buildGradleProject,
                 runJava: workspace.runActiveJava,
+                runJavaTests: workspace.runActiveJavaTests,
                 sendHTTPRequest: workspace.sendActiveHTTPRequest,
                 toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
@@ -194,6 +196,7 @@ private struct IDEToolbarActionCluster: View {
     let isMarkdownPreviewVisible: Bool
     let isGradleProject: Bool
     let isJavaRunnable: Bool
+    let isJavaTestable: Bool
     let javaRunHelp: String
     let isHTTPFile: Bool
     let isHTTPSendable: Bool
@@ -202,6 +205,7 @@ private struct IDEToolbarActionCluster: View {
     let toggleMarkdownPreview: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
+    let runJavaTests: () -> Void
     let sendHTTPRequest: () -> Void
     let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
@@ -245,6 +249,14 @@ private struct IDEToolbarActionCluster: View {
                     tint: IDEAppearance.ColorToken.run,
                     help: javaRunHelp,
                     action: runJava
+                )
+            }
+
+            if isJavaTestable {
+                IDEToolbarIconButton(
+                    systemName: "flask",
+                    help: "Run Tests",
+                    action: runJavaTests
                 )
             }
 

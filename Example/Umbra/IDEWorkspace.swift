@@ -91,6 +91,8 @@ public final class IDEWorkspace {
     let typeHierarchy = IDETypeHierarchyStore()
     /// The Usages tab's content (Find Usages results); empty until a search runs.
     let usages = IDEUsagesStore()
+    /// The Test Results tab's content; empty until a test run finishes.
+    let testResults = IDETestResultsStore()
     private var nameIndexOverlayTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
@@ -119,7 +121,10 @@ public final class IDEWorkspace {
     /// True when the active editor is a Java file with `public static void main` (either modifier
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
     var javaFileCanRun = false
+    /// True when the active editor is a Java test source file with discovered tests.
+    var javaFileCanTest = false
     private var javaRunFileURL: URL?
+    private var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
@@ -130,9 +135,15 @@ public final class IDEWorkspace {
     private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
-    /// The rename being previewed; the rename preview sheet shows while set.
-    var renamePreview: IDERenamePreviewModel?
+    /// The workspace edit being previewed (rename, extract variable, …).
+    var workspaceEditPreview: IDEWorkspaceEditPreviewModel?
+    var renamePreview: IDEWorkspaceEditPreviewModel? {
+        get { workspaceEditPreview }
+        set { workspaceEditPreview = newValue }
+    }
     @ObservationIgnored private let renamePrompt = IDERenamePrompt()
+    @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
+    @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
     private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
@@ -195,6 +206,11 @@ public final class IDEWorkspace {
         set { setBottomTab(.usages, selected: newValue) }
     }
     var showsUsagesTab: Bool { usages.hasContent }
+    var isTestResultsSelected: Bool {
+        get { selectedBottomTab == .testResults }
+        set { setBottomTab(.testResults, selected: newValue) }
+    }
+    var showsTestResultsTab: Bool { testResults.hasContent }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
 
@@ -273,7 +289,8 @@ public final class IDEWorkspace {
             self?.applyCompilerDiagnostics(diagnostics, for: url)
         }
         intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] tasks, root, result in
-            self?.applyGradleBuildOutput(result, projectRoot: root)
+            self?.applyGradleBuildOutput(result, projectRoot: root, tasks: tasks)
+            self?.applyGradleTestOutput(tasks: tasks, projectRoot: root, result: result)
             self?.continueAfterClassesBuild(tasks: tasks, exitCode: result.exitCode)
         }
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
@@ -332,6 +349,11 @@ public final class IDEWorkspace {
                 }
             }
             await intelligenceServices.javaSupport.renameProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.refactoringProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
@@ -503,27 +525,97 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.rename)
     }
 
-    private func presentRenamePreview(
-        _ plan: RenamePlan,
+    /// Extracts the selected expression into a local variable (⌥⌘V in the IntelliJ keymap).
+    func extractVariable() {
+        _ = host(for: workbench.activePane.id).textView.perform(.extractVariable)
+    }
+
+    /// Extracts the selected expression into an instance field (⌥⇧⌘F).
+    func extractField() {
+        _ = host(for: workbench.activePane.id).textView.perform(.extractField)
+    }
+
+    /// Extracts the selected expression into a static final constant (⌥⌘C).
+    func extractConstant() {
+        _ = host(for: workbench.activePane.id).textView.perform(.extractConstant)
+    }
+
+    /// Extracts the selection into a new private method (⌥⌘M).
+    func extractMethod() {
+        _ = host(for: workbench.activePane.id).textView.perform(.extractMethod)
+    }
+
+    /// Encapsulates the field at the caret (⌥⌘E).
+    func encapsulateField() {
+        _ = host(for: workbench.activePane.id).textView.perform(.encapsulateField)
+    }
+
+    /// Generates getter/setter methods for the field at the caret.
+    func generateAccessors() {
+        _ = host(for: workbench.activePane.id).textView.perform(.generateAccessors)
+    }
+
+    /// Inlines the local variable at the caret (⌥⌘N).
+    func inlineVariable() {
+        _ = host(for: workbench.activePane.id).textView.perform(.inlineVariable)
+    }
+
+    /// Inlines the private method at the caret or call site (Find Action / Java menu).
+    func inlineMethod() {
+        _ = host(for: workbench.activePane.id).textView.perform(.inlineMethod)
+    }
+
+    /// Changes the method signature at the caret (⌃F6): rename, add a parameter, or remove the last.
+    func changeMethodSignature() {
+        _ = host(for: workbench.activePane.id).textView.perform(.changeSignature)
+    }
+
+    /// Moves the top-level class at the caret to another package.
+    func moveClass() {
+        _ = host(for: workbench.activePane.id).textView.perform(.moveClass)
+    }
+
+    /// Deletes the symbol at the caret when it has no usages.
+    func safeDelete() {
+        _ = host(for: workbench.activePane.id).textView.perform(.safeDelete)
+    }
+
+    private func presentWorkspaceEditPreview(
+        _ plan: WorkspaceEditPlan,
         apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
     ) {
-        renamePreview = IDERenamePreviewModel(plan: plan) { [weak self] edit in
+        workspaceEditPreview = IDEWorkspaceEditPreviewModel(plan: plan) { [weak self] edit in
             let result = await apply(edit)
             self?.refreshAfterWorkspaceEdit(result)
             return result
         }
     }
 
-    func dismissRenamePreview() {
-        renamePreview = nil
+    func dismissWorkspaceEditPreview() {
+        workspaceEditPreview = nil
         focusActiveEditor()
     }
 
+    func dismissRenamePreview() {
+        dismissWorkspaceEditPreview()
+    }
+
+    private func presentRenamePreview(
+        _ plan: RenamePlan,
+        apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
+    ) {
+        presentWorkspaceEditPreview(plan, apply: apply)
+    }
+
     private func refreshAfterWorkspaceEdit(_ result: WorkspaceEditApplyResult) {
-        let parents = Set(result.renamedFiles.flatMap { [$0.from, $0.to] }.map { $0.deletingLastPathComponent().path })
+        let parents = Set(
+            result.renamedFiles.flatMap { [$0.from, $0.to] }
+                + result.deletedFiles
+                + result.appliedFiles
+        ).map { $0.deletingLastPathComponent().path }
         if !parents.isEmpty {
             Task {
-                await project.refresh(directories: parents)
+                await project.refresh(directories: Set(parents))
                 gitStatus.refresh()
             }
         } else if !result.appliedFiles.isEmpty {
@@ -979,6 +1071,19 @@ public final class IDEWorkspace {
     func closeUsages() {
         usages.clear()
         isUsagesSelected = false
+    }
+
+    func selectTestResultsTab() {
+        isTestResultsSelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func closeTestResults() {
+        testResults.clear()
+        isTestResultsSelected = false
     }
 
     // MARK: Type hierarchy
@@ -1748,6 +1853,19 @@ public final class IDEWorkspace {
         host.intelligenceController?.onPresentRenamePlan = { [weak self] plan, apply in
             self?.presentRenamePreview(plan, apply: apply)
         }
+        host.intelligenceController?.onPresentWorkspaceEditPlan = { [weak self] plan, apply in
+            self?.presentWorkspaceEditPreview(plan, apply: apply)
+        }
+        host.intelligenceController?.onRequestRefactoringName = { [weak self, weak host] title, suggested, validate, completion in
+            guard let self, let textView = host?.textView else { return completion(nil) }
+            self.refactoringNamePrompt.present(
+                title: title, suggestedName: suggested, in: textView, validate: validate, completion: completion
+            )
+        }
+        host.intelligenceController?.onRequestRefactoringParameters = { [weak self, weak host] descriptor, completion in
+            guard let self, let textView = host?.textView else { return completion(nil) }
+            self.changeSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
+        }
         host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
             guard let self else { return WorkspaceEditApplyResult() }
             return await IDEWorkspaceEditApplier(host: self).apply(edit)
@@ -1920,17 +2038,76 @@ public final class IDEWorkspace {
     /// A Gradle run ended: list the compiler errors in its output as Problems, for files open or
     /// not, and surface the tab when there are errors. Each stream is parsed on its own so a
     /// compiler message and its caret line are never split by interleaved task output.
-    private func applyGradleBuildOutput(_ result: GradleCommandResult, projectRoot: URL) {
+    private func applyGradleBuildOutput(_ result: GradleCommandResult, projectRoot: URL, tasks: [String] = []) {
         let messages = JavacOutputParser.parse(result.stderr) + JavacOutputParser.parse(result.stdout)
-        let byFile = JavacDiagnosticsMapper.diagnostics(
+        let javacByFile = JavacDiagnosticsMapper.diagnostics(
             from: messages, source: "gradle", baseDirectory: projectRoot
         ) { [weak self] url in
             self?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
         }
-        problems.setBuildDiagnostics(byFile)
-        if byFile.values.contains(where: { $0.contains { $0.severity == .error } }) {
+        let gradleProblems = GradleProblemMatcher.parse(
+            result.stdout + "\n" + result.stderr,
+            baseDirectory: projectRoot,
+            model: javaSupport.gradleModel
+        )
+        let gradleByFile = GradleProblemMatcher.diagnostics(from: gradleProblems, baseDirectory: projectRoot)
+        var merged = javacByFile
+        for (url, diagnostics) in gradleByFile {
+            merged[url, default: []].append(contentsOf: diagnostics)
+        }
+        problems.setBuildDiagnostics(merged)
+        if merged.values.contains(where: { $0.contains { $0.severity == .error } }) {
             showProblems()
         }
+    }
+
+    private func applyGradleTestOutput(tasks: [String], projectRoot: URL, result: GradleCommandResult) {
+        guard tasks.contains(where: JavaTestRunner.isTestTask) || javaSupport.hasPendingTestRun else { return }
+        let request = javaSupport.takePendingTestRunRequest()
+        Task { @MainActor in
+            let classes = await self.javaSupport.allTestClasses()
+            let lookup: (String) -> URL? = { className in
+                classes.first(where: { $0.qualifiedName == className })?.sourceFile
+            }
+            var parsed = JUnitXMLReportParser.parseReports(
+                in: request?.reportDirectories ?? [],
+                projectRoot: projectRoot,
+                sourceLookup: lookup
+            )
+            if parsed.cases.isEmpty {
+                parsed = JUnitXMLReportParser.parseGradleSummary(result.stdout + "\n" + result.stderr)
+            }
+            self.testResults.finishRun(parsed)
+            self.showTestResults()
+        }
+    }
+
+    func showTestResults() {
+        isTestResultsSelected = true
+        isTerminalVisible = true
+    }
+
+    func openTestResult(_ result: JavaTestCaseResult) {
+        guard let file = result.sourceFile else { return }
+        Task {
+            await openDocument(from: file)
+            if let line = result.line {
+                host(for: workbench.activePaneID).textView.goToLine(line - 1, select: .beginning)
+            }
+        }
+    }
+
+    func runActiveJavaTests() {
+        guard let testClass = activeJavaTestClass else { return }
+        testResults.beginRun(label: "Running \(testClass.gradleTaskPath)…")
+        showTestResults()
+        javaSupport.runTests(scope: .testClass(testClass))
+    }
+
+    func runTestMethod(_ method: JavaTestMethod, taskPath: String) {
+        testResults.beginRun(label: "Running \(method.displayName)…")
+        showTestResults()
+        javaSupport.runTests(scope: .testMethod(method, taskPath: taskPath))
     }
 
     /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
@@ -2170,6 +2347,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.selectPreviousTerminalTab() }),
             EditorCommand(id: "app.java.buildGradleProject", title: "Java: Build Project", group: "Java",
                           action: { [weak self] in self?.buildGradleProject() }),
+            EditorCommand(id: "app.java.runTests", title: "Java: Run Tests", group: "Java",
+                          action: { [weak self] in self?.runActiveJavaTests() }),
             EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
                           action: { [weak self] in self?.runLastRunConfiguration() }),
             EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Run Configuration…", group: "Java",
@@ -2659,6 +2838,35 @@ public final class IDEWorkspace {
         let canGradleRun = javaSupport.isGradleProject && project.rootURL != nil
         javaFileCanRun = hasMain && (canPlainRun || canGradleRun)
         javaRunFileURL = fileURL
+        Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
+    }
+
+    private func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
+        guard isJava, let fileURL else {
+            javaFileCanTest = false
+            activeJavaTestClass = nil
+            textView.setGutterDecorations([])
+            textView.gutterDecorationHandler = nil
+            return
+        }
+        guard await javaSupport.isTestSource(file: fileURL) else {
+            javaFileCanTest = false
+            activeJavaTestClass = nil
+            textView.setGutterDecorations([])
+            textView.gutterDecorationHandler = nil
+            return
+        }
+        let testClass = await javaSupport.tests(for: fileURL)
+        activeJavaTestClass = testClass
+        javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
+        let decorations = testClass?.methods.map {
+            GutterDecoration(line: $0.line, symbolName: "play.circle", accessibilityLabel: "Run \($0.displayName)")
+        } ?? []
+        textView.setGutterDecorations(decorations)
+        textView.gutterDecorationHandler = { [weak self] line in
+            guard let self, let testClass, let method = testClass.methods.first(where: { $0.line == line }) else { return }
+            self.runTestMethod(method, taskPath: testClass.gradleTaskPath)
+        }
     }
 
     /// Writes `textView`'s live content back into `document` and bumps `document.contentGeneration`
@@ -2951,6 +3159,25 @@ extension IDEWorkspace: IDEWorkspaceEditHost {
         guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
         let result = try operations.rename(url, to: newURL.lastPathComponent)
         finishFileRename(from: url, to: result)
+    }
+
+    func moveFile(from url: URL, to newURL: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let result = try operations.move(url, to: newURL)
+        finishFileRename(from: url, to: result)
+    }
+
+    func deleteFile(at url: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let affected = openDocuments(at: url)
+        for (pane, document) in affected { closeDocument(document.id, in: pane) }
+        if project.selectedPath == url.path { project.selectedPath = nil }
+        project.removeExpanded(under: url.path)
+        try operations.trash(url)
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
     }
 }
 

@@ -109,10 +109,10 @@ public struct IDERootView: View {
             }
         }
         .sheet(item: Binding(
-            get: { workspace.renamePreview },
-            set: { if $0 == nil { workspace.dismissRenamePreview() } }
+            get: { workspace.workspaceEditPreview },
+            set: { if $0 == nil { workspace.dismissWorkspaceEditPreview() } }
         )) { model in
-            IDERenamePreviewSheet(model: model)
+            IDEWorkspaceEditPreviewSheet(model: model)
                 .environment(workspace)
                 .preferredColorScheme(.dark)
         }

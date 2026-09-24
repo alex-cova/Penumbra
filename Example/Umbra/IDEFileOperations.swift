@@ -80,6 +80,21 @@ struct IDEFileOperations {
         return destination
     }
 
+    /// Moves a file into another folder (creating intermediate directories). The destination URL's
+    /// last path component is the new file name.
+    @discardableResult
+    func move(_ url: URL, to destinationURL: URL) throws -> URL {
+        try requireInsideProject(url)
+        let directory = destinationURL.deletingLastPathComponent()
+        try requireInsideProject(directory, allowingRoot: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            throw Failure.nameExists(destinationURL.lastPathComponent)
+        }
+        try FileManager.default.moveItem(at: url, to: destinationURL)
+        return destinationURL
+    }
+
     /// Copies next to the original as `name copy.ext`, `name copy 2.ext`, …
     @discardableResult
     func duplicate(_ url: URL) throws -> URL {
