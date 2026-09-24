@@ -31,7 +31,8 @@ final class IDEIntelligenceServices {
         ])
         diagnosticEngine = DiagnosticEngine(providers: [
             DuplicateSymbolDiagnosticProvider(index: symbolIndex),
-            javaSupport.compilerDiagnostics
+            javaSupport.compilerDiagnostics,
+            javaSupport.inspectionService
         ])
         navigationEngine = NavigationEngine(providers: [
             javaSupport.navigationProvider,

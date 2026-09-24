@@ -1,5 +1,11 @@
 import Foundation
 
+/// Whether a configuration runs normally or under the debugger.
+public enum JavaLaunchMode: String, Codable, Equatable, Sendable {
+    case run
+    case debug
+}
+
 /// How to launch a Java program: what to run, and the arguments and environment to run it with.
 public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public enum Target: Codable, Equatable, Sendable {
@@ -24,6 +30,12 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     /// task takes them from the build script, not the command line.
     public var vmArguments: String
     public var environment: [String: String]
+    /// Run in the terminal or launch under the debugger (classpath targets only in Umbra today).
+    public var launchMode: JavaLaunchMode
+    /// JDWP listen port for debug launches. `nil` lets the host pick a free port.
+    public var jdwpPort: Int?
+    /// When debugging, wait at startup until the debugger attaches.
+    public var suspendOnStart: Bool
 
     public init(
         id: UUID = UUID(),
@@ -31,7 +43,10 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         target: Target,
         programArguments: String = "",
         vmArguments: String = "",
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        launchMode: JavaLaunchMode = .run,
+        jdwpPort: Int? = nil,
+        suspendOnStart: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -39,10 +54,14 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         self.programArguments = programArguments
         self.vmArguments = vmArguments
         self.environment = environment
+        self.launchMode = launchMode
+        self.jdwpPort = jdwpPort
+        self.suspendOnStart = suspendOnStart
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, target, programArguments, vmArguments, environment
+        case launchMode, jdwpPort, suspendOnStart
     }
 
     /// Reads a configuration saved before configurations had an `id` and a `name`.
@@ -54,6 +73,9 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         programArguments = try container.decodeIfPresent(String.self, forKey: .programArguments) ?? ""
         vmArguments = try container.decodeIfPresent(String.self, forKey: .vmArguments) ?? ""
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        launchMode = try container.decodeIfPresent(JavaLaunchMode.self, forKey: .launchMode) ?? .run
+        jdwpPort = try container.decodeIfPresent(Int.self, forKey: .jdwpPort)
+        suspendOnStart = try container.decodeIfPresent(Bool.self, forKey: .suspendOnStart) ?? true
     }
 
     /// The name to list: the user's, else ``defaultName``.
@@ -78,6 +100,14 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public var supportsVMArguments: Bool {
         if case .gradleRun = target { return false }
         return true
+    }
+
+    /// Whether Umbra can launch this configuration under the debugger.
+    public var supportsDebugLaunch: Bool {
+        switch target {
+        case .classpathMain, .gradleRun: return true
+        default: return false
+        }
     }
 
     /// `NAME=value` lines, one variable each, for an editable text field. Blank lines and lines
@@ -163,6 +193,9 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         result.programArguments = previous.programArguments
         result.vmArguments = previous.vmArguments
         result.environment = previous.environment
+        result.launchMode = previous.launchMode
+        result.jdwpPort = previous.jdwpPort
+        result.suspendOnStart = previous.suspendOnStart
         return result
     }
 }

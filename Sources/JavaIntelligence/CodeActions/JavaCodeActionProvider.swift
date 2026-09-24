@@ -33,6 +33,8 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         let scope = scope(for: document.url)
         return await JavaIndex.$queryScope.withValue(scope) {
             var actions = await importActions(in: text, at: position, diagnostics: diagnostics)
+            actions.append(contentsOf: overrideActions(in: text, at: position, diagnostics: diagnostics))
+            actions.append(contentsOf: inspectionImportFixes(in: text, at: position, diagnostics: diagnostics))
             let organized = JavaImportOrganizer.edits(in: text)
             if !organized.isEmpty {
                 let unused = JavaUnusedImports.edits(in: text).count
@@ -44,6 +46,78 @@ public actor JavaCodeActionProvider: CodeActionProviding {
             }
             return actions
         }
+    }
+
+    private func overrideActions(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
+        guard let tree = JavaSyntaxParser().parse(text) else { return [] }
+        let ns = text as NSString
+        let caret = min(max(0, position.utf16Offset), ns.length)
+        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
+        var actions: [CodeAction] = []
+        for diagnostic in diagnostics where diagnostic.source == "java-inspection" && diagnostic.code == "missing-override" {
+            let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
+            guard NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0 else { continue }
+            let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location, in: text)
+            guard let methodNode = enclosingMethodNode(at: byteOffset, in: tree) else { continue }
+            let insertByte = methodNode.startByte
+            let indent = leadingIndent(of: methodNode, in: tree)
+            let replacement = "@Override\n\(indent)"
+            let edit = TextEdit(
+                range: TextRange(
+                    start: JavaImportInserter.textPosition(forByteOffset: insertByte, in: tree.sourceBytes),
+                    end: JavaImportInserter.textPosition(forByteOffset: insertByte, in: tree.sourceBytes)
+                ),
+                replacement: replacement
+            )
+            actions.append(CodeAction(title: "Add @Override", kind: "quickfix", edits: [edit], isPreferred: true))
+        }
+        return actions
+    }
+
+    private func inspectionImportFixes(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
+        let ns = text as NSString
+        let caret = min(max(0, position.utf16Offset), ns.length)
+        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
+        var actions: [CodeAction] = []
+        for diagnostic in diagnostics where diagnostic.source == "java-inspection" {
+            let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
+            guard NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0 else {
+                continue
+            }
+            switch diagnostic.code {
+            case "unused-import", "duplicate-import", "unresolved-import":
+                guard let title = diagnostic.message.contains("import") ? removeImportTitle(for: diagnostic.code ?? "") : nil else { continue }
+                let edit = TextEdit(range: diagnostic.range, replacement: "")
+                actions.append(CodeAction(title: title, kind: "quickfix", edits: [edit], isPreferred: true))
+            default:
+                continue
+            }
+        }
+        return actions
+    }
+
+    private func removeImportTitle(for code: String) -> String? {
+        switch code {
+        case "unused-import": return "Remove unused import"
+        case "duplicate-import": return "Remove duplicate import"
+        case "unresolved-import": return "Remove import"
+        default: return nil
+        }
+    }
+
+    private func enclosingMethodNode(at byteOffset: Int, in tree: JavaSyntaxTree) -> SyntaxNode? {
+        var current: SyntaxNode? = tree.node(atByteOffset: byteOffset)
+        while let walk = current {
+            if walk.type == "method_declaration" { return walk }
+            current = walk.parent
+        }
+        return nil
+    }
+
+    private func leadingIndent(of methodNode: SyntaxNode, in tree: JavaSyntaxTree) -> String {
+        let lineStart = tree.sourceBytes[..<methodNode.startByte].lastIndex(of: UInt8(ascii: "\n")).map { $0 + 1 } ?? 0
+        let prefix = tree.sourceBytes[lineStart..<methodNode.startByte]
+        return String(decoding: prefix.prefix { $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\t") }, as: UTF8.self)
     }
 
     // MARK: - Import fixes

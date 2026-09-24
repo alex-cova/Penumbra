@@ -118,10 +118,16 @@ struct UmbraApp: App {
                 Button("Safe Delete", action: workspace.safeDelete)
                 Button("Reformat Code", action: workspace.reformatCode)
                 Button("Type Hierarchy") { workspace.showTypeHierarchy() }
+                Button("Call Hierarchy") { workspace.showCallHierarchy() }
+                Button("Toggle Breakpoint", action: workspace.toggleBreakpointAtCaret)
+                Divider()
                 Button("Optimize Imports", action: workspace.optimizeImports)
                 Divider()
                 Button("Run Last Configuration", action: workspace.runLastRunConfiguration)
                     .keyboardShortcut("r", modifiers: [.control, .option])
+                    .disabled(workspace.lastRunConfiguration == nil)
+                Button("Debug Last Configuration", action: workspace.debugLastConfiguration)
+                    .keyboardShortcut("d", modifiers: [.control, .option])
                     .disabled(workspace.lastRunConfiguration == nil)
                 Button("Edit Run Configuration…", action: workspace.editRunConfiguration)
                     .disabled(!workspace.canEditRunConfiguration)

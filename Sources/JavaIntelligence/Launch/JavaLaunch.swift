@@ -162,4 +162,111 @@ public struct JavaLaunchCommand: Equatable, Sendable {
     static func shellQuote(_ string: String) -> String {
         "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
+
+    /// Splits a whitespace-separated JVM option string into tokens, respecting single quotes.
+    static func splitVMArguments(_ text: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inQuote = false
+        for character in text {
+            if character == "'" {
+                inQuote.toggle()
+                continue
+            }
+            if character.isWhitespace, !inQuote {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+                continue
+            }
+            current.append(character)
+        }
+        if !current.isEmpty { tokens.append(current) }
+        return tokens
+    }
+
+    /// JDWP agent flag for a debug launch.
+    static func jdwpAgent(port: Int, suspend: Bool) -> String {
+        "-agentlib:jdwp=transport=dt_socket,server=y,suspend=\(suspend ? "y" : "n"),address=*:\(port)"
+    }
+
+    /// The Gradle `run` task path for a subproject (`:` → `run`, `:app` → `:app:run`).
+    public static func gradleRunTask(for projectPath: String) -> String {
+        projectPath == ":" ? "run" : "\(projectPath):run"
+    }
+
+    /// Extra Gradle CLI flags for `runGradleTasks`, optionally including `--debug-jvm`.
+    public static func gradleRunArguments(configuration: JavaRunConfiguration, debug: Bool = false) -> [String] {
+        var arguments = ["--no-configuration-cache"]
+        if debug { arguments.append("--debug-jvm") }
+        let program = configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !program.isEmpty { arguments.append("--args=\(shellQuote(program))") }
+        return arguments
+    }
+
+    /// JDWP port used by Gradle's `--debug-jvm` flag (Application plugin default).
+    public static let gradleDebugJdwpPort = 5005
+}
+
+/// A managed JVM launch (not a shell string) for Umbra's debugger.
+public struct JavaManagedLaunch: Equatable, Sendable {
+    public let javaExecutable: URL
+    public let vmArguments: [String]
+    public let classpath: [URL]
+    public let mainClass: String
+    public let programArguments: [String]
+    public let environment: [String: String]
+    public let jdwpPort: Int
+    public let suspendOnStart: Bool
+
+    public init(
+        javaExecutable: URL,
+        vmArguments: [String],
+        classpath: [URL],
+        mainClass: String,
+        programArguments: [String],
+        environment: [String: String],
+        jdwpPort: Int,
+        suspendOnStart: Bool
+    ) {
+        self.javaExecutable = javaExecutable
+        self.vmArguments = vmArguments
+        self.classpath = classpath
+        self.mainClass = mainClass
+        self.programArguments = programArguments
+        self.environment = environment
+        self.jdwpPort = jdwpPort
+        self.suspendOnStart = suspendOnStart
+    }
+}
+
+extension JavaLaunchCommand {
+    /// Builds a managed launch for the debugger, or `nil` when the configuration cannot be debugged.
+    public static func makeManagedLaunch(
+        configuration: JavaRunConfiguration,
+        javaHome: URL,
+        runtimeClasspath: [URL],
+        jdwpPort: Int
+    ) -> JavaManagedLaunch? {
+        guard configuration.launchMode == .debug,
+              case .classpathMain(let className, _) = configuration.target,
+              className.range(of: #"^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$"#, options: .regularExpression) != nil,
+              !runtimeClasspath.isEmpty else { return nil }
+        let java = javaHome.appendingPathComponent("bin/java")
+        guard FileManager.default.isExecutableFile(atPath: java.path) else { return nil }
+        var vm = splitVMArguments(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+        vm.append(jdwpAgent(port: jdwpPort, suspend: configuration.suspendOnStart))
+        let program = splitVMArguments(configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+        return JavaManagedLaunch(
+            javaExecutable: java,
+            vmArguments: vm,
+            classpath: runtimeClasspath,
+            mainClass: className,
+            programArguments: program,
+            environment: configuration.environment,
+            jdwpPort: jdwpPort,
+            suspendOnStart: configuration.suspendOnStart
+        )
+    }
 }

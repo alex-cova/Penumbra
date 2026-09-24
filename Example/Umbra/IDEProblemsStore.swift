@@ -11,9 +11,11 @@ final class IDEProblemsStore {
     /// Source name the Java compiler reports under; its diagnostics are kept apart from the
     /// editor's so a compile result is never listed twice.
     static let compilerSource = "javac"
+    static let inspectionSource = "java-inspection"
 
     private(set) var editorDiagnostics: [URL: [Diagnostic]] = [:]
     private(set) var compilerDiagnostics: [URL: [Diagnostic]] = [:]
+    private(set) var inspectionDiagnostics: [URL: [Diagnostic]] = [:]
     /// Errors and warnings parsed from the last Gradle task run, kept apart from
     /// `compilerDiagnostics` because an editor report rewrites a file's `javac` entry. A file's
     /// entry is dropped once the file is saved, when the in-editor compile takes over.
@@ -22,23 +24,28 @@ final class IDEProblemsStore {
 
     /// Every file with problems, ignoring the severity filter -- the basis for the badge counts.
     private var allFiles: [ProblemFile] {
-        DiagnosticGrouping.files(from: [editorDiagnostics, compilerDiagnostics, buildDiagnostics])
+        DiagnosticGrouping.files(from: [editorDiagnostics, compilerDiagnostics, inspectionDiagnostics, buildDiagnostics])
     }
 
     /// Files to list, after the severity filter.
     var files: [ProblemFile] {
-        DiagnosticGrouping.files(from: [editorDiagnostics, compilerDiagnostics, buildDiagnostics], severities: visibleSeverities)
+        DiagnosticGrouping.files(
+            from: [editorDiagnostics, compilerDiagnostics, inspectionDiagnostics, buildDiagnostics],
+            severities: visibleSeverities
+        )
     }
 
     var errorCount: Int { DiagnosticGrouping.counts(in: allFiles).errors }
     var warningCount: Int { DiagnosticGrouping.counts(in: allFiles).warnings }
-    var isEmpty: Bool { editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && buildDiagnostics.isEmpty }
+    var isEmpty: Bool {
+        editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && inspectionDiagnostics.isEmpty && buildDiagnostics.isEmpty
+    }
 
     /// Takes an active editor's report. Compiler results in it are the service's cached ones for
     /// that file (which is how a re-opened file gets its problems back); the rest are the editor's.
     func setEditorDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         let key = url.standardizedFileURL
-        let own = diagnostics.filter { $0.source != Self.compilerSource }
+        let own = diagnostics.filter { $0.source != Self.compilerSource && $0.source != Self.inspectionSource }
         editorDiagnostics[key] = own.isEmpty ? nil : own
         setCompilerDiagnostics(diagnostics.filter { $0.source == Self.compilerSource }, for: key)
     }
@@ -54,6 +61,11 @@ final class IDEProblemsStore {
         } else {
             compilerDiagnostics[key] = diagnostics
         }
+    }
+
+    func setInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
+        let key = url.standardizedFileURL
+        inspectionDiagnostics[key] = diagnostics.isEmpty ? nil : diagnostics
     }
 
     /// Replaces the listed build problems with the ones from the run that just finished.

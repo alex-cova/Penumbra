@@ -35,6 +35,11 @@ enum JavaUnusedImports {
 
     static func analyze(_ source: String) -> Analysis? {
         guard let tree = JavaSyntaxParser().parse(source), !tree.rootNode.hasError else { return nil }
+        return analyze(source: source, tree: tree)
+    }
+
+    static func analyze(source: String, tree: JavaSyntaxTree) -> Analysis? {
+        guard !tree.rootNode.hasError else { return nil }
         let list = JavaImportList(tree: tree)
         return Analysis(tree: tree, list: list, removable: removableImports(in: list, used: usedNames(in: tree)))
     }

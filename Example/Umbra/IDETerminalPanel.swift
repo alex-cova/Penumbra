@@ -414,6 +414,18 @@ struct IDETerminalPanel: View {
                         .allowsHitTesting(workspace.isTestResultsSelected)
                 }
 
+                if workspace.showsDebugTab {
+                    IDEDebugPanel()
+                        .opacity(workspace.isDebugSelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isDebugSelected)
+                }
+
+                if workspace.showsCallHierarchyTab {
+                    IDECallHierarchyPanel()
+                        .opacity(workspace.isCallHierarchySelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isCallHierarchySelected)
+                }
+
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
                         .opacity(workspace.isSourceControlSelected ? 1 : 0)

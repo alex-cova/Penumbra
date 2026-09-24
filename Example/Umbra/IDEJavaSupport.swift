@@ -59,6 +59,10 @@ final class IDEJavaSupport {
     let hoverProvider: JavaHoverProvider
     /// Supertype and subtype trees for the Type Hierarchy tab.
     let hierarchyProvider: JavaTypeHierarchyProvider
+    /// Callers and callees for the Call Hierarchy tab.
+    let callHierarchyProvider: JavaCallHierarchyProvider
+    /// Static inspections (unused imports, missing @Override, unresolved types).
+    let inspectionService: JavaInspectionService
     /// Classifies Java identifiers for semantic highlighting.
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
@@ -142,6 +146,7 @@ final class IDEJavaSupport {
     @ObservationIgnored var onGradleModelChanged: (@MainActor (JavaGradleProjectModel?) -> Void)?
     /// Called with each finished compile's diagnostics for one file (empty when it is clean).
     @ObservationIgnored var onCompilerDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
+    @ObservationIgnored var onInspectionDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
     /// Called once the compiler is (re)configured, so the host can check the files already open.
     @ObservationIgnored var onCompilerConfigured: (@MainActor () -> Void)?
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
@@ -174,13 +179,16 @@ final class IDEJavaSupport {
         gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL,
         gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot
     ) {
-        overlayService = JavaOverlayService(index: javaIndex)
+        let sharedParseCache = JavaDocumentParseCache()
+        overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
         completionProvider = JavaCompletionProvider(index: javaIndex)
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
+        callHierarchyProvider = JavaCallHierarchyProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)
+        inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
@@ -192,6 +200,7 @@ final class IDEJavaSupport {
         gradleRunner = runner
         gradleExtractor = GradleProjectModelExtractor(runner: runner)
         Task { [weak self] in await self?.installCompilerResultHandler() }
+        Task { [weak self] in await self?.installInspectionResultHandler() }
         Task { [overlayService, testIndex] in
             await overlayService.setOnDocumentIndexed { _, url, text in
                 await testIndex.scheduleRescan(file: url, source: text)
@@ -243,6 +252,12 @@ final class IDEJavaSupport {
         }
     }
 
+    private func installInspectionResultHandler() async {
+        await inspectionService.setResultHandler { [weak self] url, diagnostics in
+            Task { @MainActor in self?.onInspectionDiagnostics?(url, diagnostics) }
+        }
+    }
+
     /// Scratch space for `javac` buffer copies, under the app's Caches directory.
     static var compilerWorkDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -290,9 +305,10 @@ final class IDEJavaSupport {
     /// Checks `documents` now instead of waiting for the editor to go idle -- after a save, or once
     /// the compiler is configured. `force` rechecks files whose own text did not change.
     func compileNow(_ documents: [EditorIntelligence.Document], force: Bool = false) {
-        Task { [compilerDiagnostics] in
+        Task { [compilerDiagnostics, inspectionService] in
             for document in documents {
                 await compilerDiagnostics.compileNow(document, force: force)
+                await inspectionService.analyzeNow(document, force: force)
             }
         }
     }
@@ -546,7 +562,10 @@ final class IDEJavaSupport {
         nameIndexTask?.cancel()
         nameIndexRoots = roots.map(\.standardizedFileURL)
         let searchRoots = nameIndexRoots
-        Task { [findUsagesProvider] in await findUsagesProvider.setProjectRoots(searchRoots) }
+        Task { [findUsagesProvider, callHierarchyProvider] in
+            await findUsagesProvider.setProjectRoots(searchRoots)
+            await callHierarchyProvider.setProjectRoots(searchRoots)
+        }
         let renameRoots = nameIndexRoots
         Task { [renameProvider, refactoringProvider] in
             await renameProvider.setRoots(renameRoots)
@@ -851,7 +870,9 @@ final class IDEJavaSupport {
         await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await callHierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await inspectionService.setSourceSetClasspath(model, indexPaths: paths)
         reindexTests(model: model)
         refreshCompilerDiagnostics()
     }
@@ -1085,6 +1106,7 @@ final class IDEJavaSupport {
             await findUsagesProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await callHierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await renameProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await refactoringProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
@@ -1098,7 +1120,9 @@ final class IDEJavaSupport {
             await codeActionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hoverProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await callHierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await inlayHintProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await inspectionService.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }
 

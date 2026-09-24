@@ -91,6 +91,30 @@ enum JavaTypeKeys {
         method.parameters.map { parameterKey($0.type) }
     }
 
+    static func keys(of method: SyntaxNode) -> [String] {
+        guard let parameters = method.child(byFieldName: "parameters") else { return [] }
+        return parameters.namedChildren.compactMap { parameter in
+            guard parameter.type == "formal_parameter" || parameter.type == "spread_parameter" else { return nil }
+            guard let typeNode = parameter.child(byFieldName: "type")
+                    ?? parameter.namedChildren.first(where: { $0.type != "modifiers" && $0.type != "variable_declarator" }) else { return nil }
+            var key = simpleTypeKey(from: typeNode.text)
+            key += String(repeating: "[]", count: typeNode.text.components(separatedBy: "[]").count - 1)
+            if parameter.type == "spread_parameter" { key += "[]" }
+            return key
+        }
+    }
+
+    private static func simpleTypeKey(from text: String) -> String {
+        var depth = 0
+        var plain = ""
+        for character in text {
+            if character == "<" { depth += 1 } else if character == ">" { depth -= 1 } else if depth == 0 { plain.append(character) }
+        }
+        let parts = plain.split(separator: ".").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let last = parts.last { return simple(String(last)) }
+        return simple(plain)
+    }
+
     private static func simple(_ dotted: String) -> String {
         String(dotted.split(separator: ".").last ?? Substring(dotted))
     }

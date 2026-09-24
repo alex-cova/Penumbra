@@ -98,6 +98,24 @@ final class JavaCodeActionProviderTests: XCTestCase {
         XCTAssertTrue(other.isEmpty)
     }
 
+    func testAddOverrideQuickFixForMissingOverrideInspection() async throws {
+        let provider = try await makeProvider(sources: [("Base.java", "class Base { void run() { } }")])
+        let source = "class Child extends Base { void run() { } }"
+        let runOffset = (source as NSString).range(of: "run").location
+        let start = TextPosition(line: 0, column: runOffset, utf16Offset: runOffset)
+        let end = TextPosition(line: 0, column: runOffset + 3, utf16Offset: runOffset + 3)
+        let diagnostic = Diagnostic(
+            severity: .warning, message: "missing override", range: TextRange(start: start, end: end),
+            source: "java-inspection", code: "missing-override"
+        )
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "void run"), at: position(of: "void run", in: source), diagnostics: [diagnostic]
+        )
+        let action = try XCTUnwrap(actions.first)
+        XCTAssertEqual(action.title, "Add @Override")
+        XCTAssertTrue(apply(action, to: source).contains("@Override"))
+    }
+
     func testSymbolClassNameParsing() {
         XCTAssertEqual(JavaCodeActionProvider.symbolClassName(in: cannotFind), "ArrayList")
         XCTAssertNil(JavaCodeActionProvider.symbolClassName(in: "cannot find symbol\n  symbol:   variable foo"))

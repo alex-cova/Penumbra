@@ -118,6 +118,17 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Example/Umbra",
+            exclude: [
+                "Tools/JavaDebugAdapter/build.sh",
+                "Tools/JavaDebugAdapter/build/classes",
+                "Tools/JavaDebugAdapter/build/test-classes",
+                "Tools/JavaDebugAdapter/build/test-sources.txt",
+                "Tools/JavaDebugAdapter/build/sources.txt",
+                "Tools/JavaDebugAdapter/src"
+            ],
+            resources: [
+                .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar")
+            ],
             swiftSettings: swift6
         ),
         .target(name: "TestTreeSitterLanguages"),

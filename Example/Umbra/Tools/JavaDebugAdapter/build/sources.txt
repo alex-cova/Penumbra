@@ -1,0 +1,2 @@
+/Users/alex/Developer/Penumbra/Example/Umbra/Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/Json.java
+/Users/alex/Developer/Penumbra/Example/Umbra/Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/DebugAdapter.java

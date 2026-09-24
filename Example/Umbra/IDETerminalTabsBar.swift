@@ -61,6 +61,19 @@ struct IDETerminalTabsBar: View {
                         onSelect: { workspace.selectTestResultsTab() }
                     )
                 }
+                if workspace.showsDebugTab {
+                    IDEDebugTabItem(
+                        isSelected: workspace.isDebugSelected,
+                        onSelect: { workspace.selectDebugTab() }
+                    )
+                }
+                if workspace.showsCallHierarchyTab {
+                    IDECallHierarchyTabItem(
+                        title: workspace.callHierarchy.root.map { "Calls · \($0.displayName)" } ?? "Calls",
+                        isSelected: workspace.isCallHierarchySelected,
+                        onSelect: { workspace.selectCallHierarchyTab() }
+                    )
+                }
                 if workspace.showsSourceControlTab {
                     IDESourceControlTabItem(
                         branch: workspace.gitStatus.currentBranch,

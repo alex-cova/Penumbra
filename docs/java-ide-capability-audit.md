@@ -2,7 +2,7 @@
 
 > Gap analysis for bringing Umbra's Java development experience closer to IntelliJ IDEA.
 > Based on repository inspection (Penumbra, EditorIntelligence, JavaIntelligence, Example/Umbra).
-> Last updated: 2026-09-24.
+> Last updated: 2026-09-24 (Chunk 7 MVP).
 
 ---
 
@@ -15,7 +15,7 @@ Umbra + Penumbra + JavaIntelligence form a **credible lightweight Java editor**,
 | Text engine (Penumbra) | **High** | Multi-cursor, folding, palette, workbench — production-grade |
 | IDE platform (EditorIntelligence) | **High (generic)** | Engines/protocols exist; LSP adapters unused in Umbra |
 | Java intelligence (JavaIntelligence) | **Medium** | Strong completion; weak diagnostics/refactoring/navigation depth |
-| IDE shell (Umbra) | **Medium** | Real Gradle/Git/terminal; no debugger, problems panel, or run configs |
+| IDE shell (Umbra) | **Medium–High** | Gradle/Git/terminal, Problems, run configs, test runner, minimal debugger |
 
 The largest gap is not UI polish — it is **missing semantic analysis infrastructure**: no compiler-backed diagnostics, no reference index, no Java-aware rename/refactor, and no debugger. IntelliJ's day-to-day feel depends on a persistent PSI + stub-index model; this editor has **class stubs + on-demand tree-sitter parsing**, which is enough for smart completion but not for inspections, usages, or safe refactorings.
 
@@ -58,12 +58,12 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Go to implementation | **Implemented** — subtypes and overrides (generic overrides, anonymous classes, enum constant bodies) in project sources; scans project classes per request, no persistent index |
 | Find usages | **Implemented** — identifier index plus on-demand resolution (`JavaFindUsagesProvider`), override families for methods, Usages tab; ambiguous overload/receiver cases are flagged, anonymous-class members are not covered |
 | Symbol search | **Partial** — palette class search via `JavaIndex` |
-| Type / call hierarchy | **Type hierarchy implemented** (⌃H, Hierarchy tab; project subtypes only); call hierarchy missing |
+| Type / call hierarchy | **Partial** — type hierarchy implemented (⌃H); call hierarchy MVP (⌃⌥H, callers via find-usages, callees via method-body walk) |
 | Override navigation | **Implemented** — Go to Super Method (⌘U in the IntelliJ keymap) for methods and types; no gutter override markers |
-| Error diagnostics | **Partial** — `javac` per open file (idle, save, post-sync) plus Gradle build errors in Problems; no inspections |
-| Quick fixes / code actions | **Partial** — import a class, remove unused imports |
+| Error diagnostics | **Partial** — `javac` plus Gradle build errors; inspection engine (unused/duplicate/unresolved import, missing `@Override`, unresolved type, class/file name mismatch) |
+| Quick fixes / code actions | **Partial** — import a class, remove unused imports, add `@Override`, optimize imports |
 | Rename | **Implemented** — types (imports, Javadoc, file rename), locals, parameters, methods (whole override family), fields, enum constants, record components; preview with ambiguous/read-only entries; blocked for library and generated declarations |
-| Extract / inline / change signature | **Missing** |
+| Extract / inline / change signature | **Implemented** — extract variable/method/field/constant, inline variable/method, change signature, move class, safe delete, encapsulate field (preview + multi-file edits) |
 | Import optimization | **Implemented** — removes unused, duplicate and redundant imports and sorts the rest (other, `javax`/`java`, static); no `*` collapsing |
 | Type inference / generics | **Partial** — erased assignability; documented simplifications |
 | Annotation awareness | **Partial** — completion at `@` sites |
@@ -91,11 +91,11 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 |---|---|
 | File/class/symbol search, recent files, palette | **Implemented** |
 | Module navigation | **Partial** — Gradle sidebar only |
-| Semantic refactorings | **Partial** — rename only; extract, inline, change signature, move are missing |
-| Run configurations | **Implemented** — named/multiple configurations, toolbar picker, Gradle run / single file / class with runtime classpath; no debug configurations |
-| Application / Gradle execution | **Partial** — terminal-injected commands, with saved program args, VM options and environment |
-| Test discovery / JUnit / results | **Missing** |
-| Debugging | **Missing** |
+| Semantic refactorings | **Partial** — rename plus extract, inline, change signature, move, safe delete, encapsulate |
+| Run configurations | **Implemented** — named/multiple configurations, toolbar picker, Gradle run / single file / class with runtime classpath; debug mode for classpath-main launches |
+| Application / Gradle execution | **Partial** — terminal-injected commands for run; managed JDWP debug session for classpath-main targets |
+| Test discovery / JUnit / results | **Implemented** — JUnit 4/5 discovery, `:test` runner, results tree, gutter run icons |
+| Debugging | **Partial** — classpath-main managed launch + Gradle `run --debug-jvm` attach; no conditional breakpoints, watches, or attach-to-running-process |
 
 ### Developer Experience
 
@@ -112,14 +112,13 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 ## Major Gaps
 
-1. **No inspections** — compiler errors (`javac`, Gradle builds) are listed, but there are no unresolved-symbol or style inspections beyond what `javac` reports.
+1. **Inspections are file-local** — six rules with quick fixes; no project-wide unused-private-member analysis or style rule packs yet.
 2. **Find Usages resolution gaps** — usages are resolved on demand over an identifier index, so members of anonymous classes are not covered and unresolvable overloads or untyped receivers are shown as ambiguous.
-3. **Refactoring is rename only** — extract, inline, change signature and move need a refactoring transaction layer.
-4. **No debugger or test runner** — run is terminal-injected commands only.
-5. **Navigation depth** — go to implementation and type hierarchy scan project classes per request (no persistent index); no call hierarchy or override markers.
+3. **Refactoring coverage** — core extract/inline/change-signature/move/delete/encapsulate exist; no introduce parameter, pull up/push down, or migration refactorings.
+4. **Debugger gaps** — Gradle debug uses fixed port 5005 (`--debug-jvm`); no conditional breakpoints, watches, test gutter debug, or attach-to-process.
+5. **Navigation depth** — go to implementation and type/call hierarchy scan or resolve on demand (no persistent call graph); no override gutter markers.
 6. **Import handling stops at sorting** — no `*` collapsing, and the layout is fixed rather than configurable.
-7. **No debug configurations** — run configurations are named and multiple, but nothing attaches a debugger.
-8. **LSP unused** — formatting, semantic tokens, LSP diagnostics/rename exist in EditorIntelligence but Umbra connects none.
+7. **LSP unused** — formatting, semantic tokens, LSP diagnostics/rename exist in EditorIntelligence but Umbra connects none.
 
 ---
 
@@ -129,14 +128,14 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 | Infrastructure | Current state | Unlocks |
 |---|---|---|
-| **Reference / usage index** | Identifier index (`refs.idx`) with on-demand verification; no stored symbol→usage edges | Find usages, safe rename done; inline, move, call hierarchy still need more |
-| **Compiler or analysis frontend** | None | Diagnostics, quick fixes, compile errors |
+| **Reference / usage index** | Identifier index (`refs.idx`) with on-demand verification; call hierarchy reuses usage search + AST walk | Find usages done; inline/move done; persistent call graph still missing |
+| **Compiler or analysis frontend** | `javac` subprocess for open files; three static inspections | Diagnostics + basic quick fixes; not a full analyzer |
 | **Persistent cross-file semantic model** | Class stubs only | Refactoring, dataflow, inspections |
-| **Incremental Java parse** | Whole-document tree-sitter per request | Completion latency at scale |
+| Incremental Java parse | **Partial** — `JavaDocumentParseCache` for overlay + inspections via `ts_tree_edit`; completion still full-parses repaired text |
 | **JPMS / module-path model** | ct.sym tags only | Java 9+ module projects |
 | **Annotation processor pipeline** | Not modeled | Lombok, MapStruct, etc. |
 | **Runtime classpath model** | Compile-only Gradle sync | Run/debug classpath accuracy |
-| **Refactoring transaction engine** | EIP shell only | All semantic refactorings |
+| **Refactoring transaction engine** | JavaIntelligence preview + multi-file edits | Core refactorings implemented; advanced migrations still missing |
 
 ### Implemented but architecturally weak
 
@@ -151,8 +150,8 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 ### Feature vs infrastructure
 
-- **Missing feature:** Problems panel, debugger UI, run configurations.
-- **Missing infrastructure:** Reference index + compiler integration — without these, Problems panel stays empty, rename stays unsafe, Find Usages stays broken regardless of UI work.
+- **Missing feature:** Conditional breakpoints, watches, attach debug, full inspection rule set, incremental Gradle sync.
+- **Missing infrastructure:** Persistent call graph + full semantic model — call hierarchy and some callees resolve on demand only.
 
 ---
 
@@ -281,10 +280,10 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Current state | Work required | Complexity | Dependencies |
 |---|---|---|---|---|---|
-| 5.1 | **JUnit test discovery** | Missing | Parse test sources / Gradle `test` task output for test classes | High | Gradle sync |
-| 5.2 | **Test runner + results panel** | Missing | Run `:test`, parse XML/text output, results tree with pass/fail/navigate | High | 5.1, 1.1 |
-| 5.3 | **Test gutter icons** | Missing | Run/debug single test from editor gutter | High | 5.1 |
-| 5.4 | **Gradle build problem integration** | Partial | Structured problem matcher for all Gradle tasks → Problems panel | Medium | 1.1, 2.2 |
+| 5.1 | **JUnit test discovery** | ✅ done | Parse test sources / Gradle `test` task output for test classes | High | Gradle sync |
+| 5.2 | **Test runner + results panel** | ✅ done | Run `:test`, parse XML/text output, results tree with pass/fail/navigate | High | 5.1, 1.1 |
+| 5.3 | **Test gutter icons** | ✅ done | Run single test from editor gutter | High | 5.1 |
+| 5.4 | **Gradle build problem integration** | ✅ done | Structured problem matcher for all Gradle tasks → Problems panel | Medium | 1.1, 2.2 |
 | 5.5 | **Incremental Gradle sync** | Missing | Diff model changes instead of full re-index on every sync | High | Gradle sync |
 
 **Chunk exit criteria:** Run tests from IDE, see results, navigate to failures.
@@ -297,14 +296,14 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Current state | Work required | Complexity | Dependencies |
 |---|---|---|---|---|---|
-| 6.1 | **Refactoring transaction framework** | Missing | Preview diff, multi-file edit application, undo grouping in JavaIntelligence | High | 4.2 |
-| 6.2 | **Extract variable** | Missing | Analyze selection expression, introduce local with correct type | High | 6.1 |
-| 6.3 | **Extract method** | Missing | Pull selection into new method, update call sites | Very High | 6.1, 4.2 |
-| 6.4 | **Extract constant / field** | Missing | Promote expression to constant or field | High | 6.1 |
-| 6.5 | **Inline variable / method** | Missing | Replace usages with body; remove declaration | Very High | 4.2 |
-| 6.6 | **Change signature** | Missing | Alter method params/return; update all call sites | Very High | 4.2, 6.1 |
-| 6.7 | **Move class / safe delete** | Missing | Move file + update references; delete with usage check | High | 4.2, 6.1 |
-| 6.8 | **Encapsulate fields / generate getters** | Missing | Refactor field access to accessor methods | Medium | 6.1 |
+| 6.1 | **Refactoring transaction framework** | ✅ done | Preview diff, multi-file edit application, undo grouping in JavaIntelligence | High | 4.2 |
+| 6.2 | **Extract variable** | ✅ done | Analyze selection expression, introduce local with correct type | High | 6.1 |
+| 6.3 | **Extract method** | ✅ done | Pull selection into new method, update call sites | Very High | 6.1, 4.2 |
+| 6.4 | **Extract constant / field** | ✅ done | Promote expression to constant or field | High | 6.1 |
+| 6.5 | **Inline variable / method** | ✅ done | Replace usages with body; remove declaration | Very High | 4.2 |
+| 6.6 | **Change signature** | ✅ done | Alter method params/return; update all call sites | Very High | 4.2, 6.1 |
+| 6.7 | **Move class / safe delete** | ✅ done | Move file + update references; delete with usage check | High | 4.2, 6.1 |
+| 6.8 | **Encapsulate fields / generate getters** | ✅ done | Refactor field access to accessor methods | Medium | 6.1 |
 
 **Chunk exit criteria:** Core refactoring menu (extract, inline, change signature, move) works safely with preview.
 
@@ -316,14 +315,17 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Current state | Work required | Complexity | Dependencies |
 |---|---|---|---|---|---|
-| 7.1 | **JDWP debugger adapter** | Missing | Breakpoint model, attach to JVM, session management in Umbra | Very High | 3.5, 3.6 |
-| 7.2 | **Breakpoints & conditional breakpoints** | Missing | Editor gutter, condition evaluation | Very High | 7.1 |
-| 7.3 | **Variables / call stack / watches** | Missing | Debug tool window panels | Very High | 7.1 |
-| 7.4 | **Call hierarchy** | Missing | Call graph index (bytecode or AST) | Very High | 4.2 |
-| 7.5 | **Inspections & quick fixes** | Missing | Rule engine on semantic model; intention actions | Very High | 2.2, 4.2 |
+| 7.1 | **JDWP debugger adapter** | **Partial** | JDI adapter + classpath-main launch + Gradle `--debug-jvm` attach | Very High | 3.5, 3.6 |
+| 7.2 | **Breakpoints & conditional breakpoints** | **Partial (MVP)** | Gutter breakpoints + persistence; no conditions | Very High | 7.1 |
+| 7.3 | **Variables / call stack / watches** | **Partial (MVP)** | Debug panel: stack + locals; no watches | Very High | 7.1 |
+| 7.4 | **Call hierarchy** | **Partial (MVP)** | Callers via find-usages; callees via AST method_invocation walk | Very High | 4.2 |
+| 7.5 | **Inspections & quick fixes** | **Partial** | Rule registry with six file-local rules + shared parse context | Very High | 2.2, 4.2 |
+| 7.8 | **Incremental Java parse** | **Partial** | `JavaDocumentParseCache` with `ts_tree_edit` for overlay + inspections | High | JavaSyntaxTree |
 | 7.6 | **JPMS / module-path support** | Missing | `module-info.java` index + module resolution | High | Gradle model |
 | 7.7 | **Kotlin interoperability** | Missing | Kotlin indexer or LSP for mixed projects | Very High | Optional LSP |
 | 7.8 | **Incremental Java parse** | Missing | Tree-sitter incremental edits for completion hot path | High | JavaSyntaxTree |
+
+**Chunk 7 MVP notes:** Gradle debug uses `--debug-jvm` on port 5005. Incremental parse covers overlay and inspections (completion still full-parses repaired caret text). Deferred: conditional breakpoints, watches, attach-to-process, JPMS, Kotlin.
 
 **Chunk exit criteria:** Debug Java apps with breakpoints; call hierarchy; basic inspections.
 
@@ -389,7 +391,7 @@ Keep the three-library split (Penumbra / EditorIntelligence / JavaIntelligence).
 
 ## Suggested Next Step
 
-Chunks 1–4 are complete. Chunk 4 deviated from the roadmap wording: instead of persisting resolved symbol→usage mappings (which go stale when any dependency changes), it stores a per-file identifier index and verifies candidates on demand. Go to implementation and type hierarchy still scan project classes per request and could reuse it. The next step is Chunk 5 (test discovery and runner, structured Gradle problems, incremental sync).
+Chunks 1–7 are largely complete. Remaining high-value work: conditional breakpoints, watches, attach-to-process, custom Gradle debug ports, project-wide inspections, 5.5 incremental Gradle sync, 7.6 JPMS, and completion-path incremental parse.
 
 ---
 
@@ -403,6 +405,10 @@ Chunks 1–4 are complete. Chunk 4 deviated from the roadmap wording: instead of
 | Java navigation | `Sources/JavaIntelligence/Navigation/JavaGoToDefinitionProvider.swift` |
 | Java index | `Sources/JavaIntelligence/Index/JavaIndex.swift` |
 | Index scheduler | `Sources/JavaIntelligence/Scanning/JavaIndexScheduler.swift` |
+| Java call hierarchy | `Sources/JavaIntelligence/Hierarchy/JavaCallHierarchy.swift` |
+| Java inspections | `Sources/JavaIntelligence/Inspections/` |
+| Debug session (Umbra) | `Example/Umbra/JavaDebugSession.swift` |
+| JDI adapter JAR | `Example/Umbra/Tools/JavaDebugAdapter/` |
 | Gradle sync | `Sources/JavaIntelligence/Gradle/` |
 | Generic find references (weak for Java) | `Sources/EditorIntelligence/Navigation/FindReferencesProvider.swift` |
 | Diagnostic engine | `Sources/EditorIntelligence/Diagnostics/DiagnosticEngine.swift` |

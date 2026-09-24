@@ -12,6 +12,7 @@ import EditorIntelligence
 /// entries never get clobbered by another's rebuild and the classpath name table is never rebuilt.
 public actor JavaOverlayService {
     private let index: JavaIndex
+    private let parseCache: JavaDocumentParseCache?
     private let debounceNanoseconds: UInt64
 
     private var debounceTasks: [DocumentID: Task<Void, Never>] = [:]
@@ -22,8 +23,9 @@ public actor JavaOverlayService {
     /// auxiliary indexes such as JUnit test discovery.
     public var onDocumentIndexed: (@Sendable (_ document: Document, _ url: URL, _ text: String) async -> Void)?
 
-    public init(index: JavaIndex, debounceMilliseconds: UInt64 = 300) {
+    public init(index: JavaIndex, parseCache: JavaDocumentParseCache? = nil, debounceMilliseconds: UInt64 = 300) {
         self.index = index
+        self.parseCache = parseCache
         self.debounceNanoseconds = debounceMilliseconds * 1_000_000
     }
 
@@ -61,9 +63,9 @@ public actor JavaOverlayService {
         case .documentOpened(let document), .documentChanged(let document):
             guard isJava(document) else { return }
             scheduleRebuild(for: document, debounced: false)
-        case .documentEdited(let document, _):
+        case .documentEdited(let document, let edits):
             guard isJava(document) else { return }
-            scheduleRebuild(for: document, debounced: true)
+            scheduleRebuild(for: document, debounced: true, edits: edits)
         case .documentClosed(let documentID):
             await removeDocument(documentID)
         default:
@@ -75,7 +77,7 @@ public actor JavaOverlayService {
         document.languageIdentifier == "java"
     }
 
-    private func scheduleRebuild(for document: Document, debounced: Bool) {
+    private func scheduleRebuild(for document: Document, debounced: Bool, edits: [TextEdit]? = nil) {
         let documentID = document.id
         debounceTasks[documentID]?.cancel()
         let delay = debounced ? debounceNanoseconds : 0
@@ -84,15 +86,22 @@ public actor JavaOverlayService {
                 try? await Task.sleep(nanoseconds: delay)
             }
             guard !Task.isCancelled, let self else { return }
-            await self.rebuild(document)
+            await self.rebuild(document, edits: edits)
         }
     }
 
-    private func rebuild(_ document: Document) async {
+    private func rebuild(_ document: Document, edits: [TextEdit]? = nil) async {
         guard lastIndexedVersion[document.id] != document.version else { return }
         guard !document.contentSnapshot.isElided else { return }
         let url = document.url ?? URL(fileURLWithPath: "/unsaved/\(document.id).java")
-        let fileStubs = JavaSourceStubBuilder.build(source: document.text, url: url)
+        let tree: JavaSyntaxTree?
+        if let parseCache {
+            tree = await parseCache.tree(for: document, edits: edits)
+        } else {
+            tree = JavaSyntaxParser().parse(document.text)
+        }
+        guard let tree else { return }
+        let fileStubs = JavaSourceStubBuilder.build(tree: tree, url: url)
         let previousNames = Set(fileStubsByDocument[document.id]?.classes.map(\.qualifiedName) ?? [])
         fileStubsByDocument[document.id] = fileStubs
         lastIndexedVersion[document.id] = document.version

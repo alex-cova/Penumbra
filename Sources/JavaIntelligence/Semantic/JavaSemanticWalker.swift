@@ -23,6 +23,7 @@ final class JavaSemanticWalker {
     var localSink: ((Range<Int>, Range<Int>, Bool) -> Void)?
 
     private let tree: JavaSyntaxTree
+    var syntaxTree: JavaSyntaxTree { tree }
     private let importList: JavaImportList
     private var utf16Offsets: [Int32]?
     private var scopes: [[String: Binding]] = []

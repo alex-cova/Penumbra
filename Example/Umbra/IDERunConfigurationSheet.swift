@@ -11,6 +11,8 @@ struct IDERunConfigurationSheet: View {
     @State private var gradleProjectPath: String
     @State private var filePath: String
     @State private var className: String
+    @State private var launchMode: JavaLaunchMode
+    @State private var suspendOnStart: Bool
 
     enum TargetKind: String, CaseIterable, Identifiable {
         case gradleRun = "Gradle run"
@@ -40,6 +42,8 @@ struct IDERunConfigurationSheet: View {
             _filePath = State(initialValue: source)
             _className = State(initialValue: name)
         }
+        _launchMode = State(initialValue: configuration.launchMode)
+        _suspendOnStart = State(initialValue: configuration.suspendOnStart)
     }
 
     /// The target the fields describe, or `nil` while they are incomplete.
@@ -109,12 +113,27 @@ struct IDERunConfigurationSheet: View {
                     .background(IDEAppearance.ColorToken.workbench, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
             }
 
+            if kind == .classpathMain || kind == .gradleRun {
+                field("Debug", caption: debugCaption) {
+                    Toggle("Launch in debug mode", isOn: Binding(
+                        get: { launchMode == .debug },
+                        set: { launchMode = $0 ? .debug : .run }
+                    ))
+                    Toggle("Suspend on start", isOn: $suspendOnStart)
+                        .disabled(launchMode != .debug)
+                }
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { workspace.dismissRunConfigurationSheet() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") { commit(run: false) }
                     .disabled(target == nil)
+                if launchMode == .debug, kind == .classpathMain || kind == .gradleRun {
+                    Button("Debug") { commit(run: true, debug: true) }
+                        .disabled(target == nil)
+                }
                 Button("Run") { commit(run: true) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(target == nil)
@@ -129,6 +148,17 @@ struct IDERunConfigurationSheet: View {
         case .gradleRun: return "Runs the project's Gradle run task."
         case .singleFile: return "Runs one file with java File.java."
         case .classpathMain: return "Runs a compiled class with the module's runtime classpath. It is built first if needed."
+        }
+    }
+
+    private var debugCaption: String {
+        switch kind {
+        case .gradleRun:
+            return "Gradle run uses --debug-jvm (port \(JavaLaunchCommand.gradleDebugJdwpPort)). ⌃⌥D to debug last configuration."
+        case .classpathMain:
+            return "Classpath launches run under the managed debugger. ⌃⌥D to debug last configuration."
+        default:
+            return ""
         }
     }
 
@@ -161,11 +191,13 @@ struct IDERunConfigurationSheet: View {
         }
     }
 
-    private func commit(run: Bool) {
+    private func commit(run: Bool, debug: Bool = false) {
         guard let target else { return }
         var configuration = draft
         configuration.target = target
         configuration.environment = JavaRunConfiguration.parseEnvironment(environmentText)
+        configuration.launchMode = debug ? .debug : launchMode
+        configuration.suspendOnStart = suspendOnStart
         workspace.saveRunConfiguration(configuration, run: run)
     }
 

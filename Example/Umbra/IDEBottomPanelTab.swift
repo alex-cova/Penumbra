@@ -12,4 +12,8 @@ enum IDEBottomPanelTab: Hashable {
     case usages
     /// The results of the last test run.
     case testResults
+    /// Debugger call stack and variables.
+    case debug
+    /// Callers and callees of the method last asked for.
+    case callHierarchy
 }

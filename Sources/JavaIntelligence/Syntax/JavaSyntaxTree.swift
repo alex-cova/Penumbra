@@ -23,6 +23,14 @@ public final class JavaSyntaxTree: @unchecked Sendable {
         ts_tree_delete(tree)
     }
 
+    fileprivate var treeForParsing: OpaquePointer { tree }
+
+    /// Shifts node coordinates to match a buffer edit before an incremental reparse.
+    func apply(_ edit: JavaParseEdit) {
+        var raw = edit.rawValue
+        ts_tree_edit(tree, &raw)
+    }
+
     public var rootNode: SyntaxNode {
         SyntaxNode(raw: ts_tree_root_node(tree), tree: self)
     }
@@ -73,6 +81,17 @@ public final class JavaSyntaxParser {
         let bytes = Array(source.utf8)
         guard let tsTree = source.withCString({ cString in
             ts_parser_parse_string(parser, nil, cString, UInt32(bytes.count))
+        }) else {
+            return nil
+        }
+        return JavaSyntaxTree(tree: tsTree, sourceBytes: bytes)
+    }
+
+    /// Re-parses `source` incrementally after `oldTree` has been edited with ``JavaSyntaxTree/apply(_:)``.
+    func parseIncremental(oldTree: JavaSyntaxTree, source: String) -> JavaSyntaxTree? {
+        let bytes = Array(source.utf8)
+        guard let tsTree = source.withCString({ cString in
+            ts_parser_parse_string(parser, oldTree.treeForParsing, cString, UInt32(bytes.count))
         }) else {
             return nil
         }

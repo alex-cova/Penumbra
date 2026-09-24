@@ -89,6 +89,8 @@ public final class IDEWorkspace {
     let problems = IDEProblemsStore()
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
+    let callHierarchy = IDECallHierarchyStore()
+    let debugSession = JavaDebugSession()
     /// The Usages tab's content (Find Usages results); empty until a search runs.
     let usages = IDEUsagesStore()
     /// The Test Results tab's content; empty until a test run finishes.
@@ -133,6 +135,7 @@ public final class IDEWorkspace {
     private(set) var runConfigurations: [JavaRunConfiguration] = []
     /// A classpath launch waiting for `classes` to finish building the outputs it runs from.
     private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
+    private var gradleDebugActive = false
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
     /// The workspace edit being previewed (rename, extract variable, …).
@@ -145,6 +148,7 @@ public final class IDEWorkspace {
     @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
     @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
     private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
+    private let breakpointStore = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     let httpSupport = IDEHTTPSupport()
@@ -197,9 +201,24 @@ public final class IDEWorkspace {
         get { selectedBottomTab == .typeHierarchy }
         set { setBottomTab(.typeHierarchy, selected: newValue) }
     }
+    var isCallHierarchySelected: Bool {
+        get { selectedBottomTab == .callHierarchy }
+        set { setBottomTab(.callHierarchy, selected: newValue) }
+    }
+    var isDebugSelected: Bool {
+        get { selectedBottomTab == .debug }
+        set { setBottomTab(.debug, selected: newValue) }
+    }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
     /// been requested, and goes when it is closed.
     var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent }
+    var showsCallHierarchyTab: Bool { callHierarchy.hasContent }
+    var showsDebugTab: Bool {
+        switch debugSession.state {
+        case .idle: return false
+        default: return true
+        }
+    }
     /// True when the bottom panel's Usages tab is showing instead of a shell.
     var isUsagesSelected: Bool {
         get { selectedBottomTab == .usages }
@@ -288,6 +307,9 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
         }
+        intelligenceServices.javaSupport.onInspectionDiagnostics = { [weak self] url, diagnostics in
+            self?.applyInspectionDiagnostics(diagnostics, for: url)
+        }
         intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] tasks, root, result in
             self?.applyGradleBuildOutput(result, projectRoot: root, tasks: tasks)
             self?.applyGradleTestOutput(tasks: tasks, projectRoot: root, result: result)
@@ -329,6 +351,11 @@ public final class IDEWorkspace {
                 }
             }
             await intelligenceServices.javaSupport.hierarchyProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.callHierarchyProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
@@ -740,7 +767,11 @@ public final class IDEWorkspace {
     func saveRunConfiguration(_ configuration: JavaRunConfiguration, run: Bool) {
         runConfigurationDraft = nil
         if run {
-            launch(configuration)
+            if configuration.launchMode == .debug {
+                debugLaunch(configuration)
+            } else {
+                launch(configuration)
+            }
         } else {
             runConfigurationStore.setLast(configuration, forProject: project.rootURL)
             refreshLastRunConfiguration()
@@ -762,6 +793,10 @@ public final class IDEWorkspace {
     }
 
     private func launch(_ configuration: JavaRunConfiguration) {
+        if configuration.launchMode == .debug {
+            debugLaunch(configuration)
+            return
+        }
         let root = project.rootURL
         let wrapper = root.map {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
@@ -788,6 +823,130 @@ public final class IDEWorkspace {
         runConfigurationStore.setLast(configuration, forProject: root)
         refreshLastRunConfiguration()
         runInTerminal(command.shellCommand)
+    }
+
+    func debugLaunch(_ configuration: JavaRunConfiguration) {
+        guard configuration.supportsDebugLaunch else {
+            reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
+            return
+        }
+        let root = project.rootURL
+        switch configuration.target {
+        case .gradleRun(let projectPath):
+            guard root != nil else {
+                reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+                return
+            }
+            let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
+            Task { [self] in
+                let jdk = await Task.detached(priority: .utility) {
+                    JDKLocator().select(minimumFeatureVersion: maxLanguageLevel)
+                }.value
+                guard let jdk else {
+                    reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                runConfigurationStore.setLast(configuration, forProject: root)
+                refreshLastRunConfiguration()
+                let breakpoints = breakpointStore.breakpoints(forProject: root)
+                selectDebugTab()
+                do {
+                    try await debugSession.prepareAdapter(javaHome: jdk.home)
+                } catch {
+                    reportRunProblem("Could not start the debug adapter: \(error.localizedDescription)")
+                    return
+                }
+                gradleDebugActive = true
+                Task {
+                    await debugSession.attachForGradle(
+                        suspendOnStart: configuration.suspendOnStart,
+                        breakpoints: breakpoints
+                    )
+                }
+                showGradleOutput()
+                let task = JavaLaunchCommand.gradleRunTask(for: projectPath)
+                javaSupport.runGradleTasks(
+                    [task],
+                    extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration, debug: true)
+                )
+            }
+        case .classpathMain(_, let sourceFile):
+            guard let classpath = javaSupport.gradleModel?.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
+                reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project.")
+                return
+            }
+            if !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty {
+                var debugConfig = configuration
+                debugConfig.launchMode = .debug
+                buildClassesThenLaunch(debugConfig, sourceFile: sourceFile)
+                return
+            }
+            let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
+            Task { [self] in
+                let jdk = await Task.detached(priority: .utility) {
+                    JDKLocator().select(minimumFeatureVersion: maxLanguageLevel)
+                }.value
+                guard let jdk else {
+                    reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                let port = JavaDebugPortPicker.pickPort(preferred: configuration.jdwpPort)
+                guard let launch = JavaLaunchCommand.makeManagedLaunch(
+                    configuration: configuration,
+                    javaHome: jdk.home,
+                    runtimeClasspath: classpath,
+                    jdwpPort: port
+                ) else {
+                    reportRunProblem("Could not build a debug launch for “\(configuration.displayName)”.")
+                    return
+                }
+                runConfigurationStore.setLast(configuration, forProject: root)
+                refreshLastRunConfiguration()
+                let breakpoints = breakpointStore.breakpoints(forProject: root)
+                selectDebugTab()
+                await debugSession.start(launch: launch, breakpoints: breakpoints)
+            }
+        default:
+            reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
+        }
+    }
+
+    func debugLastConfiguration() {
+        guard var configuration = lastRunConfiguration ?? activeRunConfiguration() else { return }
+        configuration.launchMode = .debug
+        debugLaunch(configuration)
+    }
+
+    func stopDebugging() {
+        if gradleDebugActive || debugSession.isGradleAttachSession {
+            gradleDebugActive = false
+            javaSupport.cancelGradleTasks()
+        }
+        debugSession.stop()
+    }
+
+    func toggleBreakpointAtCaret() {
+        guard let url = workbench.activePane.selectedDocument?.url else { return }
+        let textView = host(for: workbench.activePaneID).textView
+        let lineNumber = (textView.textLocation(at: textView.selectedRange.location)?.lineNumber ?? 0) + 1
+        _ = breakpointStore.toggle(atLine: lineNumber, file: url, project: project.rootURL)
+        Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: url.pathExtension.lowercased() == "java") }
+    }
+
+    func selectDebugTab() {
+        isDebugSelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func selectCallHierarchyTab() {
+        isCallHierarchySelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
     }
 
     /// Runs the Gradle `classes` task of the source set holding `sourceFile`, and launches
@@ -1143,6 +1302,61 @@ public final class IDEWorkspace {
     func openTypeHierarchyNode(_ node: JavaTypeHierarchyNode) {
         let provider = javaSupport.hierarchyProvider
         let file = typeHierarchy.file
+        Task { [weak self] in
+            guard let location = await provider.location(of: node, file: file), let url = location.url else {
+                NSSound.beep()
+                return
+            }
+            _ = self?.openNavigationLocation(Location(
+                documentID: DocumentID(), url: url, range: location.range, displayName: node.displayName
+            ))
+        }
+    }
+
+    // MARK: Call hierarchy
+
+    @discardableResult
+    func showCallHierarchy() -> Bool {
+        if callHierarchy.loader == nil {
+            callHierarchy.loader = { [javaSupport] node, direction, file in
+                switch direction {
+                case .callers: return await javaSupport.callHierarchyProvider.callers(of: node, file: file)
+                case .callees: return await javaSupport.callHierarchyProvider.callees(of: node, file: file)
+                }
+            }
+        }
+        let host = host(for: workbench.activePane.id)
+        let textView = host.textView
+        let url = textView.documentURL
+        guard workbench.activePane.selectedDocument?.languageIdentifier == "java" else {
+            callHierarchy.show(message: "Call Hierarchy works in Java files")
+            selectCallHierarchyTab()
+            return true
+        }
+        let source = textView.text
+        let offset = textView.selectedRange.location
+        let provider = javaSupport.callHierarchyProvider
+        Task { [weak self] in
+            let root = await provider.rootMethod(source: source, fileURL: url, utf16Offset: offset)
+            guard let self else { return }
+            if let root {
+                self.callHierarchy.show(root: root, file: url)
+            } else {
+                self.callHierarchy.show(message: "No Java method at the caret")
+            }
+            self.selectCallHierarchyTab()
+        }
+        return true
+    }
+
+    func closeCallHierarchy() {
+        callHierarchy.clear()
+        isCallHierarchySelected = false
+    }
+
+    func openCallHierarchyNode(_ node: JavaCallHierarchyNode) {
+        let provider = javaSupport.callHierarchyProvider
+        let file = callHierarchy.file
         Task { [weak self] in
             guard let location = await provider.location(of: node, file: file), let url = location.url else {
                 NSSound.beep()
@@ -2027,6 +2241,13 @@ public final class IDEWorkspace {
         return true
     }
 
+    private func applyInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
+        problems.setInspectionDiagnostics(diagnostics, for: url)
+        if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
+            host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
+        }
+    }
+
     /// A finished compile: list its problems, and redraw the squiggles if that file is showing.
     private func applyCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         problems.setCompilerDiagnostics(diagnostics, for: url)
@@ -2849,23 +3070,40 @@ public final class IDEWorkspace {
             textView.gutterDecorationHandler = nil
             return
         }
+        let breakpoints = breakpointStore.breakpoints(forFile: fileURL, project: project.rootURL).map {
+            GutterDecoration(line: $0.line, symbolName: "circle.fill", accessibilityLabel: "Breakpoint")
+        }
         guard await javaSupport.isTestSource(file: fileURL) else {
             javaFileCanTest = false
             activeJavaTestClass = nil
-            textView.setGutterDecorations([])
-            textView.gutterDecorationHandler = nil
+            textView.setGutterDecorations(breakpoints)
+            textView.gutterDecorationHandler = { [weak self] line in
+                guard let self else { return }
+                _ = self.breakpointStore.toggle(atLine: line, file: fileURL, project: self.project.rootURL)
+                Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
+            }
             return
         }
         let testClass = await javaSupport.tests(for: fileURL)
         activeJavaTestClass = testClass
         javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
-        let decorations = testClass?.methods.map {
-            GutterDecoration(line: $0.line, symbolName: "play.circle", accessibilityLabel: "Run \($0.displayName)")
-        } ?? []
+        var decorations = breakpoints
+        if let testClass {
+            decorations.append(contentsOf: testClass.methods.map {
+                GutterDecoration(line: $0.line, symbolName: "play.circle", accessibilityLabel: "Run \($0.displayName)")
+            })
+        }
         textView.setGutterDecorations(decorations)
         textView.gutterDecorationHandler = { [weak self] line in
-            guard let self, let testClass, let method = testClass.methods.first(where: { $0.line == line }) else { return }
-            self.runTestMethod(method, taskPath: testClass.gradleTaskPath)
+            guard let self else { return }
+            if self.breakpointStore.breakpoints(forFile: fileURL, project: self.project.rootURL).contains(where: { $0.line == line }) {
+                _ = self.breakpointStore.toggle(atLine: line, file: fileURL, project: self.project.rootURL)
+                Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
+                return
+            }
+            if let testClass, let method = testClass.methods.first(where: { $0.line == line }) {
+                self.runTestMethod(method, taskPath: testClass.gradleTaskPath)
+            }
         }
     }
 
