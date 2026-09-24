@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 4
+    static let formatVersion = 5
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -92,8 +92,18 @@ enum GradleProjectModelScript {
             projectDependencies: [],
             runtimeClasspathJars: [],
             runtimeProjectDependencies: [],
+            generatedSourceDirs: [],
+            annotationProcessorJars: [],
+            annotationProcessorProjects: [],
             unresolved: []
         ]
+        try {
+            def compileTask = p.tasks.findByName(ss.compileJavaTaskName)
+            def generated = compileTask?.options?.generatedSourceOutputDirectory
+            if (generated != null && generated.isPresent()) {
+                described.generatedSourceDirs.add(generated.get().asFile.toURI().toString())
+            }
+        } catch (Exception ignored) {}
         try {
             ss.output.classesDirs.files.each { described.outputDirs.add(it.toURI().toString()) }
             def resources = ss.output.resourcesDir
@@ -105,6 +115,9 @@ enum GradleProjectModelScript {
             'compileClasspathJars', 'projectDependencies')
         umbraResolveClasspath(p, ss, ss.runtimeClasspathConfigurationName, 'runtime classpath', described,
             'runtimeClasspathJars', 'runtimeProjectDependencies')
+        umbraResolveClasspath(p, ss, ss.annotationProcessorConfigurationName, 'annotation processors', described,
+            'annotationProcessorJars', 'annotationProcessorProjects')
+        described.remove('annotationProcessorProjects')
         return described
     }
 

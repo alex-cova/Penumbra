@@ -13,6 +13,9 @@ import Foundation
 public struct SourceRoot: JavaIndexableRoot {
     public let directory: URL
     public let id: String
+    /// True for annotation-processor output (`build/generated/...`). Its files are indexed like any
+    /// others but must never be edited, so refactorings (rename) refuse to touch them.
+    public let isGenerated: Bool
 
     /// Directory names never worth descending into: VCS metadata, build output, and dependency
     /// caches that may themselves contain (irrelevant, possibly huge numbers of) `.java` files.
@@ -20,8 +23,9 @@ public struct SourceRoot: JavaIndexableRoot {
         ".git", "build", ".gradle", "out", "node_modules", ".idea", "target", ".swiftpm", "bin"
     ]
 
-    public init(directory: URL) {
+    public init(directory: URL, isGenerated: Bool = false) {
         self.directory = directory
+        self.isGenerated = isGenerated
         self.id = "source-\(directory.path)"
     }
 

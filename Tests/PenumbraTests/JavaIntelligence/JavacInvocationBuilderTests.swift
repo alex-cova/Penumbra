@@ -128,6 +128,64 @@ final class JavacInvocationBuilderTests: XCTestCase {
         XCTAssertFalse(invocation.arguments.contains("-proc:none"))
     }
 
+    private func generatedApp(processorJars: [String], classpath: [String]) -> JavaGradleProjectModel.Subproject {
+        let set = JavaGradleProjectModel.SourceSet(
+            name: "main",
+            sourceDirs: [URL(fileURLWithPath: "/p/app/src/main/java")],
+            compileClasspathJars: classpath.map { URL(fileURLWithPath: $0) },
+            generatedSourceDirs: [URL(fileURLWithPath: "/p/app/build/generated/ap")],
+            annotationProcessorJars: processorJars.map { URL(fileURLWithPath: $0) }
+        )
+        return .init(path: ":app", directory: URL(fileURLWithPath: "/p/app"), sourceSets: [set])
+    }
+
+    func testGeneratedDirsJoinSourcepath() throws {
+        let jdk = try makeJDK()
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([generatedApp(processorJars: [], classpath: [])])), jdk: jdk, workDirectory: work
+        ))
+        XCTAssertEqual(
+            value(after: "-sourcepath", in: invocation.arguments),
+            "/p/app/src/main/java:/p/app/build/generated/ap"
+        )
+        XCTAssertTrue(invocation.arguments.contains("-proc:none"))
+    }
+
+    func testLombokFromAnnotationProcessorJarsOnly() throws {
+        let jdk = try makeJDK()
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([generatedApp(
+                processorJars: ["/ap/mapstruct-processor.jar", "/ap/lombok-1.18.32.jar"], classpath: ["/jars/guava.jar"]
+            )])), jdk: jdk, workDirectory: work
+        ))
+        XCTAssertEqual(value(after: "-processorpath", in: invocation.arguments), "/ap/lombok-1.18.32.jar")
+        XCTAssertFalse(invocation.arguments.contains("-proc:none"))
+    }
+
+    func testProcessorJarLombokPreferredOverClasspathLombok() throws {
+        let jdk = try makeJDK()
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([generatedApp(
+                processorJars: ["/ap/lombok-2.jar"], classpath: ["/jars/lombok-1.jar"]
+            )])), jdk: jdk, workDirectory: work
+        ))
+        XCTAssertEqual(value(after: "-processorpath", in: invocation.arguments), "/ap/lombok-2.jar")
+    }
+
+    func testNonLombokProcessorsStayOff() throws {
+        let jdk = try makeJDK()
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([generatedApp(processorJars: ["/ap/mapstruct-processor.jar"], classpath: [])])),
+            jdk: jdk, workDirectory: work
+        ))
+        XCTAssertTrue(invocation.arguments.contains("-proc:none"))
+        XCTAssertNil(value(after: "-processorpath", in: invocation.arguments))
+    }
+
     func testPlainFolderInfersPackageRoot() throws {
         let jdk = try makeJDK()
         let invocation = try XCTUnwrap(JavacInvocationBuilder.build(

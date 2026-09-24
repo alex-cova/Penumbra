@@ -424,6 +424,7 @@ final class IDEJavaSupport {
                 let elapsed = Date().timeIntervalSince(startedAt)
                 gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
                 gradleConsole.markFinished()
+                if result.exitCode == 0 { reindexGeneratedSources() }
                 onGradleTasksFinished?(taskPaths, url, result)
             } catch is CancellationError {
                 gradleConsole.appendNote("Task run cancelled")
@@ -711,6 +712,27 @@ final class IDEJavaSupport {
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
         refreshCompilerDiagnostics()
+    }
+
+    /// After a build, annotation processors may have written (or rewritten) sources under the
+    /// model's generated directories. A root's stamp is its directory's own mtime, which misses
+    /// nested changes, so the generated shards are dropped and rebuilt.
+    func reindexGeneratedSources() {
+        guard let model = gradleModel else { return }
+        let generation = projectGeneration
+        Task { [paths, scheduler] in
+            let all = model.sourceIndexTargets(paths: paths)
+            let generated = all.filter { ($0.root as? SourceRoot)?.isGenerated == true }
+            guard !generated.isEmpty else { return }
+            for target in generated { try? FileManager.default.removeItem(at: target.shardURL) }
+            for await _ in await scheduler.index(generated) {}
+            guard isCurrent(generation) else { return }
+            projectSources = all.compactMap { target in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+            }
+            await publishSources()
+        }
     }
 
     private static func modelsAreEqual(_ lhs: JavaGradleProjectModel, _ rhs: JavaGradleProjectModel) -> Bool {

@@ -205,6 +205,63 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertTrue(jarTargets[0].root is JarRoot)
     }
 
+    // MARK: - Generated sources / annotation processors (format 5)
+
+    private func sourceSetJSON(extra: String) -> Data {
+        Data("""
+        {"formatVersion": 5, "gradleVersion": "8.5", "subprojects": [
+          {"path": ":", "directory": "file:///p/", "sourceSets": [
+            {"name": "main", "sourceDirs": ["file:///p/src/main/java/"] \(extra)}
+          ]}
+        ]}
+        """.utf8)
+    }
+
+    func testDecodesFormat4JSONWithoutGeneratedFields() throws {
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: sourceSetJSON(extra: ""))
+        let set = try XCTUnwrap(model.subprojects.first?.sourceSets.first)
+        XCTAssertTrue(set.generatedSourceDirs.isEmpty)
+        XCTAssertTrue(set.annotationProcessorJars.isEmpty)
+    }
+
+    func testDecodesFormat5GeneratedFields() throws {
+        let extra = ", \"generatedSourceDirs\": [\"file:///p/build/gen/\"], \"annotationProcessorJars\": [\"file:///ap/lombok.jar\"]"
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: sourceSetJSON(extra: extra))
+        let set = try XCTUnwrap(model.subprojects.first?.sourceSets.first)
+        XCTAssertEqual(set.generatedSourceDirs.map(\.path), ["/p/build/gen/"].map { $0 })
+        XCTAssertEqual(set.annotationProcessorJars.map(\.lastPathComponent), ["lombok.jar"])
+    }
+
+    func testGeneratedDirsAreReadOnlyTargetsAndVisible() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mainDir = root.appendingPathComponent("src/main/java")
+        let genDir = root.appendingPathComponent("build/generated/ap")
+        let missingGen = root.appendingPathComponent("build/generated/none")
+        try FileManager.default.createDirectory(at: mainDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: genDir, withIntermediateDirectories: true)
+        let set = JavaGradleProjectModel.SourceSet(
+            name: "main", sourceDirs: [mainDir], generatedSourceDirs: [genDir, missingGen]
+        )
+        let model = JavaGradleProjectModel(
+            formatVersion: 5, gradleVersion: "8.5",
+            subprojects: [.init(path: ":", directory: root, sourceSets: [set])]
+        )
+        let paths = JavaIndexPaths(root: root.appendingPathComponent("index-cache"))
+
+        let targets = model.sourceIndexTargets(paths: paths)
+        XCTAssertEqual(targets.count, 2)
+        let roots = targets.compactMap { $0.root as? SourceRoot }
+        XCTAssertEqual(roots.filter(\.isGenerated).map(\.directory), [genDir.standardizedFileURL])
+        XCTAssertEqual(roots.filter { !$0.isGenerated }.count, 1)
+
+        let visible = try XCTUnwrap(model.visibleShardPaths(
+            forFile: mainDir.appendingPathComponent("A.java"), paths: paths
+        ))
+        XCTAssertTrue(visible.contains(paths.projectSourcesShard(for: genDir.standardizedFileURL).path))
+        XCTAssertFalse(visible.contains(paths.projectSourcesShard(for: missingGen.standardizedFileURL).path))
+    }
+
     // MARK: - End-to-end wiring (no Gradle needed): a model-driven JarRoot is queryable via JavaIndex
 
     func testModelDrivenJarRootIsQueryableThroughJavaIndex() async throws {

@@ -52,6 +52,12 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         public let runtimeClasspathJars: [URL]
         /// Projects on the runtime classpath, transitive ones included.
         public let runtimeProjectDependencies: [ProjectDependency]
+        /// Where annotation processors write sources for this source set (the compile task's
+        /// `generatedSourceOutputDirectory`, e.g. `build/generated/sources/annotationProcessor/java/main`).
+        /// Empty for a model synced before format version 5. The directories may not exist yet.
+        public let generatedSourceDirs: [URL]
+        /// Jars on the source set's `annotationProcessor` configuration (Lombok, MapStruct, …).
+        public let annotationProcessorJars: [URL]
 
         public init(
             name: String,
@@ -60,7 +66,9 @@ public struct JavaGradleProjectModel: Codable, Sendable {
             compileClasspathJars: [URL] = [],
             projectDependencies: [ProjectDependency] = [],
             runtimeClasspathJars: [URL] = [],
-            runtimeProjectDependencies: [ProjectDependency] = []
+            runtimeProjectDependencies: [ProjectDependency] = [],
+            generatedSourceDirs: [URL] = [],
+            annotationProcessorJars: [URL] = []
         ) {
             self.name = name
             self.sourceDirs = sourceDirs
@@ -69,6 +77,8 @@ public struct JavaGradleProjectModel: Codable, Sendable {
             self.projectDependencies = projectDependencies
             self.runtimeClasspathJars = runtimeClasspathJars
             self.runtimeProjectDependencies = runtimeProjectDependencies
+            self.generatedSourceDirs = generatedSourceDirs
+            self.annotationProcessorJars = annotationProcessorJars
         }
 
         public init(from decoder: Decoder) throws {
@@ -80,6 +90,8 @@ public struct JavaGradleProjectModel: Codable, Sendable {
             projectDependencies = try container.decodeIfPresent([ProjectDependency].self, forKey: .projectDependencies) ?? []
             runtimeClasspathJars = try container.decodeIfPresent([URL].self, forKey: .runtimeClasspathJars) ?? []
             runtimeProjectDependencies = try container.decodeIfPresent([ProjectDependency].self, forKey: .runtimeProjectDependencies) ?? []
+            generatedSourceDirs = try container.decodeIfPresent([URL].self, forKey: .generatedSourceDirs) ?? []
+            annotationProcessorJars = try container.decodeIfPresent([URL].self, forKey: .annotationProcessorJars) ?? []
         }
     }
 
@@ -254,7 +266,7 @@ extension JavaGradleProjectModel {
     public func visibleShardPaths(forFile file: URL, paths: JavaIndexPaths) -> Set<String>? {
         guard let match = sourceSet(containing: file) else { return nil }
         var shards = Set<String>()
-        addSourceDirShards(match.sourceSet.sourceDirs, to: &shards, paths: paths)
+        addSourceDirShards(match.sourceSet.sourceDirs + match.sourceSet.generatedSourceDirs, to: &shards, paths: paths)
         for jar in match.sourceSet.compileClasspathJars {
             shards.insert(paths.jarShard(jar).path)
         }
@@ -263,7 +275,7 @@ extension JavaGradleProjectModel {
             let set = target.sourceSets.first { $0.name == dependency.sourceSetName }
                 ?? target.sourceSets.first { $0.name == "main" }
             if let set {
-                addSourceDirShards(set.sourceDirs, to: &shards, paths: paths)
+                addSourceDirShards(set.sourceDirs + set.generatedSourceDirs, to: &shards, paths: paths)
             }
         }
         return shards
@@ -346,9 +358,32 @@ extension JavaGradleProjectModel {
     /// One ``SourceRoot`` per existing source directory, paired with the shard URL
     /// ``JavaIndexScheduler`` should write it to.
     public func sourceIndexTargets(paths: JavaIndexPaths) -> [(root: any JavaIndexableRoot, shardURL: URL)] {
-        existingSourceDirectories.map { directory in
-            (SourceRoot(directory: directory), paths.projectSourcesShard(for: directory))
+        let regular = existingSourceDirectories
+        let generated = existingGeneratedSourceDirectories.filter { candidate in
+            !regular.contains { candidate.path == $0.path || candidate.path.hasPrefix($0.path + "/") }
         }
+        return regular.map { directory in
+            (SourceRoot(directory: directory) as any JavaIndexableRoot, paths.projectSourcesShard(for: directory))
+        } + generated.map { directory in
+            (SourceRoot(directory: directory, isGenerated: true) as any JavaIndexableRoot, paths.projectSourcesShard(for: directory))
+        }
+    }
+
+    /// Annotation-processor output directories that exist on disk, deduplicated.
+    public var existingGeneratedSourceDirectories: [URL] {
+        var seen = Set<URL>()
+        var result: [URL] = []
+        for subproject in subprojects {
+            for sourceSet in subproject.sourceSets {
+                for directory in sourceSet.generatedSourceDirs {
+                    let standardized = directory.standardizedFileURL
+                    guard FileManager.default.fileExists(atPath: standardized.path),
+                          seen.insert(standardized).inserted else { continue }
+                    result.append(standardized)
+                }
+            }
+        }
+        return result
     }
 
     /// One ``JarRoot`` per unique resolved jar, paired with its shard URL.

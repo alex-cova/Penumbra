@@ -45,6 +45,7 @@ public enum JavacInvocationBuilder {
 
         var classpath: [URL] = []
         var sourcepath: [URL] = []
+        var processorJars: [URL] = []
         var languageLevel: Int?
 
         switch kind {
@@ -54,17 +55,18 @@ public enum JavacInvocationBuilder {
             guard let match = model.sourceSet(containing: file) else { return nil }
             classpath = match.sourceSet.compileClasspathJars
             languageLevel = match.subproject.languageLevel
-            sourcepath = match.sourceSet.sourceDirs
+            sourcepath = match.sourceSet.sourceDirs + match.sourceSet.generatedSourceDirs
+            processorJars = match.sourceSet.annotationProcessorJars
             // Test (and other) source sets see their module's main classes.
             if match.sourceSet.name != "main",
                let main = match.subproject.sourceSets.first(where: { $0.name == "main" }) {
-                sourcepath += main.sourceDirs
+                sourcepath += main.sourceDirs + main.generatedSourceDirs
             }
             for dependency in match.sourceSet.projectDependencies {
                 guard let target = model.subprojects.first(where: { $0.path == dependency.projectPath }) else { continue }
                 let set = target.sourceSets.first { $0.name == dependency.sourceSetName }
                     ?? target.sourceSets.first { $0.name == "main" }
-                if let set { sourcepath += set.sourceDirs }
+                if let set { sourcepath += set.sourceDirs + set.generatedSourceDirs }
             }
         }
 
@@ -89,7 +91,8 @@ public enum JavacInvocationBuilder {
         if !sourceDirs.isEmpty {
             arguments += ["-sourcepath", sourceDirs.map(\.path).joined(separator: ":")]
         }
-        if case .gradle = kind, let lombok = classpathJars.first(where: isLombok) {
+        // Lombok from the annotationProcessor configuration first, else the compile classpath.
+        if case .gradle = kind, let lombok = processorJars.first(where: isLombok) ?? classpathJars.first(where: isLombok) {
             arguments += ["-processorpath", lombok.path]
         } else {
             arguments.append("-proc:none")
