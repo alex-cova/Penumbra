@@ -331,6 +331,11 @@ public final class IDEWorkspace {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
             }
+            await intelligenceServices.javaSupport.renameProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
             await intelligenceServices.javaSupport.navigationProvider.setDecompilerConsent(
                 accepted: preferences.javaDecompilerAgreementAccepted,
                 request: { [navigationBuffers] in
