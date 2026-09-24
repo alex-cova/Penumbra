@@ -310,6 +310,9 @@ enum Commands {
         FileHandle.standardError.write(
             "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
         )
+        try MainActor.assumeIsolated {
+            try InteractiveProfile.run(referencePath: path)
+        }
     }
 
     /// Same as `keystroke`, but with occurrence highlighting enabled first — isolates

@@ -33,7 +33,7 @@ enum DescriptorParser {
             guard index < text.count else { return nil }
             let binaryName = String(decoding: text[start..<index], as: UTF8.self)
             index += 1 // consume ';'
-            return .classType(qualifiedName: binaryName.replacingOccurrences(of: "/", with: "."), arguments: [], outer: nil)
+            return .classType(qualifiedName: JavaTypeRef.qualifiedName(fromInternalName: binaryName), arguments: [], outer: nil)
         default:
             return nil
         }

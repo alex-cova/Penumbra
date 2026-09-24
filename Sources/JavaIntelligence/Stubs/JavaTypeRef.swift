@@ -34,6 +34,17 @@ public indirect enum JavaTypeRef: Hashable, Sendable {
         }
     }
 
+    /// `java/util/Map$Entry` → `java.util.Map.Entry`: the source-level name the index keys stubs
+    /// by (see `ClassFileReader.splitName`), so a type read from a descriptor or signature finds
+    /// its nested class.
+    public static func qualifiedName(fromInternalName internalName: String) -> String {
+        var name = internalName.replacingOccurrences(of: "/", with: ".")
+        if name.contains("$") {
+            name = name.replacingOccurrences(of: "$", with: ".")
+        }
+        return name
+    }
+
     /// The erased qualified name this type refers to, if it is a class/interface type
     /// (not a primitive, array, type variable, or unresolved reference).
     public var erasedQualifiedName: String? {

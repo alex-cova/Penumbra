@@ -1842,16 +1842,6 @@ private extension TextInputView {
         setNeedsLayout()
     }
 
-
-    /// Repaints every line's syntax colours, e.g. after the semantic highlights changed.
-    internal func refreshSyntaxColors() {
-        for lineController in lineControllerStorage {
-            lineController.invalidateSyntaxHighlighting()
-        }
-        layoutManager.setNeedsLayout()
-        setNeedsLayout()
-    }
-
     private func invalidateLines() {
         for lineController in lineControllerStorage {
             lineController.lineFragmentHeightMultiplier = lineHeightMultiplier
@@ -1915,6 +1905,17 @@ private extension TextInputView {
             return
         }
         selection = adjustedSelection
+    }
+}
+
+extension TextInputView {
+    /// Repaints every line's syntax colours, e.g. after the semantic highlights changed.
+    func refreshSyntaxColors() {
+        for lineController in lineControllerStorage {
+            lineController.invalidateSyntaxHighlighting()
+        }
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
     }
 }
 
@@ -2588,30 +2589,42 @@ extension TextInputView {
         let currentText = text(in: range) ?? ""
         let newRange = NSRange(location: range.location, length: nsNewString.length)
         multiSelectionController.clearHistory()
-        addUndoOperation(replacing: newRange,
-                         withText: currentText,
-                         selectedRangeAfterUndo: selectedRangeAfterUndo,
-                         selectedRangesAfterUndo: selectedRangesAfterUndo,
-                         primaryIndexAfterUndo: primaryIndexAfterUndo,
-                         actionName: undoActionName)
-        if updateSelection {
-            _selectedRange = NSRange(location: newRange.upperBound, length: 0)
-            if !isApplyingMultipleSelectionUpdate {
-                multiSelectionController.setSelections(_selectedRange.map { [$0] } ?? [])
+        EditorPerformanceTrace.shared.measure(.undo) {
+            addUndoOperation(replacing: newRange,
+                             withText: currentText,
+                             selectedRangeAfterUndo: selectedRangeAfterUndo,
+                             selectedRangesAfterUndo: selectedRangesAfterUndo,
+                             primaryIndexAfterUndo: primaryIndexAfterUndo,
+                             actionName: undoActionName)
+        }
+        EditorPerformanceTrace.shared.measure(.caret) {
+            if updateSelection {
+                _selectedRange = NSRange(location: newRange.upperBound, length: 0)
+                if !isApplyingMultipleSelectionUpdate {
+                    multiSelectionController.setSelections(_selectedRange.map { [$0] } ?? [])
+                }
             }
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
-        let textEditResult = textEditHelper.replaceText(in: range, with: newString)
+        let textEditResult = EditorPerformanceTrace.shared.measure(.textMutation) {
+            textEditHelper.replaceText(in: range, with: newString)
+        }
         if !inlayHints.isEmpty {
             inlayHints = InlayHintIndex.applyingEdit(to: inlayHints, range: range, replacementLength: nsNewString.length)
         }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
-        let languageModeLineChangeSet = languageMode.textDidChange(textChange)
+        let languageModeLineChangeSet = EditorPerformanceTrace.shared.measure(.incrementalParse) {
+            languageMode.textDidChange(textChange)
+        }
         lineChangeSet.union(with: languageModeLineChangeSet)
-        applyLineChangesToLayoutManager(lineChangeSet)
-        restartSyntaxParseAfterCancelledEdit()
+        EditorPerformanceTrace.shared.measure(.visibleLayout) {
+            applyLineChangesToLayoutManager(lineChangeSet)
+        }
+        EditorPerformanceTrace.shared.measure(.incrementalParse) {
+            restartSyntaxParseAfterCancelledEdit()
+        }
         let updatedTextEditResult = TextEditResult(textChange: textChange, lineChangeSet: lineChangeSet)
         let change = TextContentChange(
             range: range,

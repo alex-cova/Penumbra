@@ -2,13 +2,23 @@ import Foundation
 
 /// A local variable, parameter, loop variable, or resource variable visible at some point in a
 /// method/constructor body.
-/// Where an implicitly typed lambda parameter came from: the call it's an argument of, so its
-/// type can be read off that parameter's functional interface.
+/// Where an implicitly typed lambda parameter came from: what the lambda is assigned or passed to,
+/// so its type can be read off that target's functional interface.
 public struct JavaLambdaOrigin: Sendable, Equatable {
-    /// Source of the whole `receiver.method(..., lambda, ...)` call.
-    public let invocationText: String
-    public let argumentIndex: Int
+    public let target: JavaExpressionTarget
     public let parameterIndex: Int
+}
+
+/// The type an expression is converted to by its surroundings, as written in the source: what
+/// Java calls the target type of a poly expression (a lambda, a generic method call).
+public indirect enum JavaExpressionTarget: Sendable, Equatable {
+    /// `Function<A, B> f = <expr>`, `(Type) <expr>`, `return <expr>` in a method returning `Type`.
+    case declaredType(JavaTypeRef)
+    /// `field = <expr>`: the type of the left-hand side, typed on demand.
+    case assignedTo(expressionText: String)
+    /// Argument `argumentIndex` of the call `callText`, which may itself have a target
+    /// (`users.sort(Comparator.comparing(<expr>))`).
+    case argument(callText: String, argumentIndex: Int, callTarget: JavaExpressionTarget?)
 }
 
 public struct JavaLocalVariable: Sendable, Equatable {
@@ -19,12 +29,19 @@ public struct JavaLocalVariable: Sendable, Equatable {
     public let initializerText: String?
     /// Set for implicitly typed lambda parameters passed straight to a method call.
     public let lambdaOrigin: JavaLambdaOrigin?
+    /// `for (var x : items)`: ``initializerText`` is the iterated expression, and the local has
+    /// its element type rather than its type.
+    public let isIterationVariable: Bool
 
-    public init(name: String, type: JavaTypeRef, initializerText: String? = nil, lambdaOrigin: JavaLambdaOrigin? = nil) {
+    public init(
+        name: String, type: JavaTypeRef, initializerText: String? = nil, lambdaOrigin: JavaLambdaOrigin? = nil,
+        isIterationVariable: Bool = false
+    ) {
         self.name = name
         self.type = type
         self.initializerText = initializerText
         self.lambdaOrigin = lambdaOrigin
+        self.isIterationVariable = isIterationVariable
     }
 
     /// Declared with `var`, so ``type`` carries no information until the initializer is typed.
@@ -103,7 +120,7 @@ public enum JavaLocalScope {
                     // `x -> ...` / `(a, b) -> ...`: implicitly typed. Typed `Object` here; when the
                     // lambda is a call argument, the origin lets `JavaExpressionTyper` read the real
                     // type off the called method's functional-interface parameter.
-                    let origin = lambdaCallSite(of: node)
+                    let target = expressionTarget(of: node)
                     let names: [SyntaxNode]
                     if let parameters = node.child(byFieldName: "parameters"), parameters.type == "inferred_parameters" {
                         names = parameters.namedChildren.filter { $0.type == "identifier" }
@@ -113,7 +130,7 @@ public enum JavaLocalScope {
                         names = []
                     }
                     for (position, identifier) in names.enumerated() {
-                        let lambdaOrigin = origin.map { JavaLambdaOrigin(invocationText: $0.text, argumentIndex: $0.argumentIndex, parameterIndex: position) }
+                        let lambdaOrigin = target.map { JavaLambdaOrigin(target: $0, parameterIndex: position) }
                         addIfNew(
                             name: identifier.text, type: .unresolved(simpleName: "Object", arguments: []), lambdaOrigin: lambdaOrigin,
                             into: &result, seenNames: &seenNames
@@ -133,7 +150,14 @@ public enum JavaLocalScope {
             case "enhanced_for_statement":
                 if let body = node.child(byFieldName: "body"), offset >= body.startByte,
                    let typeNode = node.child(byFieldName: "type"), let nameNode = node.child(byFieldName: "name") {
-                    addIfNew(name: nameNode.text, type: JavaTypeNodeConverter.convert(typeNode), into: &result, seenNames: &seenNames)
+                    if typeNode.text == "var", let iterated = node.child(byFieldName: "value") {
+                        addIfNew(
+                            name: nameNode.text, type: .unresolved(simpleName: "var", arguments: []), initializerText: iterated.text,
+                            isIterationVariable: true, into: &result, seenNames: &seenNames
+                        )
+                    } else {
+                        addIfNew(name: nameNode.text, type: JavaTypeNodeConverter.convert(typeNode), into: &result, seenNames: &seenNames)
+                    }
                 }
             case "try_with_resources_statement":
                 if let spec = node.firstNamedChild(ofType: "resource_specification") {
@@ -183,19 +207,56 @@ public enum JavaLocalScope {
 
     private static func addIfNew(
         name: String, type: JavaTypeRef, initializerText: String? = nil, lambdaOrigin: JavaLambdaOrigin? = nil,
-        into result: inout [JavaLocalVariable], seenNames: inout Set<String>
+        isIterationVariable: Bool = false, into result: inout [JavaLocalVariable], seenNames: inout Set<String>
     ) {
         guard seenNames.insert(name).inserted else { return }
-        result.append(JavaLocalVariable(name: name, type: type, initializerText: initializerText, lambdaOrigin: lambdaOrigin))
+        result.append(JavaLocalVariable(
+            name: name, type: type, initializerText: initializerText, lambdaOrigin: lambdaOrigin, isIterationVariable: isIterationVariable
+        ))
     }
 
-    /// The `method_invocation` a lambda is a direct argument of, and its argument position.
-    private static func lambdaCallSite(of lambda: SyntaxNode) -> (text: String, argumentIndex: Int)? {
-        guard let argumentList = lambda.parent, argumentList.type == "argument_list",
-              let invocation = argumentList.parent, invocation.type == "method_invocation",
-              let position = argumentList.namedChildren.firstIndex(where: { $0.startByte == lambda.startByte && $0.endByte == lambda.endByte }) else {
+    /// The target `node` is converted to, from the syntax around it: a call argument, a declared
+    /// variable, an assignment, a cast, or a `return` in a method. `nil` when the surroundings say
+    /// nothing (an expression statement, a `var` declaration, a `return` inside a lambda).
+    static func expressionTarget(of node: SyntaxNode) -> JavaExpressionTarget? {
+        guard let parent = node.parent else { return nil }
+        switch parent.type {
+        case "argument_list":
+            guard let invocation = parent.parent, invocation.type == "method_invocation",
+                  let position = parent.namedChildren.firstIndex(where: { $0.startByte == node.startByte && $0.endByte == node.endByte }) else {
+                return nil
+            }
+            return .argument(callText: invocation.text, argumentIndex: position, callTarget: expressionTarget(of: invocation))
+        case "variable_declarator":
+            guard parent.child(byFieldName: "value")?.startByte == node.startByte,
+                  let declaration = parent.parent, let typeNode = declaration.child(byFieldName: "type"), typeNode.text != "var" else { return nil }
+            return .declaredType(JavaTypeNodeConverter.convert(typeNode))
+        case "assignment_expression":
+            guard parent.child(byFieldName: "right")?.startByte == node.startByte, let left = parent.child(byFieldName: "left") else { return nil }
+            return .assignedTo(expressionText: left.text)
+        case "cast_expression":
+            return parent.child(byFieldName: "type").map { .declaredType(JavaTypeNodeConverter.convert($0)) }
+        case "parenthesized_expression":
+            return expressionTarget(of: parent)
+        case "ternary_expression":
+            guard parent.child(byFieldName: "condition")?.startByte != node.startByte else { return nil }
+            return expressionTarget(of: parent)
+        case "return_statement":
+            var current = parent.parent
+            while let ancestor = current {
+                switch ancestor.type {
+                case "lambda_expression", "class_body":
+                    return nil
+                case "method_declaration":
+                    guard let typeNode = ancestor.child(byFieldName: "type") else { return nil }
+                    return .declaredType(JavaTypeNodeConverter.convert(typeNode))
+                default:
+                    current = ancestor.parent
+                }
+            }
+            return nil
+        default:
             return nil
         }
-        return (invocation.text, position)
     }
 }

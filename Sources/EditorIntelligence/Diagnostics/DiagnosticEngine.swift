@@ -10,6 +10,14 @@ public actor DiagnosticEngine {
 
     /// Collect diagnostics for the given document from all providers.
     public func diagnostics(for document: Document) async -> DiagnosticReport {
+        let started = DispatchTime.now().uptimeNanoseconds
+        let report = await collect(document)
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000_000
+        EditorPerformanceTrace.shared.record(.diagnostics, seconds: seconds)
+        return report
+    }
+
+    private func collect(_ document: Document) async -> DiagnosticReport {
         var all: [Diagnostic] = []
         await withTaskGroup(of: [Diagnostic].self) { group in
             for provider in providers {

@@ -6,8 +6,8 @@ import TreeSitterJava
 /// self-contained within `JavaIntelligence` rather than reusing `Penumbra`'s internal
 /// `TreeSitterParser`/`TreeSitterNode` (those are `internal` to the `Penumbra` module, and this
 /// module must not depend on `Penumbra` at all -- see the EIP/Penumbra adapter boundary in
-/// CLAUDE.md). It only supports one-shot whole-document parsing (no incremental re-parse), which
-/// is all the source-stub builder needs.
+/// CLAUDE.md). Parses whole documents, or incrementally after ``apply(_:)`` edits via
+/// ``JavaSyntaxParser/parseIncremental(oldTree:source:)``.
 public final class JavaSyntaxTree: @unchecked Sendable {
     /// UTF-8 bytes of the parsed source. tree-sitter's byte offsets are UTF-8 byte offsets, so
     /// every node's `startByte`/`endByte` indexes directly into this array.
@@ -24,6 +24,12 @@ public final class JavaSyntaxTree: @unchecked Sendable {
     }
 
     fileprivate var treeForParsing: OpaquePointer { tree }
+
+    /// An independent copy (tree-sitter shares the nodes, so this is cheap) that can be edited
+    /// for an incremental reparse while other code still reads this tree.
+    func copy() -> JavaSyntaxTree {
+        JavaSyntaxTree(tree: ts_tree_copy(tree), sourceBytes: sourceBytes)
+    }
 
     /// Shifts node coordinates to match a buffer edit before an incremental reparse.
     func apply(_ edit: JavaParseEdit) {

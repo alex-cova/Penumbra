@@ -45,7 +45,7 @@ public enum JavaIndexStoreError: Error, Sendable {
 public struct JavaIndexShardWriter {
     /// 2: source stubs of interfaces now record their `extends` list (v1 dropped it), so shards
     /// written by v1 must be rebuilt rather than read.
-    public static let formatVersion: UInt32 = 2
+    public static let formatVersion: UInt32 = 3
     private static let magic: [UInt8] = Array("PJIX".utf8)
 
     public init() {}

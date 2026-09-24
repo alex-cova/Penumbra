@@ -22,6 +22,27 @@ struct JavaParseEdit {
         return TSPoint(row: row, column: UInt32(max(0, offset - lineStart)))
     }
 
+    /// The single edit that turns `old` into `new`: everything between their common prefix and
+    /// common suffix. `nil` when they are equal.
+    static func diff(from old: [UInt8], to new: [UInt8]) -> JavaParseEdit? {
+        guard old != new else { return nil }
+        var prefix = 0
+        let limit = min(old.count, new.count)
+        while prefix < limit, old[prefix] == new[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < limit - prefix, old[old.count - 1 - suffix] == new[new.count - 1 - suffix] { suffix += 1 }
+        let oldEnd = old.count - suffix
+        let newEnd = new.count - suffix
+        return JavaParseEdit(rawValue: TSInputEdit(
+            start_byte: UInt32(prefix),
+            old_end_byte: UInt32(oldEnd),
+            new_end_byte: UInt32(newEnd),
+            start_point: point(forByteOffset: prefix, in: old),
+            old_end_point: point(forByteOffset: oldEnd, in: old),
+            new_end_point: point(forByteOffset: newEnd, in: new)
+        ))
+    }
+
     static func make(edit: TextEdit, in source: String) -> (edit: JavaParseEdit, newSource: String)? {
         let start = utf8ByteOffset(forUTF16Offset: edit.range.start.utf16Offset, in: source)
         let oldEnd = utf8ByteOffset(forUTF16Offset: edit.range.end.utf16Offset, in: source)

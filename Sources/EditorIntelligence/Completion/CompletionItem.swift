@@ -85,6 +85,9 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
     /// A lone explicit completion may insert this item immediately. Class names, chains, and
     /// generated templates stay in the popup.
     public let allowsAutoInsert: Bool
+    /// The type a member is inherited from, drawn dimmed after the label (`getSpecies() Animal`);
+    /// `nil` for members of the receiver's own type and for everything that isn't a member.
+    public let origin: String?
 
     public init(
         id: UUID = UUID(),
@@ -105,7 +108,8 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         caretOffset: Int? = nil,
         triggersSignatureHelp: Bool = false,
         preselect: Bool = false,
-        allowsAutoInsert: Bool = true
+        allowsAutoInsert: Bool = true,
+        origin: String? = nil
     ) {
         self.id = id
         self.label = label
@@ -126,6 +130,7 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         self.triggersSignatureHelp = triggersSignatureHelp
         self.preselect = preselect
         self.allowsAutoInsert = allowsAutoInsert
+        self.origin = origin
     }
 
     /// Whether `insertText` must be expanded as a snippet.

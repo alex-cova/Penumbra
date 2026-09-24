@@ -77,6 +77,9 @@ public final class EditorIntelligenceController {
     private weak var textView: TextView?
     private var eventTask: Task<Void, Never>?
     private var hoverTask: Task<Void, Never>?
+    /// Shows the selected completion item's documentation next to the popup, resolved through
+    /// the hover engine after a short pause on the selection. The popup never waits for it.
+    public var showsCompletionDocumentation = true
     private var completionTask: Task<Void, Never>?
     private var signatureHelpTask: Task<Void, Never>?
     private var outlineTask: Task<Void, Never>?
@@ -105,6 +108,10 @@ public final class EditorIntelligenceController {
     private let overlayContainer = IntelligenceOverlayView()
     private let completionPanelView: CompletionPanelView
     private let hoverWindowView: HoverWindowView
+    /// Documentation for the selected completion item, beside the completion popup.
+    private let completionDocumentationView: HoverWindowView
+    private var completionDocumentationTask: Task<Void, Never>?
+    private var completionDocumentationKey: String?
     private let ghostTextView: GhostTextView
     private let parameterHintsView: ParameterHintsView
 
@@ -188,6 +195,9 @@ public final class EditorIntelligenceController {
             model: CompletionPanelModel(items: [], replacementRange: placeholderRange)
         )
         hoverWindowView = HoverWindowView(
+            model: HoverWindowModel(contents: "", anchorRange: placeholderRange)
+        )
+        completionDocumentationView = HoverWindowView(
             model: HoverWindowModel(contents: "", anchorRange: placeholderRange)
         )
         ghostTextView = GhostTextView(
@@ -731,6 +741,9 @@ public final class EditorIntelligenceController {
         isCompletionVisible
     }
 
+    /// The documentation shown beside the popup for the selected item, if any.
+    public private(set) var completionDocumentation: String?
+
     /// Labels of the items currently shown in the completion popup, in display order.
     public var visibleCompletionItems: [CompletionItem] {
         isCompletionVisible ? completionItems : []
@@ -1131,7 +1144,7 @@ public final class EditorIntelligenceController {
         overlayContainer.isHidden = true
         textView.addFixedOverlaySubview(overlayContainer)
 
-        for view in [completionPanelView, hoverWindowView, ghostTextView, parameterHintsView, codeActionView, workspaceSearchPanelView] {
+        for view in [completionPanelView, hoverWindowView, completionDocumentationView, ghostTextView, parameterHintsView, codeActionView, workspaceSearchPanelView] {
             view.translatesAutoresizingMaskIntoConstraints = true
             view.isHidden = true
             overlayContainer.addSubview(view)
@@ -1206,10 +1219,18 @@ public final class EditorIntelligenceController {
     /// A document built from the live text view rather than the adapter's snapshot, which lags
     /// edits by up to 200 ms: completion must see the character that was just typed.
     ///
-    /// File-backed buffers are not copied into `TextSnapshot.text` (that materializes the whole
-    /// file on the main thread). A fresh piece-tree reader is taken instead, so the provider can
-    /// read the live source — including the `.` just typed — without using the lagging snapshot.
+    /// Piece-tree buffers are not copied into `TextSnapshot.text`. That copy materializes the
+    /// whole document on the main thread, including untitled buffers past the piece-tree
+    /// threshold (`isFileBacked` is false for those). A fresh reader is taken instead, so the
+    /// provider can read the live source — including the character just typed — without waiting
+    /// on that copy. Contiguous small buffers still pass their string through.
     private func makeLiveDocument() -> Document? {
+        EditorPerformanceTrace.shared.measure(.completionPrepare) {
+            buildLiveDocument()
+        }
+    }
+
+    private func buildLiveDocument() -> Document? {
         guard let textView, let base = adapter.currentDocument else {
             return adapter.currentDocument
         }
@@ -1219,7 +1240,7 @@ public final class EditorIntelligenceController {
         liveDocumentVersion += 1
         let version = base.version &+ liveDocumentVersion
         let snapshot: TextSnapshot
-        if textView.isFileBacked, let piece = textView.pieceTreeContentSnapshot() {
+        if let piece = textView.pieceTreeContentSnapshot() {
             let reader = TextRangeReader(utf16Length: piece.utf16Length) { offset, length in
                 piece.substring(utf16Offset: offset, length: length)
             }
@@ -1412,6 +1433,7 @@ public final class EditorIntelligenceController {
         completionPanelView.isHidden = false
         overlayContainer.isHidden = false
         updateGhostText(prefix: typedPrefix)
+        scheduleCompletionDocumentation()
     }
 
     private func completionPrefix() -> String {
@@ -1496,6 +1518,7 @@ public final class EditorIntelligenceController {
             completionHoldTask = nil
         }
         completionPanelView.isHidden = true
+        hideCompletionDocumentation()
         hideGhostText()
         updateOverlayVisibility()
     }
@@ -1675,6 +1698,85 @@ public final class EditorIntelligenceController {
     private func hideHover() {
         hoverWindowView.isHidden = true
         updateOverlayVisibility()
+    }
+
+    // MARK: - Completion documentation
+
+    /// Asks the hover engine about the document as it would read with the selected item
+    /// accepted, caret on the inserted name: every language with a hover provider gets
+    /// documentation for completion items this way, with no completion-specific resolver.
+    /// The text before the anchor is unchanged, so the anchor's position holds in both.
+    private func scheduleCompletionDocumentation() {
+        guard showsCompletionDocumentation, isCompletionVisible, let item = selectedCompletionItem, !item.isSnippet,
+              let textView else {
+            hideCompletionDocumentation()
+            return
+        }
+        // Checked before touching the buffer: re-filtering keeps the selection on most keystrokes.
+        let key = item.identityKey
+        guard key != completionDocumentationKey else { return }
+        completionDocumentationKey = key
+        completionDocumentationTask?.cancel()
+        // Main thread: only the snapshot (a piece-tree reader for large buffers, like completion's
+        // own document) and positions. The text itself is assembled off the main thread.
+        guard let document = buildLiveDocument() else { return }
+        let caret = textView.selectedRange.location
+        let anchor = liveIdentifierRange()?.location ?? caret
+        guard anchor <= caret else { return }
+        let position = livePosition(at: anchor, in: textView)
+        let engine = hoverEngine
+        completionDocumentationTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            let result = await Task.detached(priority: .userInitiated) { () -> HoverResult? in
+                let text = document.text as NSString
+                guard caret <= text.length else { return nil }
+                let hypothetical = text.replacingCharacters(in: NSRange(location: anchor, length: caret - anchor), with: item.insertText)
+                // A fresh id: the hover cache is keyed by document and caret, and this text isn't the document's.
+                let preview = Document(
+                    id: DocumentID(), url: document.url, displayName: document.displayName,
+                    contentSnapshot: TextSnapshot(version: document.version, text: hypothetical),
+                    selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
+                    cursor: Cursor(position: position), viewport: document.viewport,
+                    languageIdentifier: document.languageIdentifier
+                )
+                return await engine.hover(context: HoverContext(document: preview, cursor: preview.cursor, selection: preview.selection, trigger: .manual))
+            }.value
+            guard !Task.isCancelled, let self, self.completionDocumentationKey == key, self.isCompletionVisible else { return }
+            if let result, !result.contents.isEmpty {
+                self.showCompletionDocumentation(result.contents)
+            } else {
+                self.completionDocumentation = nil
+                self.completionDocumentationView.isHidden = true
+                self.updateOverlayVisibility()
+            }
+        }
+    }
+
+    private func showCompletionDocumentation(_ markdown: String) {
+        let model = HoverWindowModel(contents: markdown, anchorRange: currentReplacementRange ?? EditorIntelligence.TextRange(
+            start: TextPosition(line: 0, column: 0, utf16Offset: 0), end: TextPosition(line: 0, column: 0, utf16Offset: 0)
+        ), isMarkdown: true)
+        completionDocumentationView.update(model: model)
+        completionDocumentation = markdown
+        let size = HoverWindowView.preferredSize(for: model)
+        let panel = completionPanelView.frame
+        let bounds = overlayContainer.bounds
+        // Right of the popup when it fits, else left of it; top-aligned with it.
+        var x = panel.maxX + 4
+        if x + size.width > bounds.maxX - 2 { x = max(bounds.minX + 2, panel.minX - 4 - size.width) }
+        let y = min(max(bounds.minY + 2, panel.minY), max(bounds.minY + 2, bounds.maxY - size.height - 2))
+        completionDocumentationView.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
+        completionDocumentationView.isHidden = false
+        overlayContainer.isHidden = false
+    }
+
+    private func hideCompletionDocumentation() {
+        completionDocumentationTask?.cancel()
+        completionDocumentationTask = nil
+        completionDocumentationKey = nil
+        completionDocumentation = nil
+        completionDocumentationView.isHidden = true
     }
 
     // MARK: - Ghost Text
@@ -2004,7 +2106,7 @@ public final class EditorIntelligenceController {
         _ panel: NSView, near location: Int, in textView: TextView, size: NSSize = NSSize(width: 240, height: 120), preferAbove: Bool = false
     ) {
         overlayContainer.frame = textView.bounds
-        textView.bringFixedOverlaySubviewToFront(overlayContainer)
+        raiseOverlayContainer(in: textView)
         let caret = overlayContainer.convert(textView.caretRectInViewport(at: location), from: textView)
         let bounds = overlayContainer.bounds
         let below = caret.maxY + 2
@@ -2022,14 +2124,23 @@ public final class EditorIntelligenceController {
     /// Ghost text sits on the caret's own line, right after it.
     private func positionGhostText(at location: Int, in textView: TextView) {
         overlayContainer.frame = textView.bounds
-        textView.bringFixedOverlaySubviewToFront(overlayContainer)
+        raiseOverlayContainer(in: textView)
         let caret = overlayContainer.convert(textView.caretRectInViewport(at: location), from: textView)
         ghostTextView.frame = CGRect(x: caret.maxX, y: caret.minY, width: 300, height: max(16, caret.height))
+    }
+
+    /// Re-inserting a subview makes AppKit rebuild the parent's sublayer order, which can drop the
+    /// sibling Metal canvas's presented drawable (editor turns blank while a popup is up). Only
+    /// reorder when the container is not already the front-most subview.
+    private func raiseOverlayContainer(in textView: TextView) {
+        guard overlayContainer.superview !== textView || textView.subviews.last !== overlayContainer else { return }
+        textView.bringFixedOverlaySubviewToFront(overlayContainer)
     }
 
     private func updateOverlayVisibility() {
         let hasVisibleChild = !completionPanelView.isHidden
             || !hoverWindowView.isHidden
+            || !completionDocumentationView.isHidden
             || !ghostTextView.isHidden
             || !parameterHintsView.isHidden
             || !codeActionView.isHidden

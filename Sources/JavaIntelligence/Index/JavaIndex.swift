@@ -52,6 +52,42 @@ public actor JavaIndex {
     /// every overlay change, which is what keeps typing cheap on a large classpath.
     private var overlayNameIndex: [NameEntry] = []
     private var overlayPackages: Set<String> = []
+    /// Base entries by the name-derived owner: a top-level class under its package, a nested class
+    /// under its outer class (`java.util.Map.Entry` under `java.util.Map`). Lets
+    /// ``classes(inPackage:)`` touch one package's names instead of the whole classpath.
+    private var baseEntriesByOwner: [String: [NameEntry]] = [:]
+    /// Decoded stubs by source position (in `sortedSources`) and qualified name. Shards are
+    /// immutable, so entries stay valid until `setSources` replaces them; the size cap keeps a
+    /// long session from holding the whole JDK decoded.
+    private var decodedStubs: [DecodedKey: JavaClassStub] = [:]
+    private static let decodedStubLimit = 16_384
+
+    private struct DecodedKey: Hashable {
+        let source: Int
+        let qualifiedName: String
+    }
+
+    /// Bumped whenever anything a query can see changes (sources or overlay), so callers can
+    /// cache derived results (member sets, supertype closures) and drop them when it moves.
+    public private(set) var generation = 0
+
+    /// Member sets computed by ``JavaMemberLookup``, valid for the current ``generation`` only.
+    private var memberSets: [String: [JavaResolvedMember]] = [:]
+    private static let memberSetLimit = 2_048
+
+    private func bumpGeneration() {
+        generation += 1
+        memberSets.removeAll(keepingCapacity: true)
+    }
+
+    func cachedMemberSet(_ key: String) -> [JavaResolvedMember]? {
+        memberSets[key]
+    }
+
+    func storeMemberSet(_ members: [JavaResolvedMember], for key: String) {
+        if memberSets.count >= Self.memberSetLimit { memberSets.removeAll(keepingCapacity: true) }
+        memberSets[key] = members
+    }
 
     public init() {}
 
@@ -60,17 +96,21 @@ public actor JavaIndex {
     public func setSources(_ sources: [Source]) {
         self.sources = sources
         self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
+        decodedStubs = [:]
         rebuildBaseIndex()
+        bumpGeneration()
     }
 
     public func setOverlay(_ stubs: [String: JavaClassStub]) {
         self.overlay = stubs
         rebuildOverlayIndex()
+        bumpGeneration()
     }
 
     public func updateOverlay(qualifiedName: String, stub: JavaClassStub?) {
         overlay[qualifiedName] = stub
         rebuildOverlayIndex()
+        bumpGeneration()
     }
 
     /// Applies one document's overlay change: drops `removing`, then adds (or replaces) `adding`.
@@ -84,6 +124,7 @@ public actor JavaIndex {
             overlay[stub.qualifiedName] = stub
         }
         rebuildOverlayIndex()
+        bumpGeneration()
     }
 
     private func rebuildBaseIndex() {
@@ -108,8 +149,14 @@ public actor JavaIndex {
             }
         }
         entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
+        var byOwner: [String: [NameEntry]] = [:]
+        for entry in entries {
+            let owner = entry.qualifiedName.range(of: ".", options: .backwards).map { String(entry.qualifiedName[..<$0.lowerBound]) } ?? ""
+            byOwner[owner, default: []].append(entry)
+        }
         self.baseNameIndex = entries
         self.basePackages = pkgs
+        self.baseEntriesByOwner = byOwner
     }
 
     private func rebuildOverlayIndex() {
@@ -158,9 +205,13 @@ public actor JavaIndex {
         if let overlaid = overlay[qualifiedName] {
             return overlaid
         }
-        for source in sortedSources {
+        for (position, source) in sortedSources.enumerated() {
             guard isVisible(shardPath: source.shardPath, precedence: source.precedence) else { continue }
+            let key = DecodedKey(source: position, qualifiedName: qualifiedName)
+            if let cached = decodedStubs[key] { return cached }
             if let stub = source.reader.classStub(named: qualifiedName) {
+                if decodedStubs.count >= Self.decodedStubLimit { decodedStubs.removeAll(keepingCapacity: true) }
+                decodedStubs[key] = stub
                 return stub
             }
         }
@@ -299,16 +350,22 @@ public actor JavaIndex {
         return patternIndex == pattern.endIndex
     }
 
-    /// All classes whose package is exactly `packageName`.
+    /// All classes whose package is exactly `packageName`, nested classes included.
     public func classes(inPackage packageName: String) -> [JavaClassStub] {
         var seenQualified = Set<String>()
         var results: [JavaClassStub] = []
-        for table in [overlayNameIndex, baseNameIndex] {
-            for entry in table {
-                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
-                guard seenQualified.insert(entry.qualifiedName).inserted else { continue }
-                guard let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
+        for stub in overlay.values where stub.packageName == packageName && seenQualified.insert(stub.qualifiedName).inserted {
+            results.append(stub)
+        }
+        // Top-level classes are listed under the package; their nested classes under them.
+        var owners = [packageName]
+        while let owner = owners.popLast() {
+            for entry in baseEntriesByOwner[owner] ?? [] {
+                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                      seenQualified.insert(entry.qualifiedName).inserted,
+                      let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
                 results.append(stub)
+                owners.append(entry.qualifiedName)
             }
         }
         return results

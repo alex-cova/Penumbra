@@ -34,6 +34,25 @@ final class JavaReceiverScannerTests: XCTestCase {
         XCTAssertEqual(extract("list.stream().filter(x -> x > 0)."), "list.stream().filter(x -> x > 0)")
     }
 
+    func testFluentChainAcrossLines() {
+        XCTAssertEqual(extract("int a = 1;\n    users\n        .stream()\n        ."), "users\n        .stream()")
+    }
+
+    func testChainWithTrailingDotBeforeLineBreak() {
+        XCTAssertEqual(extract("x = 1;\n    users.\n        stream()."), "users.\n        stream()")
+    }
+
+    func testChainWithCommentsBetweenLinks() {
+        XCTAssertEqual(
+            extract("x();\n    user // current\n        .getAddress() /* never null */\n        ."),
+            "user // current\n        .getAddress()"
+        )
+    }
+
+    func testLineBreakWithoutDotStillEndsReceiver() {
+        XCTAssertEqual(extract("int a = b\n    address."), "address")
+    }
+
     func testArrayIndex() {
         XCTAssertEqual(extract("array[0]."), "array[0]")
     }

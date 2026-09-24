@@ -83,7 +83,9 @@ public enum CompletionMatcher {
         let lowerQ = q.map(lower)
         let lowerC = c.map(lower)
         if lowerQ.count == lowerC.count, lowerQ == lowerC {
-            return Match(tier: .exactIgnoringCase, firstCharacterCaseMatches: firstCaseMatches, matchedOffsets: Array(0..<c.count))
+            // Only a whole-word match when the first letter's case agrees (`users` for `Users`
+            // is not the same name, it is a prefix match like any other).
+            return Match(tier: firstCaseMatches ? .exactIgnoringCase : .prefix, firstCharacterCaseMatches: firstCaseMatches, matchedOffsets: Array(0..<c.count))
         }
         if Array(lowerC.prefix(lowerQ.count)) == lowerQ {
             return Match(tier: .prefix, firstCharacterCaseMatches: firstCaseMatches, matchedOffsets: Array(0..<q.count))

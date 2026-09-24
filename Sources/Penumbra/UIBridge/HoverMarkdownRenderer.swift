@@ -5,6 +5,7 @@
 ///
 /// It handles the subset hover text actually uses rather than all of CommonMark, so a hover never
 /// depends on a Markdown view.
+@MainActor
 enum HoverMarkdownRenderer {
     static let bodyFont = NSFont.systemFont(ofSize: 12)
     static let codeFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)

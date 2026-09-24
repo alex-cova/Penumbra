@@ -52,7 +52,41 @@ enum JavaExpectedType {
             }
             return resolved
         }
-        return []
+        return await structuralExpectation(at: prefixStart, request: request)
+    }
+
+    /// Node types that extend an expression rightward from the same start (`user.get|`), climbed
+    /// to reach the whole expression being completed.
+    private static let expressionContinuations: Set<String> = [
+        "field_access", "method_invocation", "array_access", "method_reference"
+    ]
+
+    /// Expected type from the tree around the expression starting at `offset`, for positions the
+    /// byte-level checks above don't recognise: a ternary branch (`return flag ? label : |`), a
+    /// lambda body (`Function<User, String> f = u -> u.|`), a cast operand.
+    private static func structuralExpectation(at offset: Int, request: JavaSemanticRequest) async -> [JavaTypeRef] {
+        var node = request.tree.node(atByteOffset: offset)
+        while let parent = node.parent, parent.startByte == node.startByte, expressionContinuations.contains(parent.type) {
+            node = parent
+        }
+        let context = request.context
+        let index = request.index
+        if let lambda = node.parent, lambda.type == "lambda_expression", lambda.child(byFieldName: "body")?.startByte == node.startByte {
+            guard let target = JavaLocalScope.expressionTarget(of: lambda) else { return [] }
+            for functional in await JavaExpressionTyper.functionalTargets(of: target, locals: request.locals, context: context, index: index) {
+                guard let signature = await JavaExpressionTyper.functionalSignature(of: functional, context: context, index: index) else { continue }
+                let returned = await JavaTypeResolver.resolve(signature.returnType, context: context, index: index)
+                if returned == .void { return [] }
+                if case .typeVariable = returned { continue }
+                return [returned]
+            }
+            return []
+        }
+        guard let target = JavaLocalScope.expressionTarget(of: node) else { return [] }
+        // Call arguments are answered by `callSite`, which knows every overload.
+        if case .argument = target { return [] }
+        return await JavaExpressionTyper.functionalTargets(of: target, locals: request.locals, context: context, index: index)
+            .filter { if case .typeVariable = $0 { return false } else { return true } }
     }
 
     /// The variable name immediately before `=`, so `String name = get|` can prefer `getName`.
@@ -311,9 +345,69 @@ actor JavaAssignability {
         await JavaTypeResolver.resolve(type, context: context, index: index)
     }
 
-    /// Whether a value of `type` can be used where `expected` is wanted (erased; boxing and
-    /// primitive widening included).
+    /// Whether a value of `type` can be used where `expected` is wanted: boxing and primitive
+    /// widening included, and type arguments checked when both sides have them (`List<String>` is
+    /// not a `List<User>`; `ArrayList<User>` is a `Collection<? extends Named>`). A raw type, an
+    /// unresolved name, or a type variable on either side is given the benefit of the doubt.
     func isAssignable(_ type: JavaTypeRef, to expected: JavaTypeRef) async -> Bool {
+        guard await isErasedAssignable(type, to: expected) else { return false }
+        guard case .classType(let name, let arguments, _) = type,
+              case .classType(let expectedName, let expectedArguments, _) = expected,
+              !arguments.isEmpty, !expectedArguments.isEmpty else { return true }
+        let viewed = name == expectedName ? type : await JavaMemberLookup.asSupertype(type, named: expectedName, index: index)
+        guard case .classType(_, let viewedArguments, _)? = viewed, viewedArguments.count == expectedArguments.count else { return true }
+        for (expectedArgument, actual) in zip(expectedArguments, viewedArguments) where !(await contains(expectedArgument, actual)) {
+            return false
+        }
+        return true
+    }
+
+    /// Type-argument containment (JLS 4.5.1): `? extends B` holds subtypes of `B`, `? super B`
+    /// supertypes, and a plain type argument only the same type.
+    private func contains(_ expected: JavaTypeArgument, _ actual: JavaTypeArgument) async -> Bool {
+        let actualType: JavaTypeRef?
+        switch actual {
+        case .type(let type): actualType = type
+        case .wildcard(.extends(let type)?): actualType = type
+        case .wildcard: actualType = nil
+        }
+        switch expected {
+        case .wildcard(nil):
+            return true
+        case .wildcard(.extends(let bound)?):
+            guard let actualType else { return true }
+            return await isAssignable(await resolve(actualType), to: await resolve(bound))
+        case .wildcard(.superBound(let bound)?):
+            guard let actualType else { return true }
+            return await isAssignable(await resolve(bound), to: await resolve(actualType))
+        case .type(let type):
+            guard case .type(let actualPlain) = actual else { return false }
+            return Self.isSameType(await resolve(type), await resolve(actualPlain))
+        }
+    }
+
+    private static func isSameType(_ lhs: JavaTypeRef, _ rhs: JavaTypeRef) -> Bool {
+        switch (lhs, rhs) {
+        case (.typeVariable, _), (_, .typeVariable), (.unresolved, _), (_, .unresolved), (.wildcard, _), (_, .wildcard):
+            return true
+        case (.classType(let l, let la, _), .classType(let r, let ra, _)):
+            guard l == r else { return false }
+            guard !la.isEmpty, !ra.isEmpty, la.count == ra.count else { return true }
+            return zip(la, ra).allSatisfy { pair in
+                switch pair {
+                case (.type(let a), .type(let b)): return isSameType(a, b)
+                default: return true
+                }
+            }
+        case (.array(let l), .array(let r)):
+            return isSameType(l, r)
+        default:
+            return lhs == rhs
+        }
+    }
+
+    /// The erased check: same class or a supertype, boxing, primitive widening, arrays.
+    private func isErasedAssignable(_ type: JavaTypeRef, to expected: JavaTypeRef) async -> Bool {
         switch (type, expected) {
         case (.primitive(let from), .primitive(let to)):
             return from == to || Self.widens(from, to)
@@ -325,7 +419,7 @@ actor JavaAssignability {
             if name == expectedName || expectedName == "java.lang.Object" { return true }
             return await closure(of: name).contains(expectedName)
         case (.array(let element), .array(let expectedElement)):
-            return await isAssignable(element, to: expectedElement)
+            return await isErasedAssignable(element, to: expectedElement)
         case (.array, .classType(let expectedName, _, _)):
             return expectedName == "java.lang.Object"
         default:

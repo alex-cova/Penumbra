@@ -110,6 +110,9 @@ public final class CompletionPanelView: NSView {
         if let tail = item.labelDetail, !tail.isEmpty {
             width += (tail as NSString).size(withAttributes: [.font: detailFont]).width
         }
+        if let origin = item.origin, !origin.isEmpty {
+            width += ("  \(origin)" as NSString).size(withAttributes: [.font: detailFont]).width
+        }
         if let detail = item.detail, !detail.isEmpty {
             width += columnGap + (detail as NSString).size(withAttributes: [.font: detailFont]).width
         }
@@ -294,6 +297,9 @@ public final class CompletionPanelView: NSView {
         }
         if let tail = item.labelDetail, !tail.isEmpty {
             text.append(NSAttributedString(string: tail, attributes: [.font: Self.detailFont, .foregroundColor: secondaryColor]))
+        }
+        if let origin = item.origin, !origin.isEmpty {
+            text.append(NSAttributedString(string: "  \(origin)", attributes: [.font: Self.detailFont, .foregroundColor: NSColor.tertiaryLabelColor]))
         }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail

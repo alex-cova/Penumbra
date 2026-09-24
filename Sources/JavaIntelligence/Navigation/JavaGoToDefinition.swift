@@ -92,7 +92,8 @@ struct JavaNavigationSession {
             packageName: file.packageName,
             imports: file.imports,
             enclosingTypeQualifiedNames: qualified,
-            typeParameterNames: enclosing.typeParameterNames.union(Self.methodTypeParameters(in: tree, atByteOffset: byteOffset))
+            typeParameterNames: enclosing.typeParameterNames.union(Self.methodTypeParameters(in: tree, atByteOffset: byteOffset)),
+            typeParameterBounds: JavaCompletionProvider.typeParameterBounds(in: tree, atByteOffset: byteOffset)
         )
     }
 

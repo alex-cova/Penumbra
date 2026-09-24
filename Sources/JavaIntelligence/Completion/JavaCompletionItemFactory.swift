@@ -4,6 +4,19 @@ import Foundation
 /// Relevance buckets for ``CompletionItem/priority``, highest first -- the ordering IntelliJ uses
 /// within one match tier: locals, then members declared by the receiver's own class, inherited
 /// members, and `Object`'s members last.
+///
+/// The ranking features, in the order they dominate (each is named where it is applied, and
+/// each has corpus cases under `Fixtures/JavaCompletionCorpus/cases`):
+/// 1. match tier and first-letter case (``DefaultRanker``, `CompletionMatcher`);
+/// 2. expected type (``expectedTypeBonus``, `preselect`);
+/// 3. scope bucket (the constants below);
+/// 4. package affinity for classes (`classPriority`: same package or single import > `java.lang` >
+///    on-demand import; `java.*` > libraries > JDK internals), preferred implementation after
+///    `new` (``affinityStep``);
+/// 5. name affinity (`memberAdjustment`: the assigned variable's name, `void` sinking in
+///    expressions);
+/// 6. deprecation (``deprecatedPenalty``);
+/// 7. recency, kind, then shorter and alphabetical labels (``DefaultRanker``).
 enum JavaCompletionPriority {
     static let local = 4.0
     static let ownMember = 3.0
@@ -16,6 +29,8 @@ enum JavaCompletionPriority {
     static let objectMember = 0.25
     static let deprecatedPenalty = -3.0
     static let expectedTypeBonus = 5.0
+    /// One step of package affinity between classes in the same scope bucket.
+    static let affinityStep = 0.25
 }
 
 /// Builds ``CompletionItem``s for Java members, locals, classes and keywords with IntelliJ-style
@@ -44,6 +59,10 @@ struct JavaCompletionItemFactory {
         }
         let deprecated = member.modifiers.contains(.deprecatedFlag)
         if deprecated { priority += JavaCompletionPriority.deprecatedPenalty }
+        // Inherited members name the type they come from; the receiver's own members don't.
+        let origin: String? = receiverQualifiedName == nil || declaringClass == receiverQualifiedName || declaringClass == "<array>"
+            ? nil
+            : String(declaringClass.split(separator: ".").last ?? Substring(declaringClass))
         if expectedMatch { priority += JavaCompletionPriority.expectedTypeBonus }
         priority += priorityAdjustment
 
@@ -59,7 +78,8 @@ struct JavaCompletionItemFactory {
                 detail: Self.display(field.type),
                 isDeprecated: deprecated,
                 priority: priority,
-                preselect: expectedMatch
+                preselect: expectedMatch,
+                origin: origin
             )
         case .method(let method, _):
             let hasParameters = !method.parameters.isEmpty
@@ -78,7 +98,8 @@ struct JavaCompletionItemFactory {
                 priority: priority,
                 caretOffset: !asMethodReference && hasParameters ? (method.name as NSString).length + 1 : nil,
                 triggersSignatureHelp: !asMethodReference && hasParameters,
-                preselect: expectedMatch
+                preselect: expectedMatch,
+                origin: origin
             )
         }
     }

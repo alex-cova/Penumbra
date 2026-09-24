@@ -34,6 +34,7 @@ func printUsageAndExit() -> Never {
       save <path> [--highlighted] [--deferred]
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR]
+      java-completion synthetic
 
     scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
     manual / nightly (print numbers, never fail on frame time). Use `synthetic` for a
@@ -68,7 +69,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal"
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -82,6 +83,8 @@ do {
         MetalCommands.scrollFrames(pathOrSynthetic: path, frames: frames, baselinePath: flagValue("--baseline", in: rest))
     case "snapshot-metal":
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
+    case "java-completion":
+        try JavaCompletionProfile.run()
     case "open":
         try Commands.open(path: path, options: options)
     case "scroll":

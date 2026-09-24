@@ -71,6 +71,25 @@ public enum JavaMemberLookup {
         guard case .classType(let qualifiedName, let arguments, _) = type else {
             return []
         }
+        // Everything the walk reads: the type, the mode, what access is checked against, the
+        // resolution fallbacks, and which shards are visible. The index clears the cache whenever
+        // its sources or overlay change.
+        let scope = JavaIndex.queryScope.map { $0.sorted().joined(separator: ",") } ?? "*"
+        let cacheKey = "\(type)|\(mode)|\(checkAccess)|\(context.packageName)|\(context.enclosingTypeQualifiedNames)|\(context.imports)|\(scope)"
+        if sourceTextProvider == nil, let cached = await index.cachedMemberSet(cacheKey) {
+            return cached
+        }
+        let result = await walkMembers(of: qualifiedName, arguments: arguments, mode: mode, context: context, index: index, checkAccess: checkAccess)
+        if sourceTextProvider == nil {
+            await index.storeMemberSet(result, for: cacheKey)
+        }
+        return result
+    }
+
+    private static func walkMembers(
+        of qualifiedName: String, arguments: [JavaTypeArgument], mode: JavaMemberLookupMode,
+        context: JavaResolutionContext, index: JavaIndex, checkAccess: Bool
+    ) async -> [JavaResolvedMember] {
         let selfHierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
         let fileCache = DeclaringFileCache()
 
@@ -105,6 +124,10 @@ public enum JavaMemberLookup {
             }
             for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
                 guard mode == .instance || method.modifiers.contains(.staticFlag) else { continue }
+                // A static interface method is not inherited and can't be called through an
+                // instance: `List.of(…)` only, never `users.of(…)` or `ArrayList.of(…)`.
+                if stub.kind == .interfaceKind, method.modifiers.contains(.staticFlag),
+                   mode == .instance || currentName != qualifiedName { continue }
                 if checkAccess {
                     guard await isAccessible(method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
                 }
@@ -464,6 +487,44 @@ public enum JavaMemberLookup {
 // MARK: - Direct supertypes
 
 extension JavaMemberLookup {
+    /// `type` viewed as its supertype `target`, with type arguments carried through each level:
+    /// `ArrayList<User>` as `java.util.Collection` is `Collection<User>`. `nil` when `target` is
+    /// not a supertype. A raw `type` gives `target` with no arguments.
+    public static func asSupertype(_ type: JavaTypeRef, named target: String, index: JavaIndex) async -> JavaTypeRef? {
+        guard case .classType(let start, let arguments, _) = type else { return nil }
+        let cache = DeclaringFileCache()
+        var visited = Set<String>()
+        var queue: [(name: String, substitution: [String: JavaTypeRef], isRaw: Bool)] = [
+            (start, await substitutionMap(forTypeArguments: arguments, appliedTo: start, index: index), arguments.isEmpty)
+        ]
+        var position = 0
+        while position < queue.count {
+            let (name, substitution, isRaw) = queue[position]
+            position += 1
+            guard visited.insert(name).inserted, let stub = await index.classStub(qualifiedName: name) else { continue }
+            if name == target {
+                guard !isRaw else { return .classType(qualifiedName: name, arguments: [], outer: nil) }
+                let viewed = stub.typeParameters.map { parameter -> JavaTypeArgument in
+                    .type(substitution[parameter.name] ?? .typeVariable(name: parameter.name))
+                }
+                return .classType(qualifiedName: name, arguments: viewed, outer: nil)
+            }
+            let fallback = JavaResolutionContext(packageName: stub.packageName, imports: [])
+            var supertypes: [JavaTypeRef] = []
+            if stub.kind != .interfaceKind, let superclass = stub.superclass { supertypes.append(superclass) }
+            supertypes += stub.interfaces
+            for supertype in supertypes {
+                let resolved = await resolveSupertype(substitute(supertype, using: substitution), declaredOn: stub, context: fallback, index: index, cache: cache)
+                guard case .classType(let superName, let superArguments, _) = resolved else { continue }
+                queue.append((superName, await substitutionMap(forTypeArguments: superArguments, appliedTo: superName, index: index), isRaw || superArguments.isEmpty))
+            }
+            if target == "java.lang.Object", stub.kind != .interfaceKind {
+                queue.append(("java.lang.Object", [:], true))
+            }
+        }
+        return nil
+    }
+
     /// The types `qualifiedName` directly extends or implements, superclass first, each resolved
     /// against the declaring file's package and imports. A class with no declared superclass
     /// extends `java.lang.Object`; an interface does not. Supertypes that cannot be resolved are

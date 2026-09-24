@@ -36,13 +36,9 @@ enum JavaReceiverScanner {
     static func receiverRange(in bytes: [UInt8], dotOffset: Int) -> Range<Int>? {
         guard dotOffset >= 0, dotOffset < bytes.count, bytes[dotOffset] == UInt8(ascii: ".") else { return nil }
 
-        // Skip any whitespace directly before the dot itself (`foo .bar`, unusual but legal) so
-        // the main scan below starts from the receiver's real last character.
-        var end = dotOffset
-        while end > 0, isWhitespaceByte(bytes[end - 1]) {
-            end -= 1
-        }
-        guard end > 0 else { return nil }
+        // Skip whitespace and comments directly before the dot itself (`foo .bar`, `foo /* x */.`)
+        // so the main scan below starts from the receiver's real last character.
+        guard let end = skipTrivia(bytes, before: dotOffset), end > 0 else { return nil }
 
         var i = end
         var bracketStack: [UInt8] = []
@@ -88,13 +84,17 @@ enum JavaReceiverScanner {
                 i -= 1
             case let ch where isIdentifierByte(ch):
                 i -= 1
-            case let ch where isWhitespaceByte(ch):
+            case let ch where isWhitespaceByte(ch) || ch == UInt8(ascii: "/"):
                 // Whitespace at depth 0 is normally a token boundary (`return foo` stops right
                 // after `return `) -- except when the word just before it is `new`, which prefixes
                 // a constructor call and is part of the same expression (`new Foo().bar` should
-                // scan the whole `new Foo()`).
+                // scan the whole `new Foo()`), or when a `.` is on either side of it: a fluent
+                // chain broken over lines (`users\n    .stream()`), comments included.
                 if let afterNew = consumeNewKeyword(bytes, before: i) {
                     i = afterNew
+                } else if let skipped = skipTrivia(bytes, before: i), skipped < i,
+                          bytes[i] == UInt8(ascii: ".") || (skipped > 0 && bytes[skipped - 1] == UInt8(ascii: ".")) {
+                    i = skipped
                 } else {
                     return finish(i, end)
                 }
@@ -147,6 +147,55 @@ enum JavaReceiverScanner {
             default:
                 j -= 1
             }
+        }
+        return nil
+    }
+
+    /// Moves `i` backward over whitespace, `/* */` comments and the `//` comment ending the line
+    /// before a line break. `nil` when a comment can't be matched.
+    static func skipTrivia(_ bytes: [UInt8], before i: Int) -> Int? {
+        var j = i
+        while j > 0 {
+            let c = bytes[j - 1]
+            if isWhitespaceByte(c) {
+                if c == UInt8(ascii: "\n"), let commentStart = lineCommentStart(bytes, lineEndingAt: j - 1) {
+                    j = commentStart
+                } else {
+                    j -= 1
+                }
+            } else if c == UInt8(ascii: "/"), j >= 2, bytes[j - 2] == UInt8(ascii: "*") {
+                var k = j - 2
+                while k > 0, !(bytes[k - 1] == UInt8(ascii: "/") && bytes[k] == UInt8(ascii: "*")) {
+                    k -= 1
+                }
+                guard k > 0 else { return nil }
+                j = k - 1
+            } else {
+                break
+            }
+        }
+        return j
+    }
+
+    /// Start of a `//` comment on the line that ends at `newline`, outside string literals.
+    private static func lineCommentStart(_ bytes: [UInt8], lineEndingAt newline: Int) -> Int? {
+        var lineStart = newline
+        while lineStart > 0, bytes[lineStart - 1] != UInt8(ascii: "\n") {
+            lineStart -= 1
+        }
+        var inString: UInt8?
+        var k = lineStart
+        while k < newline {
+            let c = bytes[k]
+            if let quote = inString {
+                if c == UInt8(ascii: "\\") { k += 2; continue }
+                if c == quote { inString = nil }
+            } else if c == UInt8(ascii: "\"") || c == UInt8(ascii: "'") {
+                inString = c
+            } else if c == UInt8(ascii: "/"), k + 1 < newline, bytes[k + 1] == UInt8(ascii: "/") {
+                return k
+            }
+            k += 1
         }
         return nil
     }

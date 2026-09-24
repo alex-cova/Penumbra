@@ -14,17 +14,22 @@ public struct JavaResolutionContext: Sendable {
     /// Every type parameter name in scope: the enclosing type(s)' own parameters plus, when
     /// resolving inside a specific method, that method's parameters too.
     public let typeParameterNames: Set<String>
+    /// The first declared bound of each bounded type parameter in scope (`T extends Animal` →
+    /// `Animal`), unresolved as written. A value of type `T` has the bound's members.
+    public let typeParameterBounds: [String: JavaTypeRef]
 
     public init(
         packageName: String,
         imports: [JavaImportDeclaration],
         enclosingTypeQualifiedNames: [String] = [],
-        typeParameterNames: Set<String> = []
+        typeParameterNames: Set<String> = [],
+        typeParameterBounds: [String: JavaTypeRef] = [:]
     ) {
         self.packageName = packageName
         self.imports = imports
         self.enclosingTypeQualifiedNames = enclosingTypeQualifiedNames
         self.typeParameterNames = typeParameterNames
+        self.typeParameterBounds = typeParameterBounds
     }
 
     /// The outermost enclosing type, e.g. `"Outer"` from `["Outer.Inner", "Outer"]`, used for
@@ -45,7 +50,8 @@ public struct JavaResolutionContext: Sendable {
             packageName: packageName,
             imports: imports,
             enclosingTypeQualifiedNames: [stub.qualifiedName] + enclosingTypeQualifiedNames,
-            typeParameterNames: typeParameterNames.union(stub.typeParameters.map(\.name))
+            typeParameterNames: typeParameterNames.union(stub.typeParameters.map(\.name)),
+            typeParameterBounds: Self.bounds(stub.typeParameters, over: typeParameterBounds)
         )
     }
 
@@ -56,7 +62,17 @@ public struct JavaResolutionContext: Sendable {
             packageName: packageName,
             imports: imports,
             enclosingTypeQualifiedNames: enclosingTypeQualifiedNames,
-            typeParameterNames: typeParameterNames.union(methodTypeParameters.map(\.name))
+            typeParameterNames: typeParameterNames.union(methodTypeParameters.map(\.name)),
+            typeParameterBounds: Self.bounds(methodTypeParameters, over: typeParameterBounds)
         )
+    }
+
+    /// `outer` with `parameters` shadowing it: an inner `<T>` without a bound hides an outer bound.
+    private static func bounds(_ parameters: [JavaTypeParameter], over outer: [String: JavaTypeRef]) -> [String: JavaTypeRef] {
+        var result = outer
+        for parameter in parameters {
+            result[parameter.name] = parameter.bounds.first
+        }
+        return result
     }
 }

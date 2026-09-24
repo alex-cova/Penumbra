@@ -171,6 +171,28 @@ public enum JavaSourceStubBuilder {
                                 declaringKind: kind, fields: &fields, methods: &methods, innerTypeNames: &innerTypeNames, nestedTypes: &result)
             }
         }
+        // javac gives every enum `Enum<Self>` as superclass plus static `values()`/`valueOf(String)`,
+        // and every record `Record`; a compiled class file shows them, so the source stub does too.
+        let selfType = JavaTypeRef.classType(qualifiedName: qualifiedName, arguments: [], outer: nil)
+        if kind == .enumKind {
+            superclass = .classType(qualifiedName: "java.lang.Enum", arguments: [.type(selfType)], outer: nil)
+            if !methods.contains(where: { $0.name == "values" && $0.parameters.isEmpty }) {
+                methods.append(JavaMethodStub(name: "values", parameters: [], returnType: .array(element: selfType), modifiers: [.publicFlag, .staticFlag]))
+            }
+            if !methods.contains(where: { $0.name == "valueOf" && $0.parameters.count == 1 }) {
+                methods.append(JavaMethodStub(
+                    name: "valueOf",
+                    parameters: [JavaParameterStub(name: "name", type: .classType(qualifiedName: "java.lang.String", arguments: [], outer: nil))],
+                    returnType: selfType, modifiers: [.publicFlag, .staticFlag]
+                ))
+            }
+        } else if kind == .recordKind, superclass == nil {
+            superclass = .classType(qualifiedName: "java.lang.Record", arguments: [], outer: nil)
+        }
+        if outerKind(of: node) == .interfaceKind {
+            // Member types of an interface are implicitly `public static`.
+            modifiers.formUnion([.publicFlag, .staticFlag])
+        }
         if kind == .annotationKind, let body = node.child(byFieldName: "body") {
             for element in body.namedChildren where element.type == "annotation_type_element_declaration" {
                 guard let typeNode = element.child(byFieldName: "type"), let elementName = element.child(byFieldName: "name") else { continue }
@@ -187,6 +209,16 @@ public enum JavaSourceStubBuilder {
         result.append(stub)
     }
 
+    /// The kind of the type declaration `node` is directly nested in, if any.
+    private static func outerKind(of node: SyntaxNode) -> JavaTypeKind? {
+        guard let body = node.parent, let owner = body.parent else { return nil }
+        switch owner.type {
+        case "interface_declaration": return .interfaceKind
+        case "annotation_type_declaration": return .annotationKind
+        default: return nil
+        }
+    }
+
     /// Shared by `class_body`, `interface_body`, and enum `enum_body_declarations`: scans a
     /// declaration list for fields, methods/constructors, and nested types, recursing into
     /// `buildType` for the latter (which appends to `nestedTypes`, the flattened result list).
@@ -199,7 +231,7 @@ public enum JavaSourceStubBuilder {
             let javadoc = javadocText(precedingSiblingOf: index, in: members)
             switch member.type {
             case "field_declaration":
-                fields.append(contentsOf: parseFields(member, javadoc: javadoc))
+                fields.append(contentsOf: parseFields(member, declaringKind: declaringKind, javadoc: javadoc))
             case "method_declaration":
                 if let method = parseMethod(member, declaringKind: declaringKind, javadoc: javadoc) {
                     methods.append(method)
@@ -220,10 +252,14 @@ public enum JavaSourceStubBuilder {
         }
     }
 
-    private static func parseFields(_ node: SyntaxNode, javadoc: String?) -> [JavaFieldStub] {
+    private static func parseFields(_ node: SyntaxNode, declaringKind: JavaTypeKind, javadoc: String?) -> [JavaFieldStub] {
         guard let typeNode = node.child(byFieldName: "type") else { return [] }
         let type = JavaTypeNodeConverter.convert(typeNode)
-        let modifiers = parseModifiers(node.namedChildren.first { $0.type == "modifiers" })
+        var modifiers = parseModifiers(node.namedChildren.first { $0.type == "modifiers" })
+        if declaringKind == .interfaceKind || declaringKind == .annotationKind {
+            // Interface fields are implicitly `public static final` constants.
+            modifiers.formUnion([.publicFlag, .staticFlag, .finalFlag])
+        }
         return node.namedChildren(ofType: "variable_declarator").compactMap { declarator in
             guard let nameNode = declarator.child(byFieldName: "name") else { return nil }
             return JavaFieldStub(name: nameNode.text, type: type, modifiers: modifiers, javadoc: javadoc)
@@ -242,6 +278,11 @@ public enum JavaSourceStubBuilder {
         if (declaringKind == .interfaceKind || declaringKind == .annotationKind), node.child(byFieldName: "body") == nil {
             modifiers.insert(.publicFlag)
             modifiers.insert(.abstractFlag)
+        }
+        // Default and static interface methods are implicitly public too (only an explicit
+        // `private` opts out), as a compiled interface's class file records.
+        if declaringKind == .interfaceKind, !modifiers.contains(.privateFlag) {
+            modifiers.insert(.publicFlag)
         }
         let typeParameters = parseTypeParameters(node.child(byFieldName: "type_parameters"))
         return JavaMethodStub(

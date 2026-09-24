@@ -38,9 +38,12 @@ public enum JavaCompletionSite: Equatable, Sendable {
 /// is unreliable right after a trigger character, see ``JavaReceiverScanner``).
 public enum JavaCompletionContextClassifier {
     /// Words that can precede `(` without it being a method call.
+    /// `keyword (` opens an expression that may be a cast or a parenthesized value.
     private static let nonCallKeywords: Set<String> = [
-        "if", "for", "while", "switch", "return", "throw", "synchronized", "assert", "try", "new", "else", "do"
+        "return", "throw", "assert", "new", "else", "do", "yield"
     ]
+    /// `keyword (` opens a condition or header, not a cast: statement completion applies.
+    private static let controlKeywords: Set<String> = ["if", "for", "while", "switch", "synchronized", "try"]
 
     public static func classify(bytes: [UInt8], tree: JavaSyntaxTree, prefixStart: Int) -> JavaCompletionSite {
         if isInsideStringOrComment(tree: tree, bytes: bytes, offset: prefixStart) {
@@ -84,6 +87,9 @@ public enum JavaCompletionContextClassifier {
             if wordBefore == "catch" {
                 return .typeOnly(keyword: "catch")
             }
+            if let wordBefore, controlKeywords.contains(wordBefore) {
+                return structuralSite(tree: tree, bytes: bytes, offset: prefixStart)
+            }
             if wordBefore == nil || nonCallKeywords.contains(wordBefore!) {
                 return .cast
             }
@@ -92,7 +98,7 @@ public enum JavaCompletionContextClassifier {
             return .typeOnly(keyword: "catch")
         }
 
-        return structuralSite(tree: tree, offset: prefixStart)
+        return structuralSite(tree: tree, bytes: bytes, offset: prefixStart)
     }
 
     // MARK: - Structure
@@ -100,7 +106,12 @@ public enum JavaCompletionContextClassifier {
     /// Walks up from the caret: the first enclosing body decides between member-declaration and
     /// statement positions. `offset` points into the identifier being completed (the provider
     /// parses with a dummy identifier at the caret, so there always is one).
-    private static func structuralSite(tree: JavaSyntaxTree, offset: Int) -> JavaCompletionSite {
+    private static func structuralSite(tree: JavaSyntaxTree, bytes: [UInt8], offset: Int) -> JavaCompletionSite {
+        // Outside every `{…}` is file level, whatever tree-sitter made of the dummy identifier
+        // there (it parses as an expression statement).
+        if braceDepth(bytes: bytes, before: offset) == 0 {
+            return .topLevel
+        }
         var current: SyntaxNode? = tree.node(atByteOffset: offset)
         var sawTypeDeclaration = false
         while let node = current {
@@ -123,6 +134,46 @@ public enum JavaCompletionContextClassifier {
             current = node.parent
         }
         return .statement
+    }
+
+    /// Unclosed `{` before `offset`, skipping string, character and text-block literals and
+    /// comments.
+    static func braceDepth(bytes: [UInt8], before offset: Int) -> Int {
+        var depth = 0
+        var index = 0
+        let end = min(offset, bytes.count)
+        while index < end {
+            let byte = bytes[index]
+            switch byte {
+            case UInt8(ascii: "{"):
+                depth += 1
+            case UInt8(ascii: "}"):
+                depth = max(0, depth - 1)
+            case UInt8(ascii: "/") where index + 1 < end && bytes[index + 1] == UInt8(ascii: "/"):
+                while index < end, bytes[index] != UInt8(ascii: "\n") { index += 1 }
+            case UInt8(ascii: "/") where index + 1 < end && bytes[index + 1] == UInt8(ascii: "*"):
+                index += 2
+                while index + 1 < end, !(bytes[index] == UInt8(ascii: "*") && bytes[index + 1] == UInt8(ascii: "/")) { index += 1 }
+                index += 1
+            case UInt8(ascii: "\""), UInt8(ascii: "'"):
+                let isTextBlock = byte == UInt8(ascii: "\"") && index + 2 < end && bytes[index + 1] == byte && bytes[index + 2] == byte
+                if isTextBlock {
+                    index += 3
+                    while index + 2 < end, !(bytes[index] == byte && bytes[index + 1] == byte && bytes[index + 2] == byte) { index += 1 }
+                    index += 2
+                } else {
+                    index += 1
+                    while index < end, bytes[index] != byte, bytes[index] != UInt8(ascii: "\n") {
+                        if bytes[index] == UInt8(ascii: "\\") { index += 1 }
+                        index += 1
+                    }
+                }
+            default:
+                break
+            }
+            index += 1
+        }
+        return depth
     }
 
     private static func isInsideStringOrComment(tree: JavaSyntaxTree, bytes: [UInt8], offset: Int) -> Bool {
@@ -194,7 +245,7 @@ public enum JavaCompletionContextClassifier {
     /// Whether only whitespace/comments separate `offset` from the previous statement (`;`, `}`,
     /// `{`) or the start of the file.
     private static func isStatementStart(bytes: [UInt8], before offset: Int) -> Bool {
-        let end = skipWhitespace(backwardFrom: offset, in: bytes)
+        let end = JavaReceiverScanner.skipTrivia(bytes, before: offset) ?? skipWhitespace(backwardFrom: offset, in: bytes)
         guard end > 0 else { return true }
         let byte = bytes[end - 1]
         return byte == UInt8(ascii: ";") || byte == UInt8(ascii: "}") || byte == UInt8(ascii: "{") || byte == UInt8(ascii: "/")

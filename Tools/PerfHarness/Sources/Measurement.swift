@@ -56,6 +56,28 @@ enum Measurement {
         return sorted[index]
     }
 
+    /// Bytes currently in use in the default malloc zone.
+    static func mallocBytesInUse() -> UInt64 {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(malloc_default_zone(), &stats)
+        return UInt64(stats.size_in_use)
+    }
+
+    /// User + system CPU time of the calling thread, in seconds.
+    static func threadCPUSeconds() -> Double {
+        var info = thread_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.stride / MemoryLayout<natural_t>.stride)
+        let result = withUnsafeMutablePointer(to: &info) { pointer -> kern_return_t in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPointer in
+                thread_info(mach_thread_self(), thread_flavor_t(THREAD_BASIC_INFO), intPointer, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        let user = Double(info.user_time.seconds) + Double(info.user_time.microseconds) / 1_000_000
+        let system = Double(info.system_time.seconds) + Double(info.system_time.microseconds) / 1_000_000
+        return user + system
+    }
+
     static func formatBytes(_ bytes: UInt64) -> String {
         let mb = Double(bytes) / 1_048_576
         if mb > 1024 {

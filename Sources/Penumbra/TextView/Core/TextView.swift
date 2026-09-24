@@ -118,6 +118,12 @@ public struct MetalPerformanceStats: Sendable {
         textInputView.stringView.contentSnapshot()
     }
 
+    /// Times the piece tree has been copied into a contiguous string. Stays at zero when a
+    /// keystroke reads the buffer through a ranged snapshot.
+    var pieceTreeMaterializeCount: Int {
+        textInputView.stringView.materializeCount
+    }
+
     /// Sendable document view for ``FindSearchEngine``. File-backed buffers return a piece-tree
     /// snapshot and do not materialize UTF-16.
     public func makeFindTextSource() -> any FindTextSource {

@@ -46,7 +46,10 @@ public actor CompletionEngine {
                     try await Task.sleep(for: .seconds(debounce))
                 }
                 try Task.checkCancellation()
+                let started = DispatchTime.now().uptimeNanoseconds
                 try await emit(context: context, providers: providers, ranker: ranker, continuation: continuation)
+                let seconds = Double(DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000_000
+                EditorPerformanceTrace.shared.record(.completion, seconds: seconds)
                 continuation.finish()
             } catch {
                 continuation.finish(throwing: error)

@@ -101,7 +101,7 @@ let package = Package(
         .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
-            dependencies: ["Penumbra", "PenumbraMarkdownLanguage", "PenumbraLanguages"],
+            dependencies: ["Penumbra", "EditorIntelligence", "JavaIntelligence", "PenumbraMarkdownLanguage", "PenumbraLanguages"],
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),
@@ -344,6 +344,6 @@ let package = Package(
             "Umbra",
             .product(name: "GitIntelligence", package: "GitIntelligence"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle")], swiftSettings: swift6)
+        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus")], swiftSettings: swift6)
     ]
 )

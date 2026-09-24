@@ -147,7 +147,7 @@ enum GenericSignatureParser {
             packageAndName.append(Character(UnicodeScalar(c)))
             cursor.advance()
         }
-        let qualifiedName = packageAndName.replacingOccurrences(of: "/", with: ".")
+        let qualifiedName = JavaTypeRef.qualifiedName(fromInternalName: packageAndName)
         var args = parseTypeArgumentsIfPresent(cursor) ?? []
         var result: JavaTypeRef = .classType(qualifiedName: qualifiedName, arguments: args, outer: nil)
 

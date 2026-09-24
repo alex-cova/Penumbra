@@ -49,7 +49,8 @@ public struct DefaultRanker: Ranker {
     /// priority/recency/kind only order items within one tier.
     static func score(item: CompletionItem, match: CompletionMatcher.Match, recentRank: Int?) -> Double {
         var score = 1000 + Double(match.tier.rawValue) * 100
-        if match.firstCharacterCaseMatches { score += 5 }
+        // IntelliJ matches the first letter's case: `UserS` means `UserService`, not a local `users`.
+        if match.firstCharacterCaseMatches { score += 12 }
         if item.preselect { score += 20 }
         score += max(-40, min(40, item.priority * 4))
         if let recentRank { score += max(0, 3 - Double(recentRank) * 0.1) }

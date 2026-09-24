@@ -31,12 +31,16 @@ public actor SymbolIndex {
 
     /// Find symbols whose name begins with the given prefix.
     public func search(prefix: String) -> [Symbol] {
-        trie.search(prefix: prefix)
+        EditorPerformanceTrace.shared.measure(.indexQuery) {
+            trie.search(prefix: prefix)
+        }
     }
 
     /// Find symbols whose name matches the query exactly.
     public func search(exact: String) -> [Symbol] {
-        trie.search(prefix: exact).filter { $0.name == exact }
+        EditorPerformanceTrace.shared.measure(.indexQuery) {
+            trie.search(prefix: exact).filter { $0.name == exact }
+        }
     }
 
     /// All symbols currently stored in the index.

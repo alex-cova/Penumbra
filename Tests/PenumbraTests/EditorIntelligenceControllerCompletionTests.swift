@@ -49,6 +49,39 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         controller.visibleCompletionItems.map(\.label)
     }
 
+    /// Answers hover for whatever word sits at the caret of the (hypothetical) document.
+    private struct WordHoverProvider: HoverProvider {
+        let name = "WordHover"
+        func provide(context: HoverContext) async -> HoverResult? {
+            let text = context.document.text as NSString
+            let start = context.cursor.position.utf16Offset
+            var end = start
+            while end < text.length, let scalar = UnicodeScalar(text.character(at: end)), CharacterSet.alphanumerics.contains(scalar) { end += 1 }
+            guard end > start else { return nil }
+            return HoverResult(contents: "docs for \(text.substring(with: NSRange(location: start, length: end - start)))", source: name)
+        }
+    }
+
+    func testSelectedItemShowsDocumentationFromHoverEngine() async throws {
+        let textView = makeTextView("", caret: 0)
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [StubProvider { _ in ["apple", "apricot"] }], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: [WordHoverProvider()]),
+            diagnosticEngine: DiagnosticEngine(providers: [])
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        textView.insertText("ap")
+        try await waitUntil { controller.isShowingCompletion }
+        try await waitUntil { controller.completionDocumentation != nil }
+        XCTAssertEqual(controller.completionDocumentation, "docs for apple")
+        XCTAssertEqual(textView.text, "ap", "resolving documentation must not edit the buffer")
+
+        controller.dismissCompletion()
+        XCTAssertNil(controller.completionDocumentation)
+    }
+
     func testTypingDotOpensPopupThroughWorkbenchAdapter() async throws {
         let textView = makeTextView("foo", caret: 3)
         let bench = EditorWorkbench()

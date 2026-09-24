@@ -6,18 +6,23 @@ import Foundation
 /// standard Java lookup order:
 ///
 /// 1. a type parameter in scope -> `.typeVariable`
-/// 2. a nested type of an enclosing type (checked directly, not through inherited nested types --
-///    see the type-level doc comment on ``resolveSimpleName(_:context:index:)``)
+/// 2. a nested type declared by an enclosing type
 /// 3. a single-type import (`import java.util.List;`)
 /// 4. the same package
 /// 5. an on-demand import (`import java.util.*;`), first match wins
 /// 6. `java.lang`
-/// 7. otherwise left as `.unresolved` -- e.g. a real class the index just doesn't have (an
+/// 7. a nested type an enclosing type inherits from a supertype (JLS puts this with step 2; it
+///    runs last so ordinary names never pay for the supertype walk)
+/// 8. otherwise left as `.unresolved` -- e.g. a real class the index just doesn't have (an
 ///    unindexed dependency), not necessarily an invalid reference
 ///
 /// Resolution recurses through the whole type (array element types, generic arguments, wildcard
 /// bounds), since any of those can independently contain unresolved references.
 public enum JavaTypeResolver {
+    /// Set while ``nestedType(named:in:index:)`` walks supertypes, to keep that walk from
+    /// recursing into another one.
+    @TaskLocal private static var isWalkingSupertypes = false
+
     public static func resolve(_ type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex) async -> JavaTypeRef {
         switch type {
         case .primitive, .void, .typeVariable:
@@ -29,6 +34,10 @@ public enum JavaTypeResolver {
             var resolvedOuter: JavaTypeRef?
             if let outer {
                 resolvedOuter = await resolve(outer, context: context, index: index)
+            }
+            if outer == nil, qualifiedName.contains("."), await index.classStub(qualifiedName: qualifiedName) == nil,
+               let nested = await resolveQualifiedNested(qualifiedName, context: context, index: index) {
+                return .classType(qualifiedName: nested, arguments: resolvedArgs, outer: nil)
             }
             return .classType(qualifiedName: qualifiedName, arguments: resolvedArgs, outer: resolvedOuter)
         case .wildcard(let bound):
@@ -64,10 +73,7 @@ public enum JavaTypeResolver {
     }
 
     /// Resolves a bare simple name (already known not to be a primitive/void/array/wildcard) to a
-    /// concrete type. Step 2 (nested types) only checks each enclosing type's own
-    /// `innerTypeNames`, not nested types inherited from its supertypes -- a deliberate
-    /// simplification, since that requires the same supertype walk ``JavaMemberLookup`` does and
-    /// nested-type inheritance is a rare completion need compared to member inheritance.
+    /// concrete type, in the order listed on ``JavaTypeResolver``.
     private static func resolveSimpleName(
         _ simpleName: String, context: JavaResolutionContext, index: JavaIndex, arguments: [JavaTypeArgument]
     ) async -> JavaTypeRef {
@@ -107,7 +113,50 @@ public enum JavaTypeResolver {
             return .classType(qualifiedName: javaLangCandidate, arguments: arguments, outer: nil)
         }
 
+        // Nested types inherited from an enclosing type's supertypes. JLS 6.4.1 puts them before
+        // imports; they are checked last here so the common case (an imported or `java.lang` name)
+        // never pays for the supertype walk. Only an import that collides with an inherited nested
+        // type's simple name resolves differently.
+        if let first = simpleName.first, first.isUppercase, !isWalkingSupertypes {
+            for enclosingQualifiedName in context.enclosingTypeQualifiedNames {
+                if let inherited = await nestedType(named: simpleName, in: enclosingQualifiedName, index: index) {
+                    return .classType(qualifiedName: inherited, arguments: arguments, outer: nil)
+                }
+            }
+        }
+
         return .unresolved(simpleName: simpleName, arguments: arguments)
+    }
+
+    /// A dotted type name as written (`Map.Entry`, `User.Builder`) that isn't a qualified class:
+    /// its first segment is a simple type name in scope, and the rest are nested types.
+    private static func resolveQualifiedNested(_ dotted: String, context: JavaResolutionContext, index: JavaIndex) async -> String? {
+        let segments = dotted.split(separator: ".").map(String.init)
+        guard segments.count > 1, segments[0].first?.isUppercase == true else { return nil }
+        guard case .classType(let head, _, _) = await resolveSimpleName(segments[0], context: context, index: index, arguments: []) else { return nil }
+        var current = head
+        for segment in segments.dropFirst() {
+            guard let nested = await nestedType(named: segment, in: current, index: index) else { return nil }
+            current = nested
+        }
+        return current
+    }
+
+    /// A member type `simpleName` of `owner` or of one of its supertypes (nested types are
+    /// inherited like other members: `class Dog extends Animal` sees `Animal.Entry` as `Entry`).
+    private static func nestedType(named simpleName: String, in owner: String, index: JavaIndex) async -> String? {
+        let direct = "\(owner).\(simpleName)"
+        if await index.classStub(qualifiedName: direct) != nil { return direct }
+        // The supertype walk resolves supertype names through this resolver; without the guard an
+        // unresolvable supertype name would start another walk, forever.
+        let supertypes = await $isWalkingSupertypes.withValue(true) {
+            await JavaMemberLookup.supertypeClosure(of: owner, index: index)
+        }
+        for supertype in supertypes where supertype != owner {
+            let candidate = "\(supertype).\(simpleName)"
+            if await index.classStub(qualifiedName: candidate) != nil { return candidate }
+        }
+        return nil
     }
 
     private static func lastComponent(of dottedName: String) -> String {

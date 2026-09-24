@@ -93,7 +93,7 @@ public enum ClassFileReader {
                     // Only direct, named members of *this* class (outer == this, name != 0 => not anonymous).
                     if outerIdx != 0, nameIdx != 0, outerIdx == thisClassIndex,
                        let innerBinary = try? pool.className(at: innerIdx) {
-                        innerTypeNames.append(innerBinary.replacingOccurrences(of: "/", with: "."))
+                        innerTypeNames.append(JavaTypeRef.qualifiedName(fromInternalName: innerBinary))
                     }
                 }
             case "Record":
@@ -123,8 +123,8 @@ public enum ClassFileReader {
         if isDeprecated { modifiers.insert(.deprecatedFlag) }
 
         var typeParameters: [JavaTypeParameter] = []
-        var superclass: JavaTypeRef? = superBinaryName.map { .classType(qualifiedName: $0.replacingOccurrences(of: "/", with: "."), arguments: [], outer: nil) }
-        var interfaces: [JavaTypeRef] = interfaceNames.map { .classType(qualifiedName: $0.replacingOccurrences(of: "/", with: "."), arguments: [], outer: nil) }
+        var superclass: JavaTypeRef? = superBinaryName.map { .classType(qualifiedName: JavaTypeRef.qualifiedName(fromInternalName: $0), arguments: [], outer: nil) }
+        var interfaces: [JavaTypeRef] = interfaceNames.map { .classType(qualifiedName: JavaTypeRef.qualifiedName(fromInternalName: $0), arguments: [], outer: nil) }
 
         if let sig = classSignature, let parsed = GenericSignatureParser.parseClassSignature(sig) {
             typeParameters = parsed.typeParameters

@@ -339,7 +339,7 @@ extension JavaNavigationSession {
                 types.append(await JavaExpressionTyper.typed(argument, locals: locals, context: context, index: index)?.type)
             }
         }
-        let best = JavaExpressionTyper.bestOverloads(targets.map(\.method), argumentTypes: types)
+        let best = await JavaExpressionTyper.resolveOverloads(targets.map(\.method), argumentTypes: types, context: context, index: index)
         let narrowed = targets.filter { best.contains($0.method) }
         guard !narrowed.isEmpty else { return (targets, true) }
         return (narrowed, narrowed.count > 1)
