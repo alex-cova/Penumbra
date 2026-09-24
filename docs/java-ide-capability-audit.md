@@ -32,7 +32,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Code folding | **Implemented** — indent + tree-sitter |
 | Sticky/structure headers | **Missing** |
 | Inline diagnostics | **Implemented** — squiggles for duplicate symbols and `javac` errors |
-| Inlay hints | **Missing** |
+| Inlay hints | **Partial** — parameter-name hints (off by default); nothing for JAR/JDK calls, no scroll refresh |
 | Code actions | **Partial** — ⌥↩ menu with Java import fixes and remove-unused-imports; no other quick fixes |
 | Formatting | **Implemented (Java)** — built-in whitespace-only formatter (⌥⌘L, selection or file); other languages use the bracket reindent |
 | Imports management | **Partial** — auto-import on accept, Optimize Imports (⌃⌥O), optional on save; no reordering |
@@ -50,15 +50,15 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Capability | State |
 |---|---|
 | Syntax highlighting | **Implemented** — tree-sitter-java |
-| Semantic highlighting | **Missing** |
+| Semantic highlighting | **Implemented** — scope-aware token classification on the tree-sitter tree, painted over syntax colours; inherited members left uncoloured |
 | Completion | **Strong** — site classification, expected types, auto-import, classpath scoping |
 | Parameter hints / signature help | **Partial** — arity-matching overload list |
 | Go to definition | **Implemented** — sources, attached JAR sources, gated decompilation |
 | Go to declaration | **Partial** — folded into definition provider |
-| Go to implementation | **Implemented (basic)** — subtypes and overrides in project sources; scans every project class per request |
+| Go to implementation | **Implemented** — subtypes and overrides (generic overrides, anonymous classes, enum constant bodies) in project sources; scans project classes per request, no persistent index |
 | Find usages | **Not available for Java** — the name-matching provider is disabled for `.java`; needs the reference index |
 | Symbol search | **Partial** — palette class search via `JavaIndex` |
-| Type / call hierarchy | **Missing** |
+| Type / call hierarchy | **Type hierarchy implemented** (⌃H, Hierarchy tab; project subtypes only); call hierarchy missing |
 | Override navigation | **Partial** — `@Override` completion stubs only |
 | Error diagnostics | **Partial** — `javac` per open file (idle, save, post-sync) plus Gradle build errors in Problems; no inspections |
 | Quick fixes / code actions | **Partial** — import a class, remove unused imports |
@@ -91,7 +91,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | File/class/symbol search, recent files, palette | **Implemented** |
 | Module navigation | **Partial** — Gradle sidebar only |
 | All semantic refactorings | **Missing** |
-| Run configurations | **Partial** — last run per project, argument sheet, Run Last Configuration (⌃⌥R); no named or multiple configurations |
+| Run configurations | **Implemented** — named/multiple configurations, toolbar picker, Gradle run / single file / class with runtime classpath; no debug configurations |
 | Application / Gradle execution | **Partial** — terminal-injected commands, with saved program args, VM options and environment |
 | Test discovery / JUnit / results | **Missing** |
 | Debugging | **Missing** |
@@ -115,9 +115,9 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 2. **No semantic Find Usages** — the name-matching provider is switched off for Java, so Find Usages says it is unavailable rather than guessing.
 3. **No Java refactoring** — rename/move/extract require a reference graph.
 4. **No debugger or test runner** — run is terminal-injected commands only.
-5. **Navigation depth** — go to implementation scans project classes per request; no type hierarchy, call hierarchy, or override markers.
+5. **Navigation depth** — go to implementation and type hierarchy scan project classes per request (no persistent index); no call hierarchy or override markers.
 6. **Import handling stops at sorting** — no `*` collapsing, and the layout is fixed rather than configurable.
-7. **Run configurations are minimal** — last run per project with arguments; no named, multiple, or debug configurations.
+7. **No debug configurations** — run configurations are named and multiple, but nothing attaches a debugger.
 8. **LSP unused** — formatting, semantic tokens, LSP diagnostics/rename exist in EditorIntelligence but Umbra connects none.
 
 ---
@@ -245,12 +245,12 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 |---|---|---|---|---|---|
 | 3.1 | **Java formatter** ✅ done | Missing | Wire Google/Eclipse formatter via CLI subprocess, or optional LSP formatting provider | Medium | None |
 | 3.2 | **Import optimization** ✅ done | Missing | Organize imports, remove unused, static import ordering | Medium | 2.2 or resolver |
-| 3.3 | **Go to implementation (full)** | Partial | Handle generics, abstract classes, multiple implementations picker | Medium | 1.4 |
-| 3.4 | **Type hierarchy (basic)** | Missing | Supertype/subtype tree panel from stub inheritance | Medium | JavaIndex |
+| 3.3 | **Go to implementation (full)** ✅ done | Partial | Handle generics, abstract classes, multiple implementations picker | Medium | 1.4 |
+| 3.4 | **Type hierarchy (basic)** ✅ done | Missing | Supertype/subtype tree panel from stub inheritance | Medium | JavaIndex |
 | 3.5 | **Runtime classpath in Gradle model** ✅ done | Missing | Extend init script for `runtimeClasspath`; expose in model | Medium | Gradle sync |
-| 3.6 | **Run configurations UI** | Missing | `RunConfiguration` model: main class, module, VM args, env; persist + execute | Medium | 3.5, 1.6 |
-| 3.7 | **Semantic highlighting (optional)** | Missing | Wire LSP semantic tokens or stub-based kind coloring | Medium | Optional LSP |
-| 3.8 | **Inlay hints (parameter names)** | Missing | Render parameter names at call sites from stub signatures | Medium | JavaIndex |
+| 3.6 | **Run configurations UI** ✅ done | Missing | `RunConfiguration` model: main class, module, VM args, env; persist + execute | Medium | 3.5, 1.6 |
+| 3.7 | **Semantic highlighting (optional)** ✅ done | Missing | Wire LSP semantic tokens or stub-based kind coloring | Medium | Optional LSP |
+| 3.8 | **Inlay hints (parameter names)** ✅ done | Missing | Render parameter names at call sites from stub signatures | Medium | JavaIndex |
 
 **Chunk exit criteria:** Formatted code, organized imports, type hierarchy view, saved run configs with correct runtime classpath.
 
@@ -388,9 +388,7 @@ Keep the three-library split (Penumbra / EditorIntelligence / JavaIntelligence).
 
 ## Suggested Next Step
 
-Chunks 1 and 2 are complete. The next foundational investment is **Chunk 4** (reference index + semantic Find Usages + rename), which also replaces the per-request project scan behind Go to Implementation with an index.
-
-The cheaper **Chunk 3** items (formatter 3.1, import sorting 3.2, runtime classpath 3.5) are done. Left in Chunk 3: full go to implementation (3.3), type hierarchy (3.4), a run configurations UI over the runtime classpath (3.6), semantic highlighting (3.7) and parameter-name inlay hints (3.8).
+Chunks 1, 2 and 3 are complete. The next foundational investment is Chunk 4 (reference index, semantic Find Usages, rename), which would also replace the per-request scans behind go to implementation and type hierarchy.
 
 ---
 
