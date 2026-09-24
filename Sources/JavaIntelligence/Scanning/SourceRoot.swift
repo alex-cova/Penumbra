@@ -53,6 +53,11 @@ public struct SourceRoot: JavaIndexableRoot {
         return results
     }
 
+    /// Every `.java` file under `directory`, without parsing them.
+    public func javaFileURLs() -> [URL] {
+        enumerateJavaFiles() ?? []
+    }
+
     private func enumerateJavaFiles() -> [URL]? {
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(

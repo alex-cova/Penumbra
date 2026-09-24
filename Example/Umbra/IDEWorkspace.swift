@@ -2086,6 +2086,7 @@ public final class IDEWorkspace {
             self.project.applyChanges(in: batch.affectedDirectories)
             self.gitStatus.refresh()
             self.fileIndexer.handle(batch)
+            self.intelligenceServices.javaSupport.projectFilesChanged(batch.paths)
         }]
         if let url {
             _ = url.startAccessingSecurityScopedResource()
