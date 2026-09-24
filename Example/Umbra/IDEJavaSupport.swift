@@ -55,6 +55,8 @@ final class IDEJavaSupport {
     let codeActionProvider: JavaCodeActionProvider
     /// Signature and Javadoc on hover and for Quick Documentation.
     let hoverProvider: JavaHoverProvider
+    /// Parameter-name hints at call sites (the Parameter Name Hints preference).
+    let inlayHintProvider: JavaInlayHintProvider
     /// Reformats Java files (⌥⌘L) with the built-in formatter.
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
@@ -149,6 +151,7 @@ final class IDEJavaSupport {
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
+        inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
@@ -694,6 +697,7 @@ final class IDEJavaSupport {
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
         await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
         refreshCompilerDiagnostics()
     }
 
@@ -852,6 +856,7 @@ final class IDEJavaSupport {
             await navigationProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await codeActionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hoverProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await inlayHintProvider.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }
 

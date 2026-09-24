@@ -71,6 +71,9 @@ struct LineFragmentDecorations {
     var foldPlaceholder: String?
     var foldPlaceholderColor: UIColor = .secondaryLabelColor
     var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+    /// Inlay hints inside this fragment (line-local offsets), drawn in the room reserved before
+    /// the character each precedes.
+    var inlayHints: [LineInlayHint] = []
     /// Fragment-local end of the fragment's character range (`LineFragment.range.upperBound`); with
     /// `endsWithLineBreak` it decides whether a `.standard` highlight extends to the canvas edge.
     var fragmentRangeUpperBound: Int = 0
@@ -109,6 +112,7 @@ extension LineFragmentDecorations: Equatable {
             && lhs.foldPlaceholder == rhs.foldPlaceholder
             && lhs.foldPlaceholderColor.isEqual(rhs.foldPlaceholderColor)
             && lhs.foldPlaceholderBackgroundColor.isEqual(rhs.foldPlaceholderBackgroundColor)
+            && lhs.inlayHints == rhs.inlayHints
             && lhs.fragmentRangeUpperBound == rhs.fragmentRangeUpperBound
             && lhs.endsWithLineBreak == rhs.endsWithLineBreak
             && lhs.invisibles == rhs.invisibles

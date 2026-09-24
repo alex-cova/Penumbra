@@ -71,6 +71,19 @@ final class LineController: @unchecked Sendable {
             }
         }
     }
+    /// Inlay hints of this line. Each reserves room after the character before it (extra kern),
+    /// so the hint can be drawn there without touching the text. Changing them re-typesets the line.
+    var inlayHints: [LineInlayHint] = [] {
+        didSet {
+            if inlayHints != oldValue {
+                isTypesetterInvalid = true
+                _lineHeight = nil
+            }
+        }
+    }
+    /// Characters whose kern was widened for a hint the last time this line was typeset, so the
+    /// widening can be taken back when the hint goes.
+    private var hintKernedRanges: [NSRange] = []
     var lineBreakMode: LineBreakMode {
         get {
             typesetter.lineBreakMode
@@ -253,6 +266,7 @@ private extension LineController {
             } else {
                 attributedString = nil
             }
+            hintKernedRanges = []
             isStringInvalid = false
             isDefaultAttributesInvalid = true
             isSyntaxHighlightingInvalid = true
@@ -282,9 +296,24 @@ private extension LineController {
             lineFragmentTree.reset(rootValue: 0, rootData: LineFragmentNodeData(lineFragment: nil))
             typesetter.reset()
             if let attributedString = attributedString {
+                applyInlayHintKern(to: attributedString)
                 typesetter.prepareToTypeset(attributedString)
             }
             isTypesetterInvalid = false
+        }
+    }
+
+    /// Adds each hint's width to the kern of the character before it, after taking back the widening
+    /// of hints that are gone. Setting (not adding) keeps a re-typeset from widening twice.
+    private func applyInlayHintKern(to attributedString: NSMutableAttributedString) {
+        for range in hintKernedRanges where range.upperBound <= attributedString.length {
+            attributedString.addAttribute(.kern, value: kern, range: range)
+        }
+        hintKernedRanges = []
+        for hint in inlayHints where hint.localOffset >= 1 && hint.localOffset <= attributedString.length {
+            let range = NSRange(location: hint.localOffset - 1, length: 1)
+            attributedString.addAttribute(.kern, value: kern + hint.width, range: range)
+            hintKernedRanges.append(range)
         }
     }
 

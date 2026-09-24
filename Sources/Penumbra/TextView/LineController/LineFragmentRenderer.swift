@@ -25,6 +25,9 @@ final class LineFragmentRenderer: @unchecked Sendable {
     var foldPlaceholderText: String?
     var foldPlaceholderColor: UIColor = .secondaryLabelColor
     var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+    /// Inlay hints inside this fragment, drawn in the room their line reserved after the previous
+    /// character (see `LineController.inlayHints`).
+    var inlayHints: [LineInlayHint] = []
 
     private var showInvisibleCharacters: Bool {
         invisibleCharacterConfiguration.showTabs
@@ -42,7 +45,45 @@ final class LineFragmentRenderer: @unchecked Sendable {
         drawHighlightedRanges(to: context, inCanvasOfSize: canvasSize)
         drawMarkedRange(to: context)
         drawGlyphs(to: context)
+        drawInlayHints(to: context)
         drawFoldPlaceholder(to: context)
+    }
+
+    private func drawInlayHints(to context: CGContext) {
+        guard !inlayHints.isEmpty else {
+            return
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: InlayHintStyle.textColor,
+            .font: InlayHintStyle.font
+        ]
+        let height = lineFragment.scaledSize.height
+        for hint in inlayHints {
+            // The room sits just before the character the hint precedes.
+            let characterX = CTLineGetOffsetForStringIndex(lineFragment.line, hint.localOffset, nil)
+            let textWidth = InlayHintStyle.textWidth(of: hint.label)
+            let size = (hint.label as NSString).size(withAttributes: attributes)
+            let pillRect = CGRect(
+                x: characterX - hint.width,
+                y: (height - size.height) / 2 - 1,
+                width: textWidth + InlayHintStyle.horizontalPadding * 2,
+                height: size.height + 2
+            )
+            context.saveGState()
+            context.setFillColor(InlayHintStyle.backgroundColor.cgColor)
+            context.addPath(CGPath(roundedRect: pillRect, cornerWidth: 3, cornerHeight: 3, transform: nil))
+            context.fillPath()
+            (hint.label as NSString).draw(
+                in: CGRect(
+                    x: pillRect.minX + InlayHintStyle.horizontalPadding,
+                    y: (height - size.height) / 2,
+                    width: textWidth,
+                    height: size.height
+                ),
+                withAttributes: attributes
+            )
+            context.restoreGState()
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import AppKit
+import EditorIntelligence
 import simd
 // swiftlint:disable file_length
 
@@ -174,6 +175,25 @@ final class LayoutManager {
     private static let maxMetalRasterRetries = 40
     /// Lines touched by the latest edit; layout highlights these synchronously so keystrokes
     /// keep syntax colours instead of flashing default `theme.textColor` until async work lands.
+    /// Inlay hints of the whole document, sorted by offset (see ``InlayHintIndex/normalized(_:)``).
+    /// Lines pick theirs up as they are laid out; setting this re-typesets the lines that had
+    /// different ones.
+    var inlayHints: [InlayHint] = [] {
+        didSet {
+            guard inlayHints != oldValue else { return }
+            var changedLineIDs: Set<DocumentLineNodeID> = []
+            for lineController in lineControllerStorage {
+                let line = lineController.line
+                let local = InlayHintIndex.localHints(in: inlayHints, lineLocation: line.location, lineLength: line.data.length)
+                if local != lineController.inlayHints {
+                    lineController.inlayHints = local
+                    changedLineIDs.insert(line.id)
+                }
+            }
+            if !changedLineIDs.isEmpty { redisplayLines(withIDs: changedLineIDs) }
+            setNeedsLayout()
+        }
+    }
     private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
@@ -767,6 +787,10 @@ extension LayoutManager {
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let oldLineHeight = lineController.lineHeight
             lineController.constrainingWidth = constrainingLineWidth
+            // Set before the line is prepared: a change re-typesets it with the hints' room.
+            lineController.inlayHints = InlayHintIndex.localHints(
+                in: inlayHints, lineLocation: line.location, lineLength: line.data.length
+            )
             let highlightAsynchronously = !recentlyEditedLineIDs.contains(line.id)
             lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: highlightAsynchronously)
             layoutLineNumberView(for: line)
@@ -797,6 +821,9 @@ extension LayoutManager {
                 lineFragmentController.foldPlaceholderText = (collapsedFold != nil && lineFragmentIndex == lineFragmentControllers.count - 1)
                     ? "\u{22EF}"
                     : nil
+                lineFragmentController.inlayHints = lineController.inlayHints.filter { hint in
+                    hint.localOffset > lineFragment.range.location && hint.localOffset <= lineFragment.range.upperBound
+                }
                 layoutLineFragmentView(
                     for: lineFragmentController,
                     lineID: line.id,
@@ -1044,6 +1071,7 @@ extension LayoutManager {
                 foldPlaceholder: lineFragmentController.foldPlaceholderText,
                 foldPlaceholderColor: lineFragmentController.foldPlaceholderColor,
                 foldPlaceholderBackgroundColor: lineFragmentController.foldPlaceholderBackgroundColor,
+                inlayHints: lineFragmentController.inlayHints,
                 fragmentRangeUpperBound: lineFragment.range.upperBound,
                 endsWithLineBreak: isLastLineFragment && lineEndsWithLineBreak,
                 invisibles: invisibles,

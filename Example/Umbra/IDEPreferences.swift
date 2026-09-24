@@ -36,6 +36,7 @@ public final class IDEPreferences {
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
+        static let javaInlayHints = "com.umbra.editor.javaInlayHints"
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
@@ -160,6 +161,12 @@ public final class IDEPreferences {
     /// Check open Java files with the JDK's `javac` and list the errors as Problems. Runs only in
     /// folders that are not Gradle projects, or in Gradle projects that have synced (which needs the
     /// trust prompt to be accepted). Machine-local: not part of `IDEPreferencesSnapshot`.
+    /// Show parameter names before call arguments in Java files (`count: 3`). Off by default:
+    /// it resolves calls in the background as you type. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaInlayHints: Bool {
+        didSet { UserDefaults.standard.set(javaInlayHints, forKey: Keys.javaInlayHints) }
+    }
+
     var javaCompilerDiagnostics: Bool {
         didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
     }
@@ -215,6 +222,7 @@ public final class IDEPreferences {
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
+        javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)

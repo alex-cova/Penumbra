@@ -485,6 +485,22 @@ public struct MetalPerformanceStats: Sendable {
         }
     }
 
+    /// Labels shown inline in front of the text they point at (parameter names at call sites).
+    ///
+    /// Hints are display-only: they are not part of ``text``, are never selected, copied or
+    /// undone, and they take a little horizontal room on their line. `InlayHint/utf16Offset` is
+    /// the offset of the character a hint sits in front of; a hint at the very start of a line
+    /// is not shown. Edits move the hints after them and drop the ones inside the edited range,
+    /// and replacing the whole document (``setState(_:addUndoAction:)``) clears them.
+    public var inlayHints: [InlayHint] {
+        get {
+            textInputView.inlayHints
+        }
+        set {
+            textInputView.inlayHints = newValue
+        }
+    }
+
     /// Re-syncs gutter visibility and line-number layout after wholesale state changes.
     public func refreshGutterChrome() {
         textInputView.refreshGutterChrome()
