@@ -40,6 +40,11 @@ public struct JavaIndexPaths: Sendable {
         projectDirectory(rootHash: sha256(directory.path)).appendingPathComponent("sources.idx")
     }
 
+    /// The identifier index (`refs.idx`) beside a source root's `sources.idx`.
+    public func projectNameIndexShard(for directory: URL) -> URL {
+        projectDirectory(rootHash: sha256(directory.path)).appendingPathComponent("refs.idx")
+    }
+
     public func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }

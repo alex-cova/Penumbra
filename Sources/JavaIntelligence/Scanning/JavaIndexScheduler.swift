@@ -25,7 +25,9 @@ public actor JavaIndexScheduler {
     /// Indexes every root whose shard (at `shardURL(for:)`) is missing or stale, writing results as
     /// they complete and yielding progress. Callers that just want the finished shard set can drain
     /// the stream and ignore the events.
-    public func index(_ roots: [(root: any JavaIndexableRoot, shardURL: URL)]) -> AsyncStream<Progress> {
+    /// `force` skips the stamp check, for a root whose contents changed without its own stamp
+    /// moving (a source directory's mtime only tracks entries added or removed, not edited files).
+    public func index(_ roots: [(root: any JavaIndexableRoot, shardURL: URL)], force: Bool = false) -> AsyncStream<Progress> {
         paths.ensureDirectoryExists()
         return AsyncStream { continuation in
             let task = Task {
@@ -42,7 +44,7 @@ public actor JavaIndexScheduler {
                         // show "indexing X…" instead of going silent until it happens to finish.
                         continuation.yield(.rootStarted(id: next.root.id))
                         group.addTask {
-                            await Self.indexOne(root: next.root, shardURL: next.shardURL)
+                            await Self.indexOne(root: next.root, shardURL: next.shardURL, force: force)
                         }
                     }
 
@@ -61,9 +63,9 @@ public actor JavaIndexScheduler {
         }
     }
 
-    private static func indexOne(root: any JavaIndexableRoot, shardURL: URL) async -> Progress {
+    private static func indexOne(root: any JavaIndexableRoot, shardURL: URL, force: Bool) async -> Progress {
         let currentStamp = root.stamp
-        if let existing = try? JavaIndexShardReader(url: shardURL), existing.stamp == currentStamp {
+        if !force, let existing = try? JavaIndexShardReader(url: shardURL), existing.stamp == currentStamp {
             return .rootSkipped(id: root.id, reason: "up to date")
         }
         do {

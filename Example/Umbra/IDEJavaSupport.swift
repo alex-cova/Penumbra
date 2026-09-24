@@ -71,6 +71,9 @@ final class IDEJavaSupport {
 
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
+    /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
+    /// semantic Find Usages and rename.
+    let nameIndex = JavaNameIndex()
     @ObservationIgnored private var jdkReader: JavaIndexShardReader?
     /// Project and jar shards carry `shardPath` so a Gradle source-set scope can hide the ones that
     /// are not on the file's compile classpath. The JDK shard does not: it is always visible.
@@ -78,6 +81,12 @@ final class IDEJavaSupport {
     @ObservationIgnored private var jarSources: [JavaIndex.Source] = []
     @ObservationIgnored private var jdkIndexingTask: Task<Void, Never>?
     @ObservationIgnored private var projectIndexingTask: Task<Void, Never>?
+    @ObservationIgnored private var nameIndexTask: Task<Void, Never>?
+    /// Source roots whose stub shard must be rebuilt after `.java` files changed on disk, and the
+    /// task draining them (one refresh at a time).
+    @ObservationIgnored private var nameIndexRoots: [URL] = []
+    @ObservationIgnored private var pendingStubRefresh: Set<URL> = []
+    @ObservationIgnored private var stubRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var gradleSyncTask: Task<Void, Never>?
     /// Bumped on every `setProjectRoot` so an in-flight index or sync for the previous folder
     /// cannot publish over the new one. Distinct from `Task.isCancelled`: a reload of the *same*
@@ -281,6 +290,9 @@ final class IDEJavaSupport {
         projectGeneration += 1
         let generation = projectGeneration
         projectIndexingTask?.cancel()
+        stubRefreshTask?.cancel()
+        stubRefreshTask = nil
+        pendingStubRefresh = []
         gradleSyncTask?.cancel()
         gradleRunTask?.cancel()
         stopBuildFileWatcher()
@@ -294,6 +306,7 @@ final class IDEJavaSupport {
         clearSourceSetClasspath()
 
         guard let url else {
+            buildNameIndex(roots: [], generation: generation)
             projectSources = []
             gradleSync = .notGradle
             Task { await publishSources() }
@@ -463,7 +476,66 @@ final class IDEJavaSupport {
         generation == projectGeneration && !Task.isCancelled
     }
 
+    /// Builds the identifier index for `roots` beside the stub pass. Replaces the previous set of
+    /// roots; only files whose stamp changed are re-tokenized.
+    private func buildNameIndex(roots: [URL], generation: Int) {
+        nameIndexTask?.cancel()
+        nameIndexRoots = roots.map(\.standardizedFileURL)
+        nameIndexTask = Task { [nameIndex] in
+            for await _ in await nameIndex.build(roots: roots) {
+                guard isCurrent(generation) else { return }
+            }
+        }
+    }
+
+    /// `.java` files changed on disk (from `IDEProjectWatcher`): update the identifier index for
+    /// them and rebuild the stub shard of every source root that changed, bypassing the
+    /// directory-mtime stamp (which does not move when a file is merely edited).
+    func projectFilesChanged(_ changedPaths: Set<String>) {
+        guard projectRootURL != nil, !nameIndexRoots.isEmpty else { return }
+        // Extension-less paths may be directories that were added, removed or renamed.
+        let urls = changedPaths
+            .map { URL(fileURLWithPath: $0) }
+            .filter { $0.pathExtension == "java" || $0.pathExtension.isEmpty }
+        guard !urls.isEmpty else { return }
+        let generation = projectGeneration
+        Task { [nameIndex] in
+            let affected = await nameIndex.filesChanged(urls)
+            guard isCurrent(generation), !affected.isEmpty else { return }
+            pendingStubRefresh.formUnion(affected)
+            refreshStubs(generation: generation)
+        }
+    }
+
+    private func refreshStubs(generation: Int) {
+        guard stubRefreshTask == nil else { return }
+        stubRefreshTask = Task { [paths, scheduler] in
+            while isCurrent(generation), !pendingStubRefresh.isEmpty {
+                let directories = pendingStubRefresh
+                pendingStubRefresh = []
+                let targets: [(root: any JavaIndexableRoot, shardURL: URL)] = directories.map {
+                    (SourceRoot(directory: $0), paths.projectSourcesShard(for: $0))
+                }
+                for await _ in await scheduler.index(targets, force: true) {}
+                guard isCurrent(generation) else { break }
+                let refreshed = Set(targets.map(\.shardURL.path))
+                let wholeTreeShard = projectRootURL.map { paths.projectSourcesShard(for: $0).path }
+                var isSynced = false
+                if case .synced = gradleSync { isSynced = true }
+                projectSources = projectSources.map { source in
+                    let shardPath = source.shardPath.isEmpty && !isSynced ? wholeTreeShard : source.shardPath
+                    guard let shardPath, refreshed.contains(shardPath),
+                          let reader = try? JavaIndexShardReader(url: URL(fileURLWithPath: shardPath)) else { return source }
+                    return JavaIndex.Source(precedence: source.precedence, reader: reader, shardPath: source.shardPath)
+                }
+                await publishSources()
+            }
+            stubRefreshTask = nil
+        }
+    }
+
     private func indexWholeTree(at url: URL, generation: Int) {
+        buildNameIndex(roots: [url], generation: generation)
         projectIndexingTask = Task { [paths, scheduler] in
             let root = SourceRoot(directory: url)
             let shardURL = paths.projectSourcesShard(for: url)
@@ -651,6 +723,7 @@ final class IDEJavaSupport {
         await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
         guard isCurrent(generation) else { return }
 
+        buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
         let sourceTargets = model.sourceIndexTargets(paths: paths)
         let jarTargets = model.jarIndexTargets(paths: paths)
         let totalTargets = sourceTargets.count + jarTargets.count
