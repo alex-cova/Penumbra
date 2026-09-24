@@ -115,6 +115,7 @@ public final class IDEWorkspace {
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
     var javaFileCanRun = false
     private var javaRunFileURL: URL?
+    @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     private(set) var lastRunConfiguration: JavaRunConfiguration?
@@ -1659,6 +1660,48 @@ public final class IDEWorkspace {
         javaSupport.refreshCompilerDiagnostics()
     }
 
+    // MARK: - Semantic highlighting
+
+    func semanticHighlightingPreferenceChanged() {
+        for pane in workbench.panes {
+            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier)
+        }
+    }
+
+    /// Recolours a pane's Java file once typing pauses. A newer request replaces the pending one,
+    /// and the result is dropped if the text changed while it was computed, so it never paints
+    /// stale offsets and never blocks typing (the pass runs off the main actor).
+    private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?) {
+        let key = ObjectIdentifier(host.textView)
+        semanticHighlightTasks[key]?.cancel()
+        guard preferences.semanticHighlighting, languageIdentifier == "java" else {
+            semanticHighlightTasks[key] = nil
+            host.textView.setSemanticHighlights([])
+            return
+        }
+        let provider = javaSupport.semanticTokenProvider
+        semanticHighlightTasks[key] = Task { [weak host] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled, let textView = host?.textView else { return }
+            let text = textView.text
+            let generation = textView.contentGeneration
+            guard let tokens = await provider.tokens(for: text), !Task.isCancelled else { return }
+            guard textView.contentGeneration == generation else { return }
+            textView.setSemanticHighlights(tokens.map {
+                SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
+            })
+        }
+    }
+
+    private func scheduleSemanticHighlighting(forEditedTextView textView: TextView) {
+        for pane in workbench.panes {
+            let paneHost = host(for: pane.id)
+            if paneHost.textView === textView {
+                scheduleSemanticHighlighting(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
+            }
+        }
+    }
+
     private func applyEditorDiagnostics(_ report: DiagnosticReport) {
         guard let url = workbench.allDocuments().first(where: { $0.documentID == report.documentID })?.url else { return }
         problems.setEditorDiagnostics(report.diagnostics, for: url)
@@ -2465,6 +2508,7 @@ public final class IDEWorkspace {
         // from the previous document in this pane would otherwise keep showing stale content
         // until the next keystroke.
         host.markdownPreviewController.refresh()
+        scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()
@@ -2554,6 +2598,7 @@ extension IDEWorkspace: TextViewDelegate {
     }
 
     public func textViewDidChange(_ textView: TextView) {
+        scheduleSemanticHighlighting(forEditedTextView: textView)
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
         refreshPresentation()

@@ -1107,6 +1107,15 @@ public struct MetalPerformanceStats: Sendable {
         highlightProviderCoordinator = coordinator
     }
 
+    /// Replaces the host-supplied highlights painted over the tree-sitter colours (Java semantic
+    /// tokens, for example). `range` is in UTF-16 offsets and `highlightName` is resolved by the
+    /// theme like a tree-sitter capture name; a name the theme has no colour for is ignored. The
+    /// highlights follow edits until the next call, dropping any that an edit overlaps.
+    public func setSemanticHighlights(_ highlights: [SyntaxHighlightRange]) {
+        textInputView.semanticHighlights.set(highlights)
+        textInputView.refreshSyntaxColors()
+    }
+
     /// Tree-sitter highlight captures intersecting `range`, or `[]` when there is no tree.
     func syntaxHighlightCaptures(in range: NSRange) -> [TreeSitterCapture] {
         textInputView.minimapCaptures(inByteRange: ByteRange(utf16Range: range))

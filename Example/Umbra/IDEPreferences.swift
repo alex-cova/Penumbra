@@ -36,6 +36,7 @@ public final class IDEPreferences {
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
+        static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
@@ -164,6 +165,12 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
     }
 
+    /// Colour Java identifiers by what they are (types by kind, methods, fields, parameters, locals)
+    /// on top of the syntax highlighting. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var semanticHighlighting: Bool {
+        didSet { UserDefaults.standard.set(semanticHighlighting, forKey: Keys.semanticHighlighting) }
+    }
+
     /// Remove unused imports from a Java file each time it is saved. Off by default: saving never
     /// edits the file unless this is on. Machine-local: not part of `IDEPreferencesSnapshot`.
     var javaOptimizeImportsOnSave: Bool {
@@ -215,6 +222,7 @@ public final class IDEPreferences {
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
+        semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
