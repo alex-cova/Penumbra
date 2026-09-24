@@ -15,7 +15,7 @@ final class JavaInspectionEngineTests: XCTestCase {
         try? FileManager.default.removeItem(at: scratch)
     }
 
-    func testDuplicateImportInspectionFlagsSecondImport() {
+    func testDuplicateImportInspectionFlagsSecondImport() throws {
         let source = """
         import java.util.List;
         import java.util.List;
@@ -27,7 +27,7 @@ final class JavaInspectionEngineTests: XCTestCase {
         XCTAssertEqual(inspections.map(\.id), ["duplicate-import"])
     }
 
-    func testClassFileNameMismatchFlagsPublicTypeName() {
+    func testClassFileNameMismatchFlagsPublicTypeName() throws {
         let url = scratch.appendingPathComponent("Wrong.java")
         let source = "public class Right { }"
         let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))

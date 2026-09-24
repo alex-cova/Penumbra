@@ -1,12 +1,12 @@
 import Foundation
 
-public struct HTTPResponseLog: Sendable {
-    public enum Line: Sendable {
+struct HTTPResponseLog: Sendable {
+    enum Line: Sendable {
         case note(String)
         case response(String)
         case error(String)
 
-        public var text: String {
+        var text: String {
             switch self {
             case .note(let text), .response(let text), .error(let text):
                 return text
@@ -14,22 +14,22 @@ public struct HTTPResponseLog: Sendable {
         }
     }
 
-    public static let maxLines = 10_000
+    static let maxLines = 10_000
 
-    public private(set) var lines: [Line] = []
-    public private(set) var runID = UUID()
-    public private(set) var startedAt: Date?
-    public private(set) var finishedAt: Date?
-    public private(set) var statusCode: Int?
-    public private(set) var duration: TimeInterval?
+    private(set) var lines: [Line] = []
+    private(set) var runID = UUID()
+    private(set) var startedAt: Date?
+    private(set) var finishedAt: Date?
+    private(set) var statusCode: Int?
+    private(set) var duration: TimeInterval?
 
-    public init() {}
+    init() {}
 
-    public var latestLine: String? {
+    var latestLine: String? {
         lines.last?.text
     }
 
-    public mutating func reset() {
+    mutating func reset() {
         lines = []
         runID = UUID()
         startedAt = Date()
@@ -38,19 +38,19 @@ public struct HTTPResponseLog: Sendable {
         duration = nil
     }
 
-    public mutating func appendNote(_ text: String) {
+    mutating func appendNote(_ text: String) {
         append(.note(text))
     }
 
-    public mutating func appendResponse(_ text: String) {
+    mutating func appendResponse(_ text: String) {
         append(.response(text))
     }
 
-    public mutating func appendError(_ text: String) {
+    mutating func appendError(_ text: String) {
         append(.error(text))
     }
 
-    public mutating func markFinished(statusCode: Int?, duration: TimeInterval) {
+    mutating func markFinished(statusCode: Int?, duration: TimeInterval) {
         self.statusCode = statusCode
         self.duration = duration
         finishedAt = Date()
@@ -64,11 +64,11 @@ public struct HTTPResponseLog: Sendable {
     }
 }
 
-public enum HTTPClientError: Error, LocalizedError {
+enum HTTPClientError: Error, LocalizedError {
     case invalidResponse
     case transport(Error)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "The server returned an invalid HTTP response."
@@ -78,10 +78,10 @@ public enum HTTPClientError: Error, LocalizedError {
     }
 }
 
-public enum HTTPClient {
-    public static let requestTimeout: TimeInterval = 30
+enum HTTPClient {
+    static let requestTimeout: TimeInterval = 30
 
-    public static func send(
+    static func send(
         _ request: HTTPPreparedRequest,
         session: URLSession = .shared
     ) async throws -> (HTTPURLResponse, Data) {
@@ -105,7 +105,7 @@ public enum HTTPClient {
         }
     }
 
-    public static func formatResponse(_ response: HTTPURLResponse, data: Data) -> String {
+    static func formatResponse(_ response: HTTPURLResponse, data: Data) -> String {
         var lines: [String] = []
         let version = "HTTP/1.1"
         let reason = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)

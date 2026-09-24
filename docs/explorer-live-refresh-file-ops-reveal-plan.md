@@ -37,7 +37,7 @@ Scope: `Example/Umbra` only. Three features, built in this order because each on
 - Symlink loops: `buildNode` already follows `isDirectory` resource values; add a visited-set of resolved paths in the refresh path only if a loop is reproduced.
 
 ### Tests
-Umbra is an executable target, so pure logic goes where it can be tested: put the directory-diffing/merge function (`IDEFileTreeMerge.merge(old:new:)`) and the porcelain parser (`IDEGitStatusModel.parse`) behind `internal` APIs and cover them in a new `Tests/PenumbraTests/Umbra*` file **only if** Umbra logic is moved into a testable library target; otherwise verify manually (see Verification). Decision needed before implementation — default: manual verification, no target change.
+Umbra is an executable target, so pure logic goes where it can be tested: put the directory-diffing/merge function (`IDEFileTreeMerge.merge(old:new:)`) behind an `internal` API and cover it in a new `Tests/PenumbraTests/Umbra*` file **only if** Umbra logic is moved into a testable library target; otherwise verify manually (see Verification). The porcelain parser now lives in the `GitIntelligence` package as `GitStatusParser` (`Packages/GitIntelligence`). Decision needed before implementation — default: manual verification, no target change.
 
 ---
 

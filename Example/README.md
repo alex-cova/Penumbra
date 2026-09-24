@@ -22,6 +22,8 @@ Pre-built releases are published on [GitHub Releases](https://github.com/alex-co
 - Open Folder with a file-tree explorer sidebar
 - New / Open / Save / Save As, recent files, drag-and-drop
 - Quick Open (⌘P) searches project files and open tabs
+- Git status in the explorer, plus a source-control panel (stage, commit, diff, history) backed by the `GitIntelligence` package
+- `.http` request files: the in-app HTTP client (`Example/Umbra/HTTP/`) sends the request at the caret and shows the response in the bottom panel
 
 **Intelligence (no LSP)**
 - Symbol index–driven completion, hover, and diagnostics

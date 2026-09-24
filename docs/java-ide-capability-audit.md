@@ -1,7 +1,7 @@
 # Java IDE Capability Audit
 
 > Gap analysis for bringing Umbra's Java development experience closer to IntelliJ IDEA.
-> Based on repository inspection (Penumbra, EditorIntelligence, JavaIntelligence, Example/Umbra).
+> Based on repository inspection (Penumbra, EditorIntelligence, JavaIntelligence, Packages/GitIntelligence, Example/Umbra).
 > Last updated: 2026-09-24 (Chunk 7 MVP).
 
 ---
@@ -15,7 +15,8 @@ Umbra + Penumbra + JavaIntelligence form a **credible lightweight Java editor**,
 | Text engine (Penumbra) | **High** | Multi-cursor, folding, palette, workbench — production-grade |
 | IDE platform (EditorIntelligence) | **High (generic)** | Engines/protocols exist; LSP adapters unused in Umbra |
 | Java intelligence (JavaIntelligence) | **Medium** | Strong completion; weak diagnostics/refactoring/navigation depth |
-| IDE shell (Umbra) | **Medium–High** | Gradle/Git/terminal, Problems, run configs, test runner, minimal debugger |
+| IDE shell (Umbra) | **Medium–High** | Gradle, terminal, Problems, run configs, test runner, minimal debugger, in-app `.http` client |
+| Git (GitIntelligence package) | **Medium** | Status, stage, commit, diff, history, lane graph. No push/pull/branch UI |
 
 The largest gap is not UI polish — it is **missing semantic analysis infrastructure**: no compiler-backed diagnostics, no reference index, no Java-aware rename/refactor, and no debugger. IntelliJ's day-to-day feel depends on a persistent PSI + stub-index model; this editor has **class stubs + on-demand tree-sitter parsing**, which is enough for smart completion but not for inspections, usages, or safe refactorings.
 
@@ -101,7 +102,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 | Capability | State |
 |---|---|
-| Git (status, stage, commit, diff, history) | **Implemented** — no push/pull/branch UI |
+| Git (status, stage, commit, diff, history) | **Implemented** — `Packages/GitIntelligence` via `IDEGitStatus`. `GitRepository.push()` is not in the panel; no pull or branch UI |
 | Terminal | **Implemented** |
 | Problems panel | **Implemented** — bottom-panel tab, ⌘⇧M, status-bar counts |
 | Build output | **Implemented** — Build Project runs through the Gradle console; compiler errors land in Problems |
@@ -339,8 +340,8 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 |---|---|---|---|
 | 8.1 | **Large-file editing performance** | Market Penumbra piece-tree + viewport rendering | Low (existing) |
 | 8.2 | **Lightweight Gradle sync** | Trust-gated, no import wizard — already implemented | Low (existing) |
-| 8.3 | **Native Git panel** | Fast diff, lane graph — extend with branch/push | Medium |
-| 8.4 | **Integrated HTTP client** | Already in Umbra bottom panel | Low (existing) |
+| 8.3 | **Native Git panel** | `Packages/GitIntelligence` (`GitRepository`, `GitGraphLayout`) wired by `Example/Umbra/IDEGitStatus.swift`. Extend with branch/push | Medium |
+| 8.4 | **Integrated HTTP client** | In the Umbra target (`Example/Umbra/HTTP/`), shown in the bottom panel. Not a library and not part of JavaIntelligence | Low (existing) |
 | 8.5 | **Sandbox-safe architecture** | App Store distribution vs IntelliJ filesystem access | Low (existing) |
 | 8.6 | **Palette-first UX** | Search Everywhere + minimal chrome | Low (existing) |
 | 8.7 | **Session restore** | Layout, tabs, terminals — already implemented | Low (existing) |
@@ -349,17 +350,22 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 ## Recommended Architecture
 
-Keep the three-library split (Penumbra / EditorIntelligence / JavaIntelligence). Do not replace Penumbra or EditorIntelligence.
+Keep Penumbra, EditorIntelligence, and JavaIntelligence in the root package. Do not replace Penumbra or EditorIntelligence. JavaIntelligence does not parse `.http` files or talk to git.
+
+The `.http` parser and `URLSession` send live in the Umbra executable (`Example/Umbra/HTTP/`). Git is a separate package, `Packages/GitIntelligence`, with no dependencies. It cannot move into JavaIntelligence, and JavaIntelligence cannot become its own package without a cycle: it depends on `EditorIntelligence` and the Tree-sitter targets inside the root package.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Umbra (shell, Gradle/Git/terminal, Problems, Run/Debug UI) │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│  EditorIntelligence — engines, Workspace, palette, LSP hooks   │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ EditorAdapter / provider protocols
+│  Umbra (shell, Gradle/terminal, Problems, Run/Debug, .http) │
+│  Example/Umbra/HTTP/  — request parse + URLSession send     │
+└────────────┬───────────────────────────────┬────────────────┘
+             │                               │
+┌────────────▼──────────────┐  ┌─────────────▼─────────────────┐
+│ GitIntelligence package   │  │ EditorIntelligence            │
+│ status, stage, diff, log, │  │ engines, Workspace, palette,  │
+│ GitGraphLayout            │  │ LSP hooks                     │
+└───────────────────────────┘  └──────────────┬────────────────┘
+                                              │ EditorAdapter / provider protocols
 ┌──────────────────────────▼──────────────────────────────────┐
 │  JavaIntelligence 2.0                                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
@@ -399,6 +405,9 @@ Chunks 1–7 are largely complete. Remaining high-value work: conditional breakp
 
 | Area | Path |
 |---|---|
+| HTTP client (Umbra) | `Example/Umbra/HTTP/` (`HTTPRequestParser`, `HTTPClient`), `IDEHTTPSupport.swift` |
+| Git package | `Packages/GitIntelligence/` (`GitRepository`, `GitGraphLayout`) |
+| Git panel (Umbra) | `Example/Umbra/IDEGitStatus.swift` |
 | Java orchestration (Umbra) | `Example/Umbra/IDEJavaSupport.swift` |
 | EIP wiring (Umbra) | `Example/Umbra/IDEIntelligenceServices.swift` |
 | Java completion | `Sources/JavaIntelligence/Completion/JavaCompletionProvider.swift` |

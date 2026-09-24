@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import HTTPClient
+@testable import Umbra
 
 final class HTTPRequestParserTests: XCTestCase {
     func testParsesAbsoluteFormGETWithHeaders() throws {

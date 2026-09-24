@@ -1,5 +1,4 @@
 import AppKit
-import HTTPClient
 import SwiftUI
 
 /// Read-only live view of `IDEHTTPSupport.responseLog`, hosted as the "HTTP" tab in the bottom panel.

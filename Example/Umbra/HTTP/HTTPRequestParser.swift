@@ -2,7 +2,7 @@ import Foundation
 import TreeSitter
 import TreeSitterHTTP
 
-/// Minimal tree-sitter wrapper for HTTP request parsing, kept self-contained in `HTTPClient`.
+/// Minimal tree-sitter wrapper for HTTP request parsing. Lives in the Umbra target with the `.http` runner.
 final class HTTPTSyntaxTree: @unchecked Sendable {
     let sourceBytes: [UInt8]
     private let tree: OpaquePointer
@@ -92,12 +92,12 @@ struct HTTPTSyntaxNode {
     }
 }
 
-public enum HTTPRequestParser {
-    public static func canParseRequest(in text: String, caretUTF16Offset: Int, fileURL: URL?) -> Bool {
+enum HTTPRequestParser {
+    static func canParseRequest(in text: String, caretUTF16Offset: Int, fileURL: URL?) -> Bool {
         (try? parse(text: text, caretUTF16Offset: caretUTF16Offset, fileURL: fileURL)) != nil
     }
 
-    public static func parse(text: String, caretUTF16Offset: Int, fileURL: URL?) throws -> HTTPPreparedRequest {
+    static func parse(text: String, caretUTF16Offset: Int, fileURL: URL?) throws -> HTTPPreparedRequest {
         guard let tree = parseTree(text) else {
             throw HTTPRequestParserError.parseFailed
         }

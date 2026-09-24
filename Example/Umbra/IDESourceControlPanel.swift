@@ -1,4 +1,5 @@
 import AppKit
+import GitIntelligence
 import SwiftUI
 
 struct IDESourceControlPanel: View {
@@ -269,7 +270,7 @@ private enum IDEGitGraphMetrics {
 }
 
 private struct IDEGitGraphView: View {
-    let row: IDEGitGraphRow
+    let row: GitGraphRow
 
     private let metrics = IDEGitGraphMetrics.self
 
@@ -277,50 +278,33 @@ private struct IDEGitGraphView: View {
         let lanes = min(row.laneCount, 8)
         Canvas { context, size in
             func x(_ lane: Int) -> CGFloat { (CGFloat(min(lane, 7)) + 0.5) * metrics.laneWidth }
+            func y(_ anchor: GitGraphAnchor) -> CGFloat {
+                switch anchor {
+                case .top: return 0
+                case .center: return size.height / 2
+                case .bottom: return size.height
+                }
+            }
+            for segment in row.segments {
+                var path = Path()
+                let start = CGPoint(x: x(segment.fromLane), y: y(segment.fromAnchor))
+                let end = CGPoint(x: x(segment.toLane), y: y(segment.toAnchor))
+                path.move(to: start)
+                if segment.fromLane == segment.toLane {
+                    path.addLine(to: end)
+                } else {
+                    let midY = (start.y + end.y) / 2
+                    path.addCurve(
+                        to: end,
+                        control1: CGPoint(x: start.x, y: midY),
+                        control2: CGPoint(x: end.x, y: midY)
+                    )
+                }
+                context.stroke(path, with: .color(metrics.color(segment.colorIndex)), lineWidth: 1.5)
+            }
             let mid = size.height / 2
-            func stroke(_ path: Path, _ lane: Int) {
-                context.stroke(path, with: .color(metrics.color(lane)), lineWidth: 1.5)
-            }
-            for lane in row.through {
-                var path = Path()
-                path.move(to: CGPoint(x: x(lane), y: 0))
-                path.addLine(to: CGPoint(x: x(lane), y: size.height))
-                stroke(path, lane)
-            }
-            if row.hasTop {
-                var path = Path()
-                path.move(to: CGPoint(x: x(row.column), y: 0))
-                path.addLine(to: CGPoint(x: x(row.column), y: mid))
-                stroke(path, row.column)
-            }
-            if row.hasBottom {
-                var path = Path()
-                path.move(to: CGPoint(x: x(row.column), y: mid))
-                path.addLine(to: CGPoint(x: x(row.column), y: size.height))
-                stroke(path, row.column)
-            }
-            for lane in row.mergesFromTop {
-                var path = Path()
-                path.move(to: CGPoint(x: x(lane), y: 0))
-                path.addCurve(
-                    to: CGPoint(x: x(row.column), y: mid),
-                    control1: CGPoint(x: x(lane), y: mid * 0.6),
-                    control2: CGPoint(x: x(row.column), y: mid * 0.4)
-                )
-                stroke(path, lane)
-            }
-            for lane in row.branchesToBottom {
-                var path = Path()
-                path.move(to: CGPoint(x: x(row.column), y: mid))
-                path.addCurve(
-                    to: CGPoint(x: x(lane), y: size.height),
-                    control1: CGPoint(x: x(row.column), y: mid + mid * 0.6),
-                    control2: CGPoint(x: x(lane), y: mid + mid * 0.4)
-                )
-                stroke(path, lane)
-            }
-            let dot = CGRect(x: x(row.column) - 4, y: mid - 4, width: 8, height: 8)
-            context.fill(Path(ellipseIn: dot), with: .color(metrics.color(row.column)))
+            let dot = CGRect(x: x(row.nodeLane) - 4, y: mid - 4, width: 8, height: 8)
+            context.fill(Path(ellipseIn: dot), with: .color(metrics.color(row.colorIndex)))
         }
         .frame(width: CGFloat(max(lanes, 1)) * metrics.laneWidth, height: metrics.rowHeight)
     }

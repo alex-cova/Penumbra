@@ -35,7 +35,7 @@ final class JavaDocumentParseCacheTests: XCTestCase {
         let firstName = first?.rootNode.namedChildren.first?.child(byFieldName: "name")?.text
         XCTAssertEqual(firstName, "T")
 
-        let (edited, edit) = editReplacing(original, "x", with: "y")
+        let (edited, edit) = editReplacing(original, marker: "x", with: "y")
         let second = await cache.tree(for: edited, edits: [edit])
         let secondName = second?.rootNode.namedChildren.first?.child(byFieldName: "name")?.text
         XCTAssertEqual(secondName, "T")

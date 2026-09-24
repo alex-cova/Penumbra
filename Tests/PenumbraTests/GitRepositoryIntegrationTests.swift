@@ -74,6 +74,36 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         XCTAssertTrue(diff.contains("+hello"))
     }
 
+    func testStageDiffShowAndAuthors() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "one\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        try write("a.txt", "one\ntwo\n")
+        try write("ignored.txt", "secret\n")
+        try "ignored.txt\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+
+        let ignored = try await repo.status(includingIgnored: true)
+        XCTAssertTrue(ignored.contains { $0.path == "ignored.txt" && $0.isIgnored })
+
+        try await repo.stage(paths: ["a.txt"])
+        let staged = try await repo.stagedDiff(path: "a.txt")
+        XCTAssertTrue(staged.contains("+two"))
+        let unstaged = try await repo.unstagedDiff(path: "a.txt")
+        XCTAssertFalse(unstaged.contains("+two"))
+
+        try await repo.unstage(paths: ["a.txt"])
+        let after = try await repo.status()
+        XCTAssertTrue(after.contains { $0.path == "a.txt" })
+        XCTAssertFalse(after.contains { $0.isIgnored })
+
+        let shown = try await repo.show(hash: "HEAD")
+        XCTAssertTrue(shown.contains("base"))
+        let authors = try await repo.authors()
+        XCTAssertEqual(authors, ["Tester"])
+        let filtered = try await repo.log(author: "Nobody")
+        XCTAssertTrue(filtered.isEmpty)
+    }
+
     func testPushWithoutRemoteFailsQuickly() async throws {
         let repo = try await makeRepo()
         try write("a.txt", "a\n")

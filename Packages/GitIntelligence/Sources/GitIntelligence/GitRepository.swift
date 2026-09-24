@@ -50,8 +50,11 @@ public struct GitRepository: Sendable {
         return nil
     }
 
-    public func status() async throws -> [GitStatusEntry] {
-        let out = try await readOnly(["status", "--porcelain=v1", "-z", "--untracked-files=normal"])
+    /// Porcelain status. `includingIgnored` adds `--ignored`, which the default omits.
+    public func status(includingIgnored: Bool = false) async throws -> [GitStatusEntry] {
+        var args = ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]
+        if includingIgnored { args.append("--ignored") }
+        let out = try await readOnly(args)
         return GitStatusParser.parse(out.text)
     }
 
@@ -75,9 +78,10 @@ public struct GitRepository: Sendable {
         return refs
     }
 
-    public func log(scope: GitLogScope = .all, grep: String? = nil, skip: Int = 0, limit: Int = 500) async throws -> [GitCommit] {
+    public func log(scope: GitLogScope = .all, grep: String? = nil, author: String? = nil, skip: Int = 0, limit: Int = 500) async throws -> [GitCommit] {
         var args = ["log", "--date-order", "--format=" + GitLogParser.format, "--skip=\(skip)", "-n", "\(limit)"]
         if let grep, !grep.isEmpty { args += ["--grep=\(grep)", "-i"] }
+        if let author, !author.isEmpty { args.append("--author=\(author)") }
         switch scope {
         case .all: args += ["--all", "--decorate=short"]
         case .head: args += ["HEAD", "--decorate=short"]
@@ -108,6 +112,27 @@ public struct GitRepository: Sendable {
         try await readOnly(["show", "--format=", "-M", "--first-parent", hash, "--", path]).text
     }
 
+    public func unstagedDiff(path: String) async throws -> String {
+        try await readOnly(["diff", "--", path]).text
+    }
+
+    public func stagedDiff(path: String) async throws -> String {
+        try await readOnly(["diff", "--cached", "--", path]).text
+    }
+
+    /// `git show --stat --patch` for the commit detail pane.
+    public func show(hash: String) async throws -> String {
+        try await readOnly(["show", "--no-color", "--stat", "--patch", hash]).text
+    }
+
+    public func authors(limit: Int = 5000) async throws -> [String] {
+        let out = try await readOnly(["log", "--all", "-n", "\(limit)", "--format=%an"])
+        var seen = Set<String>()
+        return out.text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init).filter { seen.insert($0).inserted }.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
     public func workingTreeDiff(path: String, isUntracked: Bool) async throws -> String {
         guard isUntracked else { return try await readOnly(["diff", "HEAD", "--", path]).text }
         do {
@@ -131,6 +156,24 @@ public struct GitRepository: Sendable {
     }
 
     // MARK: - Mutations
+
+    public func stage(paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        _ = try await runner.run(["add", "--"] + paths, in: root, stdin: nil, environment: nil)
+    }
+
+    public func unstage(paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        _ = try await runner.run(["restore", "--staged", "--"] + paths, in: root, stdin: nil, environment: nil)
+    }
+
+    public func stageAll() async throws {
+        _ = try await runner.run(["add", "-A"], in: root, stdin: nil, environment: nil)
+    }
+
+    public func unstageAll() async throws {
+        _ = try await runner.run(["restore", "--staged", "."], in: root, stdin: nil, environment: nil)
+    }
 
     /// Commits only `paths` (plus any `untrackedPaths`, which are added first), whatever else is staged.
     public func commit(message: String, paths: [String], untrackedPaths: [String], amend: Bool) async throws -> String {

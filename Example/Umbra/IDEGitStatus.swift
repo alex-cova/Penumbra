@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import JavaIntelligence
+import GitIntelligence
 import Observation
 
 enum IDEGitFileStatus: Equatable {
@@ -20,23 +20,8 @@ struct IDEGitChange: Identifiable, Equatable, Sendable {
     var id: String { path }
 }
 
-/// One row of the commit graph: which lanes run through it and how the commit's dot connects to
-/// the rows above and below.
-struct IDEGitGraphRow: Equatable, Sendable {
-    var column = 0
-    var laneCount = 1
-    /// Lanes drawn as a full-height vertical line (not touching this commit).
-    var through: [Int] = []
-    var hasTop = false
-    var hasBottom = false
-    /// Lanes that converge onto this commit from the row above.
-    var mergesFromTop: [Int] = []
-    /// Lanes this commit's extra/moved parents leave toward in the row below.
-    var branchesToBottom: [Int] = []
-}
-
 struct IDEGitCommit: Identifiable, Equatable, Sendable {
-    var graph: IDEGitGraphRow?
+    var graph: GitGraphRow?
     let hash: String
     let shortHash: String
     let author: String
@@ -76,6 +61,7 @@ final class IDEGitStatusModel {
     private var repositoryRoot: String?
 
     @ObservationIgnored private var rootURL: URL?
+    @ObservationIgnored private var repository: GitRepository?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var needsAnotherPass = false
     @ObservationIgnored private var diffTask: Task<Void, Never>?
@@ -105,6 +91,7 @@ final class IDEGitStatusModel {
         historyTask = nil
         commitDetailTask?.cancel()
         commitDetailTask = nil
+        repository = nil
         commits = []
         selectedCommitHash = nil
         commitDetailText = nil
@@ -125,12 +112,14 @@ final class IDEGitStatusModel {
             needsAnotherPass = true
             return
         }
+        let existing = repository
         refreshTask = Task { [weak self] in
-            let snapshot = await Task.detached(priority: .utility) { Self.loadSnapshot(root: rootURL) }.value
+            let loaded = await Self.loadSnapshot(root: rootURL, existing: existing)
             guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
-            self.apply(snapshot)
+            self.repository = loaded.repository
+            self.apply(loaded.snapshot)
             if let selected = self.selectedChangePath,
-               !snapshot.changes.contains(where: { $0.path == selected }) {
+               !loaded.snapshot.changes.contains(where: { $0.path == selected }) {
                 self.selectChange(nil)
             } else if let selected = self.selectedChangePath {
                 self.loadDiff(for: selected)
@@ -150,16 +139,16 @@ final class IDEGitStatusModel {
         let branch = historyBranch
         let author = historyAuthor
         let search = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existing = repository
         historyTask = Task { [weak self] in
             if debounced { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
-            let result = await Task.detached(priority: .utility) {
-                Self.loadHistory(root: rootURL, branch: branch, author: author, search: search)
-            }.value
+            let loaded = await Self.loadHistory(root: rootURL, existing: existing, branch: branch, author: author, search: search)
             guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
-            let commits = result.commits
-            if result.branches != self.branches { self.branches = result.branches }
-            if result.authors != self.authors { self.authors = result.authors }
+            if loaded.repository != nil { self.repository = loaded.repository }
+            let commits = Self.present(loaded.history)
+            if loaded.history.branches != self.branches { self.branches = loaded.history.branches }
+            if loaded.history.authors != self.authors { self.authors = loaded.history.authors }
             if commits != self.commits { self.commits = commits }
             if let selected = self.selectedCommitHash, !commits.contains(where: { $0.hash == selected }) {
                 self.selectCommit(nil)
@@ -174,11 +163,9 @@ final class IDEGitStatusModel {
             commitDetailText = nil
             return
         }
+        let existing = repository
         commitDetailTask = Task { [weak self] in
-            let text = await Task.detached(priority: .utility) {
-                (try? Self.runGit(root: rootURL, arguments: ["show", "--no-color", "--stat", "--patch", hash]))
-                    ?? "Could not load commit."
-            }.value
+            let text = await Self.loadShow(root: rootURL, existing: existing, hash: hash)
             guard let self, !Task.isCancelled, self.selectedCommitHash == hash else { return }
             self.commitDetailText = text
         }
@@ -191,20 +178,20 @@ final class IDEGitStatusModel {
 
     func stage(path: String) {
         guard let relative = relativePath(for: path) else { return }
-        runGitAction(["add", "--", relative])
+        runGitAction { try await $0.stage(paths: [relative]) }
     }
 
     func unstage(path: String) {
         guard let relative = relativePath(for: path) else { return }
-        runGitAction(["restore", "--staged", "--", relative])
+        runGitAction { try await $0.unstage(paths: [relative]) }
     }
 
     func stageAll() {
-        runGitAction(["add", "-A"])
+        runGitAction { try await $0.stageAll() }
     }
 
     func unstageAll() {
-        runGitAction(["restore", "--staged", "."])
+        runGitAction { try await $0.unstageAll() }
     }
 
     func commit() {
@@ -217,7 +204,7 @@ final class IDEGitStatusModel {
             actionStatus = "Nothing staged to commit."
             return
         }
-        runGitAction(["commit", "-m", message]) { [weak self] in
+        runGitAction { _ = try await $0.commit(message: message, paths: [], untrackedPaths: [], amend: false) } onSuccess: { [weak self] in
             self?.commitMessage = ""
             self?.selectedChangePath = nil
             self?.diffText = nil
@@ -258,28 +245,31 @@ final class IDEGitStatusModel {
             return
         }
         let change = changes.first(where: { $0.path == path })
+        let existing = repository
         diffTask = Task { [weak self] in
-            let text = await Task.detached(priority: .utility) {
-                Self.loadDiff(root: rootURL, path: path, change: change)
-            }.value
+            let text = await Self.loadDiff(root: rootURL, existing: existing, path: path, change: change)
             guard let self, !Task.isCancelled, self.selectedChangePath == path else { return }
             self.diffText = text
         }
     }
 
-    private func runGitAction(_ arguments: [String], onSuccess: (() -> Void)? = nil) {
+    private func runGitAction(
+        _ action: @escaping @Sendable (GitRepository) async throws -> Void,
+        onSuccess: (@MainActor () -> Void)? = nil
+    ) {
         guard let rootURL else { return }
         actionTask?.cancel()
         isBusy = true
         actionStatus = ""
+        let existing = repository
         actionTask = Task { [weak self] in
             guard let self else { return }
             defer { self.isBusy = false }
             do {
-                _ = try await Task.detached(priority: .utility) {
-                    try Self.runGit(root: rootURL, arguments: arguments)
-                }.value
+                let repo = try await Self.repository(for: rootURL, existing: existing)
+                try await action(repo)
                 guard !Task.isCancelled else { return }
+                self.repository = repo
                 onSuccess?()
                 self.refresh()
             } catch {
@@ -306,165 +296,108 @@ final class IDEGitStatusModel {
         var changes: [IDEGitChange] = []
     }
 
-    nonisolated private static func loadSnapshot(root: URL) -> GitSnapshot {
-        let runner = SystemProcessRunner()
-        let git = "/usr/bin/git"
-        guard
-            let top = try? runner.run(
-                executable: git,
-                arguments: ["-C", root.path, "rev-parse", "--show-toplevel"],
-                currentDirectory: nil,
-                environment: nil
-            ),
-            let output = try? runner.run(
-                executable: git,
-                arguments: ["--no-optional-locks", "-C", root.path, "status", "--porcelain=v1", "-z", "--ignored", "--untracked-files=normal"],
-                currentDirectory: nil,
-                environment: nil
+    struct HistoryLoad: Sendable {
+        var commits: [GitCommit] = []
+        var graphs: [GitGraphRow] = []
+        var branches: [String] = []
+        var authors: [String] = []
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    private static func present(_ history: HistoryLoad) -> [IDEGitCommit] {
+        history.commits.enumerated().map { index, commit in
+            IDEGitCommit(
+                graph: history.graphs.indices.contains(index) ? history.graphs[index] : nil,
+                hash: commit.hash,
+                shortHash: commit.shortHash,
+                author: commit.author,
+                relativeDate: relativeFormatter.localizedString(for: commit.date, relativeTo: Date()),
+                refs: commit.refs.map(\.name).filter { $0 != "HEAD" }.joined(separator: ", "),
+                parents: commit.parents,
+                subject: commit.subject
             )
-        else {
-            return GitSnapshot()
         }
-        let toplevel = URL(fileURLWithPath: top.trimmingCharacters(in: .whitespacesAndNewlines)).standardizedFileURL.path
-        var snapshot = parse(porcelain: output, toplevel: toplevel)
-        snapshot.currentBranch = loadCurrentBranch(root: root, runner: runner, git: git)
-        return snapshot
+    }
+
+    nonisolated private static func repository(for root: URL, existing: GitRepository?) async throws -> GitRepository {
+        let standardized = root.standardizedFileURL
+        if let existing {
+            let repoRoot = existing.root.standardizedFileURL.path
+            let path = standardized.path
+            if path == repoRoot || path.hasPrefix(repoRoot + "/") {
+                return existing
+            }
+        }
+        guard let discovered = await GitRepository.discover(from: standardized) else {
+            throw GitError.notARepository
+        }
+        return discovered
+    }
+
+    nonisolated private static func loadSnapshot(root: URL, existing: GitRepository?) async -> (repository: GitRepository?, snapshot: GitSnapshot) {
+        guard let repo = try? await repository(for: root, existing: existing),
+              let entries = try? await repo.status(includingIgnored: true)
+        else {
+            return (nil, GitSnapshot())
+        }
+        let branch = await repo.currentBranch()
+        return (repo, parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch))
     }
 
     nonisolated private static func loadHistory(
         root: URL,
+        existing: GitRepository?,
         branch: String?,
         author: String?,
         search: String
-    ) -> (commits: [IDEGitCommit], branches: [String], authors: [String]) {
-        let format = "%H%x1f%h%x1f%an%x1f%ar%x1f%D%x1f%P%x1f%s%x1e"
-        var arguments = ["--no-optional-locks", "log", "-n", "300", "--no-color", "--topo-order", "--fixed-strings", "-i"]
-        arguments.append("--pretty=format:\(format)")
-        if let author { arguments.append("--author=\(author)") }
-        if !search.isEmpty { arguments.append("--grep=\(search)") }
-        arguments.append(branch ?? "--all")
-        var commits: [IDEGitCommit] = []
-        if let output = try? runGit(root: root, arguments: arguments) {
-            commits = output.split(separator: "\u{1e}", omittingEmptySubsequences: true).compactMap { record in
-                let fields = record.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .split(separator: "\u{1f}", maxSplits: 6, omittingEmptySubsequences: false)
-                    .map(String.init)
-                guard fields.count == 7 else { return nil }
-                return IDEGitCommit(
-                    graph: nil,
-                    hash: fields[0],
-                    shortHash: fields[1],
-                    author: fields[2],
-                    relativeDate: fields[3],
-                    refs: fields[4],
-                    parents: fields[5].split(separator: " ").map(String.init),
-                    subject: fields[6]
-                )
+    ) async -> (repository: GitRepository?, history: HistoryLoad) {
+        guard let repo = try? await repository(for: root, existing: existing) else {
+            return (nil, HistoryLoad())
+        }
+        var history = HistoryLoad()
+        let scope: GitLogScope = if let branch, !branch.isEmpty { .branch(branch) } else { .all }
+        let grep = search.isEmpty ? nil : search
+        if let commits = try? await repo.log(scope: scope, grep: grep, author: author, limit: 300) {
+            history.commits = commits
+            // Filtered logs drop ancestors, so their lanes would dangle; show plain rows instead.
+            if author == nil && search.isEmpty {
+                var layout = GitGraphLayout()
+                history.graphs = layout.append(commits)
             }
         }
-        // Filtered logs drop ancestors, so their lanes would dangle; show plain rows instead.
-        if author == nil && search.isEmpty { assignGraph(&commits) }
-
-        let branchOutput = (try? runGit(
-            root: root,
-            arguments: ["--no-optional-locks", "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"]
-        )) ?? ""
-        let branches = branchOutput.split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/HEAD") }
-        let authorOutput = (try? runGit(
-            root: root,
-            arguments: ["--no-optional-locks", "log", "--all", "-n", "5000", "--format=%an"]
-        )) ?? ""
-        var seen = Set<String>()
-        let authors = authorOutput.split(separator: "\n").map(String.init).filter { seen.insert($0).inserted }.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        if let refs = try? await repo.branches() {
+            history.branches = refs.map(\.name)
         }
-        return (commits, branches, authors)
+        history.authors = (try? await repo.authors()) ?? []
+        return (repo, history)
     }
 
-    nonisolated private static func assignGraph(_ commits: inout [IDEGitCommit]) {
-        var lanes: [String?] = []
-        for index in commits.indices {
-            let commit = commits[index]
-            var row = IDEGitGraphRow()
-            let matching = lanes.indices.filter { lanes[$0] == commit.hash }
-            let column: Int
-            if let first = matching.first {
-                column = first
-                row.hasTop = true
-                row.mergesFromTop = Array(matching.dropFirst())
-                for extra in matching.dropFirst() { lanes[extra] = nil }
-            } else if let free = lanes.firstIndex(where: { $0 == nil }) {
-                column = free
-            } else {
-                column = lanes.count
-                lanes.append(nil)
-            }
-            row.column = column
-            row.through = lanes.indices.filter { $0 != column && lanes[$0] != nil && !matching.contains($0) }
-            let widthBefore = lanes.count
-
-            if let first = commit.parents.first {
-                row.hasBottom = true
-                if let other = lanes.indices.first(where: { $0 != column && lanes[$0] == first }) {
-                    lanes[column] = nil
-                    row.branchesToBottom.append(other)
-                } else {
-                    lanes[column] = first
-                }
-                for parent in commit.parents.dropFirst() {
-                    if let existing = lanes.firstIndex(where: { $0 == parent }) {
-                        row.branchesToBottom.append(existing)
-                    } else {
-                        let slot = lanes.firstIndex(where: { $0 == nil }) ?? lanes.count
-                        if slot == lanes.count { lanes.append(parent) } else { lanes[slot] = parent }
-                        row.branchesToBottom.append(slot)
-                    }
-                }
-            } else {
-                lanes[column] = nil
-            }
-            row.laneCount = max(widthBefore, lanes.count, column + 1)
-            while let last = lanes.last, last == nil { lanes.removeLast() }
-            commits[index].graph = row
+    nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String) async -> String {
+        guard let repo = try? await repository(for: root, existing: existing) else {
+            return "Could not load commit."
         }
+        return (try? await repo.show(hash: hash)) ?? "Could not load commit."
     }
 
-    nonisolated private static func loadCurrentBranch(root: URL, runner: SystemProcessRunner, git: String) -> String? {
-        if let branchOutput = try? runner.run(
-            executable: git,
-            arguments: ["-C", root.path, "branch", "--show-current"],
-            currentDirectory: nil,
-            environment: nil
-        ) {
-            let branch = branchOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !branch.isEmpty { return branch }
+    nonisolated private static func loadDiff(root: URL, existing: GitRepository?, path: String, change: IDEGitChange?) async -> String {
+        guard let repo = try? await repository(for: root, existing: existing) else {
+            return "Could not resolve path for diff."
         }
-        guard
-            let shaOutput = try? runner.run(
-                executable: git,
-                arguments: ["-C", root.path, "rev-parse", "--short", "HEAD"],
-                currentDirectory: nil,
-                environment: nil
-            )
-        else { return nil }
-        let sha = shaOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        return sha.isEmpty ? nil : sha
-    }
-
-    nonisolated private static func loadDiff(root: URL, path: String, change: IDEGitChange?) -> String {
-        guard let relative = relativePath(for: path, repositoryRoot: root.path) else {
+        let toplevel = repo.root.standardizedFileURL.path
+        guard let relative = relativePath(for: path, repositoryRoot: toplevel) else {
             return "Could not resolve path for diff."
         }
         var sections: [String] = []
-        if change?.unstaged != nil {
-            if let diff = try? runGit(root: root, arguments: ["diff", "--", relative]), !diff.isEmpty {
-                sections.append("--- Unstaged changes ---\n\(diff)")
-            }
+        if change?.unstaged != nil, let diff = try? await repo.unstagedDiff(path: relative), !diff.isEmpty {
+            sections.append("--- Unstaged changes ---\n\(diff)")
         }
-        if change?.staged != nil {
-            if let diff = try? runGit(root: root, arguments: ["diff", "--cached", "--", relative]), !diff.isEmpty {
-                sections.append("--- Staged changes ---\n\(diff)")
-            }
+        if change?.staged != nil, let diff = try? await repo.stagedDiff(path: relative), !diff.isEmpty {
+            sections.append("--- Staged changes ---\n\(diff)")
         }
         if sections.isEmpty {
             return "No diff available."
@@ -478,47 +411,27 @@ final class IDEGitStatusModel {
         return String(absolutePath.dropFirst(repositoryRoot.count + 1))
     }
 
-    nonisolated private static func runGit(root: URL, arguments: [String]) throws -> String {
-        let runner = SystemProcessRunner()
-        var args = ["-C", root.path]
-        args.append(contentsOf: arguments)
-        return try runner.run(executable: "/usr/bin/git", arguments: args, currentDirectory: nil, environment: nil)
-    }
-
     nonisolated private static func describe(_ error: Error) -> String {
-        switch error {
-        case ProcessRunError.nonZeroExit(_, let stderr):
-            let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? "Git command failed." : trimmed
-        case ProcessRunError.executableNotFound:
-            return "Git is not available."
-        default:
-            return error.localizedDescription
+        if let git = error as? GitError, let message = git.errorDescription, !message.isEmpty {
+            return message
         }
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? "Git command failed." : message
     }
 
-    nonisolated static func parse(porcelain: String, toplevel: String) -> GitSnapshot {
-        var snapshot = GitSnapshot(repositoryRoot: toplevel)
+    nonisolated static func parse(entries: [GitStatusEntry], toplevel: String, branch: String?) -> GitSnapshot {
+        var snapshot = GitSnapshot(repositoryRoot: toplevel, currentBranch: branch)
         var changeMap: [String: IDEGitChange] = [:]
-        let records = porcelain.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
-        var index = 0
-        while index < records.count {
-            let record = records[index]
-            index += 1
-            guard record.count > 3 else { continue }
-            let code = record.prefix(2)
-            var relative = String(record.dropFirst(3))
-            if code.contains("R") || code.contains("C") { index += 1 }  // the origin path follows
+        for entry in entries {
+            var relative = entry.path
             if relative.hasSuffix("/") { relative.removeLast() }
             let path = (toplevel as NSString).appendingPathComponent(relative)
-
-            if code == "!!" {
+            if entry.isIgnored {
                 snapshot.statuses[path] = .ignored
                 continue
             }
-
-            let staged = statusFromIndexChar(code.first ?? " ")
-            let unstaged = statusFromWorkTreeChar(code.last ?? " ")
+            let staged = statusFromIndexChar(entry.indexCode)
+            let unstaged = statusFromWorkTreeChar(entry.worktreeCode)
             let combined = combinedStatus(staged: staged, unstaged: unstaged)
             if let combined {
                 snapshot.statuses[path] = combined

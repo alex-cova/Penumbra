@@ -148,6 +148,7 @@ Penumbra/
 │   │   ├── AI/ & LSP/              # AI text model protocols & LSP interfaces
 │   │   └── Workspace/              # Multi-document workspace & cross-file search
 │   │
+│   ├── JavaIntelligence/           # Native Java index and completion (no HTTP client, no Git)
 │   ├── EditorIntelligenceLSP/      # Concrete LSP client backed by ChimeHQ LanguageClient
 │   ├── PenumbraLanguages/         # TreeSitterLanguage factories for the full language set
 │   ├── PenumbraGraphQLLanguage/   # Tree-sitter GraphQL grammar + queries
@@ -158,6 +159,10 @@ Penumbra/
 │
 ├── Example/
 │   └── Umbra/                      # SwiftUI multi-tab, split-pane macOS demo application
+│       └── HTTP/                   # In-app `.http` request parser and URLSession client
+├── Packages/
+│   ├── TreeSitter/                 # Vendored tree-sitter C library
+│   └── GitIntelligence/            # Standalone git CLI package (status, stage, log, graph)
 ├── Tools/
 │   └── PerfHarness/                # Scroll/layout/Metal performance benchmarking CLI
 └── Tests/

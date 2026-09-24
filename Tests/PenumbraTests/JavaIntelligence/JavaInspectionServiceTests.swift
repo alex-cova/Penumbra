@@ -65,7 +65,14 @@ final class JavaInspectionServiceTests: XCTestCase {
     func testUnresolvedTypeInspectionWarnsWhenNoCandidateExists() async throws {
         let index = try await makeIndex()
         let source = "class T { UnknownType value; }"
-        let inspections = await JavaUnresolvedTypeInspection.inspect(source: source, url: scratch.appendingPathComponent("T.java"), index: index)
+        let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))
+        let walker = JavaSemanticWalker(tree: tree, source: source)
+        let inspections = await JavaUnresolvedTypeInspection.inspect(
+            source: source,
+            url: scratch.appendingPathComponent("T.java"),
+            index: index,
+            walker: walker
+        )
         XCTAssertEqual(inspections.map(\.id), ["unresolved-type"])
         XCTAssertEqual(inspections.first?.message, "Cannot resolve type 'UnknownType'")
     }

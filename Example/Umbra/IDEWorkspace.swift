@@ -1,6 +1,5 @@
 import AppKit
 import EditorIntelligence
-import HTTPClient
 import JavaIntelligence
 import Observation
 import Penumbra
