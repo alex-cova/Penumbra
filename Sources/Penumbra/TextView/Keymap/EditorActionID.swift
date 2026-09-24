@@ -98,6 +98,9 @@ public extension EditorActionID {
     /// Shows the documentation of the symbol at the caret right away (F1, ⌃J), instead of waiting
     /// for the caret to rest.
     static let quickDocumentation = EditorActionID("quickDocumentation")
+    /// Shows the supertype/subtype hierarchy of the type at the caret (⌃H in the IntelliJ keymap).
+    /// The host presents it: see ``EditorIntelligenceController/onRequestTypeHierarchy``.
+    static let typeHierarchy = EditorActionID("typeHierarchy")
     /// Quick fixes and refactorings at the caret. Bound to Option-Return.
     static let showContextActions = EditorActionID("showContextActions")
     /// Removes unused imports and sorts the rest (and whatever else the language's organize-imports action does).
@@ -152,6 +155,7 @@ public extension EditorActionID {
         .navigateForward: "Forward",
         .triggerCompletion: "Complete",
         .triggerSmartCompletion: "Smart Type Completion",
+        .typeHierarchy: "Type Hierarchy",
         .quickDocumentation: "Quick Documentation",
         .showContextActions: "Show Context Actions",
         .optimizeImports: "Optimize Imports"

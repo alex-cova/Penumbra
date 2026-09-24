@@ -6,4 +6,6 @@ enum IDEBottomPanelTab: Hashable {
     case http
     case sourceControl
     case problems
+    /// The supertype/subtype tree of the type last asked for with ⌃H.
+    case typeHierarchy
 }

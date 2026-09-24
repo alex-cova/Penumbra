@@ -394,6 +394,12 @@ struct IDETerminalPanel: View {
                         .allowsHitTesting(workspace.isProblemsSelected)
                 }
 
+                if workspace.showsTypeHierarchyTab {
+                    IDETypeHierarchyPanel()
+                        .opacity(workspace.isTypeHierarchySelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isTypeHierarchySelected)
+                }
+
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
                         .opacity(workspace.isSourceControlSelected ? 1 : 0)

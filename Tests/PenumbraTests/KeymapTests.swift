@@ -89,6 +89,14 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("j", .control))), .quickDocumentation)
     }
 
+    func testTypeHierarchyShortcutOnTheIntelliJKeymapOnly() {
+        let controlH = KeyStroke(KeyChord("h", .control))
+        XCTAssertEqual(Keymap.intelliJ.action(for: controlH), .typeHierarchy)
+        XCTAssertNil(Keymap.default_.action(for: controlH))
+        XCTAssertNil(Keymap.sublime.action(for: controlH))
+        XCTAssertEqual(EditorActionID.typeHierarchy.title, "Type Hierarchy")
+    }
+
     func testControlSpaceResolvesToTriggerCompletion() {
         XCTAssertEqual(
             Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x31, .control))),

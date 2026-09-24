@@ -130,6 +130,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("d", .command)), to: .duplicateLines)
         map.bind(KeyStroke(KeyChord("o", [.control, .option])), to: .optimizeImports)
         map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
+        map.bind(KeyStroke(KeyChord("h", .control)), to: .typeHierarchy)
 
         return map
     }()

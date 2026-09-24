@@ -19,7 +19,8 @@ public extension CommandRegistry {
         .toggleMarkdownPreview,
         .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward,
         .triggerCompletion, .triggerSmartCompletion,
-        .quickDocumentation, .showContextActions, .optimizeImports
+        .quickDocumentation, .showContextActions, .optimizeImports,
+        .typeHierarchy
     ]
 
     /// Registers one command per ``findActionIDs`` entry, each performing the action through

@@ -220,6 +220,29 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
+    func testTypeHierarchyActionIsHandledOnlyWhenTheHostAsksForIt() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "class A {}"
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        var requests = 0
+        XCTAssertFalse(controller.onRequestTypeHierarchy != nil)
+
+        controller.onRequestTypeHierarchy = {
+            requests += 1
+            return true
+        }
+        XCTAssertTrue(textView.perform(.typeHierarchy))
+        XCTAssertEqual(requests, 1)
+        withExtendedLifetime(controller) {}
+    }
+
     private func makeController(textView: TextView, actions: [CodeAction]) -> EditorIntelligenceController {
         EditorIntelligenceController(
             textView: textView,
