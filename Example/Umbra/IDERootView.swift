@@ -108,6 +108,14 @@ public struct IDERootView: View {
                     .preferredColorScheme(.dark)
             }
         }
+        .sheet(item: Binding(
+            get: { workspace.renamePreview },
+            set: { if $0 == nil { workspace.dismissRenamePreview() } }
+        )) { model in
+            IDERenamePreviewSheet(model: model)
+                .environment(workspace)
+                .preferredColorScheme(.dark)
+        }
         .preferredColorScheme(.dark)
         .task {
             guard !didBootstrap else { return }

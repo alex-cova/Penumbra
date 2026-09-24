@@ -106,6 +106,10 @@ public extension EditorActionID {
     static let showContextActions = EditorActionID("showContextActions")
     /// Removes unused imports and sorts the rest (and whatever else the language's organize-imports action does).
     static let optimizeImports = EditorActionID("optimizeImports")
+    /// Renames the symbol at the caret across the project, after a preview. Bound to ⇧F6 in the
+    /// IntelliJ keymap; needs a ``RenameProviding`` and the host hooks on
+    /// ``EditorIntelligenceController`` (`onRequestRename`, `onPresentRenamePlan`).
+    static let rename = EditorActionID("rename")
     /// Completions of the expected type. Bound to Control-Shift-Space.
     static let triggerSmartCompletion = EditorActionID("triggerSmartCompletion")
 
@@ -157,6 +161,7 @@ public extension EditorActionID {
         .navigateForward: "Forward",
         .triggerCompletion: "Complete",
         .triggerSmartCompletion: "Smart Type Completion",
+        .rename: "Rename…",
         .typeHierarchy: "Type Hierarchy",
         .quickDocumentation: "Quick Documentation",
         .showContextActions: "Show Context Actions",

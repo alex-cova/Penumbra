@@ -135,6 +135,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("o", [.control, .option])), to: .optimizeImports)
         map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
         map.bind(KeyStroke(KeyChord("h", .control)), to: .typeHierarchy)
+        map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .shift)), to: .rename)
 
         return map
     }()

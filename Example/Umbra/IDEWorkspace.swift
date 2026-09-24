@@ -127,6 +127,9 @@ public final class IDEWorkspace {
     private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
+    /// The rename being previewed; the rename preview sheet shows while set.
+    var renamePreview: IDERenamePreviewModel?
+    @ObservationIgnored private let renamePrompt = IDERenamePrompt()
     private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
@@ -474,6 +477,40 @@ public final class IDEWorkspace {
     /// Reformats the selection, or the whole file when nothing is selected (⌥⌘L in the IntelliJ keymap).
     func reformatCode() {
         _ = host(for: workbench.activePane.id).textView.perform(.reformatCode)
+    }
+
+    /// Renames the symbol at the caret (⇧F6 in the IntelliJ keymap): prompt, preview, apply.
+    func renameSymbol() {
+        _ = host(for: workbench.activePane.id).textView.perform(.rename)
+    }
+
+    private func presentRenamePreview(
+        _ plan: RenamePlan,
+        apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
+    ) {
+        renamePreview = IDERenamePreviewModel(plan: plan) { [weak self] edit in
+            let result = await apply(edit)
+            self?.refreshAfterWorkspaceEdit(result)
+            return result
+        }
+    }
+
+    func dismissRenamePreview() {
+        renamePreview = nil
+        focusActiveEditor()
+    }
+
+    private func refreshAfterWorkspaceEdit(_ result: WorkspaceEditApplyResult) {
+        let parents = Set(result.renamedFiles.flatMap { [$0.from, $0.to] }.map { $0.deletingLastPathComponent().path })
+        if !parents.isEmpty {
+            Task {
+                await project.refresh(directories: parents)
+                gitStatus.refresh()
+            }
+        } else if !result.appliedFiles.isEmpty {
+            gitStatus.refresh()
+        }
+        refreshPresentation()
     }
 
     /// Removes unused imports from the active editor's Java file.
@@ -1656,6 +1693,17 @@ public final class IDEWorkspace {
         host.intelligenceController?.onRequestTypeHierarchy = { [weak self] in
             self?.showTypeHierarchy() ?? false
         }
+        host.intelligenceController?.onRequestRename = { [weak self, weak host] target, completion in
+            guard let self, let textView = host?.textView else { return completion(nil) }
+            self.renamePrompt.present(target: target, in: textView, completion: completion)
+        }
+        host.intelligenceController?.onPresentRenamePlan = { [weak self] plan, apply in
+            self?.presentRenamePreview(plan, apply: apply)
+        }
+        host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
+            guard let self else { return WorkspaceEditApplyResult() }
+            return await IDEWorkspaceEditApplier(host: self).apply(edit)
+        }
         host.intelligenceController?.onBreadcrumbsUpdated = { [weak self] segments in
             self?.applySymbolBreadcrumbs(segments)
         }
@@ -2280,9 +2328,7 @@ public final class IDEWorkspace {
                 if isPlaceholder { discardPlaceholder(url) }
                 return
             }
-            retargetOpenDocuments(from: url, to: result)
-            project.didMove(from: url.path, to: result.path)
-            recentFiles = recentFiles.map { retargeted($0, from: url, to: result) }
+            finishFileRename(from: url, to: result)
         }
         let parent = url.deletingLastPathComponent().path
         Task {
@@ -2295,6 +2341,13 @@ public final class IDEWorkspace {
                 if !isDirectory { await openDocument(from: result) }
             }
         }
+    }
+
+    /// Bookkeeping after a file moved on disk: open tabs, the tree's expansion state, recents.
+    private func finishFileRename(from url: URL, to result: URL) {
+        retargetOpenDocuments(from: url, to: result)
+        project.didMove(from: url.path, to: result.path)
+        recentFiles = recentFiles.map { retargeted($0, from: url, to: result) }
     }
 
     func cancelExplorerRename() {
@@ -2801,6 +2854,36 @@ public final class IDEWorkspace {
         } else {
             alert.runModal()
         }
+    }
+}
+
+extension IDEWorkspace: IDEWorkspaceEditHost {
+    var editProjectRoot: URL? { project.rootURL }
+
+    func editTarget(for url: URL) async -> IDEWorkspaceEditTarget {
+        guard let (pane, document) = paneAndDocument(matching: url) else { return .closed }
+        guard document.contentKind == .text else { return .unavailable("The file is open in a viewer, not a text editor.") }
+        func liveHost() -> IDEEditorPaneHost? {
+            for candidate in workbench.panes {
+                if let host = hostCache.peek(candidate.id), host.loadedDocumentID == document.id { return host }
+            }
+            return nil
+        }
+        if let host = liveHost() { return .live(host.textView) }
+        // Open in a background tab: bring it forward so the edit lands in its buffer and undo stack.
+        pane.selectDocument(document.id)
+        showDocument(in: pane, host: host(for: pane.id))
+        for _ in 0..<40 {
+            if let host = liveHost() { return .live(host.textView) }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return .unavailable("The open tab couldn't be loaded; save or close it and try again.")
+    }
+
+    func renameFile(from url: URL, to newURL: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let result = try operations.rename(url, to: newURL.lastPathComponent)
+        finishFileRename(from: url, to: result)
     }
 }
 

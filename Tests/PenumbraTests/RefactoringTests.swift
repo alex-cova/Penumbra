@@ -2,46 +2,31 @@ import XCTest
 import EditorIntelligence
 
 final class RefactoringTests: XCTestCase {
-    func testRenameOperationProducesEdits() async {
-        let index = SymbolIndex()
-        let documentID = DocumentID()
-        let symbol = Symbol(
-            name: "foo",
-            kind: .function,
-            documentID: documentID,
-            range: makeRange(line: 0, startColumn: 0, endColumn: 3)
-        )
-        await index.index([symbol], for: documentID)
-        let operation = RenameOperation()
-        let context = makeRefactoringContext(documentID: documentID, text: "foo()", offset: 1, index: index)
-        let result = await operation.apply(context: context, parameters: ["newName": "bar"])
-        XCTAssertEqual(result.edits.count, 1)
-        XCTAssertEqual(result.edits.first?.replacement, "bar")
-        XCTAssertEqual(result.affectedDocuments, [documentID])
-    }
-
     func testRefactoringEngineDiscoversAvailableOperations() async {
-        let operation = RenameOperation()
-        let engine = RefactoringEngine(operations: [operation])
+        let engine = RefactoringEngine(operations: [StubOperation(), StubOperation(name: "Never", applicable: false)])
         let context = makeRefactoringContext(documentID: DocumentID(), text: "foo()", offset: 1)
         let available = await engine.availableOperations(for: context)
-        XCTAssertEqual(available.map { $0.name }, ["Rename"])
+        XCTAssertEqual(available.map { $0.name }, ["Stub"])
     }
 
     func testRefactoringEngineAppliesOperation() async {
-        let index = SymbolIndex()
-        let documentID = DocumentID()
-        let symbol = Symbol(
-            name: "foo",
-            kind: .function,
-            documentID: documentID,
-            range: makeRange(line: 0, startColumn: 0, endColumn: 3)
-        )
-        await index.index([symbol], for: documentID)
-        let engine = RefactoringEngine(operations: [RenameOperation()])
-        let context = makeRefactoringContext(documentID: documentID, text: "foo()", offset: 1, index: index)
-        let result = await engine.apply(operationName: "Rename", context: context, parameters: ["newName": "bar"])
-        XCTAssertEqual(result?.edits.count, 1)
+        let engine = RefactoringEngine(operations: [StubOperation()])
+        let context = makeRefactoringContext(documentID: DocumentID(), text: "foo()", offset: 1)
+        let result = await engine.apply(operationName: "Stub", context: context)
+        XCTAssertEqual(result?.summary, "stubbed")
+        let missing = await engine.apply(operationName: "Nope", context: context)
+        XCTAssertNil(missing)
+    }
+}
+
+private struct StubOperation: RefactoringOperation {
+    var name = "Stub"
+    var applicable = true
+
+    func canApply(context: RefactoringContext) async -> Bool { applicable }
+
+    func apply(context: RefactoringContext, parameters: [String: String]) async -> RefactoringResult {
+        RefactoringResult(operationName: name, summary: "stubbed", edits: [])
     }
 }
 
@@ -62,12 +47,5 @@ private func makeRefactoringContext(documentID: DocumentID, text: String, offset
         cursor: Cursor(position: position),
         selection: Selection(range: TextRange(start: position, end: position)),
         index: index
-    )
-}
-
-private func makeRange(line: Int, startColumn: Int, endColumn: Int) -> EditorIntelligence.TextRange {
-    EditorIntelligence.TextRange(
-        start: TextPosition(line: line, column: startColumn, utf16Offset: startColumn),
-        end: TextPosition(line: line, column: endColumn, utf16Offset: endColumn)
     )
 }
