@@ -115,6 +115,12 @@ public final class IDEWorkspace {
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
     var javaFileCanRun = false
     private var javaRunFileURL: URL?
+    /// The last configuration Run launched in this project, restored across launches. Run Last
+    /// Configuration reruns it, whatever file is active.
+    private(set) var lastRunConfiguration: JavaRunConfiguration?
+    /// The configuration being edited in the run configuration sheet; the sheet shows while set.
+    var runConfigurationDraft: JavaRunConfiguration?
+    private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     let httpSupport = IDEHTTPSupport()
@@ -239,6 +245,9 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
         }
+        intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] _, root, result in
+            self?.applyGradleBuildOutput(result, projectRoot: root)
+        }
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
             self?.compilerDidReconfigure()
         }
@@ -264,6 +273,17 @@ public final class IDEWorkspace {
         navigationBuffers.workspace = self
         Task {
             await intelligenceServices.javaSupport.navigationProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.formattingProvider.setIndentUnitProvider {
+                await MainActor.run {
+                    let preferences = IDEPreferences.shared
+                    return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
+                }
+            }
+            await intelligenceServices.javaSupport.hoverProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
@@ -397,15 +417,37 @@ public final class IDEWorkspace {
             guard panel.runModal() == .OK, let url = panel.url else { return }
             destination = url
         }
+        if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
         do {
             _ = try await document.save(from: textView, to: destination)
             recordRecentFile(destination!)
             gitStatus.refresh()
             refreshPresentation()
-            recheckJavaAfterSave()
+            recheckJavaAfterSave(of: destination)
         } catch {
             presentError(error)
         }
+    }
+
+    /// Removes unused imports from a Java file about to be saved, when the preference is on.
+    private func optimizeImportsBeforeSaving(to url: URL, pane: EditorPane) async {
+        guard preferences.javaOptimizeImportsOnSave, url.pathExtension.lowercased() == "java" else { return }
+        await host(for: pane.id).intelligenceController?.organizeImports()
+    }
+
+    /// Shows the quick-fix list at the caret of the active editor (⌥↩).
+    func showContextActions() {
+        _ = host(for: workbench.activePane.id).textView.perform(.showContextActions)
+    }
+
+    /// Reformats the selection, or the whole file when nothing is selected (⌥⌘L in the IntelliJ keymap).
+    func reformatCode() {
+        _ = host(for: workbench.activePane.id).textView.perform(.reformatCode)
+    }
+
+    /// Removes unused imports from the active editor's Java file.
+    func optimizeImports() {
+        _ = host(for: workbench.activePane.id).textView.perform(.optimizeImports)
     }
 
     public func saveActiveDocumentAs() async {
@@ -416,12 +458,13 @@ public final class IDEWorkspace {
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = document.displayName
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        await optimizeImportsBeforeSaving(to: url, pane: pane)
         do {
             _ = try await document.save(from: textView, to: url)
             recordRecentFile(url)
             gitStatus.refresh()
             refreshPresentation()
-            recheckJavaAfterSave()
+            recheckJavaAfterSave(of: url)
         } catch {
             presentError(error)
         }
@@ -476,32 +519,87 @@ public final class IDEWorkspace {
         javaSupport.isGradleProject ? "Run Gradle project" : "Run Java file"
     }
 
-    /// Hammer for an open Gradle project. Types `./gradlew build` (or `gradle build`) into the
-    /// terminal so the whole project, including every subproject, is built.
+    /// Hammer for an open Gradle project. Runs `build` for the whole project, every subproject
+    /// included, through the Gradle runner so its output lands in the Gradle console and its
+    /// compiler errors in Problems. Needs the project to be trusted; an untrusted one is asked
+    /// first, as a sync would.
     public func buildGradleProject() {
-        guard javaSupport.isGradleProject, let root = project.rootURL else { return }
-        let wrapper = FileManager.default.fileExists(atPath: root.appendingPathComponent("gradlew").path)
-        let command = JavaLaunchCommand.build(projectRoot: root, gradleWrapperExists: wrapper)
-        runInTerminal(command.shellCommand)
+        guard javaSupport.isGradleProject, project.rootURL != nil else { return }
+        showGradleOutput()
+        javaSupport.runGradleTasks(["build"])
     }
 
     /// Play button for a Java file that has `main`. Gradle projects get `gradle run` (or
     /// `./gradlew :module:run` when the file sits in a subproject). Other files are launched with
-    /// `java File.java`.
+    /// `java File.java`. The arguments last used for the same target are kept.
     public func runActiveJava() {
-        guard javaFileCanRun else { return }
+        guard javaFileCanRun, let configuration = activeRunConfiguration() else { return }
+        launch(configuration)
+    }
+
+    /// Reruns the last launched configuration, whatever file is active.
+    func runLastRunConfiguration() {
+        guard let lastRunConfiguration else { return }
+        launch(lastRunConfiguration)
+    }
+
+    /// Opens the run configuration sheet for the active file's launch, or for the last one when
+    /// the active file can't be launched.
+    func editRunConfiguration() {
+        guard let configuration = activeRunConfiguration() ?? lastRunConfiguration else { return }
+        runConfigurationDraft = configuration
+    }
+
+    var canEditRunConfiguration: Bool {
+        javaFileCanRun || lastRunConfiguration != nil
+    }
+
+    func dismissRunConfigurationSheet() {
+        runConfigurationDraft = nil
+    }
+
+    func saveRunConfiguration(_ configuration: JavaRunConfiguration, run: Bool) {
+        runConfigurationDraft = nil
+        if run {
+            launch(configuration)
+        } else {
+            runConfigurationStore.setLast(configuration, forProject: project.rootURL)
+            lastRunConfiguration = configuration
+        }
+    }
+
+    /// The active file's default launch, carrying over what was last typed for the same target.
+    private func activeRunConfiguration() -> JavaRunConfiguration? {
+        JavaRunConfiguration.makeDefault(
+            file: javaRunFileURL,
+            projectRoot: project.rootURL,
+            isGradleProject: javaSupport.isGradleProject,
+            model: javaSupport.gradleModel
+        )?.inheritingSettings(from: runConfigurationStore.last(forProject: project.rootURL))
+    }
+
+    private func launch(_ configuration: JavaRunConfiguration) {
         let root = project.rootURL
         let wrapper = root.map {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
         } ?? false
         guard let command = JavaLaunchCommand.make(
-            file: javaRunFileURL,
-            projectRoot: root,
-            isGradleProject: javaSupport.isGradleProject,
-            model: javaSupport.gradleModel,
-            gradleWrapperExists: wrapper
+            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper
         ) else { return }
+        runConfigurationStore.setLast(configuration, forProject: root)
+        lastRunConfiguration = configuration
         runInTerminal(command.shellCommand)
+    }
+
+    private func refreshLastRunConfiguration() {
+        lastRunConfiguration = runConfigurationStore.last(forProject: project.rootURL)
+    }
+
+    /// Next to `session.json` and `gradle-trust.json`: launch settings shouldn't reset with a cache.
+    static var defaultRunConfigurationsURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.umbra.editor", isDirectory: true)
+            .appendingPathComponent("run-configurations.json")
     }
 
     public func sendActiveHTTPRequest() {
@@ -848,7 +946,7 @@ public final class IDEWorkspace {
         return (directory as NSString).abbreviatingWithTildeInPath
     }
 
-    func presentNavigationChoices(_ locations: [Location]) {
+    func presentNavigationChoices(_ locations: [Location], kind: NavigationKind = .definition) {
         guard let paletteController else {
             if let first = locations.first {
                 _ = openNavigationLocation(first)
@@ -858,9 +956,17 @@ public final class IDEWorkspace {
         let items = locations.map { location -> (title: String, subtitle: String?) in
             (location.displayName, location.url?.lastPathComponent)
         }
-        paletteController.presentList(title: "Go to Definition", items: items) { [weak self] index in
+        paletteController.presentList(title: Self.navigationChoicesTitle(for: kind), items: items) { [weak self] index in
             guard let self, locations.indices.contains(index) else { return }
             _ = self.openNavigationLocation(locations[index])
+        }
+    }
+
+    private static func navigationChoicesTitle(for kind: NavigationKind) -> String {
+        switch kind {
+        case .definition: return "Go to Definition"
+        case .implementation: return "Go to Implementation"
+        case .references: return "Find Usages"
         }
     }
 
@@ -1330,8 +1436,8 @@ public final class IDEWorkspace {
         host.intelligenceController?.onOpenLocationInOtherDocument = { [weak self] location in
             self?.openNavigationLocation(location) ?? false
         }
-        host.intelligenceController?.onPresentNavigationChoices = { [weak self] locations in
-            self?.presentNavigationChoices(locations)
+        host.intelligenceController?.onPresentNavigationChoices = { [weak self] kind, locations in
+            self?.presentNavigationChoices(locations, kind: kind)
         }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
@@ -1509,10 +1615,27 @@ public final class IDEWorkspace {
         }
     }
 
+    /// A Gradle run ended: list the compiler errors in its output as Problems, for files open or
+    /// not, and surface the tab when there are errors. Each stream is parsed on its own so a
+    /// compiler message and its caret line are never split by interleaved task output.
+    private func applyGradleBuildOutput(_ result: GradleCommandResult, projectRoot: URL) {
+        let messages = JavacOutputParser.parse(result.stderr) + JavacOutputParser.parse(result.stdout)
+        let byFile = JavacDiagnosticsMapper.diagnostics(
+            from: messages, source: "gradle", baseDirectory: projectRoot
+        ) { [weak self] url in
+            self?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
+        }
+        problems.setBuildDiagnostics(byFile)
+        if byFile.values.contains(where: { $0.contains { $0.severity == .error } }) {
+            showProblems()
+        }
+    }
+
     /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
     /// start over and check what is open.
     private func compilerDidReconfigure() {
         problems.clearCompilerDiagnostics()
+        problems.clearBuildDiagnostics()
         host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
         javaSupport.compileNow(openJavaDocuments())
     }
@@ -1527,7 +1650,8 @@ public final class IDEWorkspace {
 
     /// After a save, recheck every open Java file: one that didn't change can still break because a
     /// file it depends on did.
-    private func recheckJavaAfterSave() {
+    private func recheckJavaAfterSave(of url: URL? = nil) {
+        if let url { problems.clearBuildDiagnostics(for: url) }
         javaSupport.compileNow(openJavaDocuments(), force: true)
     }
 
@@ -1678,6 +1802,10 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.selectPreviousTerminalTab() }),
             EditorCommand(id: "app.java.buildGradleProject", title: "Java: Build Project", group: "Java",
                           action: { [weak self] in self?.buildGradleProject() }),
+            EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
+                          action: { [weak self] in self?.runLastRunConfiguration() }),
+            EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Run Configuration…", group: "Java",
+                          action: { [weak self] in self?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
                           action: { [weak self] in self?.reloadGradleProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
@@ -1720,6 +1848,7 @@ public final class IDEWorkspace {
         }
         syncTerminalWorkingDirectory()
         intelligenceServices.javaSupport.setProjectRoot(url)
+        refreshLastRunConfiguration()
         paletteController?.workspaceRoot = url
     }
 

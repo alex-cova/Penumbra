@@ -25,27 +25,11 @@ struct JavaImportInserter {
         self.text = text
         self.bytes = bytes
         self.packageName = fileStubs.packageName
-        var imports: [(String, Bool, Bool, Range<Int>)] = []
-        var packageEnd: Int?
-        for node in tree.rootNode.namedChildren {
-            switch node.type {
-            case "package_declaration":
-                packageEnd = node.endByte
-            case "import_declaration":
-                let raw = node.text
-                let isStatic = raw.range(of: #"^import\s+static\b"#, options: .regularExpression) != nil
-                let isOnDemand = raw.contains("*")
-                let name = raw
-                    .replacingOccurrences(of: #"^import\s+(static\s+)?"#, with: "", options: .regularExpression)
-                    .replacingOccurrences(of: #"\s*(\.\s*\*)?\s*;\s*$"#, with: "", options: .regularExpression)
-                    .filter { !$0.isWhitespace }
-                imports.append((name, isStatic, isOnDemand, node.byteRange))
-            default:
-                break
-            }
+        let list = JavaImportList(tree: tree)
+        self.imports = list.entries.map {
+            (qualifiedName: $0.qualifiedName, isStatic: $0.isStatic, isOnDemand: $0.isOnDemand, range: $0.range)
         }
-        self.imports = imports.map { (qualifiedName: $0.0, isStatic: $0.1, isOnDemand: $0.2, range: $0.3) }
-        self.packageDeclarationEnd = packageEnd
+        self.packageDeclarationEnd = list.packageDeclarationEnd
         self.declaredSimpleNames = Set(fileStubs.classes.map(\.simpleName))
     }
 

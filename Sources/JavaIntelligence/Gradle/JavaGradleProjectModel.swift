@@ -38,22 +38,48 @@ public struct JavaGradleProjectModel: Codable, Sendable {
     public struct SourceSet: Codable, Sendable {
         public let name: String
         public let sourceDirs: [URL]
+        /// Where this source set's compiled classes and processed resources go
+        /// (`build/classes/java/main`, `build/resources/main`, …). Part of the run classpath.
+        public let outputDirs: [URL]
         /// Jars on this source set's compile classpath (`compileClasspath`, `testCompileClasspath`,
         /// `integrationTestCompileClasspath`, …). Does not include project dependencies or
         /// `runtimeOnly` artifacts.
         public let compileClasspathJars: [URL]
         public let projectDependencies: [ProjectDependency]
+        /// Jars on this source set's runtime classpath (`runtimeClasspath`, `testRuntimeClasspath`, …):
+        /// `implementation` and `runtimeOnly` artifacts, transitively. Empty when the model was
+        /// synced before runtime classpaths were recorded (format version 3 and older).
+        public let runtimeClasspathJars: [URL]
+        /// Projects on the runtime classpath, transitive ones included.
+        public let runtimeProjectDependencies: [ProjectDependency]
 
         public init(
             name: String,
             sourceDirs: [URL] = [],
+            outputDirs: [URL] = [],
             compileClasspathJars: [URL] = [],
-            projectDependencies: [ProjectDependency] = []
+            projectDependencies: [ProjectDependency] = [],
+            runtimeClasspathJars: [URL] = [],
+            runtimeProjectDependencies: [ProjectDependency] = []
         ) {
             self.name = name
             self.sourceDirs = sourceDirs
+            self.outputDirs = outputDirs
             self.compileClasspathJars = compileClasspathJars
             self.projectDependencies = projectDependencies
+            self.runtimeClasspathJars = runtimeClasspathJars
+            self.runtimeProjectDependencies = runtimeProjectDependencies
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            sourceDirs = try container.decodeIfPresent([URL].self, forKey: .sourceDirs) ?? []
+            outputDirs = try container.decodeIfPresent([URL].self, forKey: .outputDirs) ?? []
+            compileClasspathJars = try container.decodeIfPresent([URL].self, forKey: .compileClasspathJars) ?? []
+            projectDependencies = try container.decodeIfPresent([ProjectDependency].self, forKey: .projectDependencies) ?? []
+            runtimeClasspathJars = try container.decodeIfPresent([URL].self, forKey: .runtimeClasspathJars) ?? []
+            runtimeProjectDependencies = try container.decodeIfPresent([ProjectDependency].self, forKey: .runtimeProjectDependencies) ?? []
         }
     }
 
@@ -184,6 +210,39 @@ extension JavaGradleProjectModel {
             }
         }
         return best
+    }
+
+    /// What a program in `file`'s source set runs with, first entry first: the source set's own
+    /// output directories, then those of every project on its runtime classpath, then the resolved
+    /// runtime jars. Dependencies come after the code that uses them, as `java -cp` expects.
+    ///
+    /// A source set other than `main` also gets its project's `main` output, which Gradle puts on
+    /// the `test` classpath as a file collection rather than a project dependency. Directories
+    /// that don't exist yet (nothing built) are still listed, since a build creates them.
+    /// `nil` when `file` is not in any source set. A model synced before runtime classpaths were
+    /// recorded has no runtime jars, so the result is only the output directories.
+    public func runtimeClasspath(forFile file: URL) -> [URL]? {
+        guard let match = sourceSet(containing: file) else { return nil }
+        var entries: [URL] = []
+        var seen = Set<String>()
+        func add(_ urls: [URL]) {
+            for url in urls where seen.insert(url.standardizedFileURL.path).inserted {
+                entries.append(url.standardizedFileURL)
+            }
+        }
+        add(match.sourceSet.outputDirs)
+        if match.sourceSet.name != "main",
+           let main = match.subproject.sourceSets.first(where: { $0.name == "main" }) {
+            add(main.outputDirs)
+        }
+        for dependency in match.sourceSet.runtimeProjectDependencies {
+            guard let target = subprojects.first(where: { $0.path == dependency.projectPath }) else { continue }
+            let set = target.sourceSets.first { $0.name == dependency.sourceSetName }
+                ?? target.sourceSets.first { $0.name == "main" }
+            if let set { add(set.outputDirs) }
+        }
+        add(match.sourceSet.runtimeClasspathJars)
+        return entries
     }
 
     /// Shard paths a completion in `file` may see: this source set's directories and compile jars,

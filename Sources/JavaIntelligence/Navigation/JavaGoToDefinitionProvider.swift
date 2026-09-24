@@ -81,8 +81,14 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
         decompilerConsentRequest = request
     }
 
+    /// Claims every Java request, including kinds it cannot answer yet (implementations,
+    /// references), so the name-matching providers never answer for Java.
+    public nonisolated func isPrimary(for context: NavigationContext) -> Bool {
+        context.document.languageIdentifier == "java"
+    }
+
     public func provide(context: NavigationContext) async -> NavigationResult? {
-        guard context.kind == .definition else { return nil }
+        guard context.kind == .definition || context.kind == .implementation else { return nil }
         guard context.document.languageIdentifier == "java" else { return nil }
         let source = JavaNavigationText.fullText(of: context.document)
         guard !source.isEmpty else { return nil }
@@ -91,8 +97,20 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
         let home = jdkHome
         let cacheRoot = indexPaths.root
         let gate = JavaDecompileGate(policy: decompilePolicy(trigger: context.trigger))
-        let resolve = {
-            await JavaGoToDefinition.resolve(
+        let kind = context.kind
+        let resolve = { () async -> [JavaDefinitionHit] in
+            if kind == .implementation {
+                return await JavaGoToImplementation.resolve(
+                    source: source,
+                    fileURL: context.document.url,
+                    utf16Offset: utf16Offset,
+                    index: self.index,
+                    jdkHome: home,
+                    cacheRoot: cacheRoot,
+                    openBuffer: lookup
+                )
+            }
+            return await JavaGoToDefinition.resolve(
                 source: source,
                 fileURL: context.document.url,
                 utf16Offset: utf16Offset,

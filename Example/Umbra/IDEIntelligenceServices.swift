@@ -26,7 +26,8 @@ final class IDEIntelligenceServices {
             javaSupport.completionProvider
         ])
         hoverEngine = HoverEngine(providers: [
-            SymbolHoverProvider(index: symbolIndex)
+            javaSupport.hoverProvider,
+            SymbolHoverProvider(index: symbolIndex, skippingLanguages: ["java"])
         ])
         diagnosticEngine = DiagnosticEngine(providers: [
             DuplicateSymbolDiagnosticProvider(index: symbolIndex),
@@ -35,7 +36,7 @@ final class IDEIntelligenceServices {
         navigationEngine = NavigationEngine(providers: [
             javaSupport.navigationProvider,
             GoToDefinitionProvider(index: symbolIndex, skippingLanguages: ["java"]),
-            FindReferencesProvider(index: symbolIndex)
+            FindReferencesProvider(index: symbolIndex, skippingLanguages: ["java"])
         ])
     }
 
@@ -45,7 +46,10 @@ final class IDEIntelligenceServices {
         workspace: Workspace
     ) -> EditorIntelligenceController {
         let services = EditorIntelligenceServices(
+            formattingProvider: javaSupport.formattingProvider,
             signatureHelpProvider: javaSupport.completionProvider,
+            codeActionProvider: javaSupport.codeActionProvider,
+            breadcrumbProvider: javaSupport.breadcrumbProvider,
             symbolIndex: symbolIndex,
             workspace: workspace
         )
@@ -61,7 +65,7 @@ final class IDEIntelligenceServices {
         controller.onOpenLocationInOtherDocument = { location in
             IDEIntelligenceServices.openLocation(location, adapter: adapter)
         }
-        controller.onPresentNavigationChoices = { locations in
+        controller.onPresentNavigationChoices = { _, locations in
             // Present first match when no picker is wired.
             if let first = locations.first {
                 _ = IDEIntelligenceServices.openLocation(first, adapter: adapter)

@@ -7,11 +7,13 @@ let completionLog = Logger(subsystem: "Penumbra", category: "Completion")
 
 /// Optional LSP and workspace services wired into ``EditorIntelligenceController``.
 public struct EditorIntelligenceServices {
-    public var formattingProvider: LSPFormattingProvider?
+    public var formattingProvider: (any FormattingProviding)?
     /// Parameter info after `(`/`,` and after accepting a method completion. Any
     /// ``SignatureHelpProviding`` works: ``LSPSignatureHelpProvider`` or a native one.
     public var signatureHelpProvider: (any SignatureHelpProviding)?
-    public var codeActionProvider: LSPCodeActionProvider?
+    public var codeActionProvider: (any CodeActionProviding)?
+    /// Language-aware breadcrumbs, tried before the ones derived from ``symbolIndex``.
+    public var breadcrumbProvider: (any BreadcrumbProviding)?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
     /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
@@ -20,9 +22,10 @@ public struct EditorIntelligenceServices {
     public var projectSearchEngine: ProjectSearchEngine?
 
     public init(
-        formattingProvider: LSPFormattingProvider? = nil,
+        formattingProvider: (any FormattingProviding)? = nil,
         signatureHelpProvider: (any SignatureHelpProviding)? = nil,
-        codeActionProvider: LSPCodeActionProvider? = nil,
+        codeActionProvider: (any CodeActionProviding)? = nil,
+        breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
         projectSearchEngine: ProjectSearchEngine? = nil
@@ -30,6 +33,7 @@ public struct EditorIntelligenceServices {
         self.formattingProvider = formattingProvider
         self.signatureHelpProvider = signatureHelpProvider
         self.codeActionProvider = codeActionProvider
+        self.breadcrumbProvider = breadcrumbProvider
         self.symbolIndex = symbolIndex
         self.workspace = workspace
         self.projectSearchEngine = projectSearchEngine
@@ -70,9 +74,10 @@ public final class EditorIntelligenceController {
     private var breadcrumbTask: Task<Void, Never>?
     private var jumpToDefinitionController: JumpToDefinitionController?
 
-    private let formattingProvider: LSPFormattingProvider?
+    private let formattingProvider: (any FormattingProviding)?
     private let signatureHelpProvider: (any SignatureHelpProviding)?
-    private let codeActionProvider: LSPCodeActionProvider?
+    private let codeActionProvider: (any CodeActionProviding)?
+    private let breadcrumbProvider: (any BreadcrumbProviding)?
     private let symbolIndex: SymbolIndex?
     private let workspace: Workspace?
     private let workspaceSearchEngine = WorkspaceSearchEngine()
@@ -148,6 +153,7 @@ public final class EditorIntelligenceController {
         self.formattingProvider = services.formattingProvider
         self.signatureHelpProvider = services.signatureHelpProvider
         self.codeActionProvider = services.codeActionProvider
+        self.breadcrumbProvider = services.breadcrumbProvider
         self.symbolIndex = services.symbolIndex
         self.workspace = services.workspace
         self.projectSearchEngine = services.projectSearchEngine ?? ProjectSearchEngine()
@@ -233,10 +239,10 @@ public final class EditorIntelligenceController {
             jump.onOpenInOtherDocument = { [weak self] location in
                 self?.onOpenLocationInOtherDocument?(location) ?? false
             }
-            jump.onPresentChoices = { [weak self] locations in
+            jump.onPresentChoices = { [weak self] kind, locations in
                 guard let self else { return }
                 if let onPresentNavigationChoices = self.onPresentNavigationChoices {
-                    onPresentNavigationChoices(locations)
+                    onPresentNavigationChoices(kind, locations)
                 } else if let first = locations.first {
                     self.focus(first)
                 }
@@ -252,10 +258,11 @@ public final class EditorIntelligenceController {
         }
     }
 
-    /// Invoked with the candidates when "Go to Definition/Implementation" resolves to more than
-    /// one location. Wire this to a picker (e.g. `CommandPaletteController.presentList`); if
-    /// unset, the first location is used.
-    public var onPresentNavigationChoices: (([Location]) -> Void)?
+    /// Invoked with the request kind and the candidates when "Go to Definition/Implementation"
+    /// resolves to more than one location. Wire this to a picker (e.g.
+    /// `CommandPaletteController.presentList`, titled by `kind`); if unset, the first location is
+    /// used.
+    public var onPresentNavigationChoices: ((NavigationKind, [Location]) -> Void)?
     /// Invoked when a navigation target is in a different document (`Location.url` set and
     /// different). Return `true` if the host opened it; otherwise the target is focused in the
     /// current text view.
@@ -276,8 +283,11 @@ public final class EditorIntelligenceController {
     private func handleEditorAction(_ action: EditorActionID) -> Bool {
         switch action {
         case .reformatCode:
-            guard formattingProvider != nil else { return false }
-            formatDocument()
+            // A provider that doesn't handle this document (a Java formatter, in a Swift file)
+            // leaves it to the editor's own re-indent.
+            guard let formattingProvider, let document = adapter.currentDocument,
+                  formattingProvider.supportsFormatting(document) else { return false }
+            formatSelection()
             return true
         case .goToDefinition:
             return navigate(kind: .definition)
@@ -290,6 +300,21 @@ public final class EditorIntelligenceController {
             return true
         case .triggerSmartCompletion:
             triggerSmartCompletion()
+            return true
+        case .quickDocumentation:
+            requestHover(trigger: .manual)
+            return true
+        case .showContextActions:
+            guard codeActionProvider != nil else { return false }
+            requestCodeActions()
+            return true
+        case .optimizeImports:
+            guard codeActionProvider != nil else { return false }
+            Task { [weak self] in
+                if await self?.organizeImports() == false {
+                    self?.showTransientHint("Nothing to optimize")
+                }
+            }
             return true
         case .findInFiles:
             guard let onRequestProjectSearch else { return false }
@@ -337,12 +362,12 @@ public final class EditorIntelligenceController {
                     self.focus(locations[0])
                 case .multiple(let locations):
                     if let onPresentNavigationChoices = self.onPresentNavigationChoices {
-                        onPresentNavigationChoices(locations)
+                        onPresentNavigationChoices(kind, locations)
                     } else if let first = locations.first {
                         self.focus(first)
                     }
                 case .none:
-                    break
+                    self.showTransientHint(Self.noResultText(for: kind, languageIdentifier: document.languageIdentifier))
                 }
             }
         }
@@ -452,8 +477,11 @@ public final class EditorIntelligenceController {
     }
 
     /// Request hover information for the current cursor position.
-    public func requestHover() {
-        guard let document = adapter.currentDocument else {
+    /// Shows hover information for the symbol at the caret. `trigger` is `.idle` for the popup
+    /// that follows a resting caret (a provider may stay quiet then) and `.manual` for an explicit
+    /// request such as Quick Documentation.
+    public func requestHover(trigger: RequestTrigger = .manual) {
+        guard let document = liveDocument() ?? adapter.currentDocument else {
             return
         }
         hoverTask?.cancel()
@@ -461,7 +489,7 @@ public final class EditorIntelligenceController {
             document: document,
             cursor: document.cursor,
             selection: document.selection,
-            trigger: .manual
+            trigger: trigger
         )
         hoverTask = Task { [weak self] in
             guard let self else { return }
@@ -490,7 +518,7 @@ public final class EditorIntelligenceController {
 
     /// Format the entire document using the configured LSP formatting provider.
     public func formatDocument() {
-        guard let document = adapter.currentDocument, let formattingProvider, let textView else {
+        guard let document = liveDocument(), let formattingProvider, let textView else {
             return
         }
         Task {
@@ -501,11 +529,11 @@ public final class EditorIntelligenceController {
         }
     }
 
-    /// Format the current selection using the configured LSP formatting provider. With multiple
+    /// Format the current selection using the configured formatting provider. With multiple
     /// selections active (multi-caret or block), every non-empty range is formatted individually
-    /// and the results applied together.
+    /// and the results applied together. With nothing selected the whole document is formatted.
     public func formatSelection() {
-        guard let document = adapter.currentDocument, let formattingProvider, let textView else {
+        guard let document = liveDocument(), let formattingProvider, let textView else {
             formatDocument()
             return
         }
@@ -528,7 +556,7 @@ public final class EditorIntelligenceController {
 
     /// Request code actions at the current cursor and show the action panel.
     public func requestCodeActions() {
-        guard let document = adapter.currentDocument, let codeActionProvider else {
+        guard let document = liveDocument(), let codeActionProvider else {
             return
         }
         Task {
@@ -540,11 +568,67 @@ public final class EditorIntelligenceController {
             await MainActor.run {
                 guard !actions.isEmpty else {
                     self.hideCodeActions()
+                    self.showTransientHint("No context actions available")
                     return
                 }
                 self.showCodeActions(actions, anchorRange: document.selection.range)
             }
         }
+    }
+
+    /// Applies the provider's organize-imports action (``CodeAction/organizeImportsKind``) to the
+    /// current document. Returns `false` when there is no provider or nothing to organize.
+    @discardableResult
+    public func organizeImports() async -> Bool {
+        guard let codeActionProvider, let textView, let document = liveDocument() else {
+            return false
+        }
+        let actions = await codeActionProvider.codeActions(
+            for: document,
+            at: document.cursor.position,
+            diagnostics: latestDiagnostics
+        )
+        guard let action = actions.first(where: { $0.kind == CodeAction.organizeImportsKind }) else {
+            return false
+        }
+        TextEditApplicator.apply(action.edits, in: textView)
+        return true
+    }
+
+    /// The document as it is on screen: the adapter's snapshot lags the live buffer, so code
+    /// actions get the live text and a caret with its real line and column.
+    private func liveDocument() -> Document? {
+        guard let textView, let base = adapter.currentDocument else {
+            return nil
+        }
+        let text = textView.text
+        let ns = text as NSString
+        func position(_ offset: Int) -> TextPosition {
+            let utf16 = min(max(0, offset), ns.length)
+            let before = ns.substring(to: utf16)
+            let line = before.utf16.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+            let lineStart = (before as NSString).range(of: "\n", options: .backwards)
+            let column = lineStart.location == NSNotFound ? utf16 : utf16 - (lineStart.location + 1)
+            return TextPosition(line: line, column: column, utf16Offset: utf16)
+        }
+        func range(_ selected: NSRange) -> EditorIntelligence.TextRange {
+            EditorIntelligence.TextRange(start: position(selected.location), end: position(selected.location + selected.length))
+        }
+        let caret = position(textView.selectedRange.location)
+        let selected = textView.selectedRanges
+        return Document(
+            id: base.id,
+            url: textView.documentURL ?? base.url,
+            displayName: base.displayName,
+            contentSnapshot: TextSnapshot(version: base.version, text: text),
+            selection: Selection(
+                range: range(textView.selectedRange),
+                additionalRanges: selected.dropFirst().map(range)
+            ),
+            cursor: Cursor(position: caret),
+            viewport: base.viewport,
+            languageIdentifier: base.languageIdentifier
+        )
     }
 
     /// Apply a code action's edits to the current document.
@@ -575,24 +659,32 @@ public final class EditorIntelligenceController {
 
     /// Refresh breadcrumb segments for the current cursor.
     public func refreshBreadcrumbs() {
-        guard let document = adapter.currentDocument, let symbolIndex else {
+        guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
             publishBreadcrumbs([])
             return
         }
-        guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
+        // The adapter's snapshot lags the live buffer; a language provider needs the text and the
+        // caret as they are on screen.
+        guard let document = (breadcrumbProvider != nil ? liveDocument() : nil) ?? adapter.currentDocument,
+              symbolIndex != nil || breadcrumbProvider != nil else {
             publishBreadcrumbs([])
             return
         }
         breadcrumbTask?.cancel()
         breadcrumbTask = Task { [weak self] in
             guard let self else { return }
-            let symbols = await symbolIndex.symbols(in: document.id)
-            let cursorOffset = document.cursor.position.utf16Offset
-            // Share BreadcrumbProvider's logic rather than re-deriving it here.
-            let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
-            let segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
+            var segments = await breadcrumbProvider?.breadcrumbs(for: document)
+            if segments == nil, let symbolIndex {
+                let symbols = await symbolIndex.symbols(in: document.id)
+                let cursorOffset = document.cursor.position.utf16Offset
+                // Share BreadcrumbProvider's logic rather than re-deriving it here.
+                let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
+                segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
+            }
+            guard !Task.isCancelled else { return }
+            let result = segments ?? []
             await MainActor.run {
-                self.publishBreadcrumbs(segments)
+                self.publishBreadcrumbs(result)
             }
         }
     }
@@ -1005,6 +1097,27 @@ public final class EditorIntelligenceController {
         return frozen
     }
 
+    /// Text for the hint shown when a navigation request finds nothing.
+    static func noResultText(for kind: NavigationKind, languageIdentifier: String?) -> String {
+        switch kind {
+        case .definition:
+            return "No definition found"
+        case .implementation:
+            return "No implementations found"
+        case .references:
+            return languageIdentifier == "java"
+                ? "Find Usages isn't available for Java yet"
+                : "No usages found"
+        }
+    }
+
+    /// Shows `text` next to the caret for a moment, in the completion panel's empty state.
+    private func showTransientHint(_ text: String) {
+        guard let textView, !isCompletionVisible else { return }
+        let utf16 = textView.selectedRange.location
+        showEmptyCompletionHint(at: TextPosition(line: 0, column: utf16, utf16Offset: utf16), text: text)
+    }
+
     private func showEmptyCompletionHint(at position: TextPosition, text: String = "No suggestions") {
         guard let textView else { return }
         let model = CompletionPanelModel(items: [], replacementRange: EditorIntelligence.TextRange(start: position, end: position), emptyText: text)
@@ -1188,12 +1301,14 @@ public final class EditorIntelligenceController {
     // MARK: - Hover
 
     private func scheduleHoverRequest() {
+        // A popup left over from the previous position would sit over the wrong symbol.
+        if !hoverWindowView.isHidden { hideHover() }
         hoverTask?.cancel()
         hoverTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
-                self.requestHover()
+                self.requestHover(trigger: .idle)
             }
         }
     }
@@ -1209,7 +1324,12 @@ public final class EditorIntelligenceController {
             isMarkdown: true
         )
         hoverWindowView.update(model: model)
-        positionPanel(hoverWindowView, near: anchorRange.start.utf16Offset, in: textView, size: NSSize(width: 280, height: 80))
+        positionPanel(
+            hoverWindowView,
+            near: anchorRange.start.utf16Offset,
+            in: textView,
+            size: HoverWindowView.preferredSize(for: model)
+        )
         hoverWindowView.isHidden = false
         overlayContainer.isHidden = false
     }
@@ -1305,6 +1425,7 @@ public final class EditorIntelligenceController {
         )
         codeActionView.isHidden = false
         overlayContainer.isHidden = false
+        codeActionView.selectRow(0)
     }
 
     private func hideCodeActions() {
@@ -1378,6 +1499,24 @@ public final class EditorIntelligenceController {
             if isCompletionVisible {
                 dismissCompletion()
                 return true
+            }
+        }
+
+        if !codeActionView.isHidden, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
+            switch event.keyCode {
+            case 0x7D:
+                codeActionView.moveSelection(by: 1)
+                return true
+            case 0x7E:
+                codeActionView.moveSelection(by: -1)
+                return true
+            case 0x24, 0x4C:
+                if let action = codeActionView.selectedAction {
+                    applyCodeAction(action)
+                }
+                return true
+            default:
+                break
             }
         }
 

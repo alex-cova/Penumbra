@@ -18,7 +18,8 @@ public extension CommandRegistry {
         .searchEverywhere, .findAction, .quickOpenFile, .recentFiles, .goToSymbol, .goToLine,
         .toggleMarkdownPreview,
         .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward,
-        .triggerCompletion, .triggerSmartCompletion
+        .triggerCompletion, .triggerSmartCompletion,
+        .quickDocumentation, .showContextActions, .optimizeImports
     ]
 
     /// Registers one command per ``findActionIDs`` entry, each performing the action through

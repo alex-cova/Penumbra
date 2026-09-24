@@ -21,6 +21,22 @@ final class SymbolHoverProviderTests: XCTestCase {
         XCTAssertEqual(result?.contents, "Greets the user.")
     }
 
+    func testSkipsConfiguredLanguages() async {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        await index.index([Symbol(
+            name: "greet", kind: .function, documentID: documentID,
+            range: TextRange(start: position, end: position), documentation: "Greets the user."
+        )], for: documentID)
+        let context = makeHoverContext(documentID: documentID, text: "greet()", offset: 2, languageIdentifier: "java")
+
+        let skipping = await SymbolHoverProvider(index: index, skippingLanguages: ["java"]).provide(context: context)
+        XCTAssertNil(skipping)
+        let plain = await SymbolHoverProvider(index: index).provide(context: context)
+        XCTAssertEqual(plain?.contents, "Greets the user.")
+    }
+
     func testFallsBackToSignatureThenName() async {
         let index = SymbolIndex()
         let documentID = DocumentID()
@@ -49,7 +65,7 @@ final class SymbolHoverProviderTests: XCTestCase {
     }
 }
 
-private func makeHoverContext(documentID: DocumentID, text: String, offset: Int) -> HoverContext {
+private func makeHoverContext(documentID: DocumentID, text: String, offset: Int, languageIdentifier: String? = nil) -> HoverContext {
     let snapshot = TextSnapshot(version: 0, text: text)
     let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
     let document = Document(
@@ -59,7 +75,8 @@ private func makeHoverContext(documentID: DocumentID, text: String, offset: Int)
         contentSnapshot: snapshot,
         selection: Selection(range: TextRange(start: position, end: position)),
         cursor: Cursor(position: position),
-        viewport: Viewport(x: 0, y: 0, width: 100, height: 100)
+        viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+        languageIdentifier: languageIdentifier
     )
     return HoverContext(
         document: document,

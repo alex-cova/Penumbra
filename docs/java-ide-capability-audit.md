@@ -2,7 +2,7 @@
 
 > Gap analysis for bringing Umbra's Java development experience closer to IntelliJ IDEA.
 > Based on repository inspection (Penumbra, EditorIntelligence, JavaIntelligence, Example/Umbra).
-> Last updated: 2026-09-23.
+> Last updated: 2026-09-24.
 
 ---
 
@@ -33,14 +33,14 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Sticky/structure headers | **Missing** |
 | Inline diagnostics | **Implemented** — squiggles for duplicate symbols and `javac` errors |
 | Inlay hints | **Missing** |
-| Code actions | **Partial** — LSP provider exists; not connected in Umbra |
-| Formatting | **Partial** — bracket reindent fallback; no Java formatter |
-| Imports management | **Partial** — auto-import on completion accept |
+| Code actions | **Partial** — ⌥↩ menu with Java import fixes and remove-unused-imports; no other quick fixes |
+| Formatting | **Implemented (Java)** — built-in whitespace-only formatter (⌥⌘L, selection or file); other languages use the bracket reindent |
+| Imports management | **Partial** — auto-import on accept, Optimize Imports (⌃⌥O), optional on save; no reordering |
 | Comment/uncomment | **Implemented** |
 | Surround-with | **Implemented** — generic templates |
 | Live templates | **Partial** — snippets (Java excluded); `@Override` stub snippets in completion |
 | Structural selection | **Implemented** — tree-sitter semantic selection |
-| Breadcrumbs | **Implemented** — tree-sitter symbols, not Java types |
+| Breadcrumbs | **Implemented** — Java-aware labels (`Outer<T> › put(String, int)`) |
 | Split editors | **Implemented** |
 | Tabs | **Implemented** — preview tabs, pin, tab history |
 | Preview/editor modes | **Implemented** |
@@ -55,18 +55,18 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Parameter hints / signature help | **Partial** — arity-matching overload list |
 | Go to definition | **Implemented** — sources, attached JAR sources, gated decompilation |
 | Go to declaration | **Partial** — folded into definition provider |
-| Go to implementation | **Missing** — keymap action exists; no Java provider |
-| Find usages | **Architecturally weak** — exact name match on `SymbolIndex`, not Java semantics |
+| Go to implementation | **Implemented (basic)** — subtypes and overrides in project sources; scans every project class per request |
+| Find usages | **Not available for Java** — the name-matching provider is disabled for `.java`; needs the reference index |
 | Symbol search | **Partial** — palette class search via `JavaIndex` |
 | Type / call hierarchy | **Missing** |
 | Override navigation | **Partial** — `@Override` completion stubs only |
-| Error diagnostics | **Partial** — `javac` per open file (idle, save, post-sync); no inspections |
-| Quick fixes / code actions | **Missing** |
+| Error diagnostics | **Partial** — `javac` per open file (idle, save, post-sync) plus Gradle build errors in Problems; no inspections |
+| Quick fixes / code actions | **Partial** — import a class, remove unused imports |
 | Rename / extract / inline / change signature | **Missing** |
-| Import optimization | **Missing** |
+| Import optimization | **Implemented** — removes unused, duplicate and redundant imports and sorts the rest (other, `javax`/`java`, static); no `*` collapsing |
 | Type inference / generics | **Partial** — erased assignability; documented simplifications |
 | Annotation awareness | **Partial** — completion at `@` sites |
-| Javadoc | **Partial** — parsed into stubs; no hover UI |
+| Javadoc | **Implemented** — hover and Quick Documentation (F1 / ⌃J), from sources, `src.zip` and `*-sources.jar` |
 | Decompiled classes | **Implemented** — Fernflower, consent-gated |
 | External library source nav | **Implemented** — `src.zip`, `*-sources.jar` |
 
@@ -77,7 +77,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Gradle discovery & sync | **Implemented** — trust gate, fingerprint cache, init script |
 | Multi-module / source sets | **Implemented** |
 | Compile classpath / dependencies | **Implemented** — `lenient(true)` resolution |
-| Runtime classpath / `runtimeOnly` | **Missing** |
+| Runtime classpath / `runtimeOnly` | **Model only** — synced per source set with output dirs; `runtimeClasspath(forFile:)` builds the `-cp` order; nothing launches with it yet |
 | Generated sources / annotation processors | **Partial** |
 | Java toolchains | **Partial** — language level only |
 | Kotlin interoperability | **Missing** |
@@ -91,8 +91,8 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | File/class/symbol search, recent files, palette | **Implemented** |
 | Module navigation | **Partial** — Gradle sidebar only |
 | All semantic refactorings | **Missing** |
-| Run configurations | **Missing** |
-| Application / Gradle execution | **Partial** — terminal-injected commands |
+| Run configurations | **Partial** — last run per project, argument sheet, Run Last Configuration (⌃⌥R); no named or multiple configurations |
+| Application / Gradle execution | **Partial** — terminal-injected commands, with saved program args, VM options and environment |
 | Test discovery / JUnit / results | **Missing** |
 | Debugging | **Missing** |
 
@@ -103,7 +103,7 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 | Git (status, stage, commit, diff, history) | **Implemented** — no push/pull/branch UI |
 | Terminal | **Implemented** |
 | Problems panel | **Implemented** — bottom-panel tab, ⌘⇧M, status-bar counts |
-| Build output | **Partial** — Gradle console |
+| Build output | **Implemented** — Build Project runs through the Gradle console; compiler errors land in Problems |
 | Background indexing & progress | **Implemented** |
 | Command palette, keymaps, settings | **Implemented** |
 
@@ -111,16 +111,14 @@ The largest gap is not UI polish — it is **missing semantic analysis infrastru
 
 ## Major Gaps
 
-1. **No Java diagnostics** — no compiler errors, unresolved symbols, or inspections.
-2. **No semantic Find Usages** — current provider matches identifier strings, not type-resolved references.
+1. **No inspections** — compiler errors (`javac`, Gradle builds) are listed, but there are no unresolved-symbol or style inspections beyond what `javac` reports.
+2. **No semantic Find Usages** — the name-matching provider is switched off for Java, so Find Usages says it is unavailable rather than guessing.
 3. **No Java refactoring** — rename/move/extract require a reference graph.
 4. **No debugger or test runner** — run is terminal-injected commands only.
-5. **No Problems panel** — diagnostics have no list UI.
-6. **Navigation depth** — no go-to-implementation, type hierarchy, call hierarchy.
-7. **No Java hover/Javadoc** — generic symbol hover only.
-8. **No import optimization** — auto-import on accept only.
-9. **No run configurations** — no VM args, env, or saved launch profiles.
-10. **LSP unused** — formatting, semantic tokens, LSP diagnostics/rename exist in EditorIntelligence but Umbra connects none.
+5. **Navigation depth** — go to implementation scans project classes per request; no type hierarchy, call hierarchy, or override markers.
+6. **Import handling stops at sorting** — no `*` collapsing, and the layout is fixed rather than configurable.
+7. **Run configurations are minimal** — last run per project with arguments; no named, multiple, or debug configurations.
+8. **LSP unused** — formatting, semantic tokens, LSP diagnostics/rename exist in EditorIntelligence but Umbra connects none.
 
 ---
 
@@ -210,13 +208,13 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 | # | Feature | Current state | Work required | Complexity | Unlocks |
 |---|---|---|---|---|---|
 | 1.1 | **Problems panel** ✅ done | Missing | AppKit list view; aggregate `DiagnosticEngine` results; click-to-navigate | Low | Error navigation UX |
-| 1.2 | **Java hover + Javadoc** | Missing | `JavaHoverProvider` reading stub Javadoc + attached sources | Low | API discovery |
-| 1.3 | **Disable misleading Find References for Java** | Weak | Skip `FindReferencesProvider` for `.java` until semantic provider exists | Low | Avoid false confidence |
-| 1.4 | **Go to implementation (basic)** | Missing | Walk `JavaClassStub` supertype/subtype lists; wire `NavigationProvider` for `.implementation` | Low | Interface → class nav |
-| 1.5 | **Parse Gradle compile output → Problems** | Partial | Regex `javac` output from existing Gradle console into diagnostics | Low | Build failure UX |
-| 1.6 | **Run configuration persistence** | Missing | Store last module/main/VM args in `IDESessionStore` | Low | Repeatable launch |
-| 1.7 | **Wire code actions menu (LSP optional)** | Partial | Connect existing `CodeActionView` in Umbra; optional external formatter LSP | Low | Quick-fix shell |
-| 1.8 | **Breadcrumb type labels** | Partial | Prefer Java qualified names from overlay stubs where available | Low | Better context |
+| 1.2 | **Java hover + Javadoc** ✅ done | Missing | `JavaHoverProvider` reading stub Javadoc + attached sources | Low | API discovery |
+| 1.3 | **Disable misleading Find References for Java** ✅ done | Weak | Skip `FindReferencesProvider` for `.java` until semantic provider exists | Low | Avoid false confidence |
+| 1.4 | **Go to implementation (basic)** ✅ done | Missing | Walk `JavaClassStub` supertype/subtype lists; wire `NavigationProvider` for `.implementation` | Low | Interface → class nav |
+| 1.5 | **Parse Gradle compile output → Problems** ✅ done | Partial | Regex `javac` output from existing Gradle console into diagnostics | Low | Build failure UX |
+| 1.6 | **Run configuration persistence** ✅ done | Missing | Store last module/main/VM args in `IDESessionStore` | Low | Repeatable launch |
+| 1.7 | **Wire code actions menu (LSP optional)** ✅ done | Partial | Connect existing `CodeActionView` in Umbra; optional external formatter LSP | Low | Quick-fix shell |
+| 1.8 | **Breadcrumb type labels** ✅ done | Partial | Prefer Java qualified names from overlay stubs where available | Low | Better context |
 
 **Chunk exit criteria:** User can see diagnostics in a list, hover for Javadoc, navigate interface→impl, and relaunch last run config.
 
@@ -232,8 +230,8 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 | 2.2 | **Java diagnostic provider (`javac`)** ✅ done | Missing | `JavaDiagnosticProvider`: invoke `javac` with synced classpath; map to `Diagnostic` | Medium | Gradle sync |
 | 2.3 | **Idle analysis with cancellation** ✅ done | Missing | Debounced post-edit analysis; cancel superseded runs; respect `Task.isCancelled` | Medium | 2.2 |
 | 2.4 | **Trigger analysis on save / post-sync** ✅ done | Missing | Wire save handler + Gradle sync completion to refresh diagnostics | Low | 2.2, 1.1 |
-| 2.5 | **Import cleanup on save (basic)** | Missing | Remove unused imports via existing `JavaTypeResolver` + import AST | Medium | 2.2 (or resolver only) |
-| 2.6 | **Route Java navigation exclusively through JavaIntelligence** | Weak | Ensure `.definition`/`.implementation` never fall through to generic `GoToDefinitionProvider` for `.java` | Low | 1.4 |
+| 2.5 | **Import cleanup on save (basic)** ✅ done | Missing | Remove unused imports via existing `JavaTypeResolver` + import AST | Medium | 2.2 (or resolver only) |
+| 2.6 | **Route Java navigation exclusively through JavaIntelligence** ✅ done | Weak | Ensure `.definition`/`.implementation` never fall through to generic `GoToDefinitionProvider` for `.java` | Low | 1.4 |
 
 **Chunk exit criteria:** Red squiggles from real compiler errors; Problems panel populated; typing stays responsive on large classpaths.
 
@@ -245,11 +243,11 @@ Features ordered in **difficulty chunks**. Complete each chunk (or individual it
 
 | # | Feature | Current state | Work required | Complexity | Dependencies |
 |---|---|---|---|---|---|
-| 3.1 | **Java formatter** | Missing | Wire Google/Eclipse formatter via CLI subprocess, or optional LSP formatting provider | Medium | None |
-| 3.2 | **Import optimization** | Missing | Organize imports, remove unused, static import ordering | Medium | 2.2 or resolver |
+| 3.1 | **Java formatter** ✅ done | Missing | Wire Google/Eclipse formatter via CLI subprocess, or optional LSP formatting provider | Medium | None |
+| 3.2 | **Import optimization** ✅ done | Missing | Organize imports, remove unused, static import ordering | Medium | 2.2 or resolver |
 | 3.3 | **Go to implementation (full)** | Partial | Handle generics, abstract classes, multiple implementations picker | Medium | 1.4 |
 | 3.4 | **Type hierarchy (basic)** | Missing | Supertype/subtype tree panel from stub inheritance | Medium | JavaIndex |
-| 3.5 | **Runtime classpath in Gradle model** | Missing | Extend init script for `runtimeClasspath`; expose in model | Medium | Gradle sync |
+| 3.5 | **Runtime classpath in Gradle model** ✅ done | Missing | Extend init script for `runtimeClasspath`; expose in model | Medium | Gradle sync |
 | 3.6 | **Run configurations UI** | Missing | `RunConfiguration` model: main class, module, VM args, env; persist + execute | Medium | 3.5, 1.6 |
 | 3.7 | **Semantic highlighting (optional)** | Missing | Wire LSP semantic tokens or stub-based kind coloring | Medium | Optional LSP |
 | 3.8 | **Inlay hints (parameter names)** | Missing | Render parameter names at call sites from stub signatures | Medium | JavaIndex |
@@ -390,15 +388,9 @@ Keep the three-library split (Penumbra / EditorIntelligence / JavaIntelligence).
 
 ## Suggested Next Step
 
-**Start with Chunk 1 + Chunk 2 together** as the first engineering phase:
+Chunks 1 and 2 are complete. The next foundational investment is **Chunk 4** (reference index + semantic Find Usages + rename), which also replaces the per-request project scan behind Go to Implementation with an index.
 
-1. **Chunk 1.1** — Problems panel (immediate UI value, works with existing duplicate-symbol diagnostics).
-2. **Chunk 2.1** — Incremental overlay index rebuild (performance prerequisite).
-3. **Chunk 2.2–2.4** — `JavaDiagnosticProvider` + idle analysis + Problems panel integration.
-
-This delivers the #1 visible gap vs IntelliJ (red squiggles and error navigation), reuses existing infrastructure (Gradle classpath, `DiagnosticEngine`, squiggle rendering), and creates the analysis pipeline that later feeds quick fixes, import optimization, and reference-index construction.
-
-**After this phase:** proceed to **Chunk 4** (reference index + semantic Find Usages + rename) — the next foundational investment.
+The cheaper **Chunk 3** items (formatter 3.1, import sorting 3.2, runtime classpath 3.5) are done. Left in Chunk 3: full go to implementation (3.3), type hierarchy (3.4), a run configurations UI over the runtime classpath (3.6), semantic highlighting (3.7) and parameter-name inlay hints (3.8).
 
 ---
 

@@ -86,6 +86,150 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         XCTAssertEqual(textView.text as String, "hello hello hello")
     }
 
+    func testOrganizeImportsAppliesTheProvidersOrganizeAction() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "unused keep"
+        let remove = CodeAction(
+            title: "Remove unused", kind: CodeAction.organizeImportsKind,
+            edits: [TextEdit(range: makeRange(start: 0, end: 7), replacement: "")]
+        )
+        let other = CodeAction(title: "Other", kind: "quickfix", edits: [TextEdit(range: makeRange(start: 0, end: 1), replacement: "X")])
+        let controller = makeController(textView: textView, actions: [other, remove])
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let applied = await controller.organizeImports()
+
+        XCTAssertTrue(applied)
+        XCTAssertEqual(textView.text as String, "keep")
+    }
+
+    func testOrganizeImportsIsFalseWithoutAnOrganizeAction() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "unchanged"
+        let other = CodeAction(title: "Other", kind: "quickfix", edits: [TextEdit(range: makeRange(start: 0, end: 1), replacement: "X")])
+        let controller = makeController(textView: textView, actions: [other])
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let applied = await controller.organizeImports()
+
+        XCTAssertFalse(applied)
+        XCTAssertEqual(textView.text as String, "unchanged")
+    }
+
+    func testOptimizeImportsEditorActionOrganizesImports() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "unused keep"
+        let remove = CodeAction(
+            title: "Remove unused", kind: CodeAction.organizeImportsKind,
+            edits: [TextEdit(range: makeRange(start: 0, end: 7), replacement: "")]
+        )
+        let controller = makeController(textView: textView, actions: [remove])
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertTrue(textView.perform(.optimizeImports))
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(textView.text as String, "keep")
+        withExtendedLifetime(controller) {}
+    }
+
+    func testBreadcrumbProviderOverridesTheGenericBreadcrumbs() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "class A {}"
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: []),
+            services: EditorIntelligenceServices(breadcrumbProvider: MockBreadcrumbProvider(titles: ["A", "m(int)"]))
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        var received: [String] = []
+        controller.onBreadcrumbsUpdated = { received = $0.map(\.title) }
+
+        controller.refreshBreadcrumbs()
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        XCTAssertEqual(received, ["A", "m(int)"])
+    }
+
+    func testReformatFormatsTheSelectedLinesThroughTheFormattingProvider() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "a\nb\nc\n"
+        let provider = MockFormattingProvider()
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: []),
+            services: EditorIntelligenceServices(formattingProvider: provider)
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        textView.selectedRange = NSRange(location: 2, length: 1) // "b"
+
+        XCTAssertTrue(textView.perform(.reformatCode))
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(textView.text as String, "a\n>b\nc\n")
+        let seen = await provider.lastSelection
+        XCTAssertEqual(seen?.start.line, 1, "the provider is given the live selection with real line numbers")
+        withExtendedLifetime(controller) {}
+    }
+
+    func testReformatWithNothingSelectedFormatsTheWholeDocument() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "a\nb\n"
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: []),
+            services: EditorIntelligenceServices(formattingProvider: MockFormattingProvider())
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        textView.selectedRange = NSRange(location: 0, length: 0)
+
+        XCTAssertTrue(textView.perform(.reformatCode))
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(textView.text as String, "<a\nb\n")
+        withExtendedLifetime(controller) {}
+    }
+
+    func testReformatFallsThroughWhenTheProviderDoesNotHandleTheDocument() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "a\n"
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: []),
+            services: EditorIntelligenceServices(formattingProvider: MockFormattingProvider(supports: false))
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        // The controller does not claim it, so the text view's own re-indent runs instead.
+        XCTAssertTrue(textView.perform(.reformatCode))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(textView.text as String, "a\n")
+        withExtendedLifetime(controller) {}
+    }
+
+    private func makeController(textView: TextView, actions: [CodeAction]) -> EditorIntelligenceController {
+        EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: []),
+            services: EditorIntelligenceServices(codeActionProvider: MockCodeActionProvider(actions: actions))
+        )
+    }
+
     func testControllerAppliesDiagnostics() async throws {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         textView.theme = DefaultTheme()
@@ -200,4 +344,45 @@ private func makeRange(start: Int, end: Int) -> EditorIntelligence.TextRange {
         start: TextPosition(line: 0, column: start, utf16Offset: start),
         end: TextPosition(line: 0, column: end, utf16Offset: end)
     )
+}
+
+private struct MockCodeActionProvider: CodeActionProviding {
+    let actions: [CodeAction]
+
+    func codeActions(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> [CodeAction] {
+        actions
+    }
+}
+
+private struct MockBreadcrumbProvider: BreadcrumbProviding {
+    let titles: [String]
+
+    func breadcrumbs(for document: Document) async -> [BreadcrumbSegment]? {
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        return titles.map { BreadcrumbSegment(title: $0, range: TextRange(start: position, end: position)) }
+    }
+}
+
+private actor MockFormattingProvider: FormattingProviding {
+    private nonisolated let supports: Bool
+    private(set) var lastSelection: EditorIntelligence.TextRange?
+
+    init(supports: Bool = true) {
+        self.supports = supports
+    }
+
+    nonisolated func supportsFormatting(_ document: Document) -> Bool {
+        supports
+    }
+
+    func formatDocument(_ document: Document) async -> [TextEdit] {
+        let start = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        return [TextEdit(range: EditorIntelligence.TextRange(start: start, end: start), replacement: "<")]
+    }
+
+    func formatSelection(in document: Document, range: EditorIntelligence.TextRange) async -> [TextEdit] {
+        lastSelection = range
+        let start = range.start
+        return [TextEdit(range: EditorIntelligence.TextRange(start: start, end: start), replacement: ">")]
+    }
 }

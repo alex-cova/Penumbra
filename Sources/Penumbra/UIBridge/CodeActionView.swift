@@ -12,6 +12,28 @@ public final class CodeActionView: NSView {
     ))
     private let tableView = NSTableView()
 
+    /// The highlighted action, the one Return applies.
+    public var selectedAction: CodeAction? {
+        model.actions.indices.contains(tableView.selectedRow) ? model.actions[tableView.selectedRow] : nil
+    }
+
+    /// Highlights `row` (clamped) without applying it.
+    public func selectRow(_ row: Int) {
+        guard !model.actions.isEmpty else { return }
+        let clamped = min(max(0, row), model.actions.count - 1)
+        tableView.selectRowIndexes(IndexSet(integer: clamped), byExtendingSelection: false)
+        tableView.scrollRowToVisible(clamped)
+    }
+
+    /// Moves the highlight by `delta` rows, wrapping around.
+    public func moveSelection(by delta: Int) {
+        let count = model.actions.count
+        guard count > 0 else { return }
+        let current = tableView.selectedRow
+        let next = current < 0 ? (delta > 0 ? 0 : count - 1) : ((current + delta) % count + count) % count
+        selectRow(next)
+    }
+
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -36,6 +58,13 @@ public final class CodeActionView: NSView {
         layer?.borderColor = NSColor.separatorColor.cgColor
     }
 
+    /// A click applies the action. Selection alone (arrow keys, the initial highlight) does not.
+    @objc private func rowClicked() {
+        let row = tableView.clickedRow
+        guard model.actions.indices.contains(row) else { return }
+        onSelectAction?(model.actions[row])
+    }
+
     private func configure() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
@@ -49,6 +78,8 @@ public final class CodeActionView: NSView {
         tableView.rowHeight = 22
         tableView.delegate = self
         tableView.dataSource = self
+        tableView.target = self
+        tableView.action = #selector(rowClicked)
         tableView.style = .plain
         tableView.backgroundColor = .clear
         tableView.translatesAutoresizingMaskIntoConstraints = false
@@ -88,13 +119,5 @@ extension CodeActionView: NSTableViewDataSource, NSTableViewDelegate {
         let prefix = action.isPreferred ? "💡 " : ""
         cell.textField?.stringValue = "\(prefix)\(action.title)"
         return cell
-    }
-
-    public func tableViewSelectionDidChange(_ notification: Notification) {
-        let row = tableView.selectedRow
-        guard model.actions.indices.contains(row) else {
-            return
-        }
-        onSelectAction?(model.actions[row])
     }
 }

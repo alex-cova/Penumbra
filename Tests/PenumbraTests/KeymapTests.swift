@@ -72,6 +72,23 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("d", .command))), .duplicateLines)
     }
 
+    func testContextActionsAndOptimizeImportsShortcuts() {
+        let optionReturn = KeyStroke(KeyChord(code: 0x24, .option))
+        XCTAssertEqual(Keymap.default_.action(for: optionReturn), .showContextActions)
+        XCTAssertEqual(Keymap.intelliJ.action(for: optionReturn), .showContextActions)
+        XCTAssertEqual(Keymap.sublime.action(for: optionReturn), .showContextActions)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("o", [.control, .option]))), .optimizeImports)
+        XCTAssertNil(Keymap.default_.action(for: KeyStroke(KeyChord("o", [.control, .option]))))
+    }
+
+    func testQuickDocumentationShortcuts() {
+        let f1 = KeyStroke(KeyChord(code: 0x7A))
+        XCTAssertEqual(Keymap.default_.action(for: f1), .quickDocumentation)
+        XCTAssertEqual(Keymap.sublime.action(for: f1), .quickDocumentation)
+        XCTAssertEqual(Keymap.intelliJ.action(for: f1), .quickDocumentation)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("j", .control))), .quickDocumentation)
+    }
+
     func testControlSpaceResolvesToTriggerCompletion() {
         XCTAssertEqual(
             Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x31, .control))),

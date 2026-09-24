@@ -1,0 +1,50 @@
+{
+  "formatVersion": 4,
+  "gradleVersion": "9.6.1",
+  "unresolved": [],
+  "subprojects": [
+    {
+      "path": ":lib",
+      "directory": "file:///Users/dev/demo/lib/",
+      "languageLevel": 21,
+      "tasks": [],
+      "sourceSets": [
+        {
+          "name": "main",
+          "sourceDirs": ["file:///Users/dev/demo/lib/src/main/java/"],
+          "outputDirs": ["file:///Users/dev/demo/lib/build/classes/java/main/", "file:///Users/dev/demo/lib/build/resources/main/"],
+          "compileClasspathJars": [],
+          "projectDependencies": [],
+          "runtimeClasspathJars": ["file:///Users/dev/.gradle/caches/guava.jar"],
+          "runtimeProjectDependencies": []
+        }
+      ]
+    },
+    {
+      "path": ":app",
+      "directory": "file:///Users/dev/demo/app/",
+      "languageLevel": 21,
+      "tasks": [],
+      "sourceSets": [
+        {
+          "name": "main",
+          "sourceDirs": ["file:///Users/dev/demo/app/src/main/java/"],
+          "outputDirs": ["file:///Users/dev/demo/app/build/classes/java/main/", "file:///Users/dev/demo/app/build/resources/main/"],
+          "compileClasspathJars": ["file:///Users/dev/demo/app/libs/compileonly.jar"],
+          "projectDependencies": [{"projectPath": ":lib", "sourceSetName": "main"}],
+          "runtimeClasspathJars": ["file:///Users/dev/demo/app/libs/extra.jar", "file:///Users/dev/.gradle/caches/guava.jar"],
+          "runtimeProjectDependencies": [{"projectPath": ":lib", "sourceSetName": "main"}]
+        },
+        {
+          "name": "test",
+          "sourceDirs": ["file:///Users/dev/demo/app/src/test/java/"],
+          "outputDirs": ["file:///Users/dev/demo/app/build/classes/java/test/", "file:///Users/dev/demo/app/build/resources/test/"],
+          "compileClasspathJars": [],
+          "projectDependencies": [{"projectPath": ":lib", "sourceSetName": "main"}],
+          "runtimeClasspathJars": ["file:///Users/dev/demo/app/libs/extra.jar", "file:///Users/dev/.gradle/caches/junit.jar"],
+          "runtimeProjectDependencies": [{"projectPath": ":lib", "sourceSetName": "main"}]
+        }
+      ]
+    }
+  ]
+}

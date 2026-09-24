@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 3
+    static let formatVersion = 4
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -31,20 +31,15 @@ enum GradleProjectModelScript {
         r.ext.umbraFragments = Collections.synchronizedList([])
     }
 
-    def umbraDescribeSourceSet = { p, ss ->
-        def described = [
-            name: ss.name,
-            sourceDirs: ss.java.srcDirs.collect { it.toURI().toString() },
-            compileClasspathJars: [],
-            projectDependencies: [],
-            unresolved: []
-        ]
-        def config = p.configurations.findByName(ss.compileClasspathConfigurationName)
+    // Resolves one of a source set's classpath configurations (compile or runtime) into jar URIs
+    // and project dependencies, leniently, so one bad dependency degrades instead of failing.
+    def umbraResolveClasspath = { p, ss, configName, label, described, jarsKey, dependenciesKey ->
+        def config = p.configurations.findByName(configName)
         if (config == null || !config.canBeResolved) {
-            return described
+            return
         }
         try {
-            p.logger.lifecycle("Umbra: resolving " + p.path + " " + ss.name + " compile classpath")
+            p.logger.lifecycle("Umbra: resolving " + p.path + " " + ss.name + " " + label)
             def view = config.incoming.artifactView { viewSpec ->
                 viewSpec.lenient(true)
             }
@@ -65,21 +60,51 @@ enum GradleProjectModelScript {
                     }
                     def key = owner.projectPath + '@' + sourceSetName
                     if (seenProjects.add(key)) {
-                        described.projectDependencies.add([projectPath: owner.projectPath, sourceSetName: sourceSetName])
+                        described[dependenciesKey].add([projectPath: owner.projectPath, sourceSetName: sourceSetName])
                     }
                 } else if (artifact.file.name.endsWith('.jar')) {
                     def uri = artifact.file.toURI().toString()
                     if (seenJars.add(uri)) {
-                        described.compileClasspathJars.add(uri)
+                        described[jarsKey].add(uri)
                     }
                 }
             }
             view.artifacts.failures.each { failure ->
-                described.unresolved.add(failure.message ?: failure.toString())
+                def message = failure.message ?: failure.toString()
+                if (!described.unresolved.contains(message)) {
+                    described.unresolved.add(message)
+                }
             }
         } catch (Exception e) {
-            described.unresolved.add(e.message ?: e.toString())
+            def message = e.message ?: e.toString()
+            if (!described.unresolved.contains(message)) {
+                described.unresolved.add(message)
+            }
         }
+    }
+
+    def umbraDescribeSourceSet = { p, ss ->
+        def described = [
+            name: ss.name,
+            sourceDirs: ss.java.srcDirs.collect { it.toURI().toString() },
+            outputDirs: [],
+            compileClasspathJars: [],
+            projectDependencies: [],
+            runtimeClasspathJars: [],
+            runtimeProjectDependencies: [],
+            unresolved: []
+        ]
+        try {
+            ss.output.classesDirs.files.each { described.outputDirs.add(it.toURI().toString()) }
+            def resources = ss.output.resourcesDir
+            if (resources != null) {
+                described.outputDirs.add(resources.toURI().toString())
+            }
+        } catch (Exception ignored) {}
+        umbraResolveClasspath(p, ss, ss.compileClasspathConfigurationName, 'compile classpath', described,
+            'compileClasspathJars', 'projectDependencies')
+        umbraResolveClasspath(p, ss, ss.runtimeClasspathConfigurationName, 'runtime classpath', described,
+            'runtimeClasspathJars', 'runtimeProjectDependencies')
         return described
     }
 

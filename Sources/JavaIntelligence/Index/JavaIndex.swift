@@ -314,6 +314,25 @@ public actor JavaIndex {
         return results
     }
 
+    /// Every class defined by the project itself (open-document overlay and project source
+    /// shards, precedence 1 or lower), never JARs or the JDK, deduplicated by qualified name with
+    /// the overlay winning. Honors `queryScope`. Decodes one stub per class, so this is for
+    /// explicit requests such as "Go to Implementation", not for the typing hot path.
+    public func projectClassStubs() -> [JavaClassStub] {
+        var seen = Set<String>()
+        var results: [JavaClassStub] = []
+        for table in [overlayNameIndex, baseNameIndex] {
+            for entry in table where entry.precedence <= 1 {
+                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
+                guard seen.insert(entry.qualifiedName).inserted else { continue }
+                if let stub = classStub(qualifiedName: entry.qualifiedName) {
+                    results.append(stub)
+                }
+            }
+        }
+        return results
+    }
+
     /// Direct subpackages of `prefix` (empty string for top-level packages), for import/package
     /// completion. E.g. `subpackages(of: "java.util")` includes "java.util.concurrent" but not
     /// "java.util.concurrent.atomic".

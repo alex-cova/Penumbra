@@ -413,7 +413,48 @@ final class JavaGoToDefinitionTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testJavaProviderIsPrimaryForEveryJavaKindAndNoOtherLanguage() throws {
+        let provider = JavaGoToDefinitionProvider(index: JavaIndex(), indexPaths: JavaIndexPaths(root: scratch))
+        for kind in [NavigationKind.definition, .implementation, .references] {
+            XCTAssertTrue(provider.isPrimary(for: navigationContext(language: "java", kind: kind)))
+            XCTAssertFalse(provider.isPrimary(for: navigationContext(language: "swift", kind: kind)))
+        }
+    }
+
+    func testJavaReferencesNeverFallThroughToNameMatching() async throws {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let range = TextRange(
+            start: TextPosition(line: 0, column: 0, utf16Offset: 0),
+            end: TextPosition(line: 0, column: 3, utf16Offset: 3)
+        )
+        await index.index([Symbol(name: "Bar", kind: .type, documentID: documentID, range: range)], for: documentID)
+        let engine = NavigationEngine(providers: [
+            JavaGoToDefinitionProvider(index: JavaIndex(), indexPaths: JavaIndexPaths(root: scratch)),
+            GoToDefinitionProvider(index: index),
+            FindReferencesProvider(index: index)
+        ])
+        for kind in [NavigationKind.references, .implementation] {
+            let context = navigationContext(language: "java", kind: kind, documentID: documentID)
+            let result = await engine.navigate(context: context)
+            XCTAssertNil(result, "\(kind) on Java must not use the name-matching providers")
+        }
+    }
+
     // MARK: - Fixtures
+
+    private func navigationContext(language: String, kind: NavigationKind, documentID: DocumentID = DocumentID()) -> NavigationContext {
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let document = Document(
+            id: documentID, displayName: "T",
+            contentSnapshot: TextSnapshot(version: 0, text: "Bar"),
+            selection: Selection(range: TextRange(start: position, end: position)),
+            cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 10, height: 10),
+            languageIdentifier: language
+        )
+        return NavigationContext(document: document, cursor: document.cursor, selection: document.selection, kind: kind)
+    }
 
     private struct Fixture {
         let url: URL

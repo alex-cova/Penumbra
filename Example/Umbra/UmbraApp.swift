@@ -95,6 +95,17 @@ struct UmbraApp: App {
             }
 
             CommandMenu("Java") {
+                Button("Show Context Actions", action: workspace.showContextActions)
+                    .keyboardShortcut(.return, modifiers: .option)
+                Button("Reformat Code", action: workspace.reformatCode)
+                Button("Optimize Imports", action: workspace.optimizeImports)
+                Divider()
+                Button("Run Last Configuration", action: workspace.runLastRunConfiguration)
+                    .keyboardShortcut("r", modifiers: [.control, .option])
+                    .disabled(workspace.lastRunConfiguration == nil)
+                Button("Edit Run Configuration…", action: workspace.editRunConfiguration)
+                    .disabled(!workspace.canEditRunConfiguration)
+                Divider()
                 Button("Build Project", systemImage: "hammer", action: workspace.buildGradleProject)
                     .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Reload Gradle Project", action: workspace.reloadGradleProject)

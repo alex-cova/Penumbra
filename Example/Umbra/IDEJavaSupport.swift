@@ -51,6 +51,14 @@ final class IDEJavaSupport {
     let overlayService: JavaOverlayService
     let completionProvider: JavaCompletionProvider
     let navigationProvider: JavaGoToDefinitionProvider
+    /// Quick fixes (import a class, remove unused imports) behind Show Context Actions and Optimize Imports.
+    let codeActionProvider: JavaCodeActionProvider
+    /// Signature and Javadoc on hover and for Quick Documentation.
+    let hoverProvider: JavaHoverProvider
+    /// Reformats Java files (⌥⌘L) with the built-in formatter.
+    let formattingProvider = JavaFormattingProvider()
+    /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
+    let breadcrumbProvider = JavaBreadcrumbProvider()
     /// `javac`-backed diagnostics for open Java files. Idle until ``refreshCompilerDiagnostics()``
     /// finds a project state it may check: a plain folder, or a Gradle project that has synced.
     let compilerDiagnostics = JavaCompilerDiagnosticsService()
@@ -128,6 +136,9 @@ final class IDEJavaSupport {
     /// Called when a sync ends in `.failed` (not on a user-initiated cancel) so `IDEWorkspace` can
     /// surface the Gradle console automatically.
     var onGradleSyncFailed: (@MainActor () -> Void)?
+    /// A Gradle task run ended (finished, timed out or cancelled), with whatever output it
+    /// produced, so the host can pull compiler errors out of it.
+    @ObservationIgnored var onGradleTasksFinished: (@MainActor (_ tasks: [String], _ projectRoot: URL, _ result: GradleCommandResult) -> Void)?
 
     init(
         gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL,
@@ -136,6 +147,8 @@ final class IDEJavaSupport {
         overlayService = JavaOverlayService(index: javaIndex)
         completionProvider = JavaCompletionProvider(index: javaIndex)
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
+        codeActionProvider = JavaCodeActionProvider(index: javaIndex)
+        hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
@@ -340,12 +353,12 @@ final class IDEJavaSupport {
     }
 
     /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
-    /// console tab. No-op while a sync or another task run is already in progress.
+    /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
+    /// first when the project has not been trusted yet.
     func runGradleTasks(_ taskPaths: [String]) {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         guard !taskPaths.isEmpty else { return }
         guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
-        guard gradleTrustStore.isTrusted(url) else { return }
 
         gradleRunTask?.cancel()
         gradleRunTask = Task { [gradleRunner] in
@@ -367,6 +380,17 @@ final class IDEJavaSupport {
                 runningGradleTaskPaths = []
             }
 
+            // Build scripts run arbitrary code, so an untrusted project is asked first, as a sync
+            // would. On a "no" nothing runs, and it is asked again next time.
+            if !gradleTrustStore.isTrusted(url) {
+                guard let requestTrust, await requestTrust(url) else {
+                    gradleConsole.appendNote("Not run: the project is not trusted")
+                    gradleConsole.markFinished()
+                    return
+                }
+                gradleTrustStore.setTrusted(true, for: url)
+            }
+
             do {
                 let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
                 let startedAt = Date()
@@ -386,12 +410,19 @@ final class IDEJavaSupport {
                 let elapsed = Date().timeIntervalSince(startedAt)
                 gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
                 gradleConsole.markFinished()
+                onGradleTasksFinished?(taskPaths, url, result)
             } catch is CancellationError {
                 gradleConsole.appendNote("Task run cancelled")
                 gradleConsole.markFinished()
             } catch {
                 gradleConsole.appendNote(Self.summarizeTaskRun(error))
                 gradleConsole.markFinished()
+                switch error {
+                case GradleCommandError.timedOut(let partial), GradleCommandError.cancelled(let partial):
+                    onGradleTasksFinished?(taskPaths, url, partial)
+                default:
+                    break
+                }
                 if case GradleCommandError.untrusted = error {
                     gradleSync = .untrusted
                 }
@@ -661,6 +692,8 @@ final class IDEJavaSupport {
         await publishSources()
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
         refreshCompilerDiagnostics()
     }
 
@@ -809,6 +842,7 @@ final class IDEJavaSupport {
         await javaIndex.setSources(sources)
         if let indexedJDKHomePath {
             await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
     }
 
@@ -816,6 +850,8 @@ final class IDEJavaSupport {
         Task {
             await completionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await navigationProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await codeActionProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await hoverProvider.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }
 

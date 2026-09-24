@@ -95,6 +95,13 @@ public extension EditorActionID {
     static let navigateForward = EditorActionID("navigateForward")
     /// Show completions at the caret. Bound to Control-Space in the shipped keymaps.
     static let triggerCompletion = EditorActionID("triggerCompletion")
+    /// Shows the documentation of the symbol at the caret right away (F1, ⌃J), instead of waiting
+    /// for the caret to rest.
+    static let quickDocumentation = EditorActionID("quickDocumentation")
+    /// Quick fixes and refactorings at the caret. Bound to Option-Return.
+    static let showContextActions = EditorActionID("showContextActions")
+    /// Removes unused imports and sorts the rest (and whatever else the language's organize-imports action does).
+    static let optimizeImports = EditorActionID("optimizeImports")
     /// Completions of the expected type. Bound to Control-Shift-Space.
     static let triggerSmartCompletion = EditorActionID("triggerSmartCompletion")
 
@@ -144,6 +151,9 @@ public extension EditorActionID {
         .navigateBack: "Back",
         .navigateForward: "Forward",
         .triggerCompletion: "Complete",
-        .triggerSmartCompletion: "Smart Type Completion"
+        .triggerSmartCompletion: "Smart Type Completion",
+        .quickDocumentation: "Quick Documentation",
+        .showContextActions: "Show Context Actions",
+        .optimizeImports: "Optimize Imports"
     ]
 }

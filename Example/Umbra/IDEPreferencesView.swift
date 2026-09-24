@@ -230,6 +230,12 @@ public struct IDEPreferencesView: View {
                             workspace.javaCompilerDiagnosticsPreferenceChanged()
                         }
                         IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Optimize Imports on Save",
+                            caption: "Remove unused imports from a Java file each time you save it. Java > Optimize Imports does the same on demand.",
+                            isOn: $preferences.javaOptimizeImportsOnSave
+                        )
+                        IDESettingsSeparator()
                         IDESettingsRow(title: "Gradle Sync Timeout") {
                             HStack(spacing: IDEAppearance.Spacing.xs) {
                                 Text("\(preferences.javaGradleSyncTimeoutSeconds)s")

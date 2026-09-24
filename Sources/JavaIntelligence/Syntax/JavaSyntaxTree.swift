@@ -96,6 +96,11 @@ public struct SyntaxNode {
         ts_node_is_missing(raw)
     }
 
+    /// Whether this subtree contains a syntax error or a missing node.
+    public var hasError: Bool {
+        ts_node_has_error(raw)
+    }
+
     public var startByte: Int { Int(ts_node_start_byte(raw)) }
     public var endByte: Int { Int(ts_node_end_byte(raw)) }
     public var byteRange: Range<Int> { startByte..<endByte }

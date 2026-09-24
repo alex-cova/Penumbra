@@ -82,6 +82,8 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord(code: 0x24, .command)), to: .insertLineBelow)
         map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .shift])), to: .insertLineAbove)
         map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
+        map.bind(KeyStroke(KeyChord(code: 0x24, .option)), to: .showContextActions)
+        map.bind(KeyStroke(KeyChord(code: 0x7A /* F1 */)), to: .quickDocumentation)
         return map
     }()
 
@@ -126,6 +128,8 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("t", [.command, .option])), to: .surroundWith)
         map.bind(KeyStroke(KeyChord("l", [.command, .option])), to: .reformatCode)
         map.bind(KeyStroke(KeyChord("d", .command)), to: .duplicateLines)
+        map.bind(KeyStroke(KeyChord("o", [.control, .option])), to: .optimizeImports)
+        map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
 
         return map
     }()

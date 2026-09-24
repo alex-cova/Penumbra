@@ -98,6 +98,16 @@ public struct IDERootView: View {
                 IDEFirstRunGuideOverlay()
             }
         }
+        .sheet(isPresented: Binding(
+            get: { workspace.runConfigurationDraft != nil },
+            set: { if !$0 { workspace.dismissRunConfigurationSheet() } }
+        )) {
+            if let configuration = workspace.runConfigurationDraft {
+                IDERunConfigurationSheet(configuration: configuration)
+                    .environment(workspace)
+                    .preferredColorScheme(.dark)
+            }
+        }
         .preferredColorScheme(.dark)
         .task {
             guard !didBootstrap else { return }

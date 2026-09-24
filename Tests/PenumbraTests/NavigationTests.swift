@@ -66,6 +66,42 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(location.displayName, "first")
     }
 
+    func testNavigationEngineAsksOnlyPrimaryProvidersWhenOneClaimsTheContext() async {
+        let fallback = MockNavigationProvider(name: "Fallback", result: .single(makeLocation(name: "fallback")))
+        let primary = MockNavigationProvider(name: "Primary", result: nil, isPrimary: true)
+        let engine = NavigationEngine(providers: [primary, fallback])
+        let context = makeNavigationContext(documentID: DocumentID(), text: "foo", offset: 0)
+        let navigated = await engine.navigate(context: context)
+        XCTAssertNil(navigated, "A primary provider with no answer must not fall through to a fallback")
+        let collected = await engine.collect(context: context)
+        XCTAssertTrue(collected.isEmpty)
+    }
+
+    func testNavigationEngineUsesPrimaryResultOverEarlierFallback() async {
+        let fallback = MockNavigationProvider(name: "Fallback", result: .single(makeLocation(name: "fallback")))
+        let primary = MockNavigationProvider(name: "Primary", result: .single(makeLocation(name: "primary")), isPrimary: true)
+        let engine = NavigationEngine(providers: [fallback, primary])
+        let context = makeNavigationContext(documentID: DocumentID(), text: "foo", offset: 0)
+        guard case .single(let location)? = await engine.navigate(context: context) else {
+            return XCTFail("Expected single result")
+        }
+        XCTAssertEqual(location.displayName, "primary")
+    }
+
+    func testFindReferencesProviderSkipsConfiguredLanguages() async {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let symbol = Symbol(name: "foo", kind: .function, documentID: documentID, range: makeRange(line: 0, startColumn: 0, endColumn: 3))
+        await index.index([symbol], for: documentID)
+        let context = makeNavigationContext(documentID: documentID, text: "foo", offset: 0, kind: .references, languageIdentifier: "java")
+        let skipping = FindReferencesProvider(index: index, skippingLanguages: ["java"])
+        let skipped = await skipping.provide(context: context)
+        XCTAssertNil(skipped)
+        let plain = FindReferencesProvider(index: index)
+        let found = await plain.provide(context: context)
+        XCTAssertNotNil(found)
+    }
+
     func testNavigationEngineCollectsAllResults() async {
         let first = MockNavigationProvider(name: "First", result: .single(makeLocation(name: "first")))
         let second = MockNavigationProvider(name: "Second", result: .single(makeLocation(name: "second")))
@@ -94,10 +130,16 @@ final class NavigationTests: XCTestCase {
 private actor MockNavigationProvider: NavigationProvider {
     let name: String
     let result: NavigationResult?
+    private let primary: Bool
 
-    init(name: String, result: NavigationResult?) {
+    init(name: String, result: NavigationResult?, isPrimary: Bool = false) {
         self.name = name
         self.result = result
+        self.primary = isPrimary
+    }
+
+    nonisolated func isPrimary(for context: NavigationContext) -> Bool {
+        primary
     }
 
     func provide(context: NavigationContext) async -> NavigationResult? {
@@ -109,7 +151,8 @@ private func makeNavigationContext(
     documentID: DocumentID,
     text: String,
     offset: Int,
-    kind: NavigationKind = .definition
+    kind: NavigationKind = .definition,
+    languageIdentifier: String? = nil
 ) -> NavigationContext {
     let snapshot = TextSnapshot(version: 0, text: text)
     let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
@@ -120,7 +163,8 @@ private func makeNavigationContext(
         contentSnapshot: snapshot,
         selection: Selection(range: TextRange(start: position, end: position)),
         cursor: Cursor(position: position),
-        viewport: Viewport(x: 0, y: 0, width: 100, height: 100)
+        viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+        languageIdentifier: languageIdentifier
     )
     return NavigationContext(
         document: document,

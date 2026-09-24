@@ -36,6 +36,7 @@ public final class IDEPreferences {
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
+        static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
     }
@@ -163,6 +164,12 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
     }
 
+    /// Remove unused imports from a Java file each time it is saved. Off by default: saving never
+    /// edits the file unless this is on. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaOptimizeImportsOnSave: Bool {
+        didSet { UserDefaults.standard.set(javaOptimizeImportsOnSave, forKey: Keys.javaOptimizeImportsOnSave) }
+    }
+
     /// How long one Gradle project-model sync may run before it is killed. A first sync may
     /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
     var javaGradleSyncTimeoutSeconds: Int {
@@ -208,6 +215,7 @@ public final class IDEPreferences {
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
+        javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         applyTheme()

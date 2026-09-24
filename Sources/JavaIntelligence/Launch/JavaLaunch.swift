@@ -89,14 +89,38 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         model: JavaGradleProjectModel?,
         gradleWrapperExists: Bool
     ) -> JavaLaunchCommand? {
-        if isGradleProject, let projectRoot {
-            let task = gradleRunTask(file: file, model: model)
-            return JavaLaunchCommand(
-                shellCommand: gradleInvocation(task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
-            )
+        guard let configuration = JavaRunConfiguration.makeDefault(
+            file: file, projectRoot: projectRoot, isGradleProject: isGradleProject, model: model
+        ) else { return nil }
+        return make(configuration: configuration, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
+    }
+
+    /// The shell command for `configuration`. Environment variables become a `NAME='value'`
+    /// prefix (names that aren't valid identifiers are dropped); a Gradle launch passes the
+    /// program arguments as one quoted `--args`, and a single-file launch types the JVM and
+    /// program arguments as written.
+    public static func make(
+        configuration: JavaRunConfiguration,
+        projectRoot: URL?,
+        gradleWrapperExists: Bool
+    ) -> JavaLaunchCommand? {
+        let environment = environmentPrefix(configuration.environment)
+        switch configuration.target {
+        case .gradleRun(let projectPath):
+            guard let projectRoot else { return nil }
+            var task = projectPath == ":" ? "run" : "\(projectPath):run"
+            let arguments = configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !arguments.isEmpty { task += " --args=\(shellQuote(arguments))" }
+            return JavaLaunchCommand(shellCommand: gradleInvocation(
+                task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists, environment: environment
+            ))
+        case .singleFile(let path):
+            var parts = [environment.trimmingCharacters(in: .whitespaces), "java"]
+            parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+            parts.append(shellQuote(path))
+            parts.append(configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+            return JavaLaunchCommand(shellCommand: parts.filter { !$0.isEmpty }.joined(separator: " "))
         }
-        guard let file, file.pathExtension.lowercased() == "java" else { return nil }
-        return JavaLaunchCommand(shellCommand: "java \(shellQuote(file.path))")
     }
 
     /// `./gradlew build` (or `gradle build`) at the project root. Builds every subproject.
@@ -106,14 +130,20 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         )
     }
 
-    private static func gradleInvocation(task: String, projectRoot: URL, gradleWrapperExists: Bool) -> String {
+    private static func gradleInvocation(
+        task: String, projectRoot: URL, gradleWrapperExists: Bool, environment: String = ""
+    ) -> String {
         let launcher = gradleWrapperExists ? "./gradlew" : "gradle"
-        return "cd \(shellQuote(projectRoot.path)) && \(launcher) \(task)"
+        return "cd \(shellQuote(projectRoot.path)) && \(environment)\(launcher) \(task)"
     }
 
-    private static func gradleRunTask(file: URL?, model: JavaGradleProjectModel?) -> String {
-        guard let file, let match = model?.sourceSet(containing: file) else { return "run" }
-        return match.subproject.path == ":" ? "run" : "\(match.subproject.path):run"
+    /// `A='1' B='two words' ` (with a trailing space), or `""`. Sorted, so the command is stable.
+    private static func environmentPrefix(_ environment: [String: String]) -> String {
+        environment
+            .filter { $0.key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(shellQuote($0.value)) " }
+            .joined()
     }
 
     static func shellQuote(_ string: String) -> String {

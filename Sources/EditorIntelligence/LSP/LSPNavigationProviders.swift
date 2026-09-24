@@ -66,7 +66,7 @@ public actor LSPImplementationProvider: NavigationProvider {
     }
 }
 
-public actor LSPFormattingProvider {
+public actor LSPFormattingProvider: FormattingProviding {
     public let name = "LSPFormatting"
     private let client: LSPClient
 

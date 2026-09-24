@@ -17,7 +17,7 @@ public final class JumpToDefinitionController {
     /// Called with the candidates when a request resolves to more than one location. Wire this
     /// to a picker (e.g. `CommandPaletteController.presentList`). If unset, the first location
     /// is used.
-    public var onPresentChoices: (([Location]) -> Void)?
+    public var onPresentChoices: ((NavigationKind, [Location]) -> Void)?
     /// Called when a target belongs to a different document (`Location.url` set and different
     /// from `textView.documentURL`). Return `true` if the host opened it; otherwise the target
     /// is focused in the current text view.
@@ -79,7 +79,7 @@ public final class JumpToDefinitionController {
                     self.go(to: locations[0])
                 case .multiple(let locations):
                     if let onPresentChoices = self.onPresentChoices {
-                        onPresentChoices(locations)
+                        onPresentChoices(kind, locations)
                     } else if let first = locations.first {
                         self.go(to: first)
                     }

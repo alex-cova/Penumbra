@@ -24,7 +24,7 @@ enum JavaGoToDefinition {
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return [] }
         if case .declaration = reference { return [] }
 
-        let session = Session(
+        let session = JavaNavigationSession(
             source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
             index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer, decompile: decompile
         )
@@ -32,12 +32,17 @@ enum JavaGoToDefinition {
     }
 }
 
-private struct MethodTarget {
+struct MethodTarget {
     let declaringClass: String
     let method: JavaMethodStub
 }
 
-private struct Session {
+struct FieldTarget {
+    let declaringClass: String
+    let field: JavaFieldStub
+}
+
+struct JavaNavigationSession {
     let source: String
     let fileURL: URL?
     let tree: JavaSyntaxTree
@@ -112,7 +117,7 @@ private struct Session {
 
     // MARK: - References
 
-    private func typeHits(components: [String]) async -> [JavaDefinitionHit] {
+    func typeHits(components: [String]) async -> [JavaDefinitionHit] {
         guard let resolved = await resolveType(components: components) else { return [] }
         switch resolved {
         case .typeVariable(let name):
@@ -127,7 +132,7 @@ private struct Session {
         }
     }
 
-    private func typeHits(qualifiedName: String) async -> [JavaDefinitionHit] {
+    func typeHits(qualifiedName: String) async -> [JavaDefinitionHit] {
         let display = String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName))
         if let stub = await index.classStub(qualifiedName: qualifiedName), let file = await sourceFile(for: stub),
            let range = JavaDeclarationLocator.typeName(
@@ -141,13 +146,13 @@ private struct Session {
         return []
     }
 
-    private func constructorHits(components: [String], argumentCount: Int) async -> [JavaDefinitionHit] {
+    func constructorHits(components: [String], argumentCount: Int) async -> [JavaDefinitionHit] {
         guard let resolved = await resolveType(components: components),
               case .classType(let qualifiedName, _, _) = resolved else { return [] }
         return await constructorHits(type: .classType(qualifiedName: qualifiedName, arguments: [], outer: nil), argumentCount: argumentCount)
     }
 
-    private func constructorHits(type: JavaTypeRef, argumentCount: Int) async -> [JavaDefinitionHit] {
+    func constructorHits(type: JavaTypeRef, argumentCount: Int) async -> [JavaDefinitionHit] {
         guard case .classType(let qualifiedName, _, _) = type else { return [] }
         let declared = await JavaMemberLookup.constructors(of: type, context: context, index: index)
         if declared.isEmpty {
@@ -159,7 +164,7 @@ private struct Session {
         return hits.isEmpty ? await typeHits(qualifiedName: qualifiedName) : hits
     }
 
-    private func constructorOwner(isSuper: Bool) async -> JavaTypeRef? {
+    func constructorOwner(isSuper: Bool) async -> JavaTypeRef? {
         guard let enclosing = context.enclosingTypeQualifiedNames.first else { return nil }
         if !isSuper {
             return .classType(qualifiedName: enclosing, arguments: [], outer: nil)
@@ -167,11 +172,16 @@ private struct Session {
         return await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index)
     }
 
-    private func methodCallHits(_ invocation: SyntaxNode) async -> [JavaDefinitionHit] {
+    func methodCallHits(_ invocation: SyntaxNode) async -> [JavaDefinitionHit] {
+        await methodHits(methodCallTargets(invocation))
+    }
+
+    /// The declarations a method call can bind to, narrowed by argument count.
+    func methodCallTargets(_ invocation: SyntaxNode) async -> [MethodTarget] {
         guard let nameNode = invocation.child(byFieldName: "name") else { return [] }
         let argumentCount = invocation.child(byFieldName: "arguments")?.namedChildCount ?? 0
         guard let receiver = await receiverInfo(of: invocation, nameNode: nameNode) else {
-            return await staticImportMethodHits(name: nameNode.text, argumentCount: argumentCount)
+            return choose(primary: [], secondary: await staticImportMethods(named: nameNode.text), argumentCount: argumentCount)
         }
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
         let primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
@@ -181,27 +191,33 @@ private struct Session {
         } else {
             secondary = []
         }
-        return await methodHits(choose(primary: primary, secondary: secondary, argumentCount: argumentCount))
+        return choose(primary: primary, secondary: secondary, argumentCount: argumentCount)
     }
 
-    private func fieldAccessHits(_ access: SyntaxNode) async -> [JavaDefinitionHit] {
-        guard let fieldNode = access.child(byFieldName: "field") else { return [] }
+    func fieldAccessHits(_ access: SyntaxNode) async -> [JavaDefinitionHit] {
+        guard let target = await fieldAccessTarget(access) else { return [] }
+        return await fieldHits(of: target)
+    }
+
+    /// The field a `receiver.name` expression binds to, with the class that declares it.
+    func fieldAccessTarget(_ access: SyntaxNode) async -> FieldTarget? {
+        guard let fieldNode = access.child(byFieldName: "field") else { return nil }
         if access.child(byFieldName: "object")?.type == "super" {
             guard let enclosing = context.enclosingTypeQualifiedNames.first,
                   let superclass = await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index) else {
-                return []
+                return nil
             }
-            return await fieldHits(named: fieldNode.text, on: superclass, mode: .instance)
+            return await fieldTarget(named: fieldNode.text, on: superclass, mode: .instance)
         }
-        guard let nameNode = access.child(byFieldName: "field"), let dot = dotOffset(before: nameNode),
+        guard let dot = dotOffset(before: fieldNode),
               let receiver = await JavaExpressionTyper.receiverInfo(
                 source: source, realTree: tree, dotOffset: dot, context: context, index: index
-              ) else { return [] }
+              ) else { return nil }
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        return await fieldHits(named: fieldNode.text, on: receiver.type, mode: mode)
+        return await fieldTarget(named: fieldNode.text, on: receiver.type, mode: mode)
     }
 
-    private func bareNameHits(_ name: String) async -> [JavaDefinitionHit] {
+    func bareNameHits(_ name: String) async -> [JavaDefinitionHit] {
         if let range = JavaDeclarationLocator.localDeclarationRange(name: name, in: tree, atByteOffset: byteOffset) {
             return [hit(text: source, url: fileURL, byteRange: range, displayName: name)]
         }
@@ -215,7 +231,7 @@ private struct Session {
         return await typeHits(components: [name])
     }
 
-    private func importHits(_ declaration: SyntaxNode, clicked: SyntaxNode) async -> [JavaDefinitionHit] {
+    func importHits(_ declaration: SyntaxNode, clicked: SyntaxNode) async -> [JavaDefinitionHit] {
         let isStatic = declaration.children.contains { $0.type == "static" }
         let isOnDemand = declaration.namedChildren.contains { $0.type == "asterisk" }
         guard let path = declaration.namedChildren.first(where: { $0.type == "scoped_identifier" || $0.type == "identifier" }) else {
@@ -237,7 +253,7 @@ private struct Session {
 
     // MARK: - Members
 
-    private func receiverInfo(of invocation: SyntaxNode, nameNode: SyntaxNode) async -> JavaReceiverInfo? {
+    func receiverInfo(of invocation: SyntaxNode, nameNode: SyntaxNode) async -> JavaReceiverInfo? {
         if let object = invocation.child(byFieldName: "object"), object.type == "super" {
             guard let enclosing = context.enclosingTypeQualifiedNames.first,
                   let superclass = await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index) else {
@@ -257,7 +273,7 @@ private struct Session {
         )
     }
 
-    private func allMethods(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [MethodTarget] {
+    func allMethods(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [MethodTarget] {
         let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index)
         return members.compactMap { member in
             guard case .method(let method, let declaringClass) = member, method.name == name else { return nil }
@@ -265,7 +281,7 @@ private struct Session {
         }
     }
 
-    private func staticImportMethods(named name: String) async -> [MethodTarget] {
+    func staticImportMethods(named name: String) async -> [MethodTarget] {
         var targets: [MethodTarget] = []
         for typeName in singleStaticImportTypes(member: name) {
             let type = JavaTypeRef.classType(qualifiedName: typeName, arguments: [], outer: nil)
@@ -279,16 +295,24 @@ private struct Session {
         return targets
     }
 
-    private func staticImportMethodHits(name: String, argumentCount: Int) async -> [JavaDefinitionHit] {
-        await methodHits(choose(primary: [], secondary: await staticImportMethods(named: name), argumentCount: argumentCount))
+    func fieldHits(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [JavaDefinitionHit] {
+        guard let target = await fieldTarget(named: name, on: type, mode: mode) else { return [] }
+        return await fieldHits(of: target)
     }
 
-    private func fieldHits(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [JavaDefinitionHit] {
+    func fieldTarget(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> FieldTarget? {
         let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index)
-        guard let match = members.first(where: { member in
-            guard case .field(let field, _) = member else { return false }
-            return field.name == name
-        }), case .field(_, let declaringClass) = match else { return [] }
+        for member in members {
+            if case .field(let field, let declaringClass) = member, field.name == name {
+                return FieldTarget(declaringClass: declaringClass, field: field)
+            }
+        }
+        return nil
+    }
+
+    func fieldHits(of target: FieldTarget) async -> [JavaDefinitionHit] {
+        let name = target.field.name
+        let declaringClass = target.declaringClass
         return await memberHits(declaringClass: declaringClass, displayName: name) { tree, relaxedSimpleName in
             JavaDeclarationLocator.fieldRanges(
                 declaringClass: declaringClass, name: name, relaxedSimpleName: relaxedSimpleName, in: tree
@@ -296,7 +320,7 @@ private struct Session {
         }
     }
 
-    private func staticImportFieldHits(_ name: String) async -> [JavaDefinitionHit] {
+    func staticImportFieldHits(_ name: String) async -> [JavaDefinitionHit] {
         var hits: [JavaDefinitionHit] = []
         let single = singleStaticImportTypes(member: name)
         let types = single.isEmpty
@@ -309,7 +333,7 @@ private struct Session {
         return dedupe(hits)
     }
 
-    private func singleStaticImportTypes(member: String) -> [String] {
+    func singleStaticImportTypes(member: String) -> [String] {
         context.imports.compactMap { declaration in
             guard declaration.isStatic, !declaration.isOnDemand else { return nil }
             let parts = declaration.qualifiedName.split(separator: ".").map(String.init)
@@ -318,7 +342,7 @@ private struct Session {
         }
     }
 
-    private func methodHits(_ targets: [MethodTarget]) async -> [JavaDefinitionHit] {
+    func methodHits(_ targets: [MethodTarget]) async -> [JavaDefinitionHit] {
         var hits: [JavaDefinitionHit] = []
         for target in targets {
             let display = methodDisplayName(target)
@@ -337,7 +361,7 @@ private struct Session {
         return dedupe(hits)
     }
 
-    private func methodDisplayName(_ target: MethodTarget) -> String {
+    func methodDisplayName(_ target: MethodTarget) -> String {
         if target.method.isConstructor {
             let simple = String(target.declaringClass.split(separator: ".").last ?? Substring(target.declaringClass))
             return simple + target.method.parameterListDisplay
@@ -345,7 +369,7 @@ private struct Session {
         return target.method.name + target.method.parameterListDisplay
     }
 
-    private func choose(primary: [MethodTarget], secondary: [MethodTarget], argumentCount: Int) -> [MethodTarget] {
+    func choose(primary: [MethodTarget], secondary: [MethodTarget], argumentCount: Int) -> [MethodTarget] {
         func exact(_ targets: [MethodTarget]) -> [MethodTarget] {
             targets.filter { $0.method.parameters.count == argumentCount }
         }
@@ -365,7 +389,7 @@ private struct Session {
 
     // MARK: - Source files
 
-    private func memberHits(
+    func memberHits(
         declaringClass: String, displayName: String, ranges: (JavaSyntaxTree, String?) -> [Range<Int>]
     ) async -> [JavaDefinitionHit] {
         guard let stub = await index.classStub(qualifiedName: declaringClass), let file = await sourceFile(for: stub) else {
@@ -376,7 +400,7 @@ private struct Session {
         }
     }
 
-    private func sourceFile(
+    func sourceFile(
         for stub: JavaClassStub
     ) async -> (url: URL?, text: String, tree: JavaSyntaxTree, relaxedSimpleName: String?)? {
         let top = await topLevel(stub)
@@ -413,7 +437,7 @@ private struct Session {
     /// Sunflower prints a nested class as its own compilation unit. Gated by `decompile`, which
     /// Umbra wires to the one-time user agreement; a hover-triggered resolve never gets here with
     /// permission to ask, so it silently returns nil instead of decompiling.
-    private func decompiledSourceFile(
+    func decompiledSourceFile(
         _ stub: JavaClassStub
     ) async -> (url: URL?, text: String, tree: JavaSyntaxTree, relaxedSimpleName: String?)? {
         guard await decompile.allow(),
@@ -427,7 +451,7 @@ private struct Session {
         return (result.url, result.text, parsed, relaxedSimpleName)
     }
 
-    private func topLevel(_ stub: JavaClassStub) async -> JavaClassStub {
+    func topLevel(_ stub: JavaClassStub) async -> JavaClassStub {
         var current = stub
         var seen = Set<String>()
         while seen.insert(current.qualifiedName).inserted,
@@ -438,14 +462,14 @@ private struct Session {
         return current
     }
 
-    private func load(_ url: URL) async -> String? {
+    func load(_ url: URL) async -> String? {
         if JavaNavigationText.sameFile(url, fileURL) { return source }
         if let openBuffer, let text = await openBuffer(url) { return text }
         if let provider = JavaMemberLookup.sourceTextProvider, let text = await provider(url) { return text }
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
-    private func resolveType(components: [String]) async -> JavaTypeRef? {
+    func resolveType(components: [String]) async -> JavaTypeRef? {
         guard let head = components.first else { return nil }
         let full = components.joined(separator: ".")
         if await index.classStub(qualifiedName: full) != nil {
@@ -472,7 +496,7 @@ private struct Session {
         return .classType(qualifiedName: current, arguments: [], outer: nil)
     }
 
-    private func dotOffset(before node: SyntaxNode) -> Int? {
+    func dotOffset(before node: SyntaxNode) -> Int? {
         let bytes = Array(source.utf8)
         var index = node.startByte - 1
         while index >= 0 {
@@ -486,7 +510,7 @@ private struct Session {
         return nil
     }
 
-    private func hit(text: String, url: URL?, byteRange: Range<Int>, displayName: String) -> JavaDefinitionHit {
+    func hit(text: String, url: URL?, byteRange: Range<Int>, displayName: String) -> JavaDefinitionHit {
         JavaDefinitionHit(
             url: url,
             range: JavaNavigationText.textRange(for: byteRange, in: text),
@@ -494,7 +518,7 @@ private struct Session {
         )
     }
 
-    private func dedupe(_ hits: [JavaDefinitionHit]) -> [JavaDefinitionHit] {
+    func dedupe(_ hits: [JavaDefinitionHit]) -> [JavaDefinitionHit] {
         var seen = Set<String>()
         return hits.filter { hit in
             let key = "\(hit.url?.standardizedFileURL.path ?? "")#\(hit.range.start.utf16Offset)-\(hit.range.end.utf16Offset)"
@@ -502,7 +526,7 @@ private struct Session {
         }
     }
 
-    private static func methodTypeParameters(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> Set<String> {
+    static func methodTypeParameters(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> Set<String> {
         var names = Set<String>()
         var current: SyntaxNode? = tree.node(atByteOffset: byteOffset)
         while let node = current {

@@ -232,19 +232,21 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
                 guard message.severity == .error else { continue }
                 lineIndex = 0
             }
-            let (start, end) = lines.range(line: lineIndex, column: message.column)
-            let startPosition = lines.position(atOffset: start)
-            let endPosition = lines.position(atOffset: end)
-            let (text, code) = splitCategory(message.message)
-            result.append(Diagnostic(
-                severity: message.severity == .error ? .error : .warning,
-                message: text,
-                range: TextRange(start: startPosition, end: endPosition),
-                source: "javac",
-                code: code
-            ))
+            result.append(Self.diagnostic(from: message, lineIndex: lineIndex, lines: lines, source: "javac"))
         }
         return result
+    }
+
+    static func diagnostic(from message: JavacMessage, lineIndex: Int, lines: LineTable, source: String) -> Diagnostic {
+        let (start, end) = lines.range(line: lineIndex, column: message.column)
+        let (text, code) = splitCategory(message.message)
+        return Diagnostic(
+            severity: message.severity == .error ? .error : .warning,
+            message: text,
+            range: TextRange(start: lines.position(atOffset: start), end: lines.position(atOffset: end)),
+            source: source,
+            code: code
+        )
     }
 
     /// `javac` prints a path as it was given, while the URL may have collapsed a doubled slash or
@@ -256,7 +258,7 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
     }
 
     /// `[deprecation] foo() is deprecated` -> ("foo() is deprecated", "deprecation").
-    private static func splitCategory(_ message: String) -> (String, String?) {
+    static func splitCategory(_ message: String) -> (String, String?) {
         guard message.hasPrefix("["), let close = message.firstIndex(of: "]") else { return (message, nil) }
         let code = String(message[message.index(after: message.startIndex)..<close])
         let rest = message[message.index(after: close)...].trimmingCharacters(in: .whitespaces)
@@ -332,5 +334,58 @@ struct LineTable {
         case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x5F, 0x24: return true
         default: return unit > 0x7F
         }
+    }
+}
+
+/// Maps every file-bound `javac` message of a whole build (Gradle's `compileJava` output) onto
+/// diagnostics, grouped by the file they are about. Unlike the per-file mapping above, nothing is
+/// dropped for being about another file.
+public enum JavacDiagnosticsMapper {
+    /// - Parameters:
+    ///   - baseDirectory: resolves a relative path in the output (Gradle prints absolute ones).
+    ///   - textFor: the text of a file, so columns land on real characters (an open buffer, else
+    ///     the file on disk). A file it returns `nil` for keeps its line and column as printed.
+    ///
+    /// Messages with no file are dropped: they describe the build, not a place in a source file.
+    public static func diagnostics(
+        from messages: [JavacMessage],
+        source: String,
+        baseDirectory: URL? = nil,
+        textFor: (URL) -> String?
+    ) -> [URL: [Diagnostic]] {
+        var tables: [URL: LineTable?] = [:]
+        var result: [URL: [Diagnostic]] = [:]
+        for message in messages {
+            guard let printed = message.file else { continue }
+            let url = fileURL(for: printed, baseDirectory: baseDirectory)
+            if tables[url] == nil {
+                tables[url] = .some(textFor(url).map(LineTable.init))
+            }
+            let lineIndex = max(0, message.line - 1)
+            if let lines = tables[url] ?? nil {
+                result[url, default: []].append(
+                    JavaCompilerDiagnosticsService.diagnostic(from: message, lineIndex: lineIndex, lines: lines, source: source)
+                )
+            } else {
+                let (text, code) = JavaCompilerDiagnosticsService.splitCategory(message.message)
+                let start = TextPosition(line: lineIndex, column: message.column ?? 0, utf16Offset: message.column ?? 0)
+                let end = TextPosition(line: lineIndex, column: (message.column ?? 0) + 1, utf16Offset: (message.column ?? 0) + 1)
+                result[url, default: []].append(Diagnostic(
+                    severity: message.severity == .error ? .error : .warning,
+                    message: text,
+                    range: TextRange(start: start, end: end),
+                    source: source,
+                    code: code
+                ))
+            }
+        }
+        return result
+    }
+
+    private static func fileURL(for printed: String, baseDirectory: URL?) -> URL {
+        if printed.hasPrefix("/") || baseDirectory == nil {
+            return URL(fileURLWithPath: printed).standardizedFileURL
+        }
+        return URL(fileURLWithPath: printed, relativeTo: baseDirectory).standardizedFileURL
     }
 }

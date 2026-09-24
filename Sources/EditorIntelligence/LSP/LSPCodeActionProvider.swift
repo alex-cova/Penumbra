@@ -1,6 +1,6 @@
 import Foundation
 
-public actor LSPCodeActionProvider {
+public actor LSPCodeActionProvider: CodeActionProviding {
     public let name = "LSPCodeAction"
     private let client: LSPClient
 
