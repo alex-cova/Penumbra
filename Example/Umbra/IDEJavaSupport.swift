@@ -61,6 +61,10 @@ final class IDEJavaSupport {
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
     let inlayHintProvider: JavaInlayHintProvider
+    /// Rename for classes, interfaces, enums, records, annotations, locals and parameters. Candidate
+    /// files come from a text scan of the project roots, which is always fresh and needs no index
+    /// (a `JavaUsageCandidateSource` such as the name index can replace it without other changes).
+    let renameProvider: JavaRenameProvider
     /// Reformats Java files (⌥⌘L) with the built-in formatter.
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
@@ -122,6 +126,8 @@ final class IDEJavaSupport {
         didSet {
             if oldValue == nil, gradleModel == nil { return }
             onGradleModelChanged?(gradleModel)
+            let model = gradleModel
+            Task { [renameProvider] in await renameProvider.setGradleModel(model) }
         }
     }
     /// Called whenever a sync sets or clears ``gradleModel`` (the Go to File index labels files
@@ -167,6 +173,7 @@ final class IDEJavaSupport {
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
+        renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: JavaTextScanCandidateSource())
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
@@ -481,6 +488,8 @@ final class IDEJavaSupport {
     private func buildNameIndex(roots: [URL], generation: Int) {
         nameIndexTask?.cancel()
         nameIndexRoots = roots.map(\.standardizedFileURL)
+        let renameRoots = nameIndexRoots
+        Task { [renameProvider] in await renameProvider.setRoots(renameRoots) }
         nameIndexTask = Task { [nameIndex] in
             for await _ in await nameIndex.build(roots: roots) {
                 guard isCurrent(generation) else { return }
@@ -955,6 +964,7 @@ final class IDEJavaSupport {
             await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await renameProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
     }
 

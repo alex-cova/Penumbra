@@ -49,6 +49,7 @@ final class IDEIntelligenceServices {
             formattingProvider: javaSupport.formattingProvider,
             signatureHelpProvider: javaSupport.completionProvider,
             codeActionProvider: javaSupport.codeActionProvider,
+            renameProvider: javaSupport.renameProvider,
             breadcrumbProvider: javaSupport.breadcrumbProvider,
             inlayHintProvider: javaSupport.inlayHintProvider,
             symbolIndex: symbolIndex,
