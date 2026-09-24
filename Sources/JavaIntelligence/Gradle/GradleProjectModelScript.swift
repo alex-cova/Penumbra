@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 5
+    static let formatVersion = 6
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -26,6 +26,7 @@ enum GradleProjectModelScript {
     static let source = """
     import org.gradle.api.artifacts.component.ProjectComponentIdentifier
     import org.gradle.api.plugins.JavaPluginExtension
+    import org.gradle.api.tasks.testing.Test
 
     gradle.rootProject { r ->
         r.ext.umbraFragments = Collections.synchronizedList([])
@@ -138,6 +139,41 @@ enum GradleProjectModelScript {
         }
     }
 
+    // Every `Test` task with the directory its JUnit XML reports land in and the source set whose
+    // classes it runs (matched by `testClassesDirs` against each source set's output classes dirs).
+    def umbraDescribeTestTasks = { p, javaExt ->
+        def result = []
+        try {
+            p.tasks.withType(Test).each { t ->
+                def resultsDir = null
+                try {
+                    resultsDir = t.reports.junitXml.outputLocation.get().asFile
+                } catch (Throwable ignored) {}
+                if (resultsDir == null) {
+                    try {
+                        resultsDir = t.reports.junitXml.destination
+                    } catch (Throwable ignored) {}
+                }
+                if (resultsDir == null) {
+                    resultsDir = new File(p.layout.buildDirectory.get().asFile, "test-results/${t.name}")
+                }
+                def sourceSetName = null
+                try {
+                    def testDirs = t.testClassesDirs.files
+                    def match = javaExt.sourceSets.find { ss ->
+                        def outs = ss.output.classesDirs.files
+                        !outs.isEmpty() && testDirs.any { outs.contains(it) }
+                    }
+                    sourceSetName = match?.name
+                } catch (Throwable ignored) {}
+                def entry = [path: t.path, name: t.name, resultsDir: resultsDir.toURI().toString()]
+                if (sourceSetName != null) { entry.sourceSetName = sourceSetName }
+                result.add(entry)
+            }
+        } catch (Throwable ignored) {}
+        return result.sort { it.path }
+    }
+
     def umbraDescribeProject = { p ->
         def result = [
             path: p.path,
@@ -145,6 +181,7 @@ enum GradleProjectModelScript {
             languageLevel: null,
             sourceSets: [],
             tasks: umbraDescribeTasks(p),
+            testTasks: [],
             unresolved: []
         ]
 
@@ -177,6 +214,7 @@ enum GradleProjectModelScript {
             described.remove('unresolved')
             result.sourceSets.add(described)
         }
+        result.testTasks = umbraDescribeTestTasks(p, javaExt)
 
         return result
     }

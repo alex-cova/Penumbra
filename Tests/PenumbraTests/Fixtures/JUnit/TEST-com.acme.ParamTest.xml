@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.acme.ParamTest" tests="3" skipped="0" failures="1" errors="0" timestamp="2026-01-01T10:00:00" hostname="h" time="0.03">
+  <testcase name="square(int)[1]" classname="com.acme.ParamTest" time="0.01"/>
+  <testcase name="square(int)[2]" classname="com.acme.ParamTest" time="0.01">
+    <failure message="bad" type="java.lang.AssertionError">java.lang.AssertionError: bad
+	at com.acme.ParamTest.square(ParamTest.java:17)
+</failure>
+  </testcase>
+  <testcase name="[1] arg" classname="com.acme.ParamTest" time="0.01"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

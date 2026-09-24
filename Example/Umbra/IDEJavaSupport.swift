@@ -392,7 +392,7 @@ final class IDEJavaSupport {
     /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
     /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
     /// first when the project has not been trusted yet.
-    func runGradleTasks(_ taskPaths: [String]) {
+    func runGradleTasks(_ taskPaths: [String], arguments extraArguments: [String] = []) {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         guard !taskPaths.isEmpty else { return }
         guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
@@ -434,7 +434,7 @@ final class IDEJavaSupport {
                 let result = try await gradleRunner.run(
                     projectDirectory: url,
                     tasks: taskPaths,
-                    arguments: ["--no-configuration-cache"],
+                    arguments: ["--no-configuration-cache"] + extraArguments,
                     javaHome: javaHome,
                     timeout: timeout,
                     output: { line in

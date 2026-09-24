@@ -95,6 +95,24 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         }
     }
 
+    /// A Gradle `Test` task (format version 6 and newer).
+    public struct GradleTestTask: Codable, Hashable, Sendable {
+        /// Fully-qualified task path, e.g. `:app:test`, `:app:integrationTest`.
+        public let path: String
+        public let name: String
+        /// The source set whose classes the task runs (matched by `testClassesDirs`), when known.
+        public let sourceSetName: String?
+        /// Directory the task's JUnit XML reports (`TEST-*.xml`) are written to.
+        public let resultsDir: URL?
+
+        public init(path: String, name: String, sourceSetName: String? = nil, resultsDir: URL? = nil) {
+            self.path = path
+            self.name = name
+            self.sourceSetName = sourceSetName
+            self.resultsDir = resultsDir
+        }
+    }
+
     public struct Subproject: Codable, Sendable {
         /// Gradle project path, e.g. `:`, `:app`, `:lib:core`.
         public let path: String
@@ -104,14 +122,18 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         public let languageLevel: Int?
         public let sourceSets: [SourceSet]
         public let tasks: [GradleTask]
+        /// The project's `Test` tasks. Empty for a model synced before format version 6.
+        public let testTasks: [GradleTestTask]
 
         public init(
             path: String,
             directory: URL,
             languageLevel: Int? = nil,
             sourceSets: [SourceSet] = [],
-            tasks: [GradleTask] = []
+            tasks: [GradleTask] = [],
+            testTasks: [GradleTestTask] = []
         ) {
+            self.testTasks = testTasks
             self.path = path
             self.directory = directory
             self.languageLevel = languageLevel
@@ -126,6 +148,7 @@ public struct JavaGradleProjectModel: Codable, Sendable {
             languageLevel = try container.decodeIfPresent(Int.self, forKey: .languageLevel)
             sourceSets = try container.decodeIfPresent([SourceSet].self, forKey: .sourceSets) ?? []
             tasks = try container.decodeIfPresent([GradleTask].self, forKey: .tasks) ?? []
+            testTasks = try container.decodeIfPresent([GradleTestTask].self, forKey: .testTasks) ?? []
         }
 
         /// Convenience for tests that still think in main/test directories and jars. Builds a `main`
@@ -151,7 +174,7 @@ public struct JavaGradleProjectModel: Codable, Sendable {
                     projectDependencies: [ProjectDependency(projectPath: path, sourceSetName: "main")]
                 ))
             }
-            self.init(path: path, directory: directory, languageLevel: languageLevel, sourceSets: sets)
+            self.init(path: path, directory: directory, languageLevel: languageLevel, sourceSets: sets, tasks: [], testTasks: [])
         }
 
         /// Directories of the `main` source set. Kept so callers that only need production sources

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.acme.Outer$Inner" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-01-01T10:00:00" hostname="h" time="0.001">
+  <testcase name="nested()" classname="com.acme.Outer$Inner" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

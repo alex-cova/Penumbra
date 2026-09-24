@@ -339,6 +339,6 @@ let package = Package(
             "HTTPClient",
             "GitIntelligence",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle")], swiftSettings: swift6)
+        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JUnit")], swiftSettings: swift6)
     ]
 )
