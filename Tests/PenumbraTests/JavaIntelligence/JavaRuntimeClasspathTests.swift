@@ -61,6 +61,6 @@ final class JavaRuntimeClasspathTests: XCTestCase {
         XCTAssertTrue(script.contains("runtimeClasspathJars"))
         XCTAssertTrue(script.contains("runtimeProjectDependencies"))
         XCTAssertTrue(script.contains("ss.output.classesDirs"))
-        XCTAssertEqual(GradleProjectModelScript.formatVersion, 4)
+        XCTAssertEqual(GradleProjectModelScript.formatVersion, 5)
     }
 }
