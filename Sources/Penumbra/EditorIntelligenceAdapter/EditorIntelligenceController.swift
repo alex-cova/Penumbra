@@ -279,6 +279,11 @@ public final class EditorIntelligenceController {
     /// `CommandPaletteController.presentList`, titled by `kind`); if unset, the first location is
     /// used.
     public var onPresentNavigationChoices: ((NavigationKind, [Location]) -> Void)?
+    /// Invoked when a manual navigation request starts searching, with a closure that cancels it.
+    /// Long searches (Find Usages) let a host show progress and a cancel button.
+    public var onNavigationSearchStarted: ((NavigationKind, _ cancel: @escaping () -> Void) -> Void)?
+    /// Invoked when that search finishes or is cancelled, before any result is presented.
+    public var onNavigationSearchFinished: ((NavigationKind) -> Void)?
     /// Invoked when a navigation target is in a different document (`Location.url` set and
     /// different). Return `true` if the host opened it; otherwise the target is focused in the
     /// current text view.
@@ -487,10 +492,12 @@ public final class EditorIntelligenceController {
             trigger: .manual,
             kind: kind
         )
-        Task { [weak self] in
+        let searchTask = Task { [weak self] in
             let result = await navigationEngine.navigate(context: context)
             await MainActor.run {
                 guard let self else { return }
+                self.onNavigationSearchFinished?(kind)
+                if Task.isCancelled { return }
                 switch result {
                 case .single(let location):
                     self.focus(location)
@@ -507,6 +514,7 @@ public final class EditorIntelligenceController {
                 }
             }
         }
+        onNavigationSearchStarted?(kind) { searchTask.cancel() }
         return true
     }
 
@@ -1286,9 +1294,7 @@ public final class EditorIntelligenceController {
         case .superMethod:
             return "No super method found"
         case .references:
-            return languageIdentifier == "java"
-                ? "Find Usages isn't available for Java yet"
-                : "No usages found"
+            return "No usages found"
         }
     }
 

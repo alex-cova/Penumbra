@@ -35,6 +35,7 @@ final class IDEIntelligenceServices {
         ])
         navigationEngine = NavigationEngine(providers: [
             javaSupport.navigationProvider,
+            javaSupport.findUsagesProvider,
             GoToDefinitionProvider(index: symbolIndex, skippingLanguages: ["java"]),
             FindReferencesProvider(index: symbolIndex, skippingLanguages: ["java"])
         ])

@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Open editor buffers are handled with an overlay (``setOverlay(_:text:)``): for those files the
 /// live text wins over whatever is on disk.
-public actor JavaNameIndex {
+public actor JavaNameIndex: JavaUsageCandidateSource {
     private struct RootState {
         let directory: URL
         let shardURL: URL

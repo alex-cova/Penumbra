@@ -51,6 +51,8 @@ final class IDEJavaSupport {
     let overlayService: JavaOverlayService
     let completionProvider: JavaCompletionProvider
     let navigationProvider: JavaGoToDefinitionProvider
+    /// Semantic Find Usages (`.references`); candidates come from ``nameIndex``.
+    let findUsagesProvider: JavaFindUsagesProvider
     /// Quick fixes (import a class, remove unused imports) behind Show Context Actions and Optimize Imports.
     let codeActionProvider: JavaCodeActionProvider
     /// Signature and Javadoc on hover and for Quick Documentation.
@@ -162,6 +164,7 @@ final class IDEJavaSupport {
         overlayService = JavaOverlayService(index: javaIndex)
         completionProvider = JavaCompletionProvider(index: javaIndex)
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
+        findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
@@ -481,6 +484,8 @@ final class IDEJavaSupport {
     private func buildNameIndex(roots: [URL], generation: Int) {
         nameIndexTask?.cancel()
         nameIndexRoots = roots.map(\.standardizedFileURL)
+        let searchRoots = nameIndexRoots
+        Task { [findUsagesProvider] in await findUsagesProvider.setProjectRoots(searchRoots) }
         nameIndexTask = Task { [nameIndex] in
             for await _ in await nameIndex.build(roots: roots) {
                 guard isCurrent(generation) else { return }
@@ -780,6 +785,7 @@ final class IDEJavaSupport {
         await publishSources()
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await findUsagesProvider.setSourceSetClasspath(model, indexPaths: paths)
         await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
@@ -953,6 +959,7 @@ final class IDEJavaSupport {
         await javaIndex.setSources(sources)
         if let indexedJDKHomePath {
             await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await findUsagesProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
@@ -962,6 +969,7 @@ final class IDEJavaSupport {
         Task {
             await completionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await navigationProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await findUsagesProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await codeActionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hoverProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)

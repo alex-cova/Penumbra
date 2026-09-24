@@ -45,6 +45,13 @@ struct IDETerminalTabsBar: View {
                         onSelect: { workspace.selectTypeHierarchyTab() }
                     )
                 }
+                if workspace.showsUsagesTab {
+                    IDEUsagesTabItem(
+                        title: workspace.usages.isSearching ? "Usages · …" : "Usages · \(workspace.usages.count)",
+                        isSelected: workspace.isUsagesSelected,
+                        onSelect: { workspace.selectUsagesTab() }
+                    )
+                }
                 if workspace.showsSourceControlTab {
                     IDESourceControlTabItem(
                         branch: workspace.gitStatus.currentBranch,

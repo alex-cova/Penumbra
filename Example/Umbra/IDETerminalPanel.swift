@@ -318,7 +318,9 @@ struct IDETerminalPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .help("New Terminal Tab")
                 .accessibilityLabel("New Terminal Tab")
-                if workspace.isProblemsSelected {
+                if workspace.isUsagesSelected {
+                    IDEUsagesControls()
+                } else if workspace.isProblemsSelected {
                     IDEProblemsControls()
                 } else if workspace.isSourceControlSelected {
                     IDESourceControlControls()
@@ -398,6 +400,12 @@ struct IDETerminalPanel: View {
                     IDETypeHierarchyPanel()
                         .opacity(workspace.isTypeHierarchySelected ? 1 : 0)
                         .allowsHitTesting(workspace.isTypeHierarchySelected)
+                }
+
+                if workspace.showsUsagesTab {
+                    IDEUsagesPanel()
+                        .opacity(workspace.isUsagesSelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isUsagesSelected)
                 }
 
                 if workspace.showsSourceControlTab {

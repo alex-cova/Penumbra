@@ -89,6 +89,9 @@ public final class IDEWorkspace {
     let problems = IDEProblemsStore()
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
+    /// The Usages tab's content (Find Usages results); empty until a search runs.
+    let usages = IDEUsagesStore()
+    private var nameIndexOverlayTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
@@ -186,6 +189,12 @@ public final class IDEWorkspace {
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
     /// been requested, and goes when it is closed.
     var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent }
+    /// True when the bottom panel's Usages tab is showing instead of a shell.
+    var isUsagesSelected: Bool {
+        get { selectedBottomTab == .usages }
+        set { setBottomTab(.usages, selected: newValue) }
+    }
+    var showsUsagesTab: Bool { usages.hasContent }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
 
@@ -308,6 +317,11 @@ public final class IDEWorkspace {
                 }
             }
             await intelligenceServices.javaSupport.inlayHintProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.findUsagesProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
@@ -947,6 +961,21 @@ public final class IDEWorkspace {
         selectProblemsTab()
     }
 
+    // MARK: Usages
+
+    func selectUsagesTab() {
+        isUsagesSelected = true
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+    }
+
+    func closeUsages() {
+        usages.clear()
+        isUsagesSelected = false
+    }
+
     // MARK: Type hierarchy
 
     func selectTypeHierarchyTab() {
@@ -1180,6 +1209,11 @@ public final class IDEWorkspace {
     }
 
     func presentNavigationChoices(_ locations: [Location], kind: NavigationKind = .definition) {
+        if kind == .references, locations.contains(where: { $0.usage != nil }) {
+            usages.show(locations)
+            selectUsagesTab()
+            return
+        }
         guard let paletteController else {
             if let first = locations.first {
                 _ = openNavigationLocation(first)
@@ -1679,6 +1713,15 @@ public final class IDEWorkspace {
         host.intelligenceController?.onPresentNavigationChoices = { [weak self] kind, locations in
             self?.presentNavigationChoices(locations, kind: kind)
         }
+        host.intelligenceController?.onNavigationSearchStarted = { [weak self] kind, cancel in
+            guard kind == .references, let self else { return }
+            self.usages.beginSearch(cancel: cancel)
+            self.selectUsagesTab()
+        }
+        host.intelligenceController?.onNavigationSearchFinished = { [weak self] kind in
+            guard kind == .references else { return }
+            self?.usages.finishSearch()
+        }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
             self?.sendActiveHTTPRequest()
@@ -1952,6 +1995,20 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
+    /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
+    private func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
+        guard let url = textView.documentURL, url.pathExtension == "java" else { return }
+        let key = ObjectIdentifier(textView)
+        nameIndexOverlayTasks[key]?.cancel()
+        let index = javaSupport.nameIndex
+        nameIndexOverlayTasks[key] = Task { [weak textView] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard !Task.isCancelled, let textView, textView.documentURL == url else { return }
+            await index.setOverlay(url, text: textView.text)
+        }
+    }
+
     private func scheduleSemanticHighlighting(forEditedTextView textView: TextView) {
         for pane in workbench.panes {
             let paneHost = host(for: pane.id)
@@ -1971,6 +2028,10 @@ public final class IDEWorkspace {
         pane.closeDocument(documentID)
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
             problems.clearEditorDiagnostics(for: closingURL)
+            if closingURL.pathExtension == "java" {
+                let index = javaSupport.nameIndex
+                Task { await index.removeOverlay(closingURL) }
+            }
         }
         if pane.documents.isEmpty {
             closePane(pane.id)
@@ -2774,6 +2835,7 @@ public final class IDEWorkspace {
         // until the next keystroke.
         host.markdownPreviewController.refresh()
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier)
+        scheduleNameIndexOverlay(for: host.textView, delay: 0)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()
@@ -2894,6 +2956,7 @@ extension IDEWorkspace: TextViewDelegate {
 
     public func textViewDidChange(_ textView: TextView) {
         scheduleSemanticHighlighting(forEditedTextView: textView)
+        scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
         refreshPresentation()

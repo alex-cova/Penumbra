@@ -35,6 +35,9 @@ final class JavaReferenceFixture {
 
     func url(_ name: String) -> URL { root.appendingPathComponent(name) }
 
+    /// The file and UTF-16 offset of the `€` marker.
+    var caretLocation: (file: String, utf16Offset: Int)? { caret }
+
     /// Indexes every added file and returns the environment.
     @discardableResult
     func build(gradleModel: JavaGradleProjectModel? = nil, indexPaths: JavaIndexPaths? = nil) async throws -> JavaReferenceEnvironment {
