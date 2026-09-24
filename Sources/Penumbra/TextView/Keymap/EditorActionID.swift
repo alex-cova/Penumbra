@@ -90,6 +90,7 @@ public extension EditorActionID {
     static let toggleMarkdownPreview = EditorActionID("toggleMarkdownPreview")
     static let goToDefinition = EditorActionID("goToDefinition")
     static let goToImplementation = EditorActionID("goToImplementation")
+    static let goToSuperMethod = EditorActionID("goToSuperMethod")
     static let findUsages = EditorActionID("findUsages")
     static let navigateBack = EditorActionID("navigateBack")
     static let navigateForward = EditorActionID("navigateForward")
@@ -150,6 +151,7 @@ public extension EditorActionID {
         .toggleMarkdownPreview: "Markdown Preview",
         .goToDefinition: "Go to Definition",
         .goToImplementation: "Go to Implementation(s)",
+        .goToSuperMethod: "Go to Super Method",
         .findUsages: "Find Usages",
         .navigateBack: "Back",
         .navigateForward: "Forward",

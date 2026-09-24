@@ -5,6 +5,8 @@ import Foundation
 public enum NavigationKind: Sendable {
     case definition
     case implementation
+    /// The method a method overrides or implements, or the supertypes of a class.
+    case superMethod
     case references
 }
 

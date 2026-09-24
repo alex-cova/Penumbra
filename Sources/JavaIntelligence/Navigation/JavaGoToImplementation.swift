@@ -214,7 +214,7 @@ extension JavaNavigationSession {
     }
 
     /// `java.util.Map.Entry<K, V>` -> `["java", "util", "Map", "Entry"]`.
-    private static func typeComponents(of text: String) -> [String] {
+    static func typeComponents(of text: String) -> [String] {
         var depth = 0
         var plain = ""
         for character in text {
@@ -224,7 +224,7 @@ extension JavaNavigationSession {
     }
 
     /// Parameter keys of a `method_declaration` from the type text as written (`List<String>` -> `List`).
-    private static func parameterKeys(of method: SyntaxNode) -> [String] {
+    static func parameterKeys(of method: SyntaxNode) -> [String] {
         guard let parameters = method.child(byFieldName: "parameters") else { return [] }
         return parameters.namedChildren.compactMap { parameter in
             guard parameter.type == "formal_parameter" || parameter.type == "spread_parameter" else { return nil }

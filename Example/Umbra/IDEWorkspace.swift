@@ -466,6 +466,11 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.showContextActions)
     }
 
+    /// Jumps to the method the caret's method overrides, or a class's supertypes (⌘U in the IntelliJ keymap).
+    func goToSuperMethod() {
+        _ = host(for: workbench.activePane.id).textView.perform(.goToSuperMethod)
+    }
+
     /// Reformats the selection, or the whole file when nothing is selected (⌥⌘L in the IntelliJ keymap).
     func reformatCode() {
         _ = host(for: workbench.activePane.id).textView.perform(.reformatCode)
@@ -1162,6 +1167,7 @@ public final class IDEWorkspace {
         switch kind {
         case .definition: return "Go to Definition"
         case .implementation: return "Go to Implementation"
+        case .superMethod: return "Go to Super Method"
         case .references: return "Find Usages"
         }
     }
