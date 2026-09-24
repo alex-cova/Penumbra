@@ -122,21 +122,8 @@ public actor JavaFindUsagesProvider: NavigationProvider {
         }
     }
 
-    /// A method's override family as IDs (the method first); any other symbol is its own family.
     private func familyIDs(of id: JavaSymbolID) async -> [JavaSymbolID] {
-        guard case .method(let declaringClass, let name, let keys) = id,
-              let stub = await index.classStub(qualifiedName: declaringClass),
-              let method = stub.methods.first(where: { !$0.isConstructor && $0.name == name && JavaTypeKeys.keys(of: $0) == keys })
-        else { return [id] }
-        let family = await JavaMethodFamily.family(of: method, declaringClass: declaringClass, index: index)
-        var ids = [id]
-        for member in family {
-            let memberID = JavaSymbolID.method(
-                declaringClass: member.declaringClass, name: member.method.name, parameterKeys: JavaTypeKeys.keys(of: member.method)
-            )
-            if !ids.contains(memberID) { ids.append(memberID) }
-        }
-        return ids
+        await JavaMethodFamily.symbolIDs(of: id, index: index)
     }
 
     static func kindLabel(_ kind: JavaUsage.Kind) -> String {

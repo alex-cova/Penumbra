@@ -2,7 +2,8 @@ import EditorIntelligence
 import Foundation
 
 /// Safe rename for Java. Classes, interfaces, enums, records, annotations (top-level and nested),
-/// locals and parameters are supported; members (methods, fields) are not yet.
+/// locals, parameters, methods (the whole override family) and fields (enum constants and record
+/// components included) are supported; member plans live in `JavaMemberRename.swift`.
 ///
 /// The provider resolves the symbol under the caret to a ``JavaSymbolID`` and dispatches on it
 /// (`symbolTarget(for:source:)` and the switches in `prepareRename`/`rename`), so support for
@@ -10,15 +11,15 @@ import Foundation
 /// ``JavaUsageCandidateSource`` (the persistent name index or the text-scan fallback), then add
 /// the edits the resolver does not report: single-type and static imports, and Javadoc references.
 public actor JavaRenameProvider: RenameProviding {
-    private let index: JavaIndex
+    let index: JavaIndex
     private let cacheRoot: URL
-    private let candidates: any JavaUsageCandidateSource
-    private var roots: [URL] = []
+    let candidates: any JavaUsageCandidateSource
+    var roots: [URL] = []
     private var readOnlyRoots: [URL] = []
     private var gradleModel: JavaGradleProjectModel?
     private var indexPaths: JavaIndexPaths?
     private var jdkHome: URL?
-    private var openBuffer: (@Sendable (URL) async -> String?)?
+    var openBuffer: (@Sendable (URL) async -> String?)?
 
     public init(index: JavaIndex, indexPaths: JavaIndexPaths, candidates: any JavaUsageCandidateSource) {
         self.index = index
@@ -47,6 +48,10 @@ public actor JavaRenameProvider: RenameProviding {
         case .local: description = "variable"
         case .type(let qualifiedName):
             description = await index.classStub(qualifiedName: qualifiedName).map { Self.description(of: $0.kind) } ?? "class"
+        case .method:
+            description = "method"
+        case .field(let declaringClass, let name):
+            description = await Self.fieldDescription(declaringClass: declaringClass, name: name, index: index)
         default: return nil
         }
         return RenameTarget(
@@ -70,6 +75,10 @@ public actor JavaRenameProvider: RenameProviding {
             return localPlan(id, source: source, url: context.document.url, newName: newName)
         case .type(let qualifiedName):
             return await typePlan(qualifiedName, newName: newName, context: context, environment: environment)
+        case .method:
+            return await methodPlan(id, newName: newName, context: context, environment: environment)
+        case .field:
+            return await fieldPlan(id, newName: newName, context: context, environment: environment)
         default:
             return RenamePlan(blockingError: "Renaming this kind of symbol is not supported yet.")
         }
@@ -77,7 +86,7 @@ public actor JavaRenameProvider: RenameProviding {
 
     // MARK: - Symbol resolution
 
-    private func makeEnvironment(for context: NavigationContext) -> JavaReferenceEnvironment {
+    func makeEnvironment(for context: NavigationContext) -> JavaReferenceEnvironment {
         let base = openBuffer
         let documentURL = context.document.url?.standardizedFileURL
         let documentText = JavaNavigationText.fullText(of: context.document)
@@ -106,8 +115,9 @@ public actor JavaRenameProvider: RenameProviding {
         case .local: break
         case .type(let qualifiedName):
             guard String(qualifiedName.split(separator: ".").last ?? "") == name else { return nil }
+        case .method, .field:
+            guard id.simpleName == name else { return nil }
         default:
-            // Members (methods, fields): a later extension adds their cases here and in `rename`.
             return nil
         }
         return (tokenRange, id)
@@ -284,7 +294,7 @@ public actor JavaRenameProvider: RenameProviding {
 
     // MARK: - Helpers
 
-    private func isReadOnly(_ url: URL) -> Bool {
+    func isReadOnly(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path
         if path.contains("/build/generated/") { return true }
         var directories = readOnlyRoots
@@ -292,12 +302,12 @@ public actor JavaRenameProvider: RenameProviding {
         return directories.contains { path.hasPrefix($0.path.hasSuffix("/") ? $0.path : $0.path + "/") }
     }
 
-    private func readText(of file: URL, environment: JavaReferenceEnvironment) async -> String? {
+    func readText(of file: URL, environment: JavaReferenceEnvironment) async -> String? {
         if let reader = environment.openBuffer, let text = await reader(file) { return text }
         return try? String(contentsOf: file, encoding: .utf8)
     }
 
-    private func entry(for usage: JavaUsage, url: URL, newName: String, readOnly: Bool) -> RenamePlanEntry {
+    func entry(for usage: JavaUsage, url: URL, newName: String, readOnly: Bool) -> RenamePlanEntry {
         let length = usage.utf16Range.length
         let start = TextPosition(line: usage.line, column: usage.column, utf16Offset: usage.utf16Range.location)
         let end = TextPosition(line: usage.line, column: usage.column + length, utf16Offset: usage.utf16Range.location + length)
@@ -311,13 +321,13 @@ public actor JavaRenameProvider: RenameProviding {
         )
     }
 
-    private static func byteRange(_ range: NSRange, in text: String) -> Range<Int> {
+    static func byteRange(_ range: NSRange, in text: String) -> Range<Int> {
         let lower = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location, in: text)
         let upper = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location + range.length, in: text)
         return lower..<upper
     }
 
-    private static func text(of byteRange: Range<Int>, in source: String) -> String {
+    static func text(of byteRange: Range<Int>, in source: String) -> String {
         String(decoding: Array(source.utf8)[byteRange], as: UTF8.self)
     }
 

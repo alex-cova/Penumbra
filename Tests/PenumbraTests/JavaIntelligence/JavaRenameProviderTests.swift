@@ -203,11 +203,11 @@ final class JavaRenameProviderTests: XCTestCase {
         XCTAssertTrue(plan.blockingError?.contains("library") == true)
     }
 
-    func testMembersAreNotRenamableYet() async throws {
+    func testMethodIsRenamable() async throws {
         try add("p/T.java", "package p; class T { void €run() {} }")
         let (provider, context) = try await makeProvider(caretIn: "p/T.java")
         let prepared = await provider.prepareRename(context)
-        XCTAssertNil(prepared)
+        XCTAssertEqual(prepared?.kindDescription, "method")
     }
 
     // MARK: - Helpers

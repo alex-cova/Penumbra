@@ -223,6 +223,28 @@ public enum JavaMethodFamily {
         return members + overriders
     }
 
+    /// The family of the method a ``JavaSymbolID/method`` denotes (empty when its class or method
+    /// is not in the index). Shared by Find Usages and rename.
+    public static func members(of id: JavaSymbolID, index: JavaIndex) async -> [JavaMethodFamilyMember] {
+        guard case .method(let declaringClass, let name, let keys) = id,
+              let stub = await index.classStub(qualifiedName: declaringClass),
+              let method = stub.methods.first(where: { !$0.isConstructor && $0.name == name && JavaTypeKeys.keys(of: $0) == keys })
+        else { return [] }
+        return await family(of: method, declaringClass: declaringClass, index: index)
+    }
+
+    /// ``members(of:index:)`` as symbol IDs, the symbol itself first; any other symbol is its own family.
+    public static func symbolIDs(of id: JavaSymbolID, index: JavaIndex) async -> [JavaSymbolID] {
+        var ids = [id]
+        for member in await members(of: id, index: index) {
+            let memberID = JavaSymbolID.method(
+                declaringClass: member.declaringClass, name: member.method.name, parameterKeys: JavaTypeKeys.keys(of: member.method)
+            )
+            if !ids.contains(memberID) { ids.append(memberID) }
+        }
+        return ids
+    }
+
     private static func key(_ owner: String, _ method: JavaMethodStub) -> String {
         "\(owner)#\(method.name)(\(JavaTypeKeys.keys(of: method).joined(separator: ",")))"
     }
