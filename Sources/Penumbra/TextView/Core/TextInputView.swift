@@ -826,6 +826,8 @@ final class TextInputView: UIView, UITextInput {
     var documentLength: Int {
         stringView.length
     }
+    /// Host-supplied colours painted over the tree-sitter ones (see `TextView.setSemanticHighlights`).
+    let semanticHighlights = SemanticHighlightStore()
     private(set) var stringView = StringView() {
         didSet {
             if stringView !== oldValue {
@@ -1818,6 +1820,16 @@ private extension TextInputView {
         setNeedsLayout()
     }
 
+
+    /// Repaints every line's syntax colours, e.g. after the semantic highlights changed.
+    internal func refreshSyntaxColors() {
+        for lineController in lineControllerStorage {
+            lineController.invalidateSyntaxHighlighting()
+        }
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
     private func invalidateLines() {
         for lineController in lineControllerStorage {
             lineController.lineFragmentHeightMultiplier = lineHeightMultiplier
@@ -2569,6 +2581,7 @@ extension TextInputView {
         let textEditResult = textEditHelper.replaceText(in: range, with: newString)
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
+        semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
         let languageModeLineChangeSet = languageMode.textDidChange(textChange)
         lineChangeSet.union(with: languageModeLineChangeSet)
         applyLineChangesToLayoutManager(lineChangeSet)
@@ -3795,7 +3808,9 @@ extension TextInputView: @preconcurrency LineControllerStorageDelegate {
 // MARK: - LineControllerDelegate
 extension TextInputView: @preconcurrency LineControllerDelegate {
     func lineSyntaxHighlighter(for lineController: LineController) -> LineSyntaxHighlighter? {
-        languageMode.createLineSyntaxHighlighter()
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        (highlighter as? TreeSitterSyntaxHighlighter)?.semanticHighlights = semanticHighlights
+        return highlighter
     }
 
     func lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(_ lineController: LineController) {

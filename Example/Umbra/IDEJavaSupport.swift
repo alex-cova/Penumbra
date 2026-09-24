@@ -57,6 +57,8 @@ final class IDEJavaSupport {
     let hoverProvider: JavaHoverProvider
     /// Supertype and subtype trees for the Type Hierarchy tab.
     let hierarchyProvider: JavaTypeHierarchyProvider
+    /// Classifies Java identifiers for semantic highlighting.
+    let semanticTokenProvider: JavaSemanticTokenProvider
     /// Reformats Java files (⌥⌘L) with the built-in formatter.
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
@@ -152,6 +154,7 @@ final class IDEJavaSupport {
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
+        semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)

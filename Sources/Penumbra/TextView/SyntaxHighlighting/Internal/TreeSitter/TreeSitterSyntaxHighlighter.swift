@@ -31,6 +31,9 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
         return !operation.isFinished && !operation.isCancelled
     }
 
+    /// Host-supplied highlights painted over the tree-sitter colours, when set.
+    var semanticHighlights: SemanticHighlightStore?
+
     private let stringView: StringView
     private let languageMode: TreeSitterInternalLanguageMode
     private let operationQueue: OperationQueue
@@ -46,6 +49,7 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
         let captures = languageMode.captures(in: input.byteRange)
         let tokens = self.tokens(for: captures, localTo: input.byteRange)
         setAttributes(for: tokens, on: input.attributedString)
+        applySemanticHighlights(to: input)
     }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback) {
@@ -69,6 +73,7 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
                 DispatchQueue.main.async {
                     if !operation.isCancelled {
                         self.setAttributes(for: tokens, on: input.attributedString)
+                        self.applySemanticHighlights(to: input)
                         completion(.success(()))
                     } else {
                         completion(.failure(TreeSitterSyntaxHighlighterError.cancelled))
@@ -102,6 +107,27 @@ extension TreeSitterSyntaxHighlighter {
 }
 
 private extension TreeSitterSyntaxHighlighter {
+    /// Paints the host's highlights over this line, after the tree-sitter pass. Only the colour is
+    /// set (never the font), so line metrics don't change. A name the theme has no colour for
+    /// leaves the tree-sitter colour alone.
+    func applySemanticHighlights(to input: LineSyntaxHighlighterInput) {
+        guard let store = semanticHighlights, !store.isEmpty else { return }
+        let lineStart = input.byteRange.lowerBound.utf16Length
+        let lineRange = NSRange(location: lineStart, length: input.attributedString.length)
+        let matches = store.highlights(intersecting: lineRange)
+        guard !matches.isEmpty else { return }
+        input.attributedString.beginEditing()
+        for highlight in matches {
+            guard let color = theme.textColor(for: highlight.highlightName),
+                  let overlap = highlight.range.intersection(lineRange), overlap.length > 0 else { continue }
+            input.attributedString.addAttribute(
+                .foregroundColor, value: color,
+                range: NSRange(location: overlap.location - lineStart, length: overlap.length)
+            )
+        }
+        input.attributedString.endEditing()
+    }
+
     private func setAttributes(for tokens: [TreeSitterSyntaxHighlightToken], on attributedString: NSMutableAttributedString) {
         attributedString.beginEditing()
         let defaultFont = theme.font

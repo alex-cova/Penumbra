@@ -231,6 +231,15 @@ public struct IDEPreferencesView: View {
                         }
                         IDESettingsSeparator()
                         IDESettingsToggleRow(
+                            title: "Semantic Highlighting",
+                            caption: "Colour Java types, methods, fields, parameters and locals by what they are, on top of the syntax colours.",
+                            isOn: $preferences.semanticHighlighting
+                        )
+                        .onChange(of: preferences.semanticHighlighting) {
+                            workspace.semanticHighlightingPreferenceChanged()
+                        }
+                        IDESettingsSeparator()
+                        IDESettingsToggleRow(
                             title: "Optimize Imports on Save",
                             caption: "Remove unused imports from a Java file each time you save it. Java > Optimize Imports does the same on demand.",
                             isOn: $preferences.javaOptimizeImportsOnSave
