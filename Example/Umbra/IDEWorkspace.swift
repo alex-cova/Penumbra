@@ -954,7 +954,12 @@ public final class IDEWorkspace {
             return
         }
         let items = locations.map { location -> (title: String, subtitle: String?) in
-            (location.displayName, location.url?.lastPathComponent)
+            // The file with its folder, so two classes named alike in different packages are told apart.
+            let subtitle = location.url.map { url in
+                let folder = url.deletingLastPathComponent().lastPathComponent
+                return folder.isEmpty ? url.lastPathComponent : "\(folder)/\(url.lastPathComponent)"
+            }
+            return (location.displayName, subtitle)
         }
         paletteController.presentList(title: Self.navigationChoicesTitle(for: kind), items: items) { [weak self] index in
             guard let self, locations.indices.contains(index) else { return }

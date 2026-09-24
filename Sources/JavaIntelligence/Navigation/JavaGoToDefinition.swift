@@ -342,10 +342,14 @@ struct JavaNavigationSession {
         }
     }
 
-    func methodHits(_ targets: [MethodTarget]) async -> [JavaDefinitionHit] {
+    /// - Parameter qualifiedOwner: label each hit `Owner.method(...)`, for lists whose entries sit
+    ///   in different classes (implementations).
+    func methodHits(_ targets: [MethodTarget], qualifiedOwner: Bool = false) async -> [JavaDefinitionHit] {
         var hits: [JavaDefinitionHit] = []
         for target in targets {
-            let display = methodDisplayName(target)
+            let display = qualifiedOwner
+                ? "\(target.declaringClass.split(separator: ".").last.map(String.init) ?? target.declaringClass).\(methodDisplayName(target))"
+                : methodDisplayName(target)
             let found = await memberHits(declaringClass: target.declaringClass, displayName: display) { tree, relaxedSimpleName in
                 JavaDeclarationLocator.methodRanges(
                     declaringClass: target.declaringClass,
@@ -469,7 +473,9 @@ struct JavaNavigationSession {
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
-    func resolveType(components: [String]) async -> JavaTypeRef? {
+    /// - Parameter fileContext: the file to resolve simple names against; this session's own by default.
+    func resolveType(components: [String], in fileContext: JavaResolutionContext? = nil) async -> JavaTypeRef? {
+        let context = fileContext ?? self.context
         guard let head = components.first else { return nil }
         let full = components.joined(separator: ".")
         if await index.classStub(qualifiedName: full) != nil {

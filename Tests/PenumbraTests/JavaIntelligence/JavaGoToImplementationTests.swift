@@ -95,6 +95,128 @@ final class JavaGoToImplementationTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    // MARK: - Generics
+
+    func testGenericInterfaceMethodFindsOverridesWithConcreteTypeArguments() async throws {
+        let cmp = try write("Cmp.java", "interface Cmp<T> { int compareTo(T o); }")
+        let foo = try write("Foo.java", "class Foo implements Cmp<Foo> { public int compareTo(Foo o) { return 0; } }")
+        let bar = try write("Bar.java", "class Bar implements Cmp<String> { public int compareTo(String o) { return 1; } }")
+        // A same-name method with a primitive parameter cannot bind the type variable.
+        let baz = try write("Baz.java", "class Baz implements Cmp<Foo> { public int compareTo(Foo o) { return 2; } public int compareTo(int n) { return 3; } }")
+        let hits = try await implementations(
+            "interface Cmp<T> { int €compareTo(T o); }", url: cmp.url, indexing: [cmp, foo, bar, baz]
+        )
+        XCTAssertEqual(hits.map { $0.location.url?.lastPathComponent }, ["Bar.java", "Baz.java", "Foo.java"])
+        XCTAssertEqual(hits.map(\.location.displayName), ["Bar.compareTo(String o)", "Baz.compareTo(Foo o)", "Foo.compareTo(Foo o)"])
+    }
+
+    func testGenericCallThroughAParameterizedReceiverFindsTheOverride() async throws {
+        let cmp = try write("Cmp.java", "interface Cmp<T> { int compareTo(T o); }")
+        let foo = try write("Foo.java", "class Foo implements Cmp<Foo> { public int compareTo(Foo o) { return 0; } }")
+        let hits = try await implementations(
+            "class T { int m(Cmp<Foo> c, Foo f) { return c.€compareTo(f); } }", indexing: [cmp, foo]
+        )
+        XCTAssertEqual(hits.map(\.text), ["compareTo"])
+    }
+
+    func testOverrideMatchingRules() {
+        func target(_ types: [JavaTypeRef]) -> JavaMethodStub {
+            JavaMethodStub(name: "m", parameters: types.map { JavaParameterStub(name: nil, type: $0) }, returnType: .void, modifiers: [])
+        }
+        let variable = JavaTypeRef.typeVariable(name: "T")
+        XCTAssertTrue(JavaNavigationSession.overrides(candidate: ["Foo"], target: target([variable])))
+        XCTAssertFalse(JavaNavigationSession.overrides(candidate: ["int"], target: target([variable])))
+        XCTAssertFalse(JavaNavigationSession.overrides(candidate: ["Foo", "Foo"], target: target([variable])))
+        XCTAssertTrue(JavaNavigationSession.overrides(candidate: ["Foo[]"], target: target([.array(element: variable)])))
+        XCTAssertFalse(JavaNavigationSession.overrides(candidate: ["Foo"], target: target([.array(element: variable)])))
+        XCTAssertTrue(JavaNavigationSession.overrides(candidate: ["int"], target: target([.primitive(.int)])))
+        XCTAssertFalse(JavaNavigationSession.overrides(candidate: ["long"], target: target([.primitive(.int)])))
+    }
+
+    // MARK: - Anonymous classes and enum constants
+
+    func testAnonymousClassesImplementTheirInterface() async throws {
+        let task = try write("Task.java", "interface Task { void run(); }")
+        let impl = try write("Impl.java", "class Impl implements Task { public void run() {} }")
+        let use = try write("Use.java", "class Use { Task t = new Task() { public void run() {} }; }")
+        let unrelated = try write("Other.java", "class Other { Object o = new Object() { }; }")
+        let hits = try await implementations("class T { €Task t; }", indexing: [task, impl, use, unrelated])
+        XCTAssertEqual(hits.map(\.location.displayName), ["Impl", "new Task() {…}"])
+        XCTAssertEqual(hits.map { $0.location.url?.lastPathComponent }, ["Impl.java", "Use.java"])
+        XCTAssertEqual(hits.last?.text, "Task")
+    }
+
+    func testAnonymousClassOverridesAreFoundForAMethodCall() async throws {
+        let task = try write("Task.java", "interface Task { void run(int n, String s); }")
+        let impl = try write("Impl.java", "class Impl implements Task { public void run(int n, String s) {} }")
+        let use = try write("Use.java", """
+        import java.util.List;
+        class Use {
+            Task t = new Task() {
+                public void run(int n, String s) {}
+                public void run(String other) {}
+            };
+        }
+        """)
+        let hits = try await implementations("class T { void m(Task t) { t.€run(1, \"x\"); } }", indexing: [task, impl, use])
+        XCTAssertEqual(hits.map(\.location.displayName), ["Impl.run(int n, String s)", "new Task() {…}.run(int, String)"])
+        XCTAssertEqual(hits.map(\.text), ["run", "run"])
+    }
+
+    func testAnonymousSubclassOfAnImplementorCountsAsAnImplementation() async throws {
+        let task = try write("Task.java", "interface Task { void run(); }")
+        let impl = try write("Impl.java", "class Impl implements Task { public void run() {} }")
+        let use = try write("Use.java", "class Use { Task t = new Impl() { public void run() {} }; }")
+        let hits = try await implementations("interface Task { void €run(); }", url: task.url, indexing: [task, impl, use])
+        XCTAssertEqual(hits.map(\.location.displayName), ["Impl.run()", "new Impl() {…}.run()"])
+    }
+
+    func testEnumConstantBodiesOverrideInterfaceAndEnumMethods() async throws {
+        let fn = try write("Fn.java", "interface Fn { int apply(int a); }")
+        let op = try write("Op.java", """
+        enum Op implements Fn {
+            PLUS { public int apply(int a) { return a; } },
+            MINUS { public int apply(int a) { return -a; } };
+        }
+        """)
+        let hits = try await implementations("interface Fn { int €apply(int a); }", url: fn.url, indexing: [fn, op])
+        XCTAssertEqual(hits.map(\.location.displayName), ["PLUS.apply(int)", "MINUS.apply(int)"])
+        XCTAssertEqual(hits.map(\.text), ["apply", "apply"])
+
+        let abstractEnum = try write("Shape.java", """
+        enum Shape {
+            SQUARE { int sides() { return 4; } },
+            LINE { int sides() { return 2; } };
+            abstract int sides();
+        }
+        """)
+        let own = try await implementations(
+            abstractEnum.source.replacingOccurrences(of: "abstract int sides", with: "abstract int €sides"),
+            url: abstractEnum.url, indexing: [abstractEnum]
+        )
+        XCTAssertEqual(own.map(\.location.displayName), ["SQUARE.sides()", "LINE.sides()"])
+    }
+
+    func testFilesThatDoNotMentionTheTargetAreNotSearchedForAnonymousClasses() async throws {
+        let task = try write("Task.java", "interface Task { void run(); }")
+        let use = try write("Use.java", "class Use { Runnable r = new Runnable() { public void run() {} }; }")
+        let result = try await navigate("class T { €Task t; }", indexing: [task, use])
+        XCTAssertNil(result)
+    }
+
+    // MARK: - Ordering
+
+    func testResultsAreInFileOrderNoMatterHowTheIndexHoldsThem() async throws {
+        let shape = try write("Shape.java", "interface Shape { }")
+        let zed = try write("Zed.java", "class Zed implements Shape { }")
+        let alpha = try write("Alpha.java", "class Alpha implements Shape { }")
+        let mid = try write("Mid.java", "class Mid implements Shape { }")
+        for order in [[zed, alpha, mid], [mid, zed, alpha], [alpha, mid, zed]] {
+            let hits = try await implementations("class T { €Shape s; }", indexing: [shape] + order)
+            XCTAssertEqual(hits.map { $0.location.url?.lastPathComponent }, ["Alpha.java", "Mid.java", "Zed.java"])
+        }
+    }
+
     // MARK: - Scope
 
     func testMainSourceSetDoesNotSeeATestOnlyImplementor() async throws {
