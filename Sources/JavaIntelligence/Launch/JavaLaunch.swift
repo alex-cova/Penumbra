@@ -102,7 +102,8 @@ public struct JavaLaunchCommand: Equatable, Sendable {
     public static func make(
         configuration: JavaRunConfiguration,
         projectRoot: URL?,
-        gradleWrapperExists: Bool
+        gradleWrapperExists: Bool,
+        runtimeClasspath: [URL]? = nil
     ) -> JavaLaunchCommand? {
         let environment = environmentPrefix(configuration.environment)
         switch configuration.target {
@@ -114,6 +115,18 @@ public struct JavaLaunchCommand: Equatable, Sendable {
             return JavaLaunchCommand(shellCommand: gradleInvocation(
                 task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists, environment: environment
             ))
+        case .classpathMain(let className, _):
+            // The class name goes into a shell command, so only a plain Java name is accepted.
+            guard let runtimeClasspath, !runtimeClasspath.isEmpty,
+                  className.range(of: #"^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$"#, options: .regularExpression) != nil else { return nil }
+            let classpath = runtimeClasspath.map(\.path).joined(separator: ":")
+            var parts = [environment.trimmingCharacters(in: .whitespaces), "java"]
+            parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+            parts.append("-cp")
+            parts.append(shellQuote(classpath))
+            parts.append(className)
+            parts.append(configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines))
+            return JavaLaunchCommand(shellCommand: parts.filter { !$0.isEmpty }.joined(separator: " "))
         case .singleFile(let path):
             var parts = [environment.trimmingCharacters(in: .whitespaces), "java"]
             parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))

@@ -237,6 +237,8 @@ private struct IDEToolbarActionCluster: View {
                 )
             }
 
+            IDERunConfigurationMenu()
+
             if isJavaRunnable {
                 IDEToolbarIconButton(
                     systemName: "play.fill",
