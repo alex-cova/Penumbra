@@ -563,15 +563,21 @@ public enum JavaExpressionTyper {
     /// Arity first (exact, then varargs), then the candidate whose parameter types agree with the
     /// most argument types (erased names; unknown arguments count as agreeing).
     static func chooseOverload(_ candidates: [JavaMethodStub], argumentTypes: [JavaTypeRef?]) -> JavaMethodStub? {
+        bestOverloads(candidates, argumentTypes: argumentTypes).first
+    }
+
+    /// Every candidate that ties for the best fit, in candidate order; one entry means the call
+    /// binds to it, several mean the argument types could not tell the overloads apart.
+    static func bestOverloads(_ candidates: [JavaMethodStub], argumentTypes: [JavaTypeRef?]) -> [JavaMethodStub] {
         let count = argumentTypes.count
         var applicable = candidates.filter { $0.parameters.count == count }
         if applicable.isEmpty {
             applicable = candidates.filter { $0.modifiers.contains(.varargs) && count >= max(0, $0.parameters.count - 1) }
         }
         if applicable.isEmpty {
-            return candidates.first
+            return candidates.first.map { [$0] } ?? []
         }
-        guard applicable.count > 1 else { return applicable.first }
+        guard applicable.count > 1 else { return applicable }
         func agreement(_ method: JavaMethodStub) -> Int {
             var score = 0
             for (position, argument) in argumentTypes.enumerated() {
@@ -579,10 +585,17 @@ public enum JavaExpressionTyper {
                 let parameter = position < method.parameters.count ? method.parameters[position].type : method.parameters.last?.type
                 guard let parameter else { continue }
                 if roughlyAssignable(argument, to: parameter) { score += 2 }
+                // An exact class match beats an `Object` or type-variable parameter that also accepts it.
+                if case .classType(let argumentName, _, _) = argument, case .classType(let parameterName, _, _) = parameter,
+                   argumentName == parameterName {
+                    score += 1
+                }
             }
             return score
         }
-        return applicable.max { agreement($0) < agreement($1) }
+        let scores = applicable.map(agreement)
+        let best = scores.max() ?? 0
+        return zip(applicable, scores).filter { $0.1 == best }.map(\.0)
     }
 
     /// A cheap assignability check for overload choice: same erased class, primitive ⇄ box,

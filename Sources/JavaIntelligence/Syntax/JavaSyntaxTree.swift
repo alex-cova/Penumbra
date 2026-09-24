@@ -37,6 +37,14 @@ public final class JavaSyntaxTree: @unchecked Sendable {
         return SyntaxNode(raw: raw, tree: self)
     }
 
+    /// The smallest node spanning the whole byte range -- for a token's own range, that token.
+    func node(inByteRange range: Range<Int>) -> SyntaxNode {
+        let lower = max(0, min(range.lowerBound, sourceBytes.count))
+        let upper = max(lower, min(range.upperBound, sourceBytes.count))
+        let raw = ts_node_descendant_for_byte_range(ts_tree_root_node(tree), UInt32(lower), UInt32(upper))
+        return SyntaxNode(raw: raw, tree: self)
+    }
+
     /// Decodes a byte range of the source as UTF-8 text.
     func text(in range: Range<Int>) -> String {
         guard range.lowerBound >= 0, range.upperBound <= sourceBytes.count, range.lowerBound <= range.upperBound else {

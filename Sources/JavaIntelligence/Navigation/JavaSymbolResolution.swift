@@ -71,18 +71,18 @@ extension JavaNavigationSession {
 
     // MARK: - Lookups
 
-    private func stub(named qualifiedName: String) async -> JavaClassStub? {
+    func stub(named qualifiedName: String) async -> JavaClassStub? {
         if let indexed = await index.classStub(qualifiedName: qualifiedName) { return indexed }
         return currentClasses.first { $0.qualifiedName == qualifiedName }
     }
 
-    private func typeQualifiedName(components: [String]) async -> String? {
+    func typeQualifiedName(components: [String]) async -> String? {
         guard let resolved = await resolveType(components: components),
               case .classType(let qualifiedName, _, _) = resolved else { return nil }
         return qualifiedName
     }
 
-    private func typeSymbols(components: [String]) async -> [JavaResolvedSymbol] {
+    func typeSymbols(components: [String]) async -> [JavaResolvedSymbol] {
         guard let name = await typeQualifiedName(components: components), let found = await stub(named: name) else { return [] }
         return [.type(found)]
     }
@@ -98,11 +98,11 @@ extension JavaNavigationSession {
             .map { .method($0.method, declaringClass: $0.declaringClass) }
     }
 
-    private func bareNameSymbols(_ name: String) async -> [JavaResolvedSymbol] {
+    func bareNameSymbols(_ name: String) async -> [JavaResolvedSymbol] {
         if let range = JavaDeclarationLocator.localDeclarationRange(name: name, in: tree, atByteOffset: byteOffset) {
             return [.local(name: name, declaration: declarationLine(containing: range.lowerBound))]
         }
-        if let enclosing = context.enclosingTypeQualifiedNames.first {
+        for enclosing in context.enclosingTypeQualifiedNames {
             let type = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
             if let target = await fieldTarget(named: name, on: type, mode: .instance) {
                 return [.field(target.field, declaringClass: target.declaringClass)]
@@ -119,7 +119,7 @@ extension JavaNavigationSession {
         return await typeSymbols(components: [name])
     }
 
-    private func importSymbols(_ declaration: SyntaxNode, clicked: SyntaxNode) async -> [JavaResolvedSymbol] {
+    func importSymbols(_ declaration: SyntaxNode, clicked: SyntaxNode) async -> [JavaResolvedSymbol] {
         let isStatic = declaration.children.contains { $0.type == "static" }
         let isOnDemand = declaration.namedChildren.contains { $0.type == "asterisk" }
         guard let path = declaration.namedChildren.first(where: { $0.type == "scoped_identifier" || $0.type == "identifier" }) else {
@@ -143,7 +143,7 @@ extension JavaNavigationSession {
 
     /// A declaration name under the caret: the type, method or field it declares. Locals and
     /// parameters are skipped, since the declaration is already what the caret is on.
-    private func declarationSymbols() async -> [JavaResolvedSymbol] {
+    func declarationSymbols() async -> [JavaResolvedSymbol] {
         let leaf = tree.node(atByteOffset: byteOffset)
         guard let declaration = leaf.parent, let owner = context.enclosingTypeQualifiedNames.first else { return [] }
         let ownerStub = currentClasses.first { $0.qualifiedName == owner }

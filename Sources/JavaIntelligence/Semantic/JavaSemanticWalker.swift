@@ -4,8 +4,9 @@ import Foundation
 /// ``JavaSemanticTokenProvider`` for what it does and does not resolve.
 final class JavaSemanticWalker {
     private enum Binding {
-        case local
-        case parameter
+        /// A local or parameter carries the byte range of its declaring name.
+        case local(Range<Int>)
+        case parameter(Range<Int>)
         case field(isStatic: Bool, isFinal: Bool)
         case enumConstant
         case typeParameter
@@ -16,6 +17,10 @@ final class JavaSemanticWalker {
         /// A type name the file does not declare; its kind comes from the index.
         var externalName: String?
     }
+
+    /// Receives every declaration and use of a local or parameter as `(declaration name range,
+    /// identifier range, isDeclaration)`. Set by ``JavaLocalUsages``; nil for token output.
+    var localSink: ((Range<Int>, Range<Int>, Bool) -> Void)?
 
     private let tree: JavaSyntaxTree
     private let importList: JavaImportList
@@ -118,8 +123,21 @@ final class JavaSemanticWalker {
             return walkTypeDeclaration(node)
         case "method_declaration", "constructor_declaration", "compact_constructor_declaration":
             return walkMethod(node)
+        case "lambda_expression":
+            return inScope(node) {
+                // `x -> ...`: a bare identifier parameter. Only bound when collecting local usages,
+                // so semantic-token output stays as it was.
+                if localSink != nil, let single = node.child(byFieldName: "parameters"), single.type == "identifier" {
+                    bindLocal(single, .parameter(single.byteRange))
+                    for child in node.children where child.isNamed && child.byteRange != single.byteRange {
+                        if !walk(child) { return false }
+                    }
+                    return true
+                }
+                return walkChildren(node)
+            }
         case "block", "constructor_body", "switch_block", "for_statement", "enhanced_for_statement", "catch_clause",
-             "try_with_resources_statement", "lambda_expression":
+             "try_with_resources_statement":
             return inScope(node) { walkChildren(node) }
         case "local_variable_declaration":
             return walkLocalDeclaration(node)
@@ -256,7 +274,7 @@ final class JavaSemanticWalker {
         for child in node.children where child.isNamed {
             if child.type == "variable_declarator" {
                 if let id = child.child(byFieldName: "name") {
-                    bind(id.text, .local)
+                    bindLocal(id, .local(id.byteRange))
                     emit(id, .localVariable, isDeclaration: true)
                 }
                 for part in child.namedChildren where part.byteRange != child.child(byFieldName: "name")?.byteRange {
@@ -289,7 +307,7 @@ final class JavaSemanticWalker {
     private func walkParameter(_ node: SyntaxNode) -> Bool {
         if node.type == "inferred_parameters" {
             for id in node.namedChildren(ofType: "identifier") {
-                bind(id.text, .parameter)
+                bindLocal(id, .parameter(id.byteRange))
                 emit(id, .parameter, isDeclaration: true)
             }
             return true
@@ -298,7 +316,7 @@ final class JavaSemanticWalker {
             ?? (node.type == "type_pattern" || node.type == "catch_formal_parameter" ? node.namedChildren(ofType: "identifier").last : nil)
         let isLocal = node.type == "resource" || node.type == "type_pattern"
         if let nameNode {
-            bind(nameNode.text, isLocal ? .local : .parameter)
+            bindLocal(nameNode, isLocal ? .local(nameNode.byteRange) : .parameter(nameNode.byteRange))
             emit(nameNode, isLocal ? .localVariable : .parameter, isDeclaration: true)
         }
         for child in node.namedChildren where child.byteRange != nameNode?.byteRange {
@@ -392,8 +410,12 @@ final class JavaSemanticWalker {
         let name = node.text
         if let binding = lookup(name) {
             switch binding {
-            case .local: emit(node, .localVariable)
-            case .parameter: emit(node, .parameter)
+            case .local(let declaration):
+                localSink?(declaration, node.byteRange, false)
+                emit(node, .localVariable)
+            case .parameter(let declaration):
+                localSink?(declaration, node.byteRange, false)
+                emit(node, .parameter)
             case .field(let isStatic, let isFinal): emit(node, .field, isStatic: isStatic, isFinal: isFinal)
             case .enumConstant: emit(node, .enumConstant)
             case .typeParameter: emit(node, .typeParameter)
@@ -410,6 +432,12 @@ final class JavaSemanticWalker {
 
     private func isTypeLike(_ name: String) -> Bool {
         declaredTypes[name] != nil || (name.first?.isUppercase ?? false)
+    }
+
+    /// Binds a local or parameter name and reports its declaration to ``localSink``.
+    private func bindLocal(_ node: SyntaxNode, _ binding: Binding) {
+        bind(node.text, binding)
+        localSink?(node.byteRange, node.byteRange, true)
     }
 
     private func bind(_ name: String, _ binding: Binding) {
