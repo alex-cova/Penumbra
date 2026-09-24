@@ -209,7 +209,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
 
     private func sourceSetJSON(extra: String) -> Data {
         Data("""
-        {"formatVersion": 5, "gradleVersion": "8.5", "subprojects": [
+        {"formatVersion": 5, "gradleVersion": "8.5", "unresolved": [], "subprojects": [
           {"path": ":", "directory": "file:///p/", "sourceSets": [
             {"name": "main", "sourceDirs": ["file:///p/src/main/java/"] \(extra)}
           ]}
