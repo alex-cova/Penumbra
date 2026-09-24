@@ -71,6 +71,17 @@ final class LineFragmentController {
             }
         }
     }
+    var inlayHints: [LineInlayHint] {
+        get {
+            renderer.inlayHints
+        }
+        set {
+            if newValue != renderer.inlayHints {
+                renderer.inlayHints = newValue
+                invalidateAttachedViewIfPresent()
+            }
+        }
+    }
     var unfocusedAlpha: CGFloat {
         get {
             renderer.unfocusedAlpha

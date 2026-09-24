@@ -304,6 +304,11 @@ public final class IDEWorkspace {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
             }
+            await intelligenceServices.javaSupport.inlayHintProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
             await intelligenceServices.javaSupport.hoverProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
@@ -1624,6 +1629,7 @@ public final class IDEWorkspace {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
+        host.intelligenceController?.inlayHintsEnabled = preferences.javaInlayHints
         host.intelligenceController?.onOpenLocationInOtherDocument = { [weak self] location in
             self?.openNavigationLocation(location) ?? false
         }
@@ -1847,6 +1853,12 @@ public final class IDEWorkspace {
     private func recheckJavaAfterSave(of url: URL? = nil) {
         if let url { problems.clearBuildDiagnostics(for: url) }
         javaSupport.compileNow(openJavaDocuments(), force: true)
+    }
+
+    func javaInlayHintsPreferenceChanged() {
+        for paneID in hostedPaneIDs {
+            host(for: paneID).intelligenceController?.inlayHintsEnabled = preferences.javaInlayHints
+        }
     }
 
     func javaCompilerDiagnosticsPreferenceChanged() {

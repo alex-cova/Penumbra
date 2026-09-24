@@ -245,6 +245,15 @@ public struct IDEPreferencesView: View {
                             isOn: $preferences.javaOptimizeImportsOnSave
                         )
                         IDESettingsSeparator()
+                        IDESettingsToggleRow(
+                            title: "Parameter Name Hints",
+                            caption: "Show the parameter name before call arguments, like count: 3.",
+                            isOn: $preferences.javaInlayHints
+                        )
+                        .onChange(of: preferences.javaInlayHints) {
+                            workspace.javaInlayHintsPreferenceChanged()
+                        }
+                        IDESettingsSeparator()
                         IDESettingsRow(title: "Gradle Sync Timeout") {
                             HStack(spacing: IDEAppearance.Spacing.xs) {
                                 Text("\(preferences.javaGradleSyncTimeoutSeconds)s")

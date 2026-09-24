@@ -192,6 +192,17 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    /// Display-only labels drawn inline (see ``InlayHint``). They are kept where they are through
+    /// edits, and dropped when the document is replaced.
+    var inlayHints: [InlayHint] = [] {
+        didSet {
+            if inlayHints != oldValue {
+                layoutManager.inlayHints = InlayHintIndex.normalized(inlayHints)
+                layoutManager.setNeedsLayout()
+                setNeedsLayout()
+            }
+        }
+    }
     var isLineFoldingEnabled = false {
         didSet {
             if isLineFoldingEnabled != oldValue {
@@ -1326,6 +1337,7 @@ final class TextInputView: UIView, UITextInput {
     }
 
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
+        if !inlayHints.isEmpty { inlayHints = [] }
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
         syntaxParsePolicy = state.parsePolicy
@@ -2447,6 +2459,7 @@ extension TextInputView {
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let application = textEditHelper.apply(batchReplaceSet)
+        if !inlayHints.isEmpty { inlayHints = [] }
         registerBatchUndo(inverseReplacements: application.inverseReplacements)
         invalidateLines()
         layoutManager.setNeedsLayout()
@@ -2579,6 +2592,9 @@ extension TextInputView {
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let textEditResult = textEditHelper.replaceText(in: range, with: newString)
+        if !inlayHints.isEmpty {
+            inlayHints = InlayHintIndex.applyingEdit(to: inlayHints, range: range, replacementLength: nsNewString.length)
+        }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)

@@ -54,6 +54,7 @@ enum MetalDecorationBuilder {
         appendHighlights(spec.decorations.highlighted, context: context, into: &geometry)
         appendMarkedRange(spec.decorations, context: context, into: &geometry)
         appendInvisibleCharacters(spec.decorations, context: context, atlas: atlas, budget: &budget, into: &geometry)
+        appendInlayHints(spec.decorations, context: context, atlas: atlas, budget: &budget, into: &geometry)
         appendFoldPlaceholder(spec.decorations, context: context, atlas: atlas, budget: &budget, into: &geometry)
         return geometry
     }
@@ -310,6 +311,48 @@ private extension MetalDecorationBuilder {
             strokeWidth: 1,
             roundedCornersMask: SolidInstance.allCornersMask
         )
+    }
+
+    // MARK: Inlay hints
+
+    @MainActor
+    static func appendInlayHints(
+        _ decorations: LineFragmentDecorations,
+        context: Context,
+        atlas: GlyphAtlas,
+        budget: inout GlyphRasterBudget,
+        into geometry: inout MetalDecorationGeometry
+    ) {
+        guard !decorations.inlayHints.isEmpty else {
+            return
+        }
+        let font = InlayHintStyle.font
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        for hint in decorations.inlayHints {
+            let size = (hint.label as NSString).size(withAttributes: attributes)
+            let textWidth = InlayHintStyle.textWidth(of: hint.label)
+            let pillX = context.x(at: hint.localOffset) - hint.width
+            let pillWidth = textWidth + InlayHintStyle.horizontalPadding * 2
+            let pillHeight = size.height + 2
+            geometry.overlaySolids.append(SolidInstance(
+                origin: SIMD2(Float(pillX), Float(context.originY + (context.height - size.height) / 2 - 1)),
+                size: SIMD2(Float(pillWidth), Float(pillHeight)),
+                fillColor: context.premultiplied(InlayHintStyle.backgroundColor),
+                strokeColor: SolidInstance.noColor,
+                cornerRadius: 3,
+                strokeWidth: 0,
+                roundedCornersMask: SolidInstance.allCornersMask
+            ))
+            geometry.overlayGlyphs.append(contentsOf: textGlyphs(
+                hint.label,
+                font: font,
+                color: InlayHintStyle.textColor,
+                atX: pillX + InlayHintStyle.horizontalPadding,
+                context: context,
+                atlas: atlas,
+                budget: &budget
+            ))
+        }
     }
 
     // MARK: Fold placeholder

@@ -14,6 +14,8 @@ public struct EditorIntelligenceServices {
     public var codeActionProvider: (any CodeActionProviding)?
     /// Language-aware breadcrumbs, tried before the ones derived from ``symbolIndex``.
     public var breadcrumbProvider: (any BreadcrumbProviding)?
+    /// Parameter-name hints drawn inline at call sites (see ``TextView/inlayHints``).
+    public var inlayHintProvider: (any InlayHintProviding)?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
     /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
@@ -26,6 +28,7 @@ public struct EditorIntelligenceServices {
         signatureHelpProvider: (any SignatureHelpProviding)? = nil,
         codeActionProvider: (any CodeActionProviding)? = nil,
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
+        inlayHintProvider: (any InlayHintProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
         projectSearchEngine: ProjectSearchEngine? = nil
@@ -34,6 +37,7 @@ public struct EditorIntelligenceServices {
         self.signatureHelpProvider = signatureHelpProvider
         self.codeActionProvider = codeActionProvider
         self.breadcrumbProvider = breadcrumbProvider
+        self.inlayHintProvider = inlayHintProvider
         self.symbolIndex = symbolIndex
         self.workspace = workspace
         self.projectSearchEngine = projectSearchEngine
@@ -78,6 +82,14 @@ public final class EditorIntelligenceController {
     private let signatureHelpProvider: (any SignatureHelpProviding)?
     private let codeActionProvider: (any CodeActionProviding)?
     private let breadcrumbProvider: (any BreadcrumbProviding)?
+    private var inlayHintProvider: (any InlayHintProviding)?
+    private var inlayHintTask: Task<Void, Never>?
+    /// Whether hints are shown. Off clears them; hosts flip it from a preference.
+    public var inlayHintsEnabled = true {
+        didSet {
+            if inlayHintsEnabled != oldValue { refreshInlayHints() }
+        }
+    }
     private let symbolIndex: SymbolIndex?
     private let workspace: Workspace?
     private let workspaceSearchEngine = WorkspaceSearchEngine()
@@ -154,6 +166,7 @@ public final class EditorIntelligenceController {
         self.signatureHelpProvider = services.signatureHelpProvider
         self.codeActionProvider = services.codeActionProvider
         self.breadcrumbProvider = services.breadcrumbProvider
+        self.inlayHintProvider = services.inlayHintProvider
         self.symbolIndex = services.symbolIndex
         self.workspace = services.workspace
         self.projectSearchEngine = services.projectSearchEngine ?? ProjectSearchEngine()
@@ -404,6 +417,7 @@ public final class EditorIntelligenceController {
         emptyCompletionHintTask?.cancel()
         eventTask?.cancel()
         hoverTask?.cancel()
+        inlayHintTask?.cancel()
         completionTask?.cancel()
         signatureHelpTask?.cancel()
         outlineTask?.cancel()
@@ -664,6 +678,46 @@ public final class EditorIntelligenceController {
         }
     }
 
+    /// Asks the inlay hint provider for the hints around what is on screen (a viewport above and
+    /// below included) and shows them, after a short pause so typing does not resolve every call.
+    /// Call it again after scrolling far; hints outside the last requested range are not shown.
+    public func refreshInlayHints() {
+        inlayHintTask?.cancel()
+        guard let textView else { return }
+        guard inlayHintsEnabled, let inlayHintProvider else {
+            if !textView.inlayHints.isEmpty { textView.inlayHints = [] }
+            return
+        }
+        inlayHintTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let request: (Document, EditorIntelligence.TextRange)? = await MainActor.run {
+                guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
+                let ns = textView.text as NSString
+                let height = textView.bounds.height
+                let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
+                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? ns.length
+                let start = min(max(0, top), ns.length)
+                let end = min(max(start, bottom), ns.length)
+                func position(_ offset: Int) -> TextPosition {
+                    let before = ns.substring(to: offset)
+                    let line = before.utf16.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+                    let lineStart = (before as NSString).range(of: "\n", options: .backwards)
+                    return TextPosition(line: line, column: lineStart.location == NSNotFound ? offset : offset - lineStart.location - 1, utf16Offset: offset)
+                }
+                return (document, EditorIntelligence.TextRange(start: position(start), end: position(end)))
+            }
+            guard let (document, range) = request else { return }
+            let hints = await inlayHintProvider.inlayHints(for: document, in: range)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                // A newer edit would have cancelled this task; only apply against unchanged text.
+                guard let self, let textView = self.textView, textView.text == (document.contentSnapshot.text ?? textView.text) else { return }
+                textView.inlayHints = hints
+            }
+        }
+    }
+
     /// Refresh breadcrumb segments for the current cursor.
     public func refreshBreadcrumbs() {
         guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
@@ -857,6 +911,7 @@ public final class EditorIntelligenceController {
         case .documentChanged, .documentEdited:
             refreshDiagnostics()
             refreshOutline()
+            refreshInlayHints()
         case .cursorMoved, .selectionChanged:
             dismissCompletionIfCaretLeftIdentifier()
             scheduleHoverRequest()
@@ -865,6 +920,7 @@ public final class EditorIntelligenceController {
             refreshDiagnostics()
             refreshOutline()
             refreshBreadcrumbs()
+            refreshInlayHints()
         default:
             break
         }

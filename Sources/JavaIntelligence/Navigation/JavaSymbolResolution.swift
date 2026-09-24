@@ -87,7 +87,7 @@ extension JavaNavigationSession {
         return [.type(found)]
     }
 
-    private func constructorSymbols(of qualifiedName: String, argumentCount: Int) async -> [JavaResolvedSymbol] {
+    func constructorSymbols(of qualifiedName: String, argumentCount: Int) async -> [JavaResolvedSymbol] {
         let type = JavaTypeRef.classType(qualifiedName: qualifiedName, arguments: [], outer: nil)
         let declared = await JavaMemberLookup.constructors(of: type, context: context, index: index)
         if declared.isEmpty {

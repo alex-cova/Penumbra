@@ -59,6 +59,8 @@ final class IDEJavaSupport {
     let hierarchyProvider: JavaTypeHierarchyProvider
     /// Classifies Java identifiers for semantic highlighting.
     let semanticTokenProvider: JavaSemanticTokenProvider
+    /// Parameter-name hints at call sites (the Parameter Name Hints preference).
+    let inlayHintProvider: JavaInlayHintProvider
     /// Reformats Java files (⌥⌘L) with the built-in formatter.
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
@@ -155,6 +157,7 @@ final class IDEJavaSupport {
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
+        inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
         gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
@@ -706,6 +709,7 @@ final class IDEJavaSupport {
         await codeActionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
         refreshCompilerDiagnostics()
     }
 
@@ -866,6 +870,7 @@ final class IDEJavaSupport {
             await codeActionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hoverProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await hierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await inlayHintProvider.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }
 

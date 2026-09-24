@@ -50,6 +50,7 @@ final class IDEIntelligenceServices {
             signatureHelpProvider: javaSupport.completionProvider,
             codeActionProvider: javaSupport.codeActionProvider,
             breadcrumbProvider: javaSupport.breadcrumbProvider,
+            inlayHintProvider: javaSupport.inlayHintProvider,
             symbolIndex: symbolIndex,
             workspace: workspace
         )
