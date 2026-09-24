@@ -125,6 +125,19 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(stroke?.displayString, "\u{2325}\u{2191}")
     }
 
+    func testCommandUIsGoToSuperMethodOnlyInIntelliJKeymap() {
+        var dispatcher = KeymapDispatcher()
+        XCTAssertEqual(
+            dispatcher.resolve(event: event("u", .command, keyCode: 0x20), keymap: .intelliJ), .action(.goToSuperMethod)
+        )
+        XCTAssertEqual(
+            dispatcher.resolve(event: event("u", .command, keyCode: 0x20), keymap: .default_), .action(.undoLastCaretChange)
+        )
+        XCTAssertNil(Keymap.default_.stroke(for: .goToSuperMethod))
+        XCTAssertNil(Keymap.intelliJ.stroke(for: .undoLastCaretChange))
+        XCTAssertEqual(EditorActionID.goToSuperMethod.title, "Go to Super Method")
+    }
+
     func testArrowEventsMatchByKeyCodeNotCharacter() {
         // AppKit reports ↑ as a function-key code point; the chord must key off keyCode.
         let chord = KeyChord(event: event(String(UnicodeScalar(0xF700)!), .option, keyCode: 0x7E))

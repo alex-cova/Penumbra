@@ -310,6 +310,8 @@ public final class EditorIntelligenceController {
             return navigate(kind: .definition)
         case .goToImplementation:
             return navigate(kind: .implementation)
+        case .goToSuperMethod:
+            return navigate(kind: .superMethod)
         case .findUsages:
             return navigate(kind: .references)
         case .triggerCompletion:
@@ -1167,6 +1169,8 @@ public final class EditorIntelligenceController {
             return "No definition found"
         case .implementation:
             return "No implementations found"
+        case .superMethod:
+            return "No super method found"
         case .references:
             return languageIdentifier == "java"
                 ? "Find Usages isn't available for Java yet"

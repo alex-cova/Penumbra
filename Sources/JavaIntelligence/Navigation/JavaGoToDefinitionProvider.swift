@@ -88,7 +88,7 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
-        guard context.kind == .definition || context.kind == .implementation else { return nil }
+        guard context.kind == .definition || context.kind == .implementation || context.kind == .superMethod else { return nil }
         guard context.document.languageIdentifier == "java" else { return nil }
         let source = JavaNavigationText.fullText(of: context.document)
         guard !source.isEmpty else { return nil }
@@ -99,6 +99,18 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
         let gate = JavaDecompileGate(policy: decompilePolicy(trigger: context.trigger))
         let kind = context.kind
         let resolve = { () async -> [JavaDefinitionHit] in
+            if kind == .superMethod {
+                return await JavaGoToSuperMethod.resolve(
+                    source: source,
+                    fileURL: context.document.url,
+                    utf16Offset: utf16Offset,
+                    index: self.index,
+                    jdkHome: home,
+                    cacheRoot: cacheRoot,
+                    openBuffer: lookup,
+                    decompile: gate
+                )
+            }
             if kind == .implementation {
                 return await JavaGoToImplementation.resolve(
                     source: source,

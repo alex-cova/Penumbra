@@ -105,6 +105,10 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */)), to: .goToDefinition)
         map.bind(KeyStroke(KeyChord("b", [.command, .option])), to: .goToImplementation)
         map.bind(KeyStroke(KeyChord("b", [.command, .option, .shift])), to: .findUsages)
+        // ⌘U is Go to Super Method in IntelliJ, so it replaces the default keymap's
+        // Undo Last Caret Change binding (still reachable through Find Action).
+        map.unbindAll(.undoLastCaretChange)
+        map.bind(KeyStroke(KeyChord("u", .command)), to: .goToSuperMethod)
         map.bind(KeyStroke(KeyChord(code: 0x21 /* [ */, .command)), to: .navigateBack)
         map.bind(KeyStroke(KeyChord(code: 0x1E /* ] */, .command)), to: .navigateForward)
 
