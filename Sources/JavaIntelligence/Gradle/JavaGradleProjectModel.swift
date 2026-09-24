@@ -6,7 +6,7 @@ import Foundation
 ///
 /// All `URL`s are absolute `file://` URLs (the script emits `file.toURI().toString()` so `Codable`'s
 /// single-string `URL` decoding produces a proper file URL rather than a scheme-less one).
-public struct JavaGradleProjectModel: Codable, Sendable {
+public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
     public struct GradleTask: Codable, Hashable, Sendable {
         /// Fully-qualified Gradle task path, e.g. `:build`, `:app:test`.
         public let path: String
@@ -35,7 +35,7 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         }
     }
 
-    public struct SourceSet: Codable, Sendable {
+    public struct SourceSet: Codable, Sendable, Equatable {
         public let name: String
         public let sourceDirs: [URL]
         /// Where this source set's compiled classes and processed resources go
@@ -95,7 +95,7 @@ public struct JavaGradleProjectModel: Codable, Sendable {
         }
     }
 
-    public struct Subproject: Codable, Sendable {
+    public struct Subproject: Codable, Sendable, Equatable {
         /// Gradle project path, e.g. `:`, `:app`, `:lib:core`.
         public let path: String
         public let directory: URL

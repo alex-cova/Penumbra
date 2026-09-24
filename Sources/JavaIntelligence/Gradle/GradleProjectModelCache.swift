@@ -9,7 +9,13 @@ public struct GradleProjectModelCache: Sendable {
     private struct Metadata: Codable {
         var fingerprint: GradleBuildFingerprint
         var cachedAt: Date
+        /// Absent in files written before per-file change reporting existed; such a file never
+        /// matches, so the model is re-synced once and rewritten in the current format.
+        var cacheFormat: Int?
     }
+
+    /// Bump when `meta.json`'s meaning changes.
+    static let cacheFormat = 2
 
     public let cacheRoot: URL
 
@@ -36,7 +42,7 @@ public struct GradleProjectModelCache: Sendable {
     /// the bundled init script format version hasn't changed.
     public func loadIfValid(projectRoot: URL) -> JavaGradleProjectModel? {
         let directory = projectDirectory(for: projectRoot)
-        guard let metadata = loadMetadata(from: directory) else { return nil }
+        guard let metadata = loadMetadata(from: directory), metadata.cacheFormat == Self.cacheFormat else { return nil }
         guard metadata.fingerprint.scriptFormatVersion == GradleProjectModelScript.formatVersion else {
             return nil
         }
@@ -48,13 +54,23 @@ public struct GradleProjectModelCache: Sendable {
         return try? JSONDecoder().decode(JavaGradleProjectModel.self, from: data)
     }
 
+    /// Relative paths of build files that differ from the ones stamped when the model was last
+    /// stored, or `nil` when nothing usable is stored (no cache, or one from an older format).
+    public func changedBuildFiles(projectRoot: URL) -> [String]? {
+        guard let metadata = loadMetadata(from: projectDirectory(for: projectRoot)),
+              metadata.cacheFormat == Self.cacheFormat else { return nil }
+        let current = GradleBuildFingerprintCollector.collect(projectRoot: projectRoot)
+        return GradleBuildFingerprint.changedFiles(from: metadata.fingerprint, to: current)
+    }
+
     public func store(projectRoot: URL, model: JavaGradleProjectModel) {
         let directory = projectDirectory(for: projectRoot)
         let fileManager = FileManager.default
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let metadata = Metadata(
             fingerprint: GradleBuildFingerprintCollector.collect(projectRoot: projectRoot),
-            cachedAt: Date()
+            cachedAt: Date(),
+            cacheFormat: Self.cacheFormat
         )
         guard let metaData = try? JSONEncoder().encode(metadata),
               let modelData = try? JSONEncoder().encode(model) else {

@@ -127,7 +127,7 @@ final class IDEJavaSupport {
     private(set) var gradleModel: JavaGradleProjectModel? {
         didSet {
             if oldValue == nil, gradleModel == nil { return }
-            onGradleModelChanged?(gradleModel)
+            if !suppressPaletteRebuild { onGradleModelChanged?(gradleModel) }
             let model = gradleModel
             Task { [renameProvider] in await renameProvider.setGradleModel(model) }
         }
@@ -146,6 +146,13 @@ final class IDEJavaSupport {
     /// Set when a watched Gradle build file changes outside of a sync. Bursts collapse to one
     /// banner; cleared by Reload or Dismiss.
     private(set) var gradleBuildFilesChanged = false
+    /// Relative paths of the build files that differ from the last synced state, when known. Empty
+    /// means "unknown" (the banner then shows its generic text).
+    private(set) var gradleChangedBuildFiles: [String] = []
+    /// Set while a sync installs a model whose source directories are unchanged, so the palette's
+    /// file index isn't rebuilt for nothing.
+    @ObservationIgnored private var suppressPaletteRebuild = false
+    @ObservationIgnored private var changedBuildFilesTask: Task<Void, Never>?
     /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
     private(set) var isRunningGradleTasks = false
     private(set) var runningGradleTaskPaths: [String] = []
@@ -308,6 +315,7 @@ final class IDEJavaSupport {
         stopBuildFileWatcher()
         gradleSyncInFlight = false
         gradleBuildFilesChanged = false
+        gradleChangedBuildFiles = []
         projectRootURL = url
         gradleModel = nil
         let hadJars = !jarSources.isEmpty
@@ -480,6 +488,7 @@ final class IDEJavaSupport {
 
     func dismissGradleBuildFileChanges() {
         gradleBuildFilesChanged = false
+        gradleChangedBuildFiles = []
     }
 
     private func isCurrent(_ generation: Int) -> Bool {
@@ -497,6 +506,22 @@ final class IDEJavaSupport {
         Task { [renameProvider] in await renameProvider.setRoots(renameRoots) }
         nameIndexTask = Task { [nameIndex] in
             for await _ in await nameIndex.build(roots: roots) {
+                guard isCurrent(generation) else { return }
+            }
+        }
+    }
+
+    /// Applies a root delta to the name index: unchanged roots keep their loaded shards.
+    private func updateNameIndex(plan: JavaGradleModelDiff.ApplyPlan, generation: Int) {
+        nameIndexTask?.cancel()
+        nameIndexRoots = plan.nameRoots.map(\.standardizedFileURL)
+        let searchRoots = nameIndexRoots
+        Task { [findUsagesProvider] in await findUsagesProvider.setProjectRoots(searchRoots) }
+        Task { [renameProvider] in await renameProvider.setRoots(searchRoots) }
+        let adding = plan.addedNameRoots
+        let removing = plan.removedNameRoots
+        nameIndexTask = Task { [nameIndex] in
+            for await _ in await nameIndex.updateRoots(adding: adding, removing: removing) {
                 guard isCurrent(generation) else { return }
             }
         }
@@ -588,6 +613,7 @@ final class IDEJavaSupport {
         gradleSyncTask?.cancel()
         if !silent {
             gradleBuildFilesChanged = false
+            gradleChangedBuildFiles = []
         }
         gradleSyncInFlight = true
         gradleSyncTask = Task { [gradleTrustStore, gradleExtractor, gradleModelCache, paths, scheduler] in
@@ -629,6 +655,7 @@ final class IDEJavaSupport {
                 )
                 await applyGradleModel(
                     bootstrapModel,
+                    diff: JavaGradleModelDiff.diff(from: nil, to: bootstrapModel),
                     generation: generation,
                     logToConsole: false,
                     paths: paths,
@@ -687,14 +714,17 @@ final class IDEJavaSupport {
 
                 gradleModelCache.store(projectRoot: url, model: model)
 
-                if silent, let previousModel, Self.modelsAreEqual(previousModel, model) {
+                let diff = JavaGradleModelDiff.diff(from: previousModel, to: model)
+                if silent, previousModel != nil, diff.isEmpty {
                     gradleConsole.appendNote("Background refresh: project model unchanged")
                     gradleConsole.markFinished()
                     return
                 }
 
+                suppressPaletteRebuild = !diff.requiresFullApply && !diff.sourceRootsChanged
                 gradleModel = model
-                await applyGradleModel(model, generation: generation, logToConsole: !silent, paths: paths, scheduler: scheduler)
+                suppressPaletteRebuild = false
+                await applyGradleModel(model, diff: diff, generation: generation, logToConsole: !silent, paths: paths, scheduler: scheduler)
                 guard isCurrent(generation) else { return }
 
                 gradleSync = .synced(subprojects: model.subprojects.count, jars: model.classpathJars.count)
@@ -729,23 +759,44 @@ final class IDEJavaSupport {
 
     private func applyGradleModel(
         _ model: JavaGradleProjectModel,
+        diff: JavaGradleModelDiff.Result,
         generation: Int,
         logToConsole: Bool,
         paths: JavaIndexPaths,
         scheduler: JavaIndexScheduler
     ) async {
-        await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
-        guard isCurrent(generation) else { return }
+        let full = diff.requiresFullApply
+        if full {
+            await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
+            guard isCurrent(generation) else { return }
+        }
 
-        buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
-        let sourceTargets = model.sourceIndexTargets(paths: paths)
-        let jarTargets = model.jarIndexTargets(paths: paths)
-        let totalTargets = sourceTargets.count + jarTargets.count
+        // Incremental: only what the model added is indexed, only what it dropped is unloaded.
+        let loadedShards: Set<String> = full ? [] : Set((projectSources + jarSources).map(\.shardPath).filter { !$0.isEmpty })
+        let plan = JavaGradleModelDiff.plan(
+            for: model,
+            paths: paths,
+            loadedShardPaths: loadedShards,
+            loadedNameRoots: full ? [] : Set(nameIndexRoots.map(\.path))
+        )
+        if full {
+            buildNameIndex(roots: plan.nameRoots, generation: generation)
+        } else {
+            updateNameIndex(plan: plan, generation: generation)
+        }
+        let sourceTargets = plan.sourceTargets
+        let jarTargets = plan.jarTargets
+        let indexTargets = full ? sourceTargets + jarTargets : plan.addedSourceTargets + plan.addedJarTargets
+        let totalTargets = indexTargets.count
         if logToConsole {
-            gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
+            if full {
+                gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
+            } else {
+                gradleConsole.appendNote("Indexing \(totalTargets) new source roots and dependencies (\(plan.removedShardPaths.count) removed)…")
+            }
         }
         var completedTargets = 0
-        for await progress in await scheduler.index(sourceTargets + jarTargets) {
+        for await progress in await scheduler.index(indexTargets) {
             guard isCurrent(generation) else { return }
             switch progress {
             case .allFinished:
@@ -780,18 +831,41 @@ final class IDEJavaSupport {
         }
         guard isCurrent(generation) else { return }
 
-        projectSources = sourceTargets.compactMap { target in
-            guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-            return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
-        }
-        jarSources = jarTargets.compactMap { target in
-            guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-            return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
+        if full {
+            projectSources = sourceTargets.compactMap { target in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+            }
+            jarSources = jarTargets.compactMap { target in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
+            }
+        } else {
+            // Keep the readers already loaded (file watching may have refreshed them); open only
+            // the shards that are new.
+            func merge(_ current: [JavaIndex.Source], _ targets: [JavaGradleModelDiff.ApplyPlan.Target], precedence: Int) -> [JavaIndex.Source] {
+                var byPath: [String: JavaIndex.Source] = [:]
+                for source in current where !plan.removedShardPaths.contains(source.shardPath) { byPath[source.shardPath] = source }
+                var result: [JavaIndex.Source] = []
+                for target in targets {
+                    if let existing = byPath[target.shardURL.path] {
+                        result.append(existing)
+                    } else if let reader = try? JavaIndexShardReader(url: target.shardURL) {
+                        result.append(.init(precedence: precedence, reader: reader, shardPath: target.shardURL.path))
+                    }
+                }
+                return result
+            }
+            projectSources = merge(projectSources, sourceTargets, precedence: 1)
+            jarSources = merge(jarSources, jarTargets, precedence: 2)
         }
         if statusMessage?.hasPrefix("Indexing dependencies…") == true {
             statusMessage = nil
         }
         await publishSources()
+        guard isCurrent(generation) else { return }
+        // Providers hold the model for source-set scoping; a change in tasks alone doesn't need it.
+        guard full || diff.classpathChanged || diff.sourceRootsChanged else { return }
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
         await findUsagesProvider.setSourceSetClasspath(model, indexPaths: paths)
@@ -799,6 +873,7 @@ final class IDEJavaSupport {
         await hoverProvider.setSourceSetClasspath(model, indexPaths: paths)
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
+        guard isCurrent(generation) else { return }
         refreshCompilerDiagnostics()
     }
 
@@ -821,14 +896,6 @@ final class IDEJavaSupport {
             }
             await publishSources()
         }
-    }
-
-    private static func modelsAreEqual(_ lhs: JavaGradleProjectModel, _ rhs: JavaGradleProjectModel) -> Bool {
-        guard let left = try? JSONEncoder().encode(lhs),
-              let right = try? JSONEncoder().encode(rhs) else {
-            return false
-        }
-        return left == right
     }
 
     /// Cancels an in-progress sync -- backs the Gradle console tab's Cancel button. A no-op unless
@@ -1001,7 +1068,22 @@ final class IDEJavaSupport {
                 if self.gradleSyncInFlight { continue }
                 if case .syncing = self.gradleSync { continue }
                 self.gradleBuildFilesChanged = true
+                self.refreshChangedBuildFiles(root: root, watcher: watcher)
             }
+        }
+    }
+
+    /// Names the build files that differ from the last cached sync, for the banner.
+    private func refreshChangedBuildFiles(root: URL, watcher: FSEventsFileSystemWatcher) {
+        changedBuildFilesTask?.cancel()
+        let cache = gradleModelCache
+        changedBuildFilesTask = Task { [weak self] in
+            let files = await Task.detached(priority: .utility) {
+                cache.changedBuildFiles(projectRoot: root)
+            }.value
+            guard let self, !Task.isCancelled, self.buildFileWatcher === watcher,
+                  self.gradleBuildFilesChanged, let files, !files.isEmpty else { return }
+            self.gradleChangedBuildFiles = files
         }
     }
 
