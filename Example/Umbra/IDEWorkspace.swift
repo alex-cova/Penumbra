@@ -120,6 +120,10 @@ public final class IDEWorkspace {
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     private(set) var lastRunConfiguration: JavaRunConfiguration?
+    /// Every run configuration of the project, for the toolbar picker.
+    private(set) var runConfigurations: [JavaRunConfiguration] = []
+    /// A classpath launch waiting for `classes` to finish building the outputs it runs from.
+    private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
     private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
@@ -255,8 +259,9 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
         }
-        intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] _, root, result in
+        intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] tasks, root, result in
             self?.applyGradleBuildOutput(result, projectRoot: root)
+            self?.continueAfterClassesBuild(tasks: tasks, exitCode: result.exitCode)
         }
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
             self?.compilerDidReconfigure()
@@ -579,7 +584,7 @@ public final class IDEWorkspace {
             launch(configuration)
         } else {
             runConfigurationStore.setLast(configuration, forProject: project.rootURL)
-            lastRunConfiguration = configuration
+            refreshLastRunConfiguration()
         }
     }
 
@@ -590,7 +595,11 @@ public final class IDEWorkspace {
             projectRoot: project.rootURL,
             isGradleProject: javaSupport.isGradleProject,
             model: javaSupport.gradleModel
-        )?.inheritingSettings(from: runConfigurationStore.last(forProject: project.rootURL))
+        ).map { fresh in
+            // Reuse what was saved for the same target, whichever configuration ran last.
+            let saved = runConfigurationStore.configurations(forProject: project.rootURL)
+            return fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
+        }
     }
 
     private func launch(_ configuration: JavaRunConfiguration) {
@@ -598,16 +607,109 @@ public final class IDEWorkspace {
         let wrapper = root.map {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
         } ?? false
+        var classpath: [URL]?
+        if case .classpathMain(_, let sourceFile) = configuration.target {
+            classpath = javaSupport.gradleModel?.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile))
+            guard let classpath else {
+                reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project that contains \((sourceFile as NSString).lastPathComponent).")
+                return
+            }
+            // A class that was never built can't run: build it first, then launch.
+            if !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty {
+                buildClassesThenLaunch(configuration, sourceFile: sourceFile)
+                return
+            }
+        }
         guard let command = JavaLaunchCommand.make(
-            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper
-        ) else { return }
+            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper, runtimeClasspath: classpath
+        ) else {
+            reportRunProblem("“\(configuration.displayName)” can't be launched: check its target.")
+            return
+        }
         runConfigurationStore.setLast(configuration, forProject: root)
-        lastRunConfiguration = configuration
+        refreshLastRunConfiguration()
         runInTerminal(command.shellCommand)
+    }
+
+    /// Runs the Gradle `classes` task of the source set holding `sourceFile`, and launches
+    /// `configuration` once it succeeds. The Gradle console shows the build.
+    private func buildClassesThenLaunch(_ configuration: JavaRunConfiguration, sourceFile: String) {
+        guard let match = javaSupport.gradleModel?.sourceSet(containing: URL(fileURLWithPath: sourceFile)) else { return }
+        let taskName = match.sourceSet.name == "main" ? "classes" : "\(match.sourceSet.name)Classes"
+        let task = match.subproject.path == ":" ? taskName : "\(match.subproject.path):\(taskName)"
+        launchAfterClassesBuild = (configuration, task)
+        showGradleOutput()
+        // The run resets the console; the reason for it is added once it has.
+        javaSupport.runGradleTasks([task])
+    }
+
+    /// Called when a Gradle task run ends: launches the classpath configuration that was waiting
+    /// on the build, if the build succeeded.
+    private func continueAfterClassesBuild(tasks: [String], exitCode: Int32) {
+        // Only the run that was started for this launch counts; any other Gradle run just
+        // leaves the request waiting, and a new launch replaces it.
+        guard let pending = launchAfterClassesBuild, tasks == [pending.task] else { return }
+        launchAfterClassesBuild = nil
+        guard exitCode == 0 else {
+            reportRunProblem("Build failed, so “\(pending.configuration.displayName)” was not started. Errors are listed under Problems.")
+            return
+        }
+        launch(pending.configuration)
+    }
+
+    private func reportRunProblem(_ message: String) {
+        javaSupport.appendGradleConsoleNote(message)
+        showGradleOutput()
     }
 
     private func refreshLastRunConfiguration() {
         lastRunConfiguration = runConfigurationStore.last(forProject: project.rootURL)
+        runConfigurations = runConfigurationStore.configurations(forProject: project.rootURL)
+    }
+
+    // MARK: Run configuration picker
+
+    /// Makes `id` the selected configuration without running it.
+    func selectRunConfiguration(_ id: UUID) {
+        runConfigurationStore.select(id, forProject: project.rootURL)
+        refreshLastRunConfiguration()
+    }
+
+    /// Runs the configuration `id` from the picker, selecting it.
+    func runRunConfiguration(_ id: UUID) {
+        guard let configuration = runConfigurations.first(where: { $0.id == id }) else { return }
+        launch(configuration)
+    }
+
+    func editRunConfiguration(_ id: UUID) {
+        guard let configuration = runConfigurations.first(where: { $0.id == id }) else { return }
+        runConfigurationDraft = configuration
+    }
+
+    /// Opens the sheet on a new configuration: a classpath launch of the active file inside a Gradle
+    /// source set, else what Run would use for it, else a Gradle run of the root project.
+    func newRunConfiguration() {
+        var draft: JavaRunConfiguration?
+        if let file = javaRunFileURL, let source = openBufferText(for: file) {
+            draft = JavaRunConfiguration.makeClasspathLaunch(file: file, source: source, model: javaSupport.gradleModel)
+        }
+        draft = draft ?? JavaRunConfiguration.makeDefault(
+            file: javaRunFileURL, projectRoot: project.rootURL,
+            isGradleProject: javaSupport.isGradleProject, model: javaSupport.gradleModel
+        )
+        var configuration = draft ?? JavaRunConfiguration(target: .gradleRun(projectPath: ":"))
+        configuration.name = "New Configuration"
+        runConfigurationDraft = configuration
+    }
+
+    func duplicateRunConfiguration(_ id: UUID) {
+        runConfigurationStore.duplicate(id, forProject: project.rootURL)
+        refreshLastRunConfiguration()
+    }
+
+    func deleteRunConfiguration(_ id: UUID) {
+        runConfigurationStore.delete(id, forProject: project.rootURL)
+        refreshLastRunConfiguration()
     }
 
     /// Next to `session.json` and `gradle-trust.json`: launch settings shouldn't reset with a cache.

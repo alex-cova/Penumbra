@@ -342,6 +342,11 @@ final class IDEJavaSupport {
 
     /// Re-runs Gradle extraction for the current project root -- backs "Java: Reload Gradle
     /// Project". Re-asks for trust even if the user previously declined.
+    /// Adds a line to the Gradle console, for messages from the host (why a launch did not start).
+    func appendGradleConsoleNote(_ text: String) {
+        gradleConsole.appendNote(text)
+    }
+
     func reloadGradleProject() {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         gradleModelCache.invalidate(projectRoot: url)

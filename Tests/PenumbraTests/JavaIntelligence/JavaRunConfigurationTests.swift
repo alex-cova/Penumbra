@@ -102,7 +102,9 @@ final class JavaRunConfigurationTests: XCTestCase {
         let same = JavaRunConfiguration(target: .singleFile(path: "/tmp/A.java")).inheritingSettings(from: previous)
         XCTAssertEqual(same, previous)
         let other = JavaRunConfiguration(target: .singleFile(path: "/tmp/B.java")).inheritingSettings(from: previous)
-        XCTAssertEqual(other, JavaRunConfiguration(target: .singleFile(path: "/tmp/B.java")))
+        XCTAssertEqual(other.target, .singleFile(path: "/tmp/B.java"))
+        XCTAssertEqual(other.programArguments, "")
+        XCTAssertTrue(other.environment.isEmpty)
     }
 
     func testDisplayNamesAndVMArgumentSupport() {
