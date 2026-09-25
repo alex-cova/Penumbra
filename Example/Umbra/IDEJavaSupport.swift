@@ -77,6 +77,8 @@ final class IDEJavaSupport {
     let formattingProvider = JavaFormattingProvider()
     /// Breadcrumbs like `Outer › Inner<T> › put(String, int)` for Java files.
     let breadcrumbProvider = JavaBreadcrumbProvider()
+    /// Structure tool window: the type at the caret and its members.
+    let structureProvider = JavaStructureProvider()
     /// `javac`-backed diagnostics for open Java files. Idle until ``refreshCompilerDiagnostics()``
     /// finds a project state it may check: a plain folder, or a Gradle project that has synced.
     let compilerDiagnostics = JavaCompilerDiagnosticsService()

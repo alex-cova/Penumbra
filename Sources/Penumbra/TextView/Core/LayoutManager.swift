@@ -218,6 +218,8 @@ final class LayoutManager {
         didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
     }
     let methodSeparatorView = MethodSeparatorView()
+    /// Measured width of ``pageGuideColumn`` characters; used to cap method separators at the margin.
+    var pageGuideColumnOffset: CGFloat = 0
     var showMethodSeparators = false {
         didSet {
             if showMethodSeparators != oldValue {
@@ -1010,6 +1012,7 @@ extension LayoutManager {
         if showMethodSeparators {
             let separatorWidth = max(contentSize.width, scrollViewWidth)
             methodSeparatorView.textContainerInsetTop = textContainerInset.top
+            methodSeparatorView.lineMaxX = gutterWidthService.gutterWidth + textContainerInset.left + pageGuideColumnOffset
             methodSeparatorView.frame = CGRect(x: 0, y: 0, width: separatorWidth, height: contentSize.height)
         }
         // The canvas was positioned before line heights settled. Replay the underlay so method

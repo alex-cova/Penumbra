@@ -445,7 +445,7 @@ private struct IDEFirstRunKeymapChoiceRow: View {
 
     private var caption: String {
         switch preset {
-        case .sublime: "Default. Go to File is ⌘P."
+        case .sublime: "Default. Go to File is ⌘P or double ⇧."
         case .default_: "Penumbra's original shortcut set."
         case .intelliJ: "Search Everywhere, expand selection, Go to Definition."
         }

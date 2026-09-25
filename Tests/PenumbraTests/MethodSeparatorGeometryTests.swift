@@ -28,6 +28,17 @@ final class MethodSeparatorGeometryTests: XCTestCase {
         XCTAssertLessThan(frames[0].minY, 80)
     }
 
+    func testWidthCapsAtRightMargin() {
+        let frames = MethodSeparatorGeometry.frames(
+            lineYPositions: [40],
+            insetTop: 0,
+            width: 80,
+            thickness: 1,
+            clip: CGRect(x: 0, y: 0, width: 240, height: 400)
+        )
+        XCTAssertEqual(frames, [CGRect(x: 0, y: 40, width: 80, height: 1)])
+    }
+
     func testZeroWidthOrThicknessProducesNoLines() {
         let clip = CGRect(x: 0, y: 0, width: 100, height: 100)
         XCTAssertTrue(

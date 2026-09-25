@@ -31,9 +31,7 @@ struct IDEStatusBarPanel: View {
         .frame(height: IDEAppearance.Spacing.statusBarHeight)
         .background(IDEAppearance.ColorToken.statusBar)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
+            IDEToolWindowFrameBorder()
         }
         .focusable(false)
     }
@@ -140,11 +138,12 @@ struct IDEStatusBarPanel: View {
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                                .frame(maxWidth: 280, alignment: .leading)
                         }
                     }
                 }
                 .buttonStyle(.borderless)
+                // Takes whatever the row has left, so the rest of the status bar never truncates.
+                .layoutPriority(-1)
                 .help("Show Gradle output")
                 .accessibilityLabel("Gradle sync in progress")
                 .accessibilityHint(message)
@@ -164,7 +163,7 @@ struct IDEStatusBarPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 280, alignment: .leading)
+                    .layoutPriority(-1)
             }
         }
     }

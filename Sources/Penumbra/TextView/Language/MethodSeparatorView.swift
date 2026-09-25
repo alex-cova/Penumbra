@@ -4,7 +4,8 @@ import Foundation
 /// Draws a thin horizontal rule above each method/function declaration.
 ///
 /// The rule is the same hairline as the right margin (`PageGuideView`): one device pixel,
-/// `pageGuideHairlineColor` at `pageGuideHairlineOpacity`. Like `FoldRibbonView`, this view spans
+/// `pageGuideHairlineColor` at `pageGuideHairlineOpacity`, ending at ``lineMaxX`` so it never
+/// crosses the margin guide. Like `FoldRibbonView`, this view spans
 /// the document and scrolls with it, so Core Graphics drawing is scoped to `dirtyRect`. When Metal
 /// is the paint backend the opaque canvas covers this view; `LayoutManager` replays
 /// ``separatorLineFrames(clip:)`` into the canvas underlay, the same path as the page-guide hairline.
@@ -27,6 +28,11 @@ final class MethodSeparatorView: UIView {
     }
     var separatorWidth: CGFloat = 1 {
         didSet { if separatorWidth != oldValue { needsDisplay = true } }
+    }
+    /// Content-space x where the hairline ends (aligned with the right-margin guide). `nil` spans
+    /// the full view width.
+    var lineMaxX: CGFloat? {
+        didSet { if lineMaxX != oldValue { needsDisplay = true } }
     }
 
     override init(frame: CGRect) {
@@ -79,10 +85,16 @@ final class MethodSeparatorView: UIView {
             }
             return lineManager.yPosition(ofRow: row)
         }
+        let lineWidth: CGFloat
+        if let lineMaxX {
+            lineWidth = max(0, min(lineMaxX, bounds.width))
+        } else {
+            lineWidth = bounds.width
+        }
         return MethodSeparatorGeometry.frames(
             lineYPositions: lineYPositions,
             insetTop: textContainerInsetTop,
-            width: bounds.width,
+            width: lineWidth,
             thickness: separatorWidth,
             clip: clip
         )

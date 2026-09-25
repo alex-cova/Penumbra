@@ -6,6 +6,10 @@ import SwiftUI
 /// Restore `.regular` before activation, then key the windows after SwiftUI creates them.
 @MainActor
 public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
+    /// SwiftUI's `NSApplicationDelegateAdaptor` installs an internal `NSApp.delegate` wrapper,
+    /// so `NSApp.delegate as? IDEAppDelegate` always fails. The adaptor-owned instance is kept here.
+    static weak var shared: IDEAppDelegate?
+
     weak var workspace: IDEWorkspace?
     /// Called when the dock icon is clicked and every window has been closed. Wired from
     /// `IDEWindowReopenBridge` so SwiftUI can open a fresh `WindowGroup` window.
@@ -13,6 +17,7 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
 
     public override init() {
         super.init()
+        Self.shared = self
     }
 
     public func applicationWillFinishLaunching(_ notification: Notification) {
@@ -29,7 +34,14 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            onReopenWithoutVisibleWindows?()
+            let hidden = Self.restorableWindows().filter { !$0.isVisible }
+            if hidden.isEmpty {
+                onReopenWithoutVisibleWindows?()
+            } else {
+                for window in hidden {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
         }
         Self.activateAndKeyWindows()
         return true
@@ -39,9 +51,13 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         workspace?.saveSession()
     }
 
+    private static func restorableWindows() -> [NSWindow] {
+        NSApp.windows.filter { $0.canBecomeKey && $0.level == .normal }
+    }
+
     private static func activateAndKeyWindows() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.canBecomeKey && window.isVisible {
+        for window in restorableWindows() {
             window.makeKeyAndOrderFront(nil)
         }
     }
@@ -91,7 +107,7 @@ struct IDEWindowReopenBridge: View {
     }
 
     private func register() {
-        guard let delegate = NSApp.delegate as? IDEAppDelegate else { return }
+        guard let delegate = IDEAppDelegate.shared else { return }
         delegate.onReopenWithoutVisibleWindows = {
             openWindow(id: "main")
         }

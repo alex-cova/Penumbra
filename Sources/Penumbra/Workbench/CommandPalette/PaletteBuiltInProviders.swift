@@ -6,10 +6,13 @@ public struct PaletteFileEntry: Sendable, Hashable {
     public let url: URL
     /// Optional display name override (defaults to the last path component).
     public let displayName: String?
+    /// Whether the file has unsaved edits in an open editor (`⌘E` "edited only" filter).
+    public let isEdited: Bool
 
-    public init(url: URL, displayName: String? = nil) {
+    public init(url: URL, displayName: String? = nil, isEdited: Bool = false) {
         self.url = url
         self.displayName = displayName
+        self.isEdited = isEdited
     }
 }
 
@@ -196,38 +199,77 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
     public let sectionTitle = "Recent Files"
     public let sectionOrder = 5
     private let entries: @MainActor @Sendable () -> [PaletteFileEntry]
+    private let root: @MainActor @Sendable () -> URL?
+    private let indexProvider: (@MainActor @Sendable () -> PaletteFileIndex?)?
+    private let editedOnly: @MainActor @Sendable () -> Bool
     private let onOpen: @MainActor @Sendable (URL) -> Void
+    private let onOpenInSplit: (@MainActor @Sendable (URL) -> Void)?
 
     public init(
         entries: @escaping @MainActor @Sendable () -> [PaletteFileEntry],
-        onOpen: @escaping @MainActor @Sendable (URL) -> Void
+        root: @escaping @MainActor @Sendable () -> URL? = { nil },
+        index: (@MainActor @Sendable () -> PaletteFileIndex?)? = nil,
+        editedOnly: @escaping @MainActor @Sendable () -> Bool = { false },
+        onOpen: @escaping @MainActor @Sendable (URL) -> Void,
+        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil
     ) {
         self.entries = entries
+        self.root = root
+        self.indexProvider = index
+        self.editedOnly = editedOnly
         self.onOpen = onOpen
+        self.onOpenInSplit = onOpenInSplit
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
         let entriesProvider = self.entries
-        let all = await MainActor.run { entriesProvider() }
+        let rootProvider = self.root
+        let indexLookup = self.indexProvider
+        let editedOnlyProvider = self.editedOnly
+        let all = await MainActor.run {
+            let entries = entriesProvider()
+            return editedOnlyProvider() ? entries.filter(\.isEdited) : entries
+        }
         let ranked = FuzzyMatcher.rankedWithMatches(
             query: query,
             items: all,
             key: { $0.displayName ?? $0.url.lastPathComponent },
             limit: limit
         )
-        return ranked.enumerated().map { index, entry in
+        let (rootURL, index) = await MainActor.run { (rootProvider(), indexLookup?()) }
+        return ranked.enumerated().map { rank, entry in
             let onOpen = self.onOpen
+            let onOpenInSplit = self.onOpenInSplit
             let url = entry.item.url
+            let indexed = index?.entry(for: url)
+            var alternate: (@MainActor @Sendable () -> Void)?
+            if let onOpenInSplit {
+                alternate = { onOpenInSplit(url) }
+            }
             return PaletteItem(
                 id: "recent:\(url.path)",
                 title: entry.item.displayName ?? url.lastPathComponent,
-                subtitle: url.deletingLastPathComponent().lastPathComponent,
+                subtitle: FilesPaletteProvider.relativeDirectory(of: url, root: rootURL),
                 sectionTitle: sectionTitle,
                 matchedIndices: entry.match.matchedIndices,
-                score: limit - index,
-                action: { onOpen(url) }
+                score: limit - rank,
+                action: { onOpen(url) },
+                icon: indexed?.icon,
+                location: indexed?.location,
+                trailing: indexed?.module,
+                footer: Self.displayPath(url),
+                alternateAction: alternate
             )
         }
+    }
+
+    static func displayPath(_ url: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = url.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 }
 

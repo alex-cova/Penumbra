@@ -11,23 +11,10 @@ struct IDEToolbarPanel: View {
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            IDEToolbarSidebarToggle(
-                isSidebarVisible: workspace.isSidebarVisible,
-                action: workspace.toggleSidebar
-            )
-
-            if workspace.javaSupport.isGradleProject {
-                IDEToolbarGradleSidebarToggle(
-                    isSidebarVisible: workspace.isGradleSidebarVisible,
-                    action: workspace.toggleGradleSidebar
-                )
-            }
-
             IDEToolbarBreadcrumb(
                 headerContext: workspace.headerContext,
                 onSelect: workspace.selectBreadcrumb
             )
-            .padding(.leading, IDEAppearance.Spacing.xs)
 
             Spacer(minLength: IDEAppearance.Spacing.sm)
 
@@ -36,6 +23,7 @@ struct IDEToolbarPanel: View {
             }
 
             IDEToolbarActionCluster(
+                showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
                 showsCloseGroup: workspace.tabsByPane.count > 1,
                 isMarkdownFile: workspace.statusLanguage == "markdown",
                 isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
@@ -45,14 +33,12 @@ struct IDEToolbarPanel: View {
                 javaRunHelp: workspace.javaRunHelp,
                 isHTTPFile: workspace.statusLanguage == "http",
                 isHTTPSendable: workspace.httpFileCanSend,
-                isTerminalVisible: workspace.isTerminalVisible,
                 showQuickOpen: workspace.showQuickOpen,
                 toggleMarkdownPreview: workspace.toggleMarkdownPreview,
                 buildGradle: workspace.buildGradleProject,
                 runJava: workspace.runActiveJava,
                 runJavaTests: workspace.runActiveJavaTests,
                 sendHTTPRequest: workspace.sendActiveHTTPRequest,
-                toggleTerminal: workspace.toggleTerminal,
                 exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
                 closeActivePane: workspace.closeActivePane
             )
@@ -62,39 +48,9 @@ struct IDEToolbarPanel: View {
         .frame(maxWidth: .infinity)
         .background(IDEAppearance.ColorToken.toolbar)
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
+            IDEToolWindowFrameBorder()
         }
         .focusable(false)
-    }
-}
-
-private struct IDEToolbarSidebarToggle: View {
-    let isSidebarVisible: Bool
-    let action: () -> Void
-
-    var body: some View {
-        IDEToolbarIconButton(
-            systemName: "sidebar.leading",
-            isActive: isSidebarVisible,
-            help: isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
-            action: action
-        )
-    }
-}
-
-private struct IDEToolbarGradleSidebarToggle: View {
-    let isSidebarVisible: Bool
-    let action: () -> Void
-
-    var body: some View {
-        IDEToolbarIconButton(
-            systemName: "sidebar.trailing",
-            isActive: isSidebarVisible,
-            help: isSidebarVisible ? "Hide Gradle Sidebar" : "Show Gradle Sidebar",
-            action: action
-        )
     }
 }
 
@@ -191,6 +147,7 @@ private struct IDEToolbarGitBranch: View {
 }
 
 private struct IDEToolbarActionCluster: View {
+    let showsGoToFile: Bool
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
@@ -200,31 +157,25 @@ private struct IDEToolbarActionCluster: View {
     let javaRunHelp: String
     let isHTTPFile: Bool
     let isHTTPSendable: Bool
-    let isTerminalVisible: Bool
     let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
     let runJavaTests: () -> Void
     let sendHTTPRequest: () -> Void
-    let toggleTerminal: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
     let closeActivePane: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
-            IDEToolbarIconButton(
-                systemName: "magnifyingglass",
-                help: "Go to File",
-                action: showQuickOpen
-            )
-            IDEToolbarIconButton(
-                systemName: "terminal",
-                isActive: isTerminalVisible,
-                help: "Toggle Terminal",
-                action: toggleTerminal
-            )
-            
+            if showsGoToFile {
+                IDEToolbarIconButton(
+                    systemName: "magnifyingglass",
+                    help: "Go to File",
+                    action: showQuickOpen
+                )
+            }
+
             if showsCloseGroup {
                 IDEToolbarIconButton(
                     systemName: "rectangle.slash",

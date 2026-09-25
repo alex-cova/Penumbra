@@ -27,6 +27,16 @@ Requires macOS 14+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 
 When a feature cannot be implemented in an App Store–safe way inside `Penumbra`, keep it in the host app layer (`Example/Umbra`) or behind an explicit, user-controlled capability.
 
+## Performance rules
+
+**Read `docs/PERFORMANCE_RULES.md` before changing anything on the typing, layout, scrolling, rendering, selection, folding, highlighting or `LineManager` paths.** The short version:
+
+- Work per keystroke, layout pass or scrolled frame is bounded by visible rows or edit size, never by document size.
+- Read values with `lineID(atRow:)` / `lineInfo(atRow:)` / `location(ofRow:)`, not `line(atRow:)` handles; never `textView.text` on a hot path.
+- Intelligence (completion, diagnostics, parsing, indexing) is scheduled from a keystroke, never awaited on it, and stale results are dropped.
+- Caches stay bounded and are invalidated by row; moved lines keep their glyphs.
+- Measure with `swift run -c release PerfHarness enter-session synthetic --lines 20000` (and 120000) on the parent commit and on the change; never draw conclusions from Debug timings.
+
 ## Features
 
 ### Penumbra text engine (`TextView`)

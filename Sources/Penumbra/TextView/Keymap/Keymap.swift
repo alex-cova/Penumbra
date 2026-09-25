@@ -92,8 +92,7 @@ public extension Keymap {
     static let intelliJ: Keymap = {
         var map = Keymap.default_
 
-        // Search Everywhere is double-Shift, handled out of band by DoubleModifierDetector,
-        // but a discoverable ⌘⇧A / etc. still routes through the keymap.
+        // Go to File is also double-Shift, handled out of band by DoubleModifierDetector.
         map.bind(KeyStroke(KeyChord("a", [.command, .shift])), to: .findAction)
         map.bind(KeyStroke(KeyChord("o", [.command, .shift])), to: .quickOpenFile)
         map.bind(KeyStroke(KeyChord("e", .command)), to: .recentFiles)

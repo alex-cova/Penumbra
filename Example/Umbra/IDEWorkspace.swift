@@ -88,6 +88,8 @@ public final class IDEWorkspace {
     let problems = IDEProblemsStore()
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
+    /// The Structure tool window's member tree for the Java type at the caret.
+    let javaStructure = IDEJavaStructureStore()
     let callHierarchy = IDECallHierarchyStore()
     let debugSession = JavaDebugSession()
     /// The Usages tab's content (Find Usages results); empty until a search runs.
@@ -111,6 +113,8 @@ public final class IDEWorkspace {
     }
 
     var isSidebarVisible = false
+    var isStructureSidebarVisible = false
+    var structureSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var isGradleSidebarVisible = true
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
@@ -135,6 +139,7 @@ public final class IDEWorkspace {
     private var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
+    @ObservationIgnored private var javaStructureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     private(set) var lastRunConfiguration: JavaRunConfiguration?
@@ -273,9 +278,12 @@ public final class IDEWorkspace {
         guard let document = workbench.activePane.selectedDocument else { return false }
         return !IDELanguageSupport.isLanguageLocked(for: document)
     }
-    /// What `IDERootView` should actually render — just the user's sidebar toggle. The Explorer
-    /// stays visible even with no folder or documents open, showing its own empty state.
-    var showsSidebar: Bool { isSidebarVisible }
+    /// What `IDERootView` should actually render: the user's sidebar toggle, once a folder or a
+    /// document is open (the stripe offers no Explorer button before that).
+    var showsSidebar: Bool { isSidebarVisible && (hasOpenProject || hasOpenDocuments) }
+    /// Left-hand Structure panel — members of the Java type at the caret.
+    var showsJavaStructureButton: Bool { statusLanguage == "java" && (hasOpenProject || hasOpenDocuments) }
+    var showsStructureSidebar: Bool { isStructureSidebarVisible && showsJavaStructureButton }
     /// Right-hand Gradle panel — modules and dependencies — only for Gradle project folders.
     var showsGradleSidebar: Bool { isGradleSidebarVisible && javaSupport.isGradleProject }
 
@@ -405,7 +413,7 @@ public final class IDEWorkspace {
             await intelligenceServices.javaSupport.connect(to: workspaceBridge.workspace)
         }
 
-        (NSApp.delegate as? IDEAppDelegate)?.workspace = self
+        IDEAppDelegate.shared?.workspace = self
     }
 
     // MARK: - Commands
@@ -502,21 +510,21 @@ public final class IDEWorkspace {
         saveSession()
     }
 
+    /// Returns whether the main window may close. Asks when open editors have unsaved changes.
+    func confirmCloseWindow() -> Bool {
+        confirmDiscardingUnsavedChanges(
+            messageText: "Close this window?",
+            confirmButtonTitle: "Close Window"
+        )
+    }
+
     /// Closes the open project folder, all editor tabs, and project-scoped panels.
     public func closeFolder() {
         guard project.rootURL != nil else { return }
-
-        let dirtyCount = workbench.allDocuments().filter(\.isDirty).count
-        if dirtyCount > 0 {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Close the open folder?"
-            alert.informativeText =
-                "\(dirtyCount) open editor\(dirtyCount == 1 ? " has" : "s have") unsaved changes that will be lost."
-            alert.addButton(withTitle: "Close Folder")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
+        guard confirmDiscardingUnsavedChanges(
+            messageText: "Close the open folder?",
+            confirmButtonTitle: "Close Folder"
+        ) else { return }
 
         closeAllOpenDocuments()
         dismissProjectChrome()
@@ -1764,10 +1772,68 @@ public final class IDEWorkspace {
         focusActiveEditor()
     }
 
+    public func toggleStructureSidebar() {
+        isStructureSidebarVisible.toggle()
+        focusActiveEditor()
+        if isStructureSidebarVisible {
+            refreshJavaStructure()
+        }
+        saveSession()
+    }
+
     public func toggleGradleSidebar() {
         isGradleSidebarVisible.toggle()
         focusActiveEditor()
         saveSession()
+    }
+
+    func toggleFindInFiles() {
+        if isFindInFilesVisible {
+            hideFindInFiles()
+        } else {
+            showFindInFiles()
+        }
+    }
+
+    /// Whether a tool-window stripe button for `tab` should read as open: the bottom panel is
+    /// showing and that tab is the selected one.
+    func isBottomToolWindowOpen(_ tab: IDEBottomPanelTab) -> Bool {
+        isTerminalVisible && selectedBottomTab == tab
+    }
+
+    /// Tool-window stripe behavior (IntelliJ): clicking the open tab's button hides the bottom
+    /// panel, clicking any other one shows the panel on that tab.
+    func toggleBottomToolWindow(_ tab: IDEBottomPanelTab) {
+        if isBottomToolWindowOpen(tab) {
+            hideTerminal()
+            return
+        }
+        switch tab {
+        case .terminal:
+            if let id = selectedTerminalTabID ?? terminalTabs.first?.id {
+                selectedBottomTab = .terminal
+                selectTerminalTab(id)
+                if !isTerminalVisible {
+                    isTerminalVisible = true
+                    saveSession()
+                }
+            } else {
+                selectedBottomTab = .terminal
+                addTerminalTab()
+            }
+        case .sourceControl:
+            selectSourceControlTab()
+        case .gradle:
+            selectGradleConsoleTab()
+        case .http:
+            selectHTTPConsoleTab()
+        default:
+            selectedBottomTab = tab
+            if !isTerminalVisible {
+                isTerminalVisible = true
+                saveSession()
+            }
+        }
     }
 
     /// Reveals a folder or file in the left Explorer, expanding ancestors as needed.
@@ -2037,6 +2103,7 @@ public final class IDEWorkspace {
 
     func makeSession(
         sidebarWidth: Double,
+        structureSidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> AppSession {
@@ -2048,6 +2115,8 @@ public final class IDEWorkspace {
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
+            structureSidebarWidth: structureSidebarWidth ?? self.structureSidebarWidth,
+            isStructureSidebarVisible: isStructureSidebarVisible,
             gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
             isGradleSidebarVisible: isGradleSidebarVisible,
             isTerminalVisible: isTerminalVisible,
@@ -2059,11 +2128,13 @@ public final class IDEWorkspace {
 
     func saveSession(
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
+        structureSidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
         IDESessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
+            structureSidebarWidth: structureSidebarWidth,
             gradleSidebarWidth: gradleSidebarWidth,
             terminalHeight: terminalHeight
         ))
@@ -2091,6 +2162,8 @@ public final class IDEWorkspace {
         recentProjects = session.recentProjects
         // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
+        structureSidebarWidth = session.structureSidebarWidth
+        isStructureSidebarVisible = session.isStructureSidebarVisible
         gradleSidebarWidth = session.gradleSidebarWidth
         isGradleSidebarVisible = session.isGradleSidebarVisible
         isTerminalVisible = session.isTerminalVisible
@@ -2616,7 +2689,78 @@ public final class IDEWorkspace {
     private func configurePalette(_ palette: CommandPaletteController) {
         palette.recentFileEntriesProvider = { [weak self] in
             guard let self else { return [] }
-            return self.recentFiles.map { PaletteFileEntry(url: $0, displayName: $0.lastPathComponent) }
+            var seen = Set<URL>()
+            let open = self.workbench.recentDocuments(limit: 30).compactMap { document -> PaletteFileEntry? in
+                guard let url = document.url else { return nil }
+                seen.insert(url)
+                return PaletteFileEntry(
+                    url: url,
+                    displayName: url.lastPathComponent,
+                    isEdited: document.isDirty
+                )
+            }
+            let closed = self.recentFiles.compactMap { url -> PaletteFileEntry? in
+                guard seen.insert(url).inserted else { return nil }
+                return PaletteFileEntry(url: url, displayName: url.lastPathComponent)
+            }
+            return open + closed
+        }
+        palette.navigationDestinationsProvider = { [weak self] in
+            guard let self else { return [] }
+            var destinations: [RecentFilesDestination] = [
+                RecentFilesDestination(
+                    id: "project",
+                    title: "Project",
+                    shortcut: "⌘0",
+                    icon: PaletteIcon(systemName: "folder", tint: .blue),
+                    action: { [weak self] in self?.toggleSidebar() }
+                ),
+                RecentFilesDestination(
+                    id: "terminal",
+                    title: "Terminal",
+                    shortcut: "⌃`",
+                    icon: PaletteIcon(systemName: "terminal", tint: .secondary),
+                    action: { [weak self] in self?.toggleTerminal() }
+                ),
+                RecentFilesDestination(
+                    id: "problems",
+                    title: "Problems",
+                    shortcut: "⌘⇧M",
+                    icon: PaletteIcon(systemName: "exclamationmark.triangle", tint: .orange),
+                    action: { [weak self] in self?.toggleProblems() }
+                )
+            ]
+            if self.showsSourceControlTab {
+                destinations.append(
+                    RecentFilesDestination(
+                        id: "sourceControl",
+                        title: "Source Control",
+                        shortcut: "⌘⌃G",
+                        icon: PaletteIcon(systemName: "arrow.triangle.branch", tint: .green),
+                        action: { [weak self] in self?.toggleSourceControl() }
+                    )
+                )
+            }
+            if self.javaSupport.isGradleProject {
+                destinations.append(
+                    RecentFilesDestination(
+                        id: "gradle",
+                        title: "Gradle",
+                        icon: PaletteIcon(systemName: "hammer", tint: .purple),
+                        action: { [weak self] in self?.toggleGradleSidebar() }
+                    )
+                )
+            }
+            destinations.append(
+                RecentFilesDestination(
+                    id: "goToFile",
+                    title: "Go to File",
+                    shortcut: "⌘P",
+                    icon: PaletteIcon(systemName: "doc.text.magnifyingglass", tint: .accent),
+                    action: { [weak self] in self?.showQuickOpen() }
+                )
+            )
+            return destinations
         }
         palette.fileIndex = fileIndexer.index
         fileIndexer.onIndexChanged = { [weak palette] index in
@@ -2667,6 +2811,9 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.splitDown() }),
             EditorCommand(id: "app.toggleSidebar", title: "Toggle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleSidebar() }),
+            EditorCommand(id: "app.toggleStructure", title: "Toggle Structure", group: "View",
+                          shortcutDisplay: "⌘7",
+                          action: { [weak self] in self?.toggleStructureSidebar() }),
             EditorCommand(id: "app.toggleGradleSidebar", title: "Toggle Gradle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleGradleSidebar() }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
@@ -2786,6 +2933,7 @@ public final class IDEWorkspace {
         adapter.refreshCachedDocuments()
         host.intelligenceController?.refreshDiagnostics()
         host.intelligenceController?.refreshBreadcrumbs()
+        refreshJavaStructure()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
@@ -2861,6 +3009,34 @@ public final class IDEWorkspace {
             revealInSidebar(url)
         case .symbol(let range):
             jumpToSymbol(range)
+        }
+    }
+
+    func selectStructureNode(_ node: JavaStructureNode) {
+        let textView = host(for: workbench.activePaneID).textView
+        jumpToSymbol(node.nameTextRange(in: textView.text))
+    }
+
+    func refreshJavaStructure() {
+        javaStructureRefreshTask?.cancel()
+        guard statusLanguage == "java" else {
+            if showsStructureSidebar {
+                javaStructure.show(message: "Open a Java file")
+            }
+            return
+        }
+        let textView = host(for: workbench.activePaneID).textView
+        let text = textView.text
+        let caret = textView.selectedRange.location
+        let provider = javaSupport.structureProvider
+        javaStructureRefreshTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            guard let root = await provider.structure(for: text, atUTF16Offset: caret) else {
+                self.javaStructure.show(message: "No type at the caret")
+                return
+            }
+            let selected = await provider.selectedNode(in: root, text: text, atUTF16Offset: caret)
+            self.javaStructure.show(root: root, selectedID: selected?.id)
         }
     }
 
@@ -3478,6 +3654,22 @@ public final class IDEWorkspace {
         }
     }
 
+    private func confirmDiscardingUnsavedChanges(
+        messageText: String,
+        confirmButtonTitle: String
+    ) -> Bool {
+        let dirtyCount = workbench.allDocuments().filter(\.isDirty).count
+        guard dirtyCount > 0 else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = messageText
+        alert.informativeText =
+            "\(dirtyCount) open editor\(dirtyCount == 1 ? " has" : "s have") unsaved changes that will be lost."
+        alert.addButton(withTitle: confirmButtonTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     private func presentError(_ error: Error) {
         NSAlert(error: error).runModal()
     }
@@ -3606,6 +3798,7 @@ extension IDEWorkspace: IDEWorkspaceEditHost {
 extension IDEWorkspace: TextViewDelegate {
     public func textViewDidChangeSelection(_ textView: TextView) {
         updateStatus(from: textView)
+        refreshJavaStructure()
     }
 
     public func textViewDidChange(_ textView: TextView) {
@@ -3613,6 +3806,7 @@ extension IDEWorkspace: TextViewDelegate {
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
+        refreshJavaStructure()
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.
         noteActiveDocumentEdited()

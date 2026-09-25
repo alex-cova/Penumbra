@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
+    @State private var structureSidebarWidth = IDESessionStore.load().structureSidebarWidth
     @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
     @State private var didBootstrap = false
 
@@ -19,6 +20,12 @@ public struct IDERootView: View {
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
 
             HStack(spacing: 0) {
+                if IDEToolWindowStripe.hasItems(edge: .leading, workspace: workspace) {
+                    IDEToolWindowStripe(edge: .leading)
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                }
+
                 if workspace.showsSidebar {
                     IDESidebarPanel()
                         .frame(width: sidebarWidth)
@@ -26,6 +33,16 @@ public struct IDERootView: View {
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
 
                     IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
+                        .opacity(workspace.chromeOpacity)
+                }
+
+                if workspace.showsStructureSidebar {
+                    IDEJavaStructurePanel()
+                        .frame(width: structureSidebarWidth)
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+
+                    IDESidebarResizeHandle(width: $structureSidebarWidth, edge: .leading)
                         .opacity(workspace.chromeOpacity)
                 }
 
@@ -80,6 +97,12 @@ public struct IDERootView: View {
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
+
+                if IDEToolWindowStripe.hasItems(edge: .trailing, workspace: workspace) {
+                    IDEToolWindowStripe(edge: .trailing)
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                }
             }
 
             IDEStatusBarPanel()
@@ -87,7 +110,7 @@ public struct IDERootView: View {
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
         }
         .background(IDEAppearance.ColorToken.workbench)
-        .background(IDEWindowConfigurator(title: workspace.windowTitle))
+        .background(IDEWindowConfigurator(title: workspace.windowTitle, workspace: workspace))
         .overlay {
             IDEPaletteOverlayHost(workspace: workspace)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -124,15 +147,20 @@ public struct IDERootView: View {
             workspace.focusActiveEditor()
         }
         .onChange(of: sidebarWidth) { _, newWidth in
-            workspace.saveSession(sidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
+            workspace.saveSession(sidebarWidth: newWidth, structureSidebarWidth: structureSidebarWidth, gradleSidebarWidth: gradleSidebarWidth)
+        }
+        .onChange(of: structureSidebarWidth) { _, newWidth in
+            workspace.structureSidebarWidth = newWidth
+            workspace.saveSession(sidebarWidth: sidebarWidth, structureSidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
         }
         .onChange(of: gradleSidebarWidth) { _, newWidth in
             workspace.gradleSidebarWidth = newWidth
-            workspace.saveSession(sidebarWidth: sidebarWidth, gradleSidebarWidth: newWidth)
+            workspace.saveSession(sidebarWidth: sidebarWidth, structureSidebarWidth: structureSidebarWidth, gradleSidebarWidth: newWidth)
         }
         .onChange(of: workspace.terminalHeight) { _, newHeight in
             workspace.saveSession(
                 sidebarWidth: sidebarWidth,
+                structureSidebarWidth: structureSidebarWidth,
                 gradleSidebarWidth: gradleSidebarWidth,
                 terminalHeight: newHeight
             )
@@ -275,21 +303,40 @@ private struct IDESidebarResizeHandle: View {
 /// Configures the SwiftUI window for a hidden, movable titlebar without a hosting view controller.
 private struct IDEWindowConfigurator: NSViewRepresentable {
     let title: String
+    let workspace: IDEWorkspace
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(workspace: workspace)
+    }
 
     func makeNSView(context: Context) -> IDEWindowConfiguratorView {
         let view = IDEWindowConfiguratorView()
         view.title = title
+        view.closeGuard = context.coordinator.closeGuard
         return view
     }
 
     func updateNSView(_ view: IDEWindowConfiguratorView, context: Context) {
         view.title = title
+        view.closeGuard = context.coordinator.closeGuard
         view.apply(activate: false)
+    }
+
+    @MainActor
+    final class Coordinator {
+        let closeGuard: IDEWindowCloseGuard
+
+        init(workspace: IDEWorkspace) {
+            let windowGuard = IDEWindowCloseGuard()
+            windowGuard.workspace = workspace
+            closeGuard = windowGuard
+        }
     }
 }
 
 final class IDEWindowConfiguratorView: NSView {
     var title: String = "Umbra"
+    var closeGuard: IDEWindowCloseGuard?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -304,12 +351,39 @@ final class IDEWindowConfiguratorView: NSView {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
+        if let closeGuard {
+            MainActor.assumeIsolated {
+                closeGuard.install(on: window)
+            }
+        }
         if activate {
             window.makeKeyAndOrderFront(nil)
         }
     }
 
     override var acceptsFirstResponder: Bool { false }
+}
+
+/// Intercepts the red close button so unsaved edits can be confirmed before the window closes.
+@MainActor
+final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
+    weak var workspace: IDEWorkspace?
+    private weak var upstream: NSWindowDelegate?
+
+    func install(on window: NSWindow) {
+        guard window.delegate !== self else { return }
+        upstream = window.delegate
+        window.delegate = self
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard workspace?.confirmCloseWindow() == true else { return false }
+        if let upstream, upstream.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
+            guard upstream.windowShouldClose?(sender) == true else { return false }
+        }
+        workspace?.saveSession()
+        return true
+    }
 }
 
 /// Full-window AppKit host for the command palette. Clicks pass through while the palette is

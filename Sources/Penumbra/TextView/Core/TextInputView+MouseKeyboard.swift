@@ -298,8 +298,8 @@ extension TextInputView {
     override func flagsChanged(with event: NSEvent) {
         onFlagsChanged?(event)
         if doubleShiftDetector.handleFlagsChanged(event) {
-            if performKeymapAction(.searchEverywhere, isEditable: delegate?.textInputViewIsEditable(self) ?? true)
-                || delegate?.textInputView(self, didRequestAction: .searchEverywhere) == true {
+            if performKeymapAction(.quickOpenFile, isEditable: delegate?.textInputViewIsEditable(self) ?? true)
+                || delegate?.textInputView(self, didRequestAction: .quickOpenFile) == true {
                 return
             }
         }

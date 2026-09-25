@@ -1216,6 +1216,7 @@ final class TextInputView: UIView, UITextInput {
         super.layoutSubviews()
         hasDeletedTextWithPendingLayoutSubviews = false
         // Metal consumes the page-guide geometry during the viewport layout below.
+        layoutManager.pageGuideColumnOffset = pageGuideController.columnOffset
         layoutPageGuideIfNeeded()
         layoutManager.layoutIfNeeded()
         layoutManager.layoutLineSelectionIfNeeded()

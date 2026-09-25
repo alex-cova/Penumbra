@@ -1,8 +1,8 @@
 @preconcurrency import AppKit
 
 /// Detects a "double tap" of a bare modifier key — two press-and-release cycles of the same
-/// modifier, with nothing else pressed in between, inside a short window. IntelliJ's Search
-/// Everywhere (double ⇧) is the motivating case.
+/// modifier, with nothing else pressed in between, inside a short window. Umbra's Go to File
+/// dialog (double ⇧) is the motivating case.
 ///
 /// Fed from `flagsChanged(with:)` for the modifier transitions and from `keyDown`/`mouseDown`
 /// (via ``noteOtherInput()``) so an intervening key press cancels a pending double tap.

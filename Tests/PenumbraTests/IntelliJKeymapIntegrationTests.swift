@@ -97,7 +97,7 @@ final class IntelliJKeymapIntegrationTests: XCTestCase {
         XCTAssertFalse(textView.isBlockSelectionActive, "A second ⌘⇧8 exits the mode")
     }
 
-    func testDoubleShiftInvokesSearchEverywhereAction() {
+    func testDoubleShiftInvokesGoToFileAction() {
         let textView = makeFocusedTextView(text: "x")
         textView.keymap = .intelliJ
         var received: EditorActionID?
@@ -108,7 +108,7 @@ final class IntelliJKeymapIntegrationTests: XCTestCase {
         send(flagsEvent(.shift), to: textView)
         send(flagsEvent([]), to: textView)
         send(flagsEvent(.shift), to: textView)
-        XCTAssertEqual(received, .searchEverywhere)
+        XCTAssertEqual(received, .quickOpenFile)
     }
 
     func testPerformDrivesActionsProgrammatically() {

@@ -6,6 +6,11 @@
 /// the same `NSView` + baked-`CGColor` idiom as `WorkspaceSearchPanelView`.
 @MainActor
 public final class CommandPaletteView: NSView {
+    public enum NavigationPane {
+        case destinations
+        case files
+    }
+
     public var onQueryChange: ((String) -> Void)?
     public var onMoveSelection: ((Int) -> Void)?
     public var onConfirm: (() -> Void)?
@@ -16,6 +21,11 @@ public final class CommandPaletteView: NSView {
     public var onActivateItemAtIndex: ((Int) -> Void)?
     public var onSelectTab: ((PaletteTab) -> Void)?
     public var onToggleNonProjectItems: ((Bool) -> Void)?
+    /// ←/→ between the Recent Files sidebar and file list. Returns whether it handled the key.
+    public var onNavigatePane: ((Int) -> Bool)?
+    /// ⌘E while Recent Files is open toggles the edited-only filter.
+    public var onToggleEditedOnly: (() -> Void)?
+    public var onEditedOnlyChanged: ((Bool) -> Void)?
 
     private enum Row {
         case header(String)
@@ -31,9 +41,20 @@ public final class CommandPaletteView: NSView {
     private let tabStack = NSStackView()
     private let tabContainer = NSView()
     private let nonProjectToggle = NSButton(checkboxWithTitle: "Include non-project items", target: nil, action: nil)
+    private let navigationHeader = NSView()
+    private let navigationTitle = NSTextField(labelWithString: "")
+    private let editedOnlyToggle = NSButton(checkboxWithTitle: "Show edited only", target: nil, action: nil)
+    private let destinationScrollView = NSScrollView()
+    private let destinationTableView = NSTableView()
+    private let sidebarSeparator = NSBox()
     private let footerLabel = NSTextField(labelWithString: "")
     private let splitButton = NSButton(title: "Open In Right Split", target: nil, action: nil)
     private var tabHeight: NSLayoutConstraint?
+    private var sidebarWidth: NSLayoutConstraint?
+    private var filesLeadingToSidebar: NSLayoutConstraint?
+    private var filesLeadingToEdge: NSLayoutConstraint?
+    private var queryTopToTabs: NSLayoutConstraint?
+    private var queryTopToRecentHeader: NSLayoutConstraint?
     private var tabButtons: [(tab: PaletteTab, button: PaletteTabButton)] = []
 
     private var rows: [Row] = []
@@ -43,6 +64,38 @@ public final class CommandPaletteView: NSView {
     private var rowItemIndices: [Int] = []
     /// Table row index of the currently selected item, or `nil`.
     private var selectedTableRow: Int?
+    private var selectedItemIndex = 0
+
+    public var showsNavigationChrome = false {
+        didSet { applyNavigationChrome() }
+    }
+
+    public var navigationChromeTitle = "" {
+        didSet { navigationTitle.stringValue = navigationChromeTitle }
+    }
+
+    public var showsEditedOnlyInChrome = false {
+        didSet { applyNavigationChrome() }
+    }
+
+    public var navigationDestinations: [RecentFilesDestination] = [] {
+        didSet {
+            destinationTableView.reloadData()
+            refreshNavigationChrome()
+        }
+    }
+
+    public var selectedDestinationIndex = 0 {
+        didSet { refreshNavigationChrome() }
+    }
+
+    public var navigationPane: NavigationPane = .files {
+        didSet { refreshNavigationChrome() }
+    }
+
+    public var editedOnly = false {
+        didSet { editedOnlyToggle.state = editedOnly ? .on : .off }
+    }
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -99,7 +152,7 @@ public final class CommandPaletteView: NSView {
         var itemRows: [Int] = []
         var rowItems: [Int] = []
         for section in sections {
-            if !section.title.isEmpty {
+            if !section.title.isEmpty, !showsNavigationChrome {
                 newRows.append(.header(section.title))
                 rowItems.append(-1)
             }
@@ -122,6 +175,12 @@ public final class CommandPaletteView: NSView {
     }
 
     private func applySelection(itemIndex: Int) {
+        selectedItemIndex = itemIndex
+        if navigationPane == .destinations {
+            tableView.deselectAll(nil)
+            refreshFooter()
+            return
+        }
         if itemRowIndices.isEmpty {
             selectedTableRow = nil
             tableView.deselectAll(nil)
@@ -133,7 +192,31 @@ public final class CommandPaletteView: NSView {
             // Keep the section header visible when the first item of a section is selected.
             tableView.scrollRowToVisible(clamped == 0 ? 0 : row)
         }
+        destinationTableView.deselectAll(nil)
         refreshFooter()
+    }
+
+    public func refreshNavigationChrome() {
+        guard showsNavigationChrome else { return }
+        switch navigationPane {
+        case .destinations:
+            tableView.deselectAll(nil)
+            guard navigationDestinations.indices.contains(selectedDestinationIndex) else {
+                destinationTableView.deselectAll(nil)
+                refreshFooter()
+                return
+            }
+            destinationTableView.selectRowIndexes(
+                IndexSet(integer: selectedDestinationIndex),
+                byExtendingSelection: false
+            )
+            destinationTableView.scrollRowToVisible(selectedDestinationIndex)
+            footerLabel.stringValue = navigationDestinations[selectedDestinationIndex].title
+            splitButton.isHidden = true
+        case .files:
+            destinationTableView.deselectAll(nil)
+            applySelection(itemIndex: selectedItemIndex)
+        }
     }
 
     private func refreshFooter() {
@@ -200,6 +283,20 @@ public final class CommandPaletteView: NSView {
         nonProjectToggle.translatesAutoresizingMaskIntoConstraints = false
         tabContainer.addSubview(nonProjectToggle)
 
+        navigationHeader.translatesAutoresizingMaskIntoConstraints = false
+        navigationHeader.isHidden = true
+        addSubview(navigationHeader)
+        navigationTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        navigationTitle.textColor = .labelColor
+        navigationTitle.translatesAutoresizingMaskIntoConstraints = false
+        navigationHeader.addSubview(navigationTitle)
+        editedOnlyToggle.controlSize = .small
+        editedOnlyToggle.font = .systemFont(ofSize: 12)
+        editedOnlyToggle.target = self
+        editedOnlyToggle.action = #selector(editedOnlyToggled)
+        editedOnlyToggle.translatesAutoresizingMaskIntoConstraints = false
+        navigationHeader.addSubview(editedOnlyToggle)
+
         // Query row.
         searchIcon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
         searchIcon.contentTintColor = .tertiaryLabelColor
@@ -218,6 +315,8 @@ public final class CommandPaletteView: NSView {
         queryField.onConfirmAlternate = { [weak self] in self?.onConfirmAlternate?() }
         queryField.onCancel = { [weak self] in self?.onCancel?() }
         queryField.onCycleTab = { [weak self] delta in self?.cycleTab(by: delta) ?? false }
+        queryField.onNavigatePane = { [weak self] delta in self?.onNavigatePane?(delta) ?? false }
+        queryField.onToggleEditedOnly = { [weak self] in self?.onToggleEditedOnly?() }
         addSubview(queryField)
 
         hintLabel.font = .systemFont(ofSize: 12)
@@ -233,6 +332,34 @@ public final class CommandPaletteView: NSView {
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
+
+        destinationScrollView.translatesAutoresizingMaskIntoConstraints = false
+        destinationScrollView.hasVerticalScroller = true
+        destinationScrollView.borderType = .noBorder
+        destinationScrollView.drawsBackground = false
+        destinationScrollView.isHidden = true
+        addSubview(destinationScrollView)
+
+        sidebarSeparator.boxType = .separator
+        sidebarSeparator.translatesAutoresizingMaskIntoConstraints = false
+        sidebarSeparator.isHidden = true
+        addSubview(sidebarSeparator)
+
+        let destinationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("destination"))
+        destinationColumn.resizingMask = .autoresizingMask
+        destinationTableView.addTableColumn(destinationColumn)
+        destinationTableView.headerView = nil
+        destinationTableView.rowHeight = 26
+        destinationTableView.intercellSpacing = NSSize(width: 0, height: 1)
+        destinationTableView.delegate = self
+        destinationTableView.dataSource = self
+        destinationTableView.style = .plain
+        destinationTableView.backgroundColor = .clear
+        destinationTableView.selectionHighlightStyle = .regular
+        destinationTableView.refusesFirstResponder = true
+        destinationTableView.target = self
+        destinationTableView.action = #selector(destinationTableClicked)
+        destinationScrollView.documentView = destinationTableView
 
         // Results.
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -256,6 +383,7 @@ public final class CommandPaletteView: NSView {
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.target = self
         tableView.action = #selector(tableViewClicked)
+        tableView.refusesFirstResponder = true
         scrollView.documentView = tableView
 
         // Footer.
@@ -285,6 +413,16 @@ public final class CommandPaletteView: NSView {
 
         let tabHeight = tabContainer.heightAnchor.constraint(equalToConstant: 0)
         self.tabHeight = tabHeight
+        let sidebarWidth = destinationScrollView.widthAnchor.constraint(equalToConstant: 0)
+        self.sidebarWidth = sidebarWidth
+        let filesLeadingToSidebar = scrollView.leadingAnchor.constraint(
+            equalTo: sidebarSeparator.trailingAnchor,
+            constant: 4
+        )
+        let filesLeadingToEdge = scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
+        self.filesLeadingToSidebar = filesLeadingToSidebar
+        self.filesLeadingToEdge = filesLeadingToEdge
+        filesLeadingToEdge.isActive = true
 
         NSLayoutConstraint.activate([
             materialView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -301,13 +439,21 @@ public final class CommandPaletteView: NSView {
             nonProjectToggle.trailingAnchor.constraint(equalTo: tabContainer.trailingAnchor),
             nonProjectToggle.centerYAnchor.constraint(equalTo: tabContainer.centerYAnchor),
 
+            navigationHeader.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            navigationHeader.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            navigationHeader.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 8),
+            navigationHeader.heightAnchor.constraint(equalToConstant: 24),
+            navigationTitle.leadingAnchor.constraint(equalTo: navigationHeader.leadingAnchor),
+            navigationTitle.centerYAnchor.constraint(equalTo: navigationHeader.centerYAnchor),
+            editedOnlyToggle.trailingAnchor.constraint(equalTo: navigationHeader.trailingAnchor),
+            editedOnlyToggle.centerYAnchor.constraint(equalTo: navigationHeader.centerYAnchor),
+
             searchIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             searchIcon.centerYAnchor.constraint(equalTo: queryField.centerYAnchor),
             searchIcon.widthAnchor.constraint(equalToConstant: 16),
 
             queryField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 8),
             queryField.trailingAnchor.constraint(equalTo: hintLabel.leadingAnchor, constant: -8),
-            queryField.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 10),
             queryField.heightAnchor.constraint(equalToConstant: 28),
 
             hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
@@ -318,7 +464,16 @@ public final class CommandPaletteView: NSView {
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
             separator.topAnchor.constraint(equalTo: queryField.bottomAnchor, constant: 10),
 
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            destinationScrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            sidebarWidth,
+            destinationScrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            destinationScrollView.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
+
+            sidebarSeparator.leadingAnchor.constraint(equalTo: destinationScrollView.trailingAnchor, constant: 2),
+            sidebarSeparator.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            sidebarSeparator.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
+            sidebarSeparator.widthAnchor.constraint(equalToConstant: 1),
+
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
             scrollView.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
@@ -334,6 +489,32 @@ public final class CommandPaletteView: NSView {
             splitButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             splitButton.centerYAnchor.constraint(equalTo: footerLabel.centerYAnchor)
         ])
+        queryTopToTabs = queryField.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 10)
+        queryTopToRecentHeader = queryField.topAnchor.constraint(equalTo: navigationHeader.bottomAnchor, constant: 8)
+        queryTopToTabs?.isActive = true
+    }
+
+    private func applyNavigationChrome() {
+        navigationHeader.isHidden = !showsNavigationChrome
+        destinationScrollView.isHidden = !showsNavigationChrome
+        sidebarSeparator.isHidden = !showsNavigationChrome
+        editedOnlyToggle.isHidden = !showsNavigationChrome || !showsEditedOnlyInChrome
+        hintLabel.isHidden = showsNavigationChrome && showsEditedOnlyInChrome
+        sidebarWidth?.constant = showsNavigationChrome ? 168 : 0
+        if showsNavigationChrome {
+            filesLeadingToEdge?.isActive = false
+            filesLeadingToSidebar?.isActive = true
+            queryTopToTabs?.isActive = false
+            queryTopToRecentHeader?.isActive = true
+            navigationPane = .files
+        } else {
+            filesLeadingToSidebar?.isActive = false
+            filesLeadingToEdge?.isActive = true
+            queryTopToRecentHeader?.isActive = false
+            queryTopToTabs?.isActive = true
+        }
+        destinationTableView.reloadData()
+        refreshNavigationChrome()
     }
 
     private func applyChromeColors() {
@@ -400,6 +581,19 @@ public final class CommandPaletteView: NSView {
         focusQueryField()
     }
 
+    @objc private func editedOnlyToggled() {
+        onEditedOnlyChanged?(editedOnlyToggle.state == .on)
+        focusQueryField()
+    }
+
+    @objc private func destinationTableClicked() {
+        let row = destinationTableView.clickedRow
+        guard navigationDestinations.indices.contains(row) else { return }
+        selectedDestinationIndex = row
+        navigationPane = .destinations
+        onConfirm?()
+    }
+
     @objc private func splitButtonClicked() {
         onConfirmAlternate?()
     }
@@ -407,6 +601,7 @@ public final class CommandPaletteView: NSView {
     @objc private func tableViewClicked() {
         let clickedRow = tableView.clickedRow
         guard rowItemIndices.indices.contains(clickedRow), rowItemIndices[clickedRow] >= 0 else { return }
+        navigationPane = .files
         onActivateItemAtIndex?(rowItemIndices[clickedRow])
     }
 
@@ -447,20 +642,31 @@ public final class CommandPaletteView: NSView {
 
 extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
     public func numberOfRows(in tableView: NSTableView) -> Int {
-        rows.count
+        if tableView === destinationTableView { return navigationDestinations.count }
+        return rows.count
     }
 
     public func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        if tableView === destinationTableView { return false }
         if case .header = rows[row] { return true }
         return false
     }
 
     public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        if tableView === destinationTableView { return true }
         if case .item = rows[row] { return true }
         return false
     }
 
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        if tableView === destinationTableView {
+            let id = NSUserInterfaceItemIdentifier("destinationRow")
+            return tableView.makeView(withIdentifier: id, owner: self) as? NSTableRowView ?? {
+                let created = PaletteRowView()
+                created.identifier = id
+                return created
+            }()
+        }
         if case .header = rows[row] {
             let id = NSUserInterfaceItemIdentifier("headerRow")
             let view = tableView.makeView(withIdentifier: id, owner: self) as? NSTableRowView ?? {
@@ -480,6 +686,14 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView === destinationTableView {
+            let destination = navigationDestinations[row]
+            let id = NSUserInterfaceItemIdentifier("destinationCell")
+            let cell = tableView.makeView(withIdentifier: id, owner: self) as? PaletteDestinationCell
+                ?? PaletteDestinationCell(id: id)
+            cell.apply(destination: destination)
+            return cell
+        }
         switch rows[row] {
         case .header(let title):
             let id = NSUserInterfaceItemIdentifier("headerCell")
@@ -536,9 +750,25 @@ private final class PaletteQueryField: NSTextField {
     var onCancel: (() -> Void)?
     /// Returns whether it handled the key.
     var onCycleTab: ((Int) -> Bool)?
+    var onNavigatePane: ((Int) -> Bool)?
+    var onToggleEditedOnly: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "e",
+           onToggleEditedOnly != nil {
+            onToggleEditedOnly?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func doCommand(by selector: Selector) {
         switch selector {
+        case #selector(NSResponder.moveLeft(_:)):
+            if onNavigatePane?(-1) != true { super.doCommand(by: selector) }
+        case #selector(NSResponder.moveRight(_:)):
+            if onNavigatePane?(1) != true { super.doCommand(by: selector) }
         case #selector(NSResponder.moveUp(_:)):
             onMoveSelection?(-1)
         case #selector(NSResponder.moveDown(_:)):
@@ -627,6 +857,68 @@ private final class PaletteTabButton: NSButton {
         layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor
         setAccessibilityLabel(title)
         setAccessibilitySelected(isSelectedTab)
+    }
+}
+
+private final class PaletteDestinationCell: NSTableCellView {
+    private let iconView = NSImageView()
+    private let shortcutField = NSTextField(labelWithString: "")
+
+    init(id: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        identifier = id
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyDown
+        addSubview(iconView)
+
+        let textField = NSTextField(labelWithString: "")
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.lineBreakMode = .byTruncatingTail
+        addSubview(textField)
+        self.textField = textField
+
+        shortcutField.translatesAutoresizingMaskIntoConstraints = false
+        shortcutField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        shortcutField.textColor = .tertiaryLabelColor
+        shortcutField.alignment = .right
+        shortcutField.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(shortcutField)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+
+            textField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            textField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            textField.trailingAnchor.constraint(lessThanOrEqualTo: shortcutField.leadingAnchor, constant: -8),
+
+            shortcutField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            shortcutField.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(destination: RecentFilesDestination) {
+        textField?.stringValue = destination.title
+        textField?.font = .systemFont(ofSize: 13)
+        textField?.textColor = .labelColor
+        if let icon = destination.icon,
+           let image = NSImage(systemSymbolName: icon.systemName, accessibilityDescription: nil) {
+            iconView.image = image
+            iconView.contentTintColor = paletteIconColor(for: icon.tint)
+            iconView.isHidden = false
+        } else {
+            iconView.isHidden = true
+        }
+        shortcutField.stringValue = destination.shortcut ?? ""
+        shortcutField.isHidden = destination.shortcut == nil
     }
 }
 
@@ -735,14 +1027,18 @@ private final class PaletteItemCell: NSTableCellView {
     }
 
     private static func color(for tint: PaletteIcon.Tint) -> NSColor {
-        switch tint {
-        case .accent: .controlAccentColor
-        case .blue: .systemBlue
-        case .orange: .systemOrange
-        case .green: .systemGreen
-        case .purple: .systemPurple
-        case .red: .systemRed
-        case .secondary: .secondaryLabelColor
-        }
+        paletteIconColor(for: tint)
+    }
+}
+
+private func paletteIconColor(for tint: PaletteIcon.Tint) -> NSColor {
+    switch tint {
+    case .accent: .controlAccentColor
+    case .blue: .systemBlue
+    case .orange: .systemOrange
+    case .green: .systemGreen
+    case .purple: .systemPurple
+    case .red: .systemRed
+    case .secondary: .secondaryLabelColor
     }
 }

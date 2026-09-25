@@ -18,6 +18,8 @@ enum IDEAppearance {
         static let toolbarHeight = 38.0
         static let tabHeight = 32.0
         static let iconButton = 26.0
+        static let toolWindowStripeWidth = 40.0
+        static let toolWindowButton = 30.0
         static let statusBarHeight = 24.0
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
@@ -26,7 +28,8 @@ enum IDEAppearance {
         static let firstRunGuideWidth = 640.0
         static let firstRunGuideHeight = 428.0
         static let firstRunGuideRailWidth = 168.0
-        static let settingsWidth = 480.0
+        static let settingsWidth = 640.0
+        static let settingsIdealWidth = 720.0
         static let settingsMinHeight = 520.0
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
@@ -41,6 +44,7 @@ enum IDEAppearance {
     enum IconSize {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
+        static let toolWindowGlyph = 15.0
     }
 
     enum Typography {
@@ -64,7 +68,7 @@ enum IDEAppearance {
         static let tabInactive = Color.clear
         static let tabHover = Color(hex: 0x1C1C20)
         static let controlHover = Color.white.opacity(0.06)
-        static let statusBar = Color(hex: 0x18181B)
+        static let statusBar = Color(hex: 0x1B1B1F)
         static let border = Color.white.opacity(0.08)
         static let accent = Color(hex: 0x74ADE8)
         static let run = Color(hex: 0x3DDC84)
@@ -110,6 +114,71 @@ extension Color {
         let green = Double((hex >> 8) & 0xFF) / 255
         let blue = Double(hex & 0xFF) / 255
         self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
+    }
+}
+
+/// AppKit-backed vibrancy for shell chrome. Falls back to a solid fill when Reduce Transparency is on.
+struct IDEVisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .sidebar
+    var blendingMode: NSVisualEffectView.BlendingMode = .withinWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+    }
+}
+
+/// Pre–macOS 26 frosted shell background: blurs adjacent content, keeps the dark IDE tint, and draws
+/// a hairline on the inner edge when used for a tool-window stripe. On macOS 26+, tool-window
+/// stripes use Liquid Glass (`GlassEffectContainer` / `.glassEffect`) instead.
+struct IDEChromeGlassBackground: View {
+    enum InnerEdge {
+        case leading, trailing
+    }
+
+    var innerEdge: InnerEdge?
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        if reduceTransparency {
+            IDEAppearance.ColorToken.toolbar
+                .overlay { innerEdgeHairline }
+        } else {
+            ZStack {
+                IDEVisualEffectBackground(material: .sidebar, blendingMode: .withinWindow)
+                IDEAppearance.ColorToken.toolbar.opacity(0.32)
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.05),
+                        Color.clear,
+                        Color.black.opacity(0.06),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .overlay { innerEdgeHairline }
+        }
+    }
+
+    @ViewBuilder
+    private var innerEdgeHairline: some View {
+        if let innerEdge {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(width: 1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: innerEdge == .leading ? .leading : .trailing)
+        }
     }
 }
 

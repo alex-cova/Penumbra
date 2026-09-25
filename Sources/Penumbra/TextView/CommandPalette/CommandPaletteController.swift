@@ -26,6 +26,8 @@ public final class CommandPaletteController {
     public var fileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
     /// Supplies most-recently-used documents for ⌘E and the Recent Files section.
     public var recentFileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
+    /// Tool-window shortcuts for the Recent Files / Go to File sidebar (Project, Terminal, …).
+    public var navigationDestinationsProvider: (@MainActor @Sendable () -> [RecentFilesDestination])?
     /// A prebuilt, host-maintained file index. When set it replaces ``fileEntriesProvider`` for the
     /// Files section: nothing is enumerated per keystroke, rows get icons / module / path columns,
     /// and the Text tab reuses its file list instead of walking the disk.
@@ -37,7 +39,10 @@ public final class CommandPaletteController {
     /// Opens a file beside the current editor (⇧↩ / "Open In Right Split"). File rows only offer
     /// the alternate action when this is set.
     public var onOpenFileInSplit: ((URL) -> Void)? {
-        didSet { indexedFilesProvider = nil }
+        didSet {
+            indexedFilesProvider = nil
+            recentFilesProvider = nil
+        }
     }
     /// Whether ⌘⇧F (`.findInFiles`) opens the palette's Text tab. A host with its own Find in Files
     /// panel sets this to `false`; the Text tab stays reachable from the tab strip.
@@ -78,6 +83,9 @@ public final class CommandPaletteController {
     /// Set while presenting a fixed list (`.locations` / surround templates) that bypasses the engine.
     private var isStaticList = false
     private var indexedFilesProvider: FilesPaletteProvider?
+    private var recentFilesProvider: RecentFilesPaletteProvider?
+    private var recentFilesEditedOnly = false
+    private var selectedDestinationIndex = 0
 
     var flatItems: [PaletteItem] { currentSections.flatMap(\.items) }
 
@@ -182,11 +190,14 @@ public final class CommandPaletteController {
     }
 
     public func presentRecentFiles() {
-        present(mode: .recentFiles, placeholder: "Recent Files")
+        selectedDestinationIndex = 0
+        recentFilesEditedOnly = false
+        present(mode: .recentFiles, placeholder: "Search recent files")
     }
 
     public func presentQuickOpen() {
-        present(mode: .quickOpen, placeholder: "Go to File")
+        selectedDestinationIndex = 0
+        present(mode: .quickOpen, placeholder: "Search by filename")
     }
 
     public func presentClasses() {
@@ -290,20 +301,57 @@ public final class CommandPaletteController {
         runQuery(seed)
     }
 
-    /// Shows the tab strip for the tabbed modes and hides it for go-to-line, recent files and
-    /// fixed lists.
+    /// Shows the tab strip for the tabbed modes and hides it for go-to-line, recent files, go to
+    /// file, and fixed lists.
     private func configureTabs() {
-        if let tab = currentTab {
-            paletteView.tabs = availableTabs
-            paletteView.selectedTab = tab
-            paletteView.hint = "> actions   @ symbols   : line"
-            paletteView.showsNonProjectToggle = showsNonProjectToggle
-        } else {
-            paletteView.tabs = []
-            paletteView.selectedTab = nil
-            paletteView.hint = ""
-            paletteView.showsNonProjectToggle = false
+        switch paletteModel.mode {
+        case .recentFiles:
+            configureNavigationChrome(
+                title: "Recent Files",
+                showsEditedOnly: true,
+                hint: ""
+            )
+        case .quickOpen:
+            configureNavigationChrome(
+                title: "Go to File",
+                showsEditedOnly: false,
+                hint: "> actions   @ symbols   / files   # text   : line"
+            )
+        default:
+            if let tab = currentTab {
+                paletteView.tabs = availableTabs
+                paletteView.selectedTab = tab
+                paletteView.hint = "> actions   @ symbols   : line"
+                paletteView.showsNonProjectToggle = showsNonProjectToggle
+                paletteView.showsNavigationChrome = false
+            } else {
+                paletteView.tabs = []
+                paletteView.selectedTab = nil
+                paletteView.hint = ""
+                paletteView.showsNonProjectToggle = false
+                paletteView.showsNavigationChrome = false
+            }
         }
+    }
+
+    private func configureNavigationChrome(title: String, showsEditedOnly: Bool, hint: String) {
+        paletteView.tabs = []
+        paletteView.selectedTab = nil
+        paletteView.hint = hint
+        paletteView.showsNonProjectToggle = false
+        paletteView.navigationChromeTitle = title
+        paletteView.showsEditedOnlyInChrome = showsEditedOnly
+        paletteView.showsNavigationChrome = true
+        paletteView.navigationDestinations = navigationDestinationsProvider?() ?? []
+        if showsEditedOnly {
+            paletteView.editedOnly = recentFilesEditedOnly
+        }
+        paletteView.selectedDestinationIndex = selectedDestinationIndex
+        paletteView.navigationPane = .files
+    }
+
+    private var usesNavigationChrome: Bool {
+        paletteModel.mode == .recentFiles || paletteModel.mode == .quickOpen
     }
 
     private func showOverlay() {
@@ -343,9 +391,24 @@ public final class CommandPaletteController {
 
     private func makeRecentProvider() -> RecentFilesPaletteProvider? {
         guard let entries = recentFileEntriesProvider else { return nil }
-        return RecentFilesPaletteProvider(entries: entries) { [weak self] url in
-            self?.onOpenFile?(url)
+        if let existing = recentFilesProvider { return existing }
+        let root = workspaceRoot
+        let index: @MainActor @Sendable () -> PaletteFileIndex? = { [weak self] in self?.fileIndex }
+        let editedOnly: @MainActor @Sendable () -> Bool = { [weak self] in self?.recentFilesEditedOnly ?? false }
+        var openInSplit: (@MainActor @Sendable (URL) -> Void)?
+        if onOpenFileInSplit != nil {
+            openInSplit = { [weak self] url in self?.onOpenFileInSplit?(url) }
         }
+        let provider = RecentFilesPaletteProvider(
+            entries: entries,
+            root: { root },
+            index: index,
+            editedOnly: editedOnly,
+            onOpen: { [weak self] url in self?.onOpenFile?(url) },
+            onOpenInSplit: openInSplit
+        )
+        recentFilesProvider = provider
+        return provider
     }
 
     private func makeSymbolsProvider() -> SymbolsPaletteProvider? {
@@ -467,6 +530,10 @@ public final class CommandPaletteController {
     }
 
     func activateSelection(alternate: Bool = false) {
+        if usesNavigationChrome, paletteView.navigationPane == .destinations {
+            activateDestination()
+            return
+        }
         // Results are debounced, so Return right after typing a line number would otherwise see
         // no rows (or the previous number's row). The line is fully determined by the query.
         if !isStaticList,
@@ -496,16 +563,71 @@ public final class CommandPaletteController {
         action()
     }
 
+    private func activateDestination() {
+        let destinations = paletteView.navigationDestinations
+        guard destinations.indices.contains(selectedDestinationIndex) else { return }
+        let action = destinations[selectedDestinationIndex].action
+        dismiss()
+        action()
+    }
+
+    private func moveDestinationSelection(by delta: Int) {
+        let count = paletteView.navigationDestinations.count
+        guard count > 0 else { return }
+        selectedDestinationIndex = min(max(selectedDestinationIndex + delta, 0), count - 1)
+        paletteView.selectedDestinationIndex = selectedDestinationIndex
+    }
+
+    @discardableResult
+    private func navigateRecentFilesPane(by delta: Int) -> Bool {
+        guard usesNavigationChrome else { return false }
+        switch paletteView.navigationPane {
+        case .files where delta < 0:
+            guard !paletteView.navigationDestinations.isEmpty else { return false }
+            paletteView.navigationPane = .destinations
+        case .destinations where delta > 0:
+            paletteView.navigationPane = .files
+        default:
+            return false
+        }
+        paletteView.refreshNavigationChrome()
+        return true
+    }
+
     private func wirePaletteView() {
         paletteView.onQueryChange = { [weak self] query in
             guard let self else { return }
             self.paletteModel.query = query
+            if self.usesNavigationChrome {
+                self.paletteView.navigationPane = .files
+                self.paletteView.refreshNavigationChrome()
+            }
             self.runQuery(query)
         }
         paletteView.onMoveSelection = { [weak self] delta in
             guard let self else { return }
+            if self.usesNavigationChrome, self.paletteView.navigationPane == .destinations {
+                self.moveDestinationSelection(by: delta)
+                return
+            }
             self.paletteModel.moveSelection(by: delta, count: self.flatItems.count)
             self.paletteView.updateSelection(self.paletteModel.selectedIndex)
+        }
+        paletteView.onNavigatePane = { [weak self] delta in
+            self?.navigateRecentFilesPane(by: delta) ?? false
+        }
+        paletteView.onToggleEditedOnly = { [weak self] in
+            guard let self, self.paletteModel.mode == .recentFiles else { return }
+            self.recentFilesEditedOnly.toggle()
+            self.paletteView.editedOnly = self.recentFilesEditedOnly
+            self.paletteModel.selectedIndex = 0
+            self.runQuery(self.paletteModel.query)
+        }
+        paletteView.onEditedOnlyChanged = { [weak self] isOn in
+            guard let self, self.paletteModel.mode == .recentFiles else { return }
+            self.recentFilesEditedOnly = isOn
+            self.paletteModel.selectedIndex = 0
+            self.runQuery(self.paletteModel.query)
         }
         paletteView.onConfirm = { [weak self] in self?.activateSelection() }
         paletteView.onConfirmAlternate = { [weak self] in self?.activateSelection(alternate: true) }
