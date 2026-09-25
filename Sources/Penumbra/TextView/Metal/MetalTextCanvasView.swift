@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 @preconcurrency import AppKit
 import Metal
@@ -22,6 +23,12 @@ protocol MetalCanvasGlyphEncoding: AnyObject {
     )
     /// The canvas left its window (cached / hidden host): release grown instance buffers.
     func hostDidLeaveWindow()
+    /// Returns whether every instance-buffer slot this frame will write is free. Checked before
+    /// `nextDrawable()` on the display-link path.
+    func canAcquireWriteSlots() -> Bool
+    /// Bumped after a successful on-screen present commit.
+    var paintGeneration: UInt64 { get }
+    func notePaintCommitted()
 }
 
 /// Opaque `CAMetalLayer` host. When Metal is active `MetalRenderer` paints editor chrome and glyphs here and the
@@ -49,9 +56,14 @@ final class MetalTextCanvasView: UIView {
     /// from ever being what a stray async present encodes.
     private var presentCoalescingDepth = 0
     private static let maxDrawableRetries = 3
+    private static let maxDeferredPresentFrames = 30
+    private var deferredPresentFrameCount = 0
+    private var displayLink: CADisplayLink?
+    private let displayLinkProxy = MetalDisplayLinkProxy()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        displayLinkProxy.canvas = self
         isUserInteractionEnabled = false
         setAccessibilityElement(false)
         setAccessibilityHidden(true)
@@ -93,7 +105,11 @@ final class MetalTextCanvasView: UIView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        presentIfDirty()
+        if usesDeferredPresent {
+            armDisplayLink()
+        } else {
+            presentIfDirtyNow()
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -154,11 +170,30 @@ final class MetalTextCanvasView: UIView {
         scheduleDeferredPresentIfNeeded()
     }
 
-    /// Encode + present now if a display is pending. AppKit does not reliably call `draw(_:)` on a
-    /// view whose backing layer is `CAMetalLayer` (especially under a layer-backed SwiftUI host),
-    /// so layout invokes this *after* its disableActions transaction. `presentsWithTransaction`
-    /// presents at this method's own CA commit.
+    /// Encode + present now if a display is pending, or arm the display link when deferred present
+    /// is enabled. AppKit does not reliably call `draw(_:)` on a view whose backing layer is
+    /// `CAMetalLayer` (especially under a layer-backed SwiftUI host), so layout invokes this
+    /// *after* its disableActions transaction.
     func presentIfDirty() {
+        if usesDeferredPresent {
+            armDisplayLink()
+        } else {
+            presentIfDirtyNow()
+        }
+    }
+
+    /// Arms a vsync-aligned present without encoding on the calling thread.
+    func armDisplayLink() {
+        guard isDisplayDirty else {
+            pauseDisplayLinkIfIdle()
+            return
+        }
+        ensureDisplayLink()
+        displayLink?.isPaused = false
+    }
+
+    /// Synchronous encode + present. Used when deferred present is off and for readback capture.
+    func presentIfDirtyNow() {
         guard window != nil, !isHidden, isDisplayDirty else {
             return
         }
@@ -175,10 +210,16 @@ final class MetalTextCanvasView: UIView {
             onRenderingFailure?()
             return
         }
-        if encodePass(on: metalLayer) {
+        let waitForReadback = MetalContext.shared.allowsDrawableCapture
+        if encodePass(on: metalLayer, waitForReadback: waitForReadback) {
             PenumbraSignposts.event("MetalCanvas.presented")
+            if EditorPerformanceTrace.shared.isEnabled {
+                EditorPerformanceTrace.shared.recordCount(.metalPresents, count: 1)
+            }
             isDisplayDirty = false
             drawableRetryCount = 0
+            deferredPresentFrameCount = 0
+            pauseDisplayLinkIfIdle()
         } else {
             PenumbraSignposts.event("MetalCanvas.presentRetry")
             schedulePresentRetry()
@@ -187,13 +228,22 @@ final class MetalTextCanvasView: UIView {
 
     private func schedulePresentRetry() {
         guard !presentRetryScheduled, drawableRetryCount < Self.maxDrawableRetries else {
+            if usesDeferredPresent, deferredPresentFrameCount >= Self.maxDeferredPresentFrames {
+                onRenderingFailure?()
+            }
             return
         }
         presentRetryScheduled = true
         drawableRetryCount += 1
-        DispatchQueue.main.async { [weak self] in
-            self?.presentRetryScheduled = false
-            self?.presentIfDirty()
+        if usesDeferredPresent {
+            deferredPresentFrameCount += 1
+            presentRetryScheduled = false
+            armDisplayLink()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.presentRetryScheduled = false
+                self?.presentIfDirtyNow()
+            }
         }
     }
 
@@ -204,13 +254,17 @@ final class MetalTextCanvasView: UIView {
         guard presentCoalescingDepth == 0, !deferredPresentScheduled else {
             return
         }
+        if usesDeferredPresent {
+            armDisplayLink()
+            return
+        }
         deferredPresentScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else {
                 return
             }
             self.deferredPresentScheduled = false
-            self.presentIfDirty()
+            self.presentIfDirtyNow()
         }
     }
 
@@ -226,6 +280,49 @@ final class MetalTextCanvasView: UIView {
         }
     }
 
+    func handleDisplayLink() {
+        guard presentCoalescingDepth == 0 else {
+            return
+        }
+        guard window != nil, !isHidden, isDisplayDirty else {
+            pauseDisplayLinkIfIdle()
+            return
+        }
+        guard let metalLayer = layer as? CAMetalLayer else {
+            return
+        }
+        updateMetalLayerGeometry()
+        guard bounds.width > 0, bounds.height > 0,
+              metalLayer.drawableSize.width > 1, metalLayer.drawableSize.height > 1 else {
+            return
+        }
+        guard MetalContext.shared.isAvailable else {
+            onRenderingFailure?()
+            return
+        }
+        guard glyphEncoder?.canAcquireWriteSlots() ?? true else {
+            return
+        }
+        let waitForReadback = MetalContext.shared.allowsDrawableCapture
+        if encodePass(on: metalLayer, waitForReadback: waitForReadback) {
+            PenumbraSignposts.event("MetalCanvas.presented")
+            if EditorPerformanceTrace.shared.isEnabled {
+                EditorPerformanceTrace.shared.recordCount(.metalPresents, count: 1)
+            }
+            isDisplayDirty = false
+            drawableRetryCount = 0
+            deferredPresentFrameCount = 0
+            glyphEncoder?.notePaintCommitted()
+            pauseDisplayLinkIfIdle()
+        } else {
+            PenumbraSignposts.event("MetalCanvas.presentRetry")
+            deferredPresentFrameCount += 1
+            if deferredPresentFrameCount >= Self.maxDeferredPresentFrames {
+                onRenderingFailure?()
+            }
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         updateMetalLayerGeometry()
@@ -236,6 +333,7 @@ final class MetalTextCanvasView: UIView {
         guard window != nil else {
             // Off-screen (workbench tab switch, EditorHostCache): stop presenting and shrink the
             // grown instance buffers back to their start size.
+            invalidateDisplayLink()
             glyphEncoder?.hostDidLeaveWindow()
             return
         }
@@ -269,7 +367,7 @@ final class MetalTextCanvasView: UIView {
     /// dependable way to observe the frame users were shown.
     func capturePresentedLayer() -> NSBitmapImageRep? {
         displayIfNeeded()
-        presentIfDirty()
+        presentIfDirtyNow()
         return lastPresentedImage
     }
 
@@ -358,7 +456,41 @@ final class MetalTextCanvasView: UIView {
     }
 }
 
+@MainActor
+private final class MetalDisplayLinkProxy: NSObject {
+    weak var canvas: MetalTextCanvasView?
+
+    @objc func displayLinkFired(_ link: CADisplayLink) {
+        canvas?.handleDisplayLink()
+    }
+}
+
 private extension MetalTextCanvasView {
+    var usesDeferredPresent: Bool {
+        MetalDeferredPresent.resolved(
+            defaults: UserDefaults.standard.object(forKey: MetalDeferredPresent.defaultsKey) as? Bool
+        )
+    }
+
+    func ensureDisplayLink() {
+        guard displayLink == nil else {
+            return
+        }
+        let link = displayLink(target: displayLinkProxy, selector: #selector(MetalDisplayLinkProxy.displayLinkFired(_:)))
+        link.add(to: .main, forMode: .common)
+        link.isPaused = true
+        displayLink = link
+    }
+
+    func invalidateDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    func pauseDisplayLinkIfIdle() {
+        displayLink?.isPaused = true
+    }
+
     func updateMetalLayerGeometry() {
         guard let metalLayer = layer as? CAMetalLayer else {
             return
@@ -375,7 +507,7 @@ private extension MetalTextCanvasView {
     }
 
     @discardableResult
-    func encodePass(on metalLayer: CAMetalLayer) -> Bool {
+    func encodePass(on metalLayer: CAMetalLayer, waitForReadback: Bool) -> Bool {
         PenumbraSignposts.event("MetalCanvas.encodeStarted")
         let context = MetalContext.shared
         guard let commandQueue = context.commandQueue, let commandBuffer = commandQueue.makeCommandBuffer() else {
@@ -385,6 +517,9 @@ private extension MetalTextCanvasView {
         }
         guard let drawable = metalLayer.nextDrawable() else {
             return false
+        }
+        if KeystrokeBudgetMetrics.observerPending {
+            KeystrokeBudgetMetrics.recordNextDrawableBeforeObserver()
         }
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = drawable.texture
@@ -448,7 +583,13 @@ private extension MetalTextCanvasView {
                 height: drawable.texture.height,
                 bytesPerRow: captureBytesPerRow
             )
-        } else {
+        } else if waitForReadback {
+            commandBuffer.waitUntilCompleted()
+        } else if !usesDeferredPresent {
+            PenumbraSignposts.event("MetalCanvas.waitUntilScheduled")
+            if EditorPerformanceTrace.shared.isEnabled {
+                EditorPerformanceTrace.shared.recordCount(.metalWaits, count: 1)
+            }
             commandBuffer.waitUntilScheduled()
         }
         return true

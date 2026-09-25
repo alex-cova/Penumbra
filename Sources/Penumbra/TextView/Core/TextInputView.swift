@@ -585,6 +585,10 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.metalDebugStats
     }
 
+    var metalPaintGeneration: UInt64 {
+        layoutManager.metalPaintGeneration
+    }
+
     var metalAtlasCensus: (nonzero: Int, total: Int, pages: Int)? {
         layoutManager.metalAtlasCensus
     }
@@ -916,6 +920,8 @@ final class TextInputView: UIView, UITextInput {
     /// re-querying every frame.
     private(set) var syntaxParseGeneration = 0
     private var syntaxParsePolicy: SyntaxParsePolicy = .eager
+    private var lastReplaceEditRange = NSRange(location: 0, length: 0)
+    private var lastReplaceNewString = ""
     private var hasNotifiedSyntaxParse = false
     /// Window last handed to ``startViewportParse``. Prevents layout + `contentOffset` from
     /// cancelling the same in-flight expansion by starting it twice.
@@ -1573,7 +1579,7 @@ final class TextInputView: UIView, UITextInput {
 
     private func handleSyntaxParseFinished(state: TextViewState?, notify: Bool) {
         state?.applyDetectedIndentStrategy()
-        invalidateLines()
+        invalidateVisibleLineSyntaxHighlighting()
         methodSeparatorController.recompute()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
@@ -1852,6 +1858,16 @@ private extension TextInputView {
         }
     }
 
+    private func invalidateVisibleLineSyntaxHighlighting() {
+        for lineController in lineControllerStorage {
+            lineController.lineFragmentHeightMultiplier = lineHeightMultiplier
+            lineController.tabWidth = indentController.tabWidth
+            lineController.kern = kern
+            lineController.lineBreakMode = lineBreakMode
+        }
+        layoutManager.invalidateSyntaxHighlightingOnVisibleLines()
+    }
+
     private func setupContentSizeObserver() {
         contentSizeService.$isContentSizeInvalid.filter { $0 }.sink { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
@@ -1909,7 +1925,32 @@ private extension TextInputView {
 }
 
 extension TextInputView {
-    /// Repaints every line's syntax colours, e.g. after the semantic highlights changed.
+    /// Repaints syntax colours on lines touched by `utf16Ranges`, e.g. after semantic highlights changed.
+    func refreshSyntaxColors(forUTF16Ranges utf16Ranges: [NSRange]) {
+        var lineIDs = Set<DocumentLineNodeID>()
+        for range in utf16Ranges where range.length > 0 || range.location < stringView.length {
+            let clamped = NSIntersectionRange(range, NSRange(location: 0, length: stringView.length))
+            guard clamped.length > 0 else { continue }
+            if let startLine = lineManager.line(containingCharacterAt: clamped.location) {
+                lineIDs.insert(startLine.id)
+            }
+            let endLocation = max(clamped.upperBound - 1, clamped.location)
+            if let endLine = lineManager.line(containingCharacterAt: endLocation) {
+                lineIDs.insert(endLine.id)
+            }
+        }
+        guard !lineIDs.isEmpty else { return }
+        for lineID in lineIDs {
+            lineControllerStorage[lineID]?.invalidateSyntaxHighlighting()
+        }
+        for lineID in lineIDs where layoutManager.currentlyVisibleLineIDs.contains(lineID) {
+            layoutManager.redisplayLines(withIDs: [lineID])
+        }
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
+    /// Repaints every line's syntax colours, e.g. after a theme change.
     func refreshSyntaxColors() {
         for lineController in lineControllerStorage {
             lineController.invalidateSyntaxHighlighting()
@@ -2296,11 +2337,24 @@ extension TextInputView {
 extension TextInputView {
     func insertText(_ text: String) {
         let preparedText = prepareTextForInsertion(text)
+        let traceEnabled = EditorPerformanceTrace.shared.isEnabled
+        let insertStart = traceEnabled ? DispatchTime.now().uptimeNanoseconds : 0
+        KeystrokeBudgetMetrics.observerPending = traceEnabled
         isRestoringPreviouslyDeletedText = hasDeletedTextWithPendingLayoutSubviews
         hasDeletedTextWithPendingLayoutSubviews = false
         defer {
             isRestoringPreviouslyDeletedText = false
             if imeMarkedRange == nil {
+                if traceEnabled {
+                    let seconds = Double(DispatchTime.now().uptimeNanoseconds &- insertStart) / 1_000_000_000
+                    EditorPerformanceTrace.shared.record(.untilTypingObserver, seconds: seconds)
+                    let nextDrawableCount = KeystrokeBudgetMetrics.consumeNextDrawableBeforeObserverCount()
+                    EditorPerformanceTrace.shared.recordCount(.metalWaits, count: 0)
+                    let syncLines = EditorPerformanceTrace.shared.counts(for: .syncHighlightLines).reduce(0, +)
+                    EditorPerformanceTrace.shared.recordCount(.syncHighlightLines, count: syncLines)
+                    EditorPerformanceTrace.shared.recordCount(.metalPresents, count: nextDrawableCount)
+                }
+                KeystrokeBudgetMetrics.observerPending = false
                 onTypingEvent?(.inserted(text))
             }
         }
@@ -2586,6 +2640,8 @@ extension TextInputView {
                              undoActionName: String = L10n.Undo.ActionName.typing,
                              updateSelection: Bool = true) {
         let nsNewString = newString as NSString
+        lastReplaceEditRange = range
+        lastReplaceNewString = newString
         let currentText = text(in: range) ?? ""
         let newRange = NSRange(location: range.location, length: nsNewString.length)
         multiSelectionController.clearHistory()
@@ -2661,7 +2717,29 @@ extension TextInputView {
             }
         }
         let editedLineIDs = Set(lineChangeSet.editedLines.map(\.id))
-        layoutManager.redisplayLines(withIDs: editedLineIDs)
+        let colorShift: (utf16RangeInLine: NSRange, text: String)?
+        if editedLineIDs.count == 1,
+           lineChangeSet.insertedLines.isEmpty,
+           lineChangeSet.removedLines.isEmpty,
+           let line = lineChangeSet.editedLines.first {
+            let lineRange = NSRange(location: line.location, length: line.data.length)
+            if lastReplaceEditRange.location >= lineRange.location,
+               lastReplaceEditRange.upperBound <= lineRange.upperBound + (lastReplaceNewString as NSString).length {
+                let localRange = NSRange(
+                    location: lastReplaceEditRange.location - lineRange.location,
+                    length: lastReplaceEditRange.length
+                )
+                colorShift = (localRange, lastReplaceNewString)
+            } else {
+                colorShift = nil
+            }
+        } else {
+            colorShift = nil
+        }
+        layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift)
+        if !didAddOrRemoveLines {
+            selectionOverlayController.updateLayout()
+        }
         if didAddOrRemoveLines {
             gutterWidthService.invalidateLineNumberWidth()
             layoutManager.relayoutVisibleFragmentsAfterLineStructureChange()

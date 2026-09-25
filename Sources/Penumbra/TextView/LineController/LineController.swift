@@ -111,6 +111,7 @@ final class LineController: @unchecked Sendable {
     private var isDefaultAttributesInvalid = true
     private var isSyntaxHighlightingInvalid = true
     private var isTypesetterInvalid = true
+    private(set) var colorsStale = false
     private var _lineHeight: CGFloat?
     private var lineFragmentTree: LineFragmentTree
     private var syntaxHighlighter: LineSyntaxHighlighter? {
@@ -163,7 +164,41 @@ final class LineController: @unchecked Sendable {
         isTypesetterInvalid = true
         isDefaultAttributesInvalid = true
         isSyntaxHighlightingInvalid = true
+        colorsStale = false
         _lineHeight = nil
+    }
+
+    /// Shifts cached syntax colors for an in-place edit without re-querying tree-sitter.
+    @discardableResult
+    func applyColorShift(replacing utf16RangeInLine: NSRange, with text: String) -> Bool {
+        guard let attributedString,
+              !isStringInvalid,
+              utf16RangeInLine.location >= 0,
+              utf16RangeInLine.upperBound <= attributedString.length else {
+            return false
+        }
+        let expectedLength = attributedString.length + (text as NSString).length - utf16RangeInLine.length
+        guard expectedLength == line.data.length else {
+            return false
+        }
+        let defaultAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: theme.textColor,
+            .font: theme.font,
+            .kern: kern as NSNumber
+        ]
+        attributedString.replaceCharacters(in: utf16RangeInLine, with: text)
+        let insertedRange = NSRange(location: utf16RangeInLine.location, length: (text as NSString).length)
+        if insertedRange.length > 0 {
+            attributedString.addAttributes(defaultAttributes, range: insertedRange)
+        }
+        isTypesetterInvalid = true
+        colorsStale = true
+        return true
+    }
+
+    func markColorsStale() {
+        colorsStale = true
+        isTypesetterInvalid = true
     }
 
     func invalidateSyntaxHighlighter() {
@@ -318,6 +353,9 @@ private extension LineController {
     }
 
     private func updateSyntaxHighlightingIfNecessary(async: Bool) {
+        if colorsStale, !async {
+            return
+        }
         guard isSyntaxHighlightingInvalid else {
             return
         }

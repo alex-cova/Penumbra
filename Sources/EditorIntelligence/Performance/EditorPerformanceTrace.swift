@@ -26,6 +26,10 @@ public enum EditorPerformanceStage: String, Sendable, Hashable, CaseIterable {
     case cursorMovement = "cursor_movement"
     case typingDuringBackground = "typing_during_background"
     case typingWithIntelligence = "typing_with_intelligence"
+    case untilTypingObserver = "until_typing_observer"
+    case syncHighlightLines = "sync_highlight_lines"
+    case metalPresents = "metal_presents"
+    case metalWaits = "metal_waits"
 }
 
 /// In-process stage recorder. The release harness turns it on, reads the samples, and turns it off.
@@ -35,6 +39,7 @@ public final class EditorPerformanceTrace: @unchecked Sendable {
     private let lock = NSLock()
     private var enabled = false
     private var samples: [EditorPerformanceStage: [Double]] = [:]
+    private var counts: [EditorPerformanceStage: [Int]] = [:]
 
     public init() {}
 
@@ -64,6 +69,19 @@ public final class EditorPerformanceTrace: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func recordCount(_ stage: EditorPerformanceStage, count: Int) {
+        guard count >= 0 else { return }
+        lock.lock()
+        if enabled {
+            counts[stage, default: []].append(count)
+        }
+        lock.unlock()
+    }
+
+    public func counts(for stage: EditorPerformanceStage) -> [Int] {
+        lock.withLock { counts[stage] ?? [] }
+    }
+
     public func samples(for stage: EditorPerformanceStage) -> [Double] {
         lock.withLock { samples[stage] ?? [] }
     }
@@ -73,6 +91,9 @@ public final class EditorPerformanceTrace: @unchecked Sendable {
     }
 
     public func reset() {
-        lock.withLock { samples.removeAll(keepingCapacity: true) }
+        lock.withLock {
+            samples.removeAll(keepingCapacity: true)
+            counts.removeAll(keepingCapacity: true)
+        }
     }
 }

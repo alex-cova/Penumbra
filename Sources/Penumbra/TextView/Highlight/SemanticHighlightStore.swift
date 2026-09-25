@@ -64,4 +64,26 @@ final class SemanticHighlightStore: @unchecked Sendable {
         }
         highlights = kept
     }
+
+    /// UTF-16 ranges whose semantic token spans changed between the stored set and `newHighlights`.
+    func lineRanges(affectedByReplacing newHighlights: [SyntaxHighlightRange]) -> [NSRange] {
+        lock.lock()
+        let previous = highlights
+        lock.unlock()
+        let sorted = newHighlights.sorted { $0.range.location < $1.range.location }
+        guard previous != sorted else {
+            return []
+        }
+        if previous.isEmpty {
+            return sorted.map(\.range)
+        }
+        var affected: [NSRange] = []
+        for highlight in sorted where !previous.contains(highlight) {
+            affected.append(highlight.range)
+        }
+        for highlight in previous where !sorted.contains(highlight) {
+            affected.append(highlight.range)
+        }
+        return affected
+    }
 }

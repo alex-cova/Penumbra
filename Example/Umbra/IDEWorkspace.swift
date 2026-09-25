@@ -266,6 +266,7 @@ public final class IDEWorkspace {
 
     var editorLayout: EditorLayout { workbench.layout }
     var hasOpenDocuments: Bool { !workbench.allDocuments().isEmpty }
+    var hasOpenProject: Bool { project.rootURL != nil }
     /// Whether the active document's syntax can be changed from the status bar or View > Syntax.
     var canChangeActiveLanguage: Bool {
         guard let document = workbench.activePane.selectedDocument else { return false }
@@ -496,6 +497,30 @@ public final class IDEWorkspace {
         applyProjectRoot(url)
         isSidebarVisible = true
         showsWelcome = !hasOpenDocuments
+        refreshPresentation()
+        saveSession()
+    }
+
+    /// Closes the open project folder, all editor tabs, and project-scoped panels.
+    public func closeFolder() {
+        guard project.rootURL != nil else { return }
+
+        let dirtyCount = workbench.allDocuments().filter(\.isDirty).count
+        if dirtyCount > 0 {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Close the open folder?"
+            alert.informativeText =
+                "\(dirtyCount) open editor\(dirtyCount == 1 ? " has" : "s have") unsaved changes that will be lost."
+            alert.addButton(withTitle: "Close Folder")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        closeAllOpenDocuments()
+        dismissProjectChrome()
+        applyProjectRoot(nil)
+        showsWelcome = true
         refreshPresentation()
         saveSession()
     }
@@ -2475,10 +2500,12 @@ public final class IDEWorkspace {
         semanticHighlightTasks[key] = Task { [weak host] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled, let textView = host?.textView else { return }
-            let text = textView.text
             let generation = textView.contentGeneration
-            guard let tokens = await provider.tokens(for: text), !Task.isCancelled else { return }
-            guard textView.contentGeneration == generation else { return }
+            let export = textView.exportDocumentText()
+            let tokens = await Task.detached(priority: .utility) {
+                await provider.tokens(for: export.materializeUTF16Text())
+            }.value
+            guard !Task.isCancelled, let tokens, textView.contentGeneration == generation else { return }
             textView.setSemanticHighlights(tokens.map {
                 SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
             })
@@ -2543,6 +2570,29 @@ public final class IDEWorkspace {
         activatePane(workbench.activePaneID)
         showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    private func closeAllOpenDocuments() {
+        let snapshots = workbench.panes.map { pane in
+            (pane.id, pane.documents.map(\.id))
+        }
+        for (paneID, documentIDs) in snapshots {
+            guard let pane = workbench.layout.findPane(id: paneID) else { continue }
+            for documentID in documentIDs {
+                closeDocument(documentID, in: pane)
+            }
+        }
+    }
+
+    private func dismissProjectChrome() {
+        isSidebarVisible = false
+        isFindInFilesVisible = false
+        closeUsages()
+        closeTypeHierarchy()
+        closeCallHierarchy()
+        closeTestResults()
+        problems.clearCompilerDiagnostics()
+        problems.clearBuildDiagnostics()
     }
 
     private func rebuildLayoutHosts() {
@@ -3095,6 +3145,16 @@ public final class IDEWorkspace {
             preferences.isMetalRenderingEnabled = false
         } else if arguments.contains("--metal") {
             preferences.isMetalRenderingEnabled = true
+        }
+        if arguments.contains("--no-metal-deferred-present") {
+            UserDefaults.standard.set(false, forKey: MetalDeferredPresent.defaultsKey)
+        } else if arguments.contains("--metal-deferred-present") {
+            UserDefaults.standard.set(true, forKey: MetalDeferredPresent.defaultsKey)
+        }
+        if arguments.contains("--sync-keystroke-parse") {
+            UserDefaults.standard.set(true, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
+        } else if arguments.contains("--no-sync-keystroke-parse") {
+            UserDefaults.standard.set(false, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
         }
     }
 

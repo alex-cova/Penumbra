@@ -20,6 +20,24 @@ public struct MetalPerformanceStats: Sendable {
     public let solidBufferRebuildCount: Int
 }
 
+/// Sendable document export for background tokenization without exposing piece-tree internals.
+public struct DocumentTextExport: Sendable {
+    private let snapshot: PieceTreeContentSnapshot?
+    private let fallback: String
+
+    init(snapshot: PieceTreeContentSnapshot?, fallback: String) {
+        self.snapshot = snapshot
+        self.fallback = fallback
+    }
+
+    public func materializeUTF16Text() -> String {
+        if let snapshot {
+            return snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
+        }
+        return fallback
+    }
+}
+
 /// A type similiar to UITextView with features commonly found in code editors.
 ///
 /// `TextView` is a performant implementation of a text view with features such as showing line numbers, searching for text and replacing results, syntax highlighting, showing invisible characters and more.
@@ -116,6 +134,12 @@ public struct MetalPerformanceStats: Sendable {
 
     func pieceTreeContentSnapshot() -> PieceTreeContentSnapshot? {
         textInputView.stringView.contentSnapshot()
+    }
+
+    /// Piece-tree metadata captured on the main actor; call ``DocumentTextExport/materializeUTF16Text()``
+    /// from a background task to build the full string without blocking typing.
+    public func exportDocumentText() -> DocumentTextExport {
+        DocumentTextExport(snapshot: pieceTreeContentSnapshot(), fallback: text)
     }
 
     /// Times the piece tree has been copied into a contiguous string. Stays at zero when a
@@ -1076,6 +1100,8 @@ public struct MetalPerformanceStats: Sendable {
     }
     /// Windowed p95 of `MetalRenderer.encode`, in nanoseconds. Debug/PerfHarness only.
     public var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
+    /// Monotonic counter bumped on each successful Metal present commit. Debug/test only.
+    public var metalPaintGeneration: UInt64 { textInputView.metalPaintGeneration }
     /// One non-blocking snapshot for benchmark/HUD callers that need several Metal counters.
     public var metalPerformanceStats: MetalPerformanceStats? {
         guard let stats = textInputView.metalDebugStats else {
@@ -1150,8 +1176,12 @@ public struct MetalPerformanceStats: Sendable {
     /// theme like a tree-sitter capture name; a name the theme has no colour for is ignored. The
     /// highlights follow edits until the next call, dropping any that an edit overlaps.
     public func setSemanticHighlights(_ highlights: [SyntaxHighlightRange]) {
+        let affectedUTF16Ranges = textInputView.semanticHighlights.lineRanges(affectedByReplacing: highlights)
         textInputView.semanticHighlights.set(highlights)
-        textInputView.refreshSyntaxColors()
+        if affectedUTF16Ranges.isEmpty {
+            return
+        }
+        textInputView.refreshSyntaxColors(forUTF16Ranges: affectedUTF16Ranges)
     }
 
     /// Tree-sitter highlight captures intersecting `range`, or `[]` when there is no tree.

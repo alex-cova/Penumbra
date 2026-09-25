@@ -311,6 +311,28 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertFalse(controller.isShowingCompletion)
     }
+
+    func testShowingCompletionDoesNotBumpMetalPaintGeneration() async throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+        let textView = makeTextView("hel", caret: 3)
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let beforeGeneration = textView.metalPaintGeneration
+        let controller = try await makeController(
+            textView,
+            provider: StubProvider { _ in ["hello", "help", "helm"] }
+        )
+        textView.insertText("l")
+        try await waitUntil { controller.isShowingCompletion }
+        XCTAssertEqual(textView.metalPaintGeneration, beforeGeneration, "completion popup must not trigger a Metal present")
+    }
 }
 
 /// Yields one row immediately, unfinished, then a second row after the popup has had time to paint.

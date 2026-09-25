@@ -979,8 +979,9 @@ public final class EditorIntelligenceController {
         inlayHintTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
-            let request: (Document, EditorIntelligence.TextRange)? = await MainActor.run {
+            let request: (Document, EditorIntelligence.TextRange, UInt64)? = await MainActor.run {
                 guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
+                let generation = textView.contentGeneration
                 let ns = textView.text as NSString
                 let height = textView.bounds.height
                 let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
@@ -993,14 +994,13 @@ public final class EditorIntelligenceController {
                     let lineStart = (before as NSString).range(of: "\n", options: .backwards)
                     return TextPosition(line: line, column: lineStart.location == NSNotFound ? offset : offset - lineStart.location - 1, utf16Offset: offset)
                 }
-                return (document, EditorIntelligence.TextRange(start: position(start), end: position(end)))
+                return (document, EditorIntelligence.TextRange(start: position(start), end: position(end)), generation)
             }
-            guard let (document, range) = request else { return }
+            guard let (document, range, generation) = request else { return }
             let hints = await inlayHintProvider.inlayHints(for: document, in: range)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                // A newer edit would have cancelled this task; only apply against unchanged text.
-                guard let self, let textView = self.textView, textView.text == (document.contentSnapshot.text ?? textView.text) else { return }
+                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return }
                 textView.inlayHints = hints
             }
         }

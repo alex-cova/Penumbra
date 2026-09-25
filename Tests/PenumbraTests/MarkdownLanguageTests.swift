@@ -101,11 +101,22 @@ final class MarkdownLanguageTests: XCTestCase {
         XCTAssertTrue(textView.syntaxHighlightCaptures(in: firstRange).contains { $0.name == "markup.bold" })
 
         textView.replace(NSRange(location: (body as NSString).length, length: 0), withText: " tail")
+        waitForSyntaxTreeReady(textView)
         XCTAssertTrue(textView.syntaxHighlightCaptures(in: firstRange).contains { $0.name == "markup.bold" })
 
         textView.replace(NSRange(location: 0, length: 0), withText: "head ")
+        waitForSyntaxTreeReady(textView)
         let shiftedFirst = NSRange(location: 5, length: 36)
         XCTAssertTrue(textView.syntaxHighlightCaptures(in: shiftedFirst).contains { $0.name == "markup.bold" })
+    }
+
+    @MainActor
+    private func waitForSyntaxTreeReady(_ textView: TextView, timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !textView.isSyntaxTreeReady, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(textView.isSyntaxTreeReady, "background parse should republish the tree after a deferred edit")
     }
 
     // A node name that doesn't exist in the grammar makes `ts_query_new` fail, and

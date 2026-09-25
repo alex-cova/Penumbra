@@ -197,6 +197,7 @@ final class LayoutManager {
     private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
+    var currentlyVisibleLineIDs: Set<DocumentLineNodeID> { visibleLineIDs }
     private let linesContainerView = UIView()
     private let gutterBackgroundView = GutterBackgroundView()
     private let lineNumbersContainerView = UIView()
@@ -323,11 +324,22 @@ final class LayoutManager {
         setNeedsLayout()
     }
 
-    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>) {
+    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>, colorShift: (utf16RangeInLine: NSRange, text: String)? = nil) {
         recentlyEditedLineIDs.formUnion(lineIDs)
         for lineID in lineIDs {
             if let lineController = lineControllerStorage[lineID] {
-                lineController.invalidateEverything()
+                let usedColorShift: Bool
+                if let colorShift, lineIDs.count == 1 {
+                    usedColorShift = lineController.applyColorShift(
+                        replacing: colorShift.utf16RangeInLine,
+                        with: colorShift.text
+                    )
+                } else {
+                    usedColorShift = false
+                }
+                if !usedColorShift {
+                    lineController.invalidateEverything()
+                }
                 // Only display the line if it's currently visible on the screen. Otherwise it's enough to invalidate it and redisplay it later.
                 if visibleLineIDs.contains(lineID) {
                     let lineYPosition = lineController.line.yPosition
@@ -373,6 +385,12 @@ final class LayoutManager {
         upsertLineFragmentsForDisplay(lineID: lineID)
     }
 
+    func invalidateSyntaxHighlightingOnVisibleLines() {
+        for lineID in visibleLineIDs {
+            lineControllerStorage[lineID]?.invalidateSyntaxHighlighting()
+        }
+    }
+
     /// Appearance change: glyph instance colors were baked at extract time. Drop cache keys so
     /// the next layout re-extracts against the new `effectiveAppearance`.
     func invalidateMetalGlyphsForAppearanceChange() {
@@ -414,6 +432,10 @@ final class LayoutManager {
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is not active.
     var metalDebugStats: MetalRenderer.DebugStats? {
         isMetalRenderingActive ? metalRenderer?.debugStats : nil
+    }
+
+    var metalPaintGeneration: UInt64 {
+        metalRenderer?.paintGeneration ?? 0
     }
 
     var metalAtlasCensus: (nonzero: Int, total: Int, pages: Int)? {

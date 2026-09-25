@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 @preconcurrency import AppKit
 import Penumbra
@@ -92,7 +93,13 @@ enum Commands {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        if Thread.isMainThread {
+            while semaphore.wait(timeout: .now()) != .success {
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+        } else {
+            semaphore.wait()
+        }
         return try box.result!.get()
     }
 
@@ -456,6 +463,108 @@ enum Commands {
             textView.search(for: query)
         }
         ResultLog.row(regex ? "search_regex" : "search_literal", file: path, sizeBytes: sizeBytes, seconds: searchResult.seconds, extra: "\(searchResult.value.count) matches")
+    }
+
+    // MARK: - keystroke budget
+
+    static func keystrokeBudget(path: String, options: Options, samples: Int = 30) throws {
+        try MainActor.assumeIsolated {
+            try keystrokeBudgetOnMain(path: path, options: options, samples: samples)
+        }
+    }
+
+    @MainActor
+    private static func keystrokeBudgetOnMain(path: String, options: Options, samples: Int) throws {
+        FileHandle.standardError.write("=== keystroke-budget \(path) (\(samples) samples) ===\n".data(using: .utf8)!)
+        EditorPerformanceTrace.shared.isEnabled = true
+        EditorPerformanceTrace.shared.reset()
+        defer {
+            EditorPerformanceTrace.shared.isEnabled = false
+            EditorPerformanceTrace.shared.reset()
+        }
+        if options.metal {
+            UserDefaults.standard.set(true, forKey: MetalDeferredPresent.defaultsKey)
+        }
+        let loadOptions = Options(
+            highlighted: true,
+            deferred: options.deferred,
+            chunked: options.chunked,
+            mmap: options.mmap,
+            viewport: options.viewport,
+            metal: options.metal,
+            language: options.language ?? "java"
+        )
+        let (state, sizeBytes) = try runBlocking { try await loadState(path: path, options: loadOptions) }
+        let metalWindow: NSWindow?
+        let textView: TextView
+        if options.metal {
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            let hostedView = makeTextView(state: state)
+            window.contentView = hostedView
+            window.makeKeyAndOrderFront(nil)
+            hostedView.isMetalRenderingEnabled = true
+            metalWindow = window
+            textView = hostedView
+        } else {
+            metalWindow = nil
+            textView = makeTextView(state: state)
+        }
+        defer { metalWindow?.close() }
+        textView.layoutSubviews()
+        let deadline = Date().addingTimeInterval(30)
+        while !textView.isSyntaxTreeReady, Date() < deadline {
+            Measurement.pumpRunLoop(seconds: 0.01)
+        }
+        guard textView.isSyntaxTreeReady else {
+            throw NSError(domain: "PerfHarness", code: 1, userInfo: [NSLocalizedDescriptionKey: "Syntax tree not ready"])
+        }
+        for _ in 0..<5 {
+            textView.insertText("x")
+            Measurement.pumpRunLoop(seconds: 0.001)
+        }
+        let length = textView.documentLength
+        var location = min(max(length / 2, 10), max(length - 10, 0))
+        if let textLocation = textView.textLocation(at: location) {
+            _ = textView.goToLine(textLocation.lineNumber, select: .beginning)
+        }
+        textView.selectedRange = NSRange(location: location, length: 0)
+        let sampleCount = max(samples, 1)
+        var untilObserver: [Double] = []
+        untilObserver.reserveCapacity(sampleCount)
+        var presents = 0
+        var waits = 0
+        var syncLines = 0
+        var nextDrawableBeforeObserver = 0
+        for _ in 0..<sampleCount {
+            EditorPerformanceTrace.shared.reset()
+            textView.insertText("x")
+            location += 1
+            let observerSamples = EditorPerformanceTrace.shared.samples(for: .untilTypingObserver)
+            untilObserver.append(observerSamples.last ?? 0)
+            waits += EditorPerformanceTrace.shared.counts(for: .metalWaits).reduce(0, +)
+            syncLines += EditorPerformanceTrace.shared.counts(for: .syncHighlightLines).reduce(0, +)
+            nextDrawableBeforeObserver += KeystrokeBudgetMetrics.consumeNextDrawableBeforeObserverCount()
+            if options.metal {
+                Measurement.pumpRunLoop(seconds: 0.016)
+                presents += EditorPerformanceTrace.shared.counts(for: .metalPresents).reduce(0, +)
+            }
+        }
+        let p95 = Measurement.percentile(untilObserver, 0.95)
+        ResultLog.row("keystroke_until_observer_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
+        ResultLog.row("keystroke_waits", file: path, sizeBytes: sizeBytes, seconds: Double(waits))
+        ResultLog.row("keystroke_sync_highlight_lines", file: path, sizeBytes: sizeBytes, seconds: Double(syncLines))
+        ResultLog.row("keystroke_next_drawable_before_observer", file: path, sizeBytes: sizeBytes, seconds: Double(nextDrawableBeforeObserver))
+        if options.metal {
+            ResultLog.row("keystroke_presents", file: path, sizeBytes: sizeBytes, seconds: Double(presents))
+        }
+        FileHandle.standardError.write(
+            "  until_observer_p95=\(String(format: "%.4f", p95)) waits=\(waits) sync_highlight_lines=\(syncLines) next_drawable_before_observer=\(nextDrawableBeforeObserver)\n".data(using: .utf8)!
+        )
     }
 
     // MARK: - save

@@ -28,6 +28,7 @@ func printUsageAndExit() -> Never {
       open <path> [--highlighted] [--deferred] [--viewport] [--chunked] [--mmap]
       scroll <path> [--frames N] [--highlighted] [--deferred]
       keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred] [--metal]
+      keystroke-budget <path> [--samples N] [--metal] [--lang java]
       occurrence-keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred] [--metal]
       goto <path> --percent N [--highlighted] [--deferred]
       search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
@@ -100,6 +101,12 @@ do {
             position: position,
             options: options,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 1
+        )
+    case "keystroke-budget":
+        try Commands.keystrokeBudget(
+            path: path,
+            options: options,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 30
         )
     case "occurrence-keystroke":
         guard let raw = flagValue("--at", in: rest), let position = Commands.Position(rawValue: raw) else {

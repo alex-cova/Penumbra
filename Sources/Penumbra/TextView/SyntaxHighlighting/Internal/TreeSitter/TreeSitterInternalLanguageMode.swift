@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import TreeSitter
 
@@ -263,7 +264,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             }
             captureWindows.removeAll()
             let editUTF16Length = max(change.byteRange.length.utf16Length, change.bytesAdded.utf16Length)
-            if editUTF16Length > TreeSitterPerformanceConstants.maxSyncEditLength {
+            let deferSyncParse = !PenumbraSyncKeystrokeParse.resolved(
+                defaults: UserDefaults.standard.object(forKey: PenumbraSyncKeystrokeParse.defaultsKey) as? Bool
+            )
+            if deferSyncParse || editUTF16Length > TreeSitterPerformanceConstants.maxSyncEditLength {
                 parseEpoch += 1
                 hasCompletedInitialParse = false
                 rootLanguageLayer.applyEditWithoutParsing(edit)
@@ -301,7 +305,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             return []
         }
         let captures = PenumbraSignposts.interval("TreeSitterInternalLanguageMode.captures") {
-            snapshot.captures(in: queryRange, stringView: stringView)
+            if Thread.isMainThread, EditorPerformanceTrace.shared.isEnabled {
+                EditorPerformanceTrace.shared.recordCount(.syncHighlightLines, count: 1)
+            }
+            return snapshot.captures(in: queryRange, stringView: stringView)
         }
         parseLock.lock()
         if epoch == parseEpoch {

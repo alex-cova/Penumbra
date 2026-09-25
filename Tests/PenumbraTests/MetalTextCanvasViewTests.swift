@@ -1,4 +1,5 @@
 import AppKit
+import EditorIntelligence
 import XCTest
 @testable import Penumbra
 
@@ -83,6 +84,53 @@ final class MetalTextCanvasViewTests: XCTestCase {
         let caretIndexAfterEdit = try XCTUnwrap(textView.subviews.firstIndex { $0 === overlayAfterEdit })
         XCTAssertGreaterThan(caretIndexAfterEdit, canvasIndexAfterEdit, "Return must not bury the caret under the Metal canvas")
         XCTAssertFalse(caretAfterEdit.isHidden)
+    }
+
+    func testDeferredPresentDoesNotWaitOnKeystroke() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+        let previousDeferred = UserDefaults.standard.object(forKey: MetalDeferredPresent.defaultsKey) as? Bool
+        UserDefaults.standard.set(true, forKey: MetalDeferredPresent.defaultsKey)
+        defer {
+            if let previousDeferred {
+                UserDefaults.standard.set(previousDeferred, forKey: MetalDeferredPresent.defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: MetalDeferredPresent.defaultsKey)
+            }
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView = textView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        EditorPerformanceTrace.shared.isEnabled = true
+        EditorPerformanceTrace.shared.reset()
+        defer {
+            EditorPerformanceTrace.shared.isEnabled = false
+            EditorPerformanceTrace.shared.reset()
+        }
+        textView.insertText("x")
+        let waits = EditorPerformanceTrace.shared.counts(for: .metalWaits).reduce(0, +)
+        let nextDrawable = KeystrokeBudgetMetrics.consumeNextDrawableBeforeObserverCount()
+        XCTAssertEqual(waits, 0, "deferred present must not waitUntilScheduled on the keystroke path")
+        XCTAssertEqual(nextDrawable, 0, "deferred present must not acquire a drawable before the typing observer")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        textView.layoutIfNeeded()
+        XCTAssertFalse(textView.metalDebugGlyphColors(atLocation: 0).isEmpty, "display link should present after pumping the run loop")
     }
 
     func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {

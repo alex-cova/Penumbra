@@ -4,6 +4,8 @@ final class LineChangeSet {
     private(set) var insertedLines: Set<DocumentLineNode> = []
     private(set) var removedLines: Set<DocumentLineNode> = []
     private(set) var editedLines: Set<DocumentLineNode> = []
+    private(set) var textEditedLines: Set<DocumentLineNode> = []
+    private(set) var syntaxChangedLines: Set<DocumentLineNode> = []
 
     func markLineInserted(_ line: DocumentLineNode) {
         removedLines.remove(line)
@@ -20,6 +22,13 @@ final class LineChangeSet {
     func markLineEdited(_ line: DocumentLineNode) {
         if !insertedLines.contains(line) && !removedLines.contains(line) {
             editedLines.insert(line)
+            textEditedLines.insert(line)
+        }
+    }
+
+    func markSyntaxChanged(_ line: DocumentLineNode) {
+        if !insertedLines.contains(line) && !removedLines.contains(line) {
+            syntaxChangedLines.insert(line)
         }
     }
 
@@ -27,6 +36,8 @@ final class LineChangeSet {
         insertedLines.formUnion(otherChangeSet.insertedLines)
         removedLines.formUnion(otherChangeSet.removedLines)
         editedLines.formUnion(otherChangeSet.editedLines)
+        textEditedLines.formUnion(otherChangeSet.textEditedLines)
+        syntaxChangedLines.formUnion(otherChangeSet.syntaxChangedLines)
     }
 
     /// Rows touched by this edit in post-edit coordinates, padded by one line so indent/fold

@@ -143,7 +143,9 @@ final class TreeSitterCaptureSnapshotTests: XCTestCase {
             let result = helper.replaceText(in: NSRange(location: 0, length: 0), with: "x")
             _ = languageMode.textDidChange(result.textChange)
         }
-        wait(for: [finished], timeout: 5)
+        let parseFinished = expectation(description: "parse finished")
+        languageMode.parse { _ in parseFinished.fulfill() }
+        wait(for: [finished, parseFinished], timeout: 5)
         XCTAssertTrue(languageMode.isSyntaxTreeReady)
     }
 
@@ -222,7 +224,27 @@ final class TreeSitterMaxSyncEditLengthTests: XCTestCase {
         super.tearDown()
     }
 
-    func testSmallEditKeepsSyntaxTreeReady() {
+    func testSmallEditDefersParseThenHighlights() {
+        UserDefaults.standard.set(false, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let delegate = SyntaxParseFinishedDelegate()
+        let finished = expectation(description: "deferred parse finished")
+        delegate.onFinish = { finished.fulfill() }
+        textView.editorDelegate = delegate
+        textView.setState(TextViewState(text: "# Hello\n\n**bold**\n", language: .markdown, parsePolicy: .eager))
+        XCTAssertTrue(textView.isSyntaxTreeReady)
+
+        textView.replace(NSRange(location: 0, length: 0), withText: "a")
+        XCTAssertFalse(textView.isSyntaxTreeReady)
+        XCTAssertTrue(textView.text.hasPrefix("a# Hello"))
+
+        wait(for: [finished], timeout: 5)
+        XCTAssertTrue(textView.isSyntaxTreeReady)
+    }
+
+    func testSyncKeystrokeParseRollbackKeepsTreeReady() {
+        UserDefaults.standard.set(true, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: PenumbraSyncKeystrokeParse.defaultsKey) }
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         textView.setState(TextViewState(text: "# Hello\n\n**bold**\n", language: .markdown, parsePolicy: .eager))
         XCTAssertTrue(textView.isSyntaxTreeReady)

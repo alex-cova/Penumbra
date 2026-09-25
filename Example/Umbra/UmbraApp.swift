@@ -7,10 +7,11 @@ struct UmbraApp: App {
     @State private var workspace = IDEWorkspace()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             IDERootView()
                 .environment(workspace)
                 .frame(minWidth: 960, minHeight: 640)
+                .background(IDEWindowReopenBridge())
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -21,6 +22,8 @@ struct UmbraApp: App {
                     .keyboardShortcut("o")
                 Button("Open Folder…", systemImage: "folder.badge.plus", action: workspace.openFolder)
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Button("Close Folder", systemImage: "folder.badge.minus", action: workspace.closeFolder)
+                    .disabled(!workspace.hasOpenProject)
                 Divider()
                 Button("Save", systemImage: "square.and.arrow.down") {
                     Task { await workspace.saveActiveDocument() }

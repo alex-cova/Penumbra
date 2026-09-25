@@ -62,18 +62,47 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         }
 
         func advanceForWrite() {
+            if !tryAdvanceForWrite() {
+                slotCondition.lock()
+                defer { slotCondition.unlock() }
+                while true {
+                    for offset in 1...buffers.count {
+                        let candidate = (cursor + offset) % buffers.count
+                        if inFlightCounts[candidate] == 0 {
+                            cursor = candidate
+                            return
+                        }
+                    }
+                    PenumbraSignposts.event("MetalRenderer.slotWait")
+                    slotCondition.wait()
+                }
+            }
+        }
+
+        func canAcquireWriteSlot() -> Bool {
             slotCondition.lock()
             defer { slotCondition.unlock() }
-            while true {
-                for offset in 1...buffers.count {
-                    let candidate = (cursor + offset) % buffers.count
-                    if inFlightCounts[candidate] == 0 {
-                        cursor = candidate
-                        return
-                    }
+            for offset in 1...buffers.count {
+                let candidate = (cursor + offset) % buffers.count
+                if inFlightCounts[candidate] == 0 {
+                    return true
                 }
-                slotCondition.wait()
             }
+            return false
+        }
+
+        @discardableResult
+        func tryAdvanceForWrite() -> Bool {
+            slotCondition.lock()
+            defer { slotCondition.unlock() }
+            for offset in 1...buffers.count {
+                let candidate = (cursor + offset) % buffers.count
+                if inFlightCounts[candidate] == 0 {
+                    cursor = candidate
+                    return true
+                }
+            }
+            return false
         }
 
         func markCurrentInFlight(on commandBuffer: MTLCommandBuffer) {
@@ -161,18 +190,47 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         }
 
         private func advanceForWrite() {
+            if !tryAdvanceForWrite() {
+                slotCondition.lock()
+                defer { slotCondition.unlock() }
+                while true {
+                    for offset in 1...buffers.count {
+                        let candidate = (cursor + offset) % buffers.count
+                        if inFlightCounts[candidate] == 0 {
+                            cursor = candidate
+                            return
+                        }
+                    }
+                    PenumbraSignposts.event("MetalRenderer.slotWait")
+                    slotCondition.wait()
+                }
+            }
+        }
+
+        func canAcquireWriteSlot() -> Bool {
             slotCondition.lock()
             defer { slotCondition.unlock() }
-            while true {
-                for offset in 1...buffers.count {
-                    let candidate = (cursor + offset) % buffers.count
-                    if inFlightCounts[candidate] == 0 {
-                        cursor = candidate
-                        return
-                    }
+            for offset in 1...buffers.count {
+                let candidate = (cursor + offset) % buffers.count
+                if inFlightCounts[candidate] == 0 {
+                    return true
                 }
-                slotCondition.wait()
             }
+            return false
+        }
+
+        @discardableResult
+        func tryAdvanceForWrite() -> Bool {
+            slotCondition.lock()
+            defer { slotCondition.unlock() }
+            for offset in 1...buffers.count {
+                let candidate = (cursor + offset) % buffers.count
+                if inFlightCounts[candidate] == 0 {
+                    cursor = candidate
+                    return true
+                }
+            }
+            return false
         }
     }
 
@@ -248,6 +306,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private var decorationBuildCount = 0
     private var glyphBufferRebuildCount = 0
     private var solidBufferRebuildCount = 0
+    private(set) var paintGeneration: UInt64 = 0
 
     var debugStats: DebugStats {
         return DebugStats(
@@ -501,15 +560,85 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         // instead of a blank gap or `theme.textColor` (the white flash).
         for (fragmentID, fragment) in fragments where ids.contains(fragment.lineID) {
             fragments[fragmentID]?.cacheKey = nil
+            for page in textPageContributions.keys where textPageContributions[page]?[fragmentID] != nil {
+                dirtyPageIDs.insert(page)
+            }
+            for page in overlayPageContributions.keys where overlayPageContributions[page]?[fragmentID] != nil {
+                dirtyPageIDs.insert(page)
+            }
         }
         needsGlyphBufferRebuild = true
-        needsDecorationBufferRebuild = true
         // Do not `setNeedsDisplay` here — a deferred present would encode this pass's stale
         // frame/decorations before layout/upsert rebuilds them.
     }
 
+    func canAcquireWriteSlots() -> Bool {
+        guard needsGlyphBufferRebuild || needsDecorationBufferRebuild else {
+            return true
+        }
+        let rebuildGlyphs = needsGlyphBufferRebuild
+        let rebuildSolids = needsDecorationBufferRebuild
+        var bucketsToCheck: [PageBucket] = []
+        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty, !rebuildSolids {
+            for pageID in dirtyPageIDs {
+                if let bucket = textPageBuckets[pageID] {
+                    bucketsToCheck.append(bucket)
+                }
+                if let bucket = overlayPageBuckets[pageID] {
+                    bucketsToCheck.append(bucket)
+                }
+            }
+        } else if rebuildGlyphs {
+            var textPages = Set<UInt32>()
+            var overlayPages = Set<UInt32>()
+            for fragment in fragments.values {
+                for instance in (fragment.alignedGlyphs ?? fragment.glyphs) where instance.atlasPage != 0 {
+                    textPages.insert(instance.atlasPage)
+                }
+                for instance in fragment.decorations.symbolGlyphs where instance.atlasPage != 0 {
+                    textPages.insert(instance.atlasPage)
+                }
+                for instance in fragment.decorations.overlayGlyphs where instance.atlasPage != 0 {
+                    overlayPages.insert(instance.atlasPage)
+                }
+            }
+            for pageID in textPages {
+                if let bucket = textPageBuckets[pageID] {
+                    bucketsToCheck.append(bucket)
+                }
+            }
+            for pageID in overlayPages {
+                if let bucket = overlayPageBuckets[pageID] {
+                    bucketsToCheck.append(bucket)
+                }
+            }
+            for pageID in textPageBuckets.keys where !textPages.contains(pageID) {
+                bucketsToCheck.append(textPageBuckets[pageID]!)
+            }
+            for pageID in overlayPageBuckets.keys where !overlayPages.contains(pageID) {
+                bucketsToCheck.append(overlayPageBuckets[pageID]!)
+            }
+        }
+        if !bucketsToCheck.allSatisfy({ $0.canAcquireWriteSlot() }) {
+            return false
+        }
+        if rebuildSolids {
+            return underlaySolidBuffer.canAcquireWriteSlot()
+                && overlaySolidBuffer.canAcquireWriteSlot()
+                && underlayLineBuffer.canAcquireWriteSlot()
+        }
+        return true
+    }
+
+    func notePaintCommitted() {
+        paintGeneration &+= 1
+    }
+
     func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat) {
         let scaleChanged = abs(scale - self.scale) > 0.001
+        let viewportUnchanged = self.viewport == viewport
+            && self.canvasFrame == canvasFrame
+            && !scaleChanged
         self.viewport = viewport
         self.canvasFrame = canvasFrame
         self.scale = max(scale, 0.001)
@@ -529,6 +658,9 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             needsGlyphBufferRebuild = true
             needsDecorationBufferRebuild = true
             dirtyFragmentIDs.formUnion(fragments.keys)
+        }
+        guard !viewportUnchanged else {
+            return
         }
         canvasView?.setNeedsDisplay()
     }
@@ -851,11 +983,13 @@ private extension MetalRenderer {
     }
 
     private func rebuildInstanceBuffers(rebuildGlyphs: Bool, rebuildSolids: Bool) {
-        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty {
+        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty, !rebuildSolids {
+            PenumbraSignposts.event("MetalRenderer.dirtyPageRebuild")
             rebuildDirtyGlyphPages()
-            if !rebuildSolids {
-                return
-            }
+            return
+        }
+        if rebuildGlyphs || rebuildSolids {
+            PenumbraSignposts.event("MetalRenderer.fullGlyphRebuild")
         }
         var textByPage: [UInt32: [GlyphInstance]] = [:]
         var overlayByPage: [UInt32: [GlyphInstance]] = [:]

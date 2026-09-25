@@ -47,6 +47,25 @@ final class SemanticHighlightStoreTests: XCTestCase {
         XCTAssertTrue(store.isEmpty)
     }
 
+    func testLineRangesAffectedByReplacingDetectsAddedAndRemovedHighlights() {
+        let store = SemanticHighlightStore()
+        store.set([highlight(0, 4, "type.class"), highlight(10, 3, "property")])
+        let affected = store.lineRanges(affectedByReplacing: [
+            highlight(0, 4, "type.class"),
+            highlight(20, 2, "method")
+        ])
+        XCTAssertTrue(affected.contains(NSRange(location: 10, length: 3)))
+        XCTAssertTrue(affected.contains(NSRange(location: 20, length: 2)))
+        XCTAssertFalse(affected.contains(NSRange(location: 0, length: 4)))
+    }
+
+    func testLineRangesAffectedByReplacingIsEmptyWhenUnchanged() {
+        let store = SemanticHighlightStore()
+        let highlights = [highlight(0, 4), highlight(10, 3)]
+        store.set(highlights)
+        XCTAssertTrue(store.lineRanges(affectedByReplacing: highlights).isEmpty)
+    }
+
     @MainActor
     func testTextViewAcceptsSemanticHighlightsAndSurvivesEdits() {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
