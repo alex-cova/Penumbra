@@ -78,10 +78,8 @@ private extension LineMovementController {
         guard let line = lineManager.line(containingCharacterAt: location) else {
             return location
         }
-        guard let lineController = lineControllerStorage[line.id] else {
-            return location
-        }
         let lineLocalLocation = max(min(location - line.location, line.data.totalLength), 0)
+        let lineController = typesetLineController(for: line, toLocation: lineLocalLocation)
         guard let lineFragmentNode = lineController.lineFragmentNode(containingCharacterAt: lineLocalLocation) else {
             return location
         }
@@ -99,7 +97,7 @@ private extension LineMovementController {
             return locationForMovingDownwards(lineOffset: lineOffset, fromLocation: location, inLineFragmentAt: lineFragmentIndex, of: line)
         } else {
             // lineOffset is 0 so we shouldn't change the line
-            let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+            let lineController = typesetLineController(for: line, toLocation: line.data.totalLength)
             let destinationLineFragmentNode = lineController.lineFragmentNode(atIndex: lineFragmentIndex)
             let lineLocation = line.location
             let preferredLocation = lineLocation + destinationLineFragmentNode.location + location
@@ -159,7 +157,19 @@ private extension LineMovementController {
     }
 
     private func numberOfLineFragments(in line: DocumentLineNode) -> Int {
+        typesetLineController(for: line, toLocation: line.data.totalLength).numberOfLineFragments
+    }
+
+    /// The controller for `line`, typeset through line-local `location`. Layout evicts controllers
+    /// far from the viewport (`LineControllerStorage.evictLineControllers`), and lines outside the
+    /// laid-out band were never typeset, so a caret line or a line moved into may need laying out
+    /// here; an untypeset controller reports no line fragments.
+    private func typesetLineController(for line: DocumentLineNode, toLocation location: Int) -> LineController {
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
-        return lineController.numberOfLineFragments
+        // A new controller reports finished typesetting with no fragments until it's prepared.
+        if lineController.numberOfLineFragments == 0 || !lineController.isFinishedTypesetting {
+            lineController.prepareToDisplayString(toLocation: location, syntaxHighlightAsynchronously: true)
+        }
+        return lineController
     }
 }

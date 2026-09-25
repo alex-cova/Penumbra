@@ -121,6 +121,16 @@ final class LineManager {
 
     private let packed: PackedLineIndex
     private var handles: [UInt32: DocumentLineNode] = [:]
+    /// Handle-table instrumentation for PerfHarness (see docs/EDITOR_PERF_PLAN.md). Plain counters,
+    /// cheap enough to keep in release builds.
+    var handleCount: Int { handles.count }
+    private(set) var handlesCreated = 0
+    /// Handles visited by the row-shift loops that run on every line insert/removal.
+    private(set) var handleShiftVisits = 0
+    func resetHandleCounters() {
+        handlesCreated = 0
+        handleShiftVisits = 0
+    }
 
     init(stringView: StringView, packedIndex: PackedLineIndex? = nil) {
         self.stringView = stringView
@@ -303,11 +313,23 @@ final class LineManager {
             data: data
         )
         handles[packedLine.id] = node
+        handlesCreated += 1
         return node
     }
 
     func location(ofRow row: Int) -> Int {
         packed.location(ofRow: row)
+    }
+
+    /// The stable ID of the line at `row`, without creating a `DocumentLineNode` handle.
+    func lineID(atRow row: Int) -> DocumentLineNodeID {
+        DocumentLineNodeID(value: packed.line(atRow: row).id)
+    }
+
+    /// UTF-16 range of the line at `row` without its line break, without creating a handle.
+    func contentRange(atRow row: Int) -> NSRange {
+        let (line, location) = packed.lineAndLocation(atRow: row)
+        return NSRange(location: location, length: Int(line.utf16Length) - Int(line.delimiterLength))
     }
 
     func yPosition(ofRow row: Int) -> CGFloat {
@@ -450,6 +472,7 @@ private extension LineManager {
     }
 
     private func shiftHandlesAfterInsert(atRow row: Int) {
+        handleShiftVisits += handles.count
         for handle in handles.values where handle.row >= row {
             handle.row += 1
         }
@@ -457,6 +480,7 @@ private extension LineManager {
 
     private func shiftHandlesAfterRemoval(atRow row: Int, removedID: UInt32) {
         handles.removeValue(forKey: removedID)
+        handleShiftVisits += handles.count
         for handle in handles.values where handle.row > row {
             handle.row -= 1
         }

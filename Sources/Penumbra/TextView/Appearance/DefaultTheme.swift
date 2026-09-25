@@ -3,6 +3,12 @@ import Foundation
 
 /// Default theme used by Penumbra when no other theme has been set.
 public final class DefaultTheme: Penumbra.Theme {
+    /// Shared placeholder for objects that are created often and get their real theme assigned
+    /// right after (`LineController`, syntax highlighters). Building a `DefaultTheme` resolves ~20
+    /// named colors, which was ~9% of scrolling time when done per line. Safe to share: every
+    /// property is a `let`.
+    nonisolated(unsafe) static let placeholder = DefaultTheme()
+
     nonisolated(unsafe) private static let defaultFont = NSFont(name: "Menlo", size: 14) ?? NSFont.userFixedPitchFont(ofSize: 14) ?? NSFont.systemFont(ofSize: 14)
 
     public let font: UIFont = DefaultTheme.defaultFont

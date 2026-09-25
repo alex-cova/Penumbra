@@ -34,20 +34,23 @@ private extension LineIndentationFoldProvider {
     /// Returns the indentation depth of the given row, along with its leading-whitespace
     /// character count, or `nil` if the row is empty or entirely whitespace.
     private func indentDepth(atRow row: Int, in lineManager: LineManager, stringView: StringView) -> (depth: Int, leadingWhitespaceCount: Int)? {
-        let line = lineManager.line(atRow: row)
-        let range = NSRange(location: line.location, length: line.data.length)
+        // Runs for every scanned row on each fold recompute: no line handle, and stop at the
+        // first non-whitespace character instead of counting the whole line.
+        let range = lineManager.contentRange(atRow: row)
         guard range.length > 0, let text = stringView.substring(in: range) else {
             return nil
         }
         var leadingWhitespaceCount = 0
+        var hasContent = false
         for character in text {
             if character.isWhitespace {
                 leadingWhitespaceCount += 1
             } else {
+                hasContent = true
                 break
             }
         }
-        guard leadingWhitespaceCount < text.count else {
+        guard hasContent else {
             // Entirely whitespace.
             return nil
         }

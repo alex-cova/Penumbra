@@ -967,6 +967,7 @@ final class TextInputView: UIView, UITextInput {
     private var inFlightViewportParseRange: NSRange?
     private let lineControllerFactory: LineControllerFactory
     private let lineControllerStorage: LineControllerStorage
+    var lineControllerCount: Int { lineControllerStorage.numberOfLineControllers }
     private let layoutManager: LayoutManager
     private let timedUndoManager = TimedUndoManager()
     private let indentController: IndentController

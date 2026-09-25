@@ -18,7 +18,7 @@ final class LineControllerStorage {
         }
     }
 
-    fileprivate var numberOfLineControllers: Int {
+    var numberOfLineControllers: Int {
         lineControllers.count
     }
 
@@ -47,6 +47,23 @@ final class LineControllerStorage {
 
     func removeAllLineControllers() {
         lineControllers.removeAll()
+    }
+
+    /// Once more than `limit` controllers are kept, drops those whose line row is outside
+    /// `keptRows`, except `pinnedLineIDs`. A dropped controller is recreated (and re-typeset) the
+    /// next time its line is needed. Returns how many were dropped.
+    @discardableResult
+    func evictLineControllers(ifMoreThan limit: Int,
+                              keepingRows keptRows: ClosedRange<Int>,
+                              pinnedLineIDs: Set<DocumentLineNodeID> = []) -> Int {
+        guard lineControllers.count > limit else {
+            return 0
+        }
+        let countBefore = lineControllers.count
+        lineControllers = lineControllers.filter { lineID, lineController in
+            keptRows.contains(lineController.line.row) || pinnedLineIDs.contains(lineID)
+        }
+        return countBefore - lineControllers.count
     }
 
     func removeAllLineControllers(exceptLinesWithID exceptionLineIDs: Set<DocumentLineNodeID>) {

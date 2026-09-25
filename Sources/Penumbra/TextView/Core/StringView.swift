@@ -239,89 +239,128 @@ final class StringView {
         }
     }
 
+    // Every read below takes the lock too: piece-tree reads update its lookup caches
+    // (`cachedNode`, read cursors), and a background parse reads through `bytes(in:)` at the same
+    // time. An unlocked read here raced that and freed a node mid-lookup (EXC_BAD_ACCESS in
+    // `PieceTree.nodeContaining`, found with PerfHarness `enter-session` under TSan).
+
     func rangeOfComposedCharacterSequence(at location: Int) -> NSRange {
-        switch storage {
-        case .contiguous(let string):
-            return string.customRangeOfComposedCharacterSequence(at: location)
-        case .pieceTree(let tree):
-            return tree.rangeOfComposedCharacterSequence(at: location)
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return string.customRangeOfComposedCharacterSequence(at: location)
+            case .pieceTree(let tree):
+                return tree.rangeOfComposedCharacterSequence(at: location)
+            }
         }
     }
 
     func rangeOfComposedCharacterSequences(for range: NSRange) -> NSRange {
-        switch storage {
-        case .contiguous(let string):
-            return string.customRangeOfComposedCharacterSequences(for: range)
-        case .pieceTree:
-            guard range.length > 0 else {
-                return rangeOfComposedCharacterSequence(at: range.location)
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return string.customRangeOfComposedCharacterSequences(for: range)
+            case .pieceTree:
+                guard range.length > 0 else {
+                    return rangeOfComposedCharacterSequence(at: range.location)
+                }
+                let start = rangeOfComposedCharacterSequence(at: range.location)
+                let last = max(range.location, range.upperBound - 1)
+                let end = rangeOfComposedCharacterSequence(at: last)
+                let location = min(start.location, end.location)
+                return NSRange(location: location, length: NSMaxRange(end) - location)
             }
-            let start = rangeOfComposedCharacterSequence(at: range.location)
-            let last = max(range.location, range.upperBound - 1)
-            let end = rangeOfComposedCharacterSequence(at: last)
-            let location = min(start.location, end.location)
-            return NSRange(location: location, length: NSMaxRange(end) - location)
         }
     }
 
+    /// Copies `range` under the lock, then enumerates the copy with the lock released, so a
+    /// long scan (bracket matching) doesn't hold up a background parse. Ranges passed to `block`
+    /// are in document coordinates.
     func enumerateSubstrings(
         in range: NSRange,
         options: NSString.EnumerationOptions,
         using block: @escaping (String?, NSRange, NSRange, UnsafeMutablePointer<ObjCBool>) -> Void
     ) {
-        switch storage {
-        case .contiguous(let string):
-            string.enumerateSubstrings(in: range, options: options, using: block)
-        case .pieceTree(let tree):
-            tree.enumerateSubstrings(in: range, options: options, using: block)
+        guard range.length > 0 else {
+            return
+        }
+        let copied: NSString? = withLock {
+            switch storage {
+            case .contiguous(let string):
+                return string.substring(with: range) as NSString
+            case .pieceTree(let tree):
+                return tree.substring(in: range).map { $0 as NSString }
+            }
+        }
+        guard let copied else {
+            return
+        }
+        copied.enumerateSubstrings(in: NSRange(location: 0, length: copied.length), options: options) { substring, substringRange, enclosingRange, stop in
+            let shifted = NSRange(location: range.location + substringRange.location, length: substringRange.length)
+            let shiftedEnclosing = NSRange(location: range.location + enclosingRange.location, length: enclosingRange.length)
+            block(substring, shifted, shiftedEnclosing, stop)
         }
     }
 
     func prefetch(utf16Range: NSRange) {
-        if case .pieceTree(let tree) = storage {
-            tree.prefetch(utf16Range: utf16Range)
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                tree.prefetch(utf16Range: utf16Range)
+            }
         }
     }
 
     func contentSnapshot() -> PieceTreeContentSnapshot? {
-        if case .pieceTree(let tree) = storage {
-            return tree.contentSnapshot()
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.contentSnapshot()
+            }
+            return nil
         }
-        return nil
     }
 
     func compactPieceTree(mapping: FileMapping, footer: DocumentWriteFooter) {
-        if case .pieceTree(let tree) = storage {
-            tree.compact(mapping: mapping, footer: footer)
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                tree.compact(mapping: mapping, footer: footer)
+            }
         }
     }
 
     var materializeCount: Int {
-        if case .pieceTree(let tree) = storage {
-            return tree.materializeCount
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.materializeCount
+            }
+            return 0
         }
-        return 0
     }
 
     var pieceCount: Int {
-        if case .pieceTree(let tree) = storage {
-            return tree.pieceCount
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.pieceCount
+            }
+            return 1
         }
-        return 1
     }
 
     var addBufferByteCount: Int {
-        if case .pieceTree(let tree) = storage {
-            return tree.addBufferByteCount
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.addBufferByteCount
+            }
+            return 0
         }
-        return 0
     }
 
     var lastPrefetchByteCount: Int {
-        if case .pieceTree(let tree) = storage {
-            return tree.lastPrefetchByteCount
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.lastPrefetchByteCount
+            }
+            return 0
         }
-        return 0
     }
 
     func unichar(at location: Int) -> unichar? {

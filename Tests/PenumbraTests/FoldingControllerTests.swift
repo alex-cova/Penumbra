@@ -274,6 +274,59 @@ final class FoldingControllerTests: XCTestCase {
         XCTAssertTrue(foldingController.isLineHidden(lineManager.line(atRow: lastFold.lineRange.lowerBound + 1).id))
     }
 
+    /// Recomputing with nothing collapsed used to create a line handle for every hidden row of
+    /// every (nested) fold on each edit: ~10 ms per Enter in a 20k-line Java file. Uses the
+    /// tree-sitter provider, as Umbra does for code.
+    func testRecomputeWithoutCollapsedFoldsCreatesNoLineHandlesForFoldBodies() {
+        var text = "class Outer {\n"
+        for index in 0..<200 {
+            text += "  f\(index)() {\n    let x = \(index)\n    let y = x\n  }\n"
+        }
+        text += "}\n"
+        let (foldingController, lineManager, stringView, languageMode) = makeTreeSitterFoldingController(text: text)
+        // Like an opened document: `insert` made a handle per line, a rebuild starts clean.
+        lineManager.rebuild()
+        foldingController.isEnabled = true
+        lineManager.resetHandleCounters()
+        foldingController.recomputeIfNeeded()
+        XCTAssertGreaterThan(foldingController.folds.count, 200)
+        XCTAssertLessThan(lineManager.handlesCreated, 16, "full recompute")
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let body = lineManager.line(atRow: 2)
+        let result = helper.replaceText(in: NSRange(location: body.location, length: body.data.length), with: "    let x = 99")
+        _ = languageMode.textDidChange(result.textChange)
+        foldingController.foldProvider.invalidateForEdit(
+            changedRows: result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount),
+            lineCount: lineManager.lineCount,
+            previousLineCount: lineManager.lineCount,
+            spliceRow: result.lineChangeSet.spliceRow ?? 0
+        )
+        let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+        lineManager.resetHandleCounters()
+        foldingController.setNeedsRecompute(rows: rows)
+        foldingController.recomputeIfNeeded()
+        XCTAssertGreaterThan(foldingController.folds.count, 200)
+        XCTAssertLessThan(lineManager.handlesCreated, 16, "incremental recompute after an edit")
+    }
+
+    /// The indentation provider (plain text and languages without a tree-sitter fold provider)
+    /// used to read every scanned row through a line handle.
+    func testIndentationProviderRecomputeCreatesNoLineHandles() {
+        var text = "class Outer {\n"
+        for index in 0..<200 {
+            text += "    func f\(index)() {\n        let x = \(index)\n\n        let y = x\n    }\n"
+        }
+        text += "}\n"
+        let (foldingController, lineManager, _) = makeFoldingController(text: text)
+        lineManager.rebuild()
+        foldingController.isEnabled = true
+        lineManager.resetHandleCounters()
+        foldingController.recomputeIfNeeded()
+        XCTAssertEqual(foldingController.folds.count, 201)
+        XCTAssertLessThan(lineManager.handlesCreated, 16)
+    }
+
     func testNewlineInsideAFoldShiftsLaterFolds() {
         let text = """
         func first() {

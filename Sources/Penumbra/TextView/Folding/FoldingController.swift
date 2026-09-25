@@ -458,24 +458,26 @@ private extension FoldingController {
         collapsedFoldByHeaderLineID = [:]
         var resultFolds: [FoldRange] = []
         resultFolds.reserveCapacity(newFolds.count)
+        let lineCount = lineManager.lineCount
         for fold in newFolds {
             var updatedFold = fold
-            if let hiddenLineRange = fold.hiddenLineRange {
-                var lines: [DocumentLineNode] = []
-                lines.reserveCapacity(hiddenLineRange.count)
-                for row in hiddenLineRange where row < lineManager.lineCount {
-                    lines.append(lineManager.line(atRow: row))
-                }
-                let wasCollapsed = !lines.isEmpty && lines.allSatisfy { previouslyHiddenLineIDs.contains($0.id) }
+            updatedFold.isCollapsed = false
+            // Runs on every edit, over every fold's rows (nested folds cover most lines several
+            // times). With nothing hidden before, no fold can be collapsed, so skip the walk; and
+            // read IDs without creating line handles until a fold really is collapsed.
+            if !previouslyHiddenLineIDs.isEmpty, let hiddenLineRange = fold.hiddenLineRange,
+               hiddenLineRange.lowerBound < lineCount {
+                let rows = hiddenLineRange.lowerBound ... min(hiddenLineRange.upperBound, lineCount - 1)
+                let wasCollapsed = rows.allSatisfy { previouslyHiddenLineIDs.contains(lineManager.lineID(atRow: $0)) }
                 updatedFold.isCollapsed = wasCollapsed
                 if wasCollapsed {
-                    for line in lines {
+                    for row in rows {
+                        let line = lineManager.line(atRow: row)
                         lineManager.setHeight(of: line, to: 0)
                         hiddenLineIDs.insert(line.id)
                         collapsedFoldByHiddenLineID[line.id] = updatedFold
                     }
-                    let headerLine = lineManager.line(atRow: fold.lineRange.lowerBound)
-                    collapsedFoldByHeaderLineID[headerLine.id] = updatedFold
+                    collapsedFoldByHeaderLineID[lineManager.lineID(atRow: fold.lineRange.lowerBound)] = updatedFold
                 }
             }
             resultFolds.append(updatedFold)

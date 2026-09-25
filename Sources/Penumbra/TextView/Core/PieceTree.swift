@@ -653,26 +653,6 @@ final class PieceTree {
         }
     }
 
-    func enumerateSubstrings(
-        in range: NSRange,
-        options: NSString.EnumerationOptions,
-        using block: @escaping (String?, NSRange, NSRange, UnsafeMutablePointer<ObjCBool>) -> Void
-    ) {
-        guard range.length > 0, let text = substring(in: range) else {
-            return
-        }
-        let ns = text as NSString
-        let local = NSRange(location: 0, length: ns.length)
-        ns.enumerateSubstrings(in: local, options: options) { substring, substringRange, enclosingRange, stop in
-            let shifted = NSRange(location: range.location + substringRange.location, length: substringRange.length)
-            let shiftedEnclosing = NSRange(
-                location: range.location + enclosingRange.location,
-                length: enclosingRange.length
-            )
-            block(substring, shifted, shiftedEnclosing, stop)
-        }
-    }
-
     func prefetch(utf16Range: NSRange) {
         guard let original else {
             return

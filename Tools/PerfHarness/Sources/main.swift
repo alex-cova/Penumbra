@@ -36,6 +36,7 @@ func printUsageAndExit() -> Never {
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR]
       java-completion synthetic
+      enter-session <path|synthetic> [--lines N] [--samples N]
 
     scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
     manual / nightly (print numbers, never fail on frame time). Use `synthetic` for a
@@ -71,6 +72,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion"
+    || command == "enter-session"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -86,6 +88,12 @@ do {
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "java-completion":
         try JavaCompletionProfile.run()
+    case "enter-session":
+        let lines = Int(flagValue("--lines", in: rest) ?? "") ?? 120_000
+        let samples = Int(flagValue("--samples", in: rest) ?? "") ?? 15
+        MainActor.assumeIsolated {
+            EnterSessionProfile.run(pathOrSynthetic: path, lines: lines, samples: samples)
+        }
     case "open":
         try Commands.open(path: path, options: options)
     case "scroll":

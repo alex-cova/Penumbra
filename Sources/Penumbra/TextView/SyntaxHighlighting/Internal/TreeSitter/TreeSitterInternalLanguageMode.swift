@@ -13,7 +13,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     /// `[]`. Without this, `LineController` would mark a line "highlighted" after a query that
     /// silently produced zero tokens, leaving it stuck at `theme.textColor` (the Metal white flash).
     var canHighlight: Bool {
-        parseLock.withLock { rootLanguageLayer.canHighlight && !parseInFlight && hasCompletedInitialParse }
+        // `parseInFlight` first: the parse assigns the layer's tree and parser language outside
+        // `parseLock`, so the layer may only be read when no parse is running.
+        parseLock.withLock { !parseInFlight && hasCompletedInitialParse && rootLanguageLayer.canHighlight }
     }
     /// `false` when this language (and every injected language) has no highlights query, i.e. a
     /// pending parse can never produce a highlight here. Lets `TreeSitterSyntaxHighlighter` report
@@ -60,6 +62,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private let operationQueue = OperationQueue()
     private let highlightQueue = OperationQueue()
     private let parseLock = NSLock()
+    /// Copy of the root tree taken when the in-flight parse started; what main-thread readers get
+    /// while `parseInFlight` (the parse replaces the live tree outside `parseLock`).
+    private var treeSnapshotDuringParse: TreeSitterTree?
     private var hasCompletedInitialParse = false
     /// Highlight captures for recently-queried byte windows, reused by adjacent lines until the
     /// tree changes. `LayoutManager` schedules one highlight per visible line onto `highlightQueue`
@@ -211,12 +216,14 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         // compares the edited tree with the one parse returns. A retain of the live tree
         // would be freed when the parser swaps it out.
         let previousTree = rootLanguageLayer.tree?.copy()
+        treeSnapshotDuringParse = rootLanguageLayer.tree?.copy()
         parseLock.unlock()
 
         work()
 
         parseLock.lock()
         parseInFlight = false
+        treeSnapshotDuringParse = nil
         parser.shouldCancel = nil
         if isCancelled?() == true || epoch != parseEpoch || parser.lastParseAborted {
             parser.reset()
@@ -353,11 +360,13 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             }
             return snapshot.captures(in: queryRange, stringView: stringView)
         }
+        // Built before taking the lock: indexing is O(captures).
+        let window = CaptureWindow(range: queryRange, captures: captures)
         parseLock.lock()
         // An edit during the query shifted bytes under the snapshot; its captures are off.
         let isCurrent = epoch == parseEpoch
         if isCurrent {
-            storeCaptureWindow(CaptureWindow(range: queryRange, captures: captures))
+            storeCaptureWindow(window)
         }
         parseLock.unlock()
         guard isCurrent else {
@@ -366,7 +375,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         if queryRange == range {
             return captures
         }
-        return captures.filter { $0.byteRange.overlaps(range) }
+        return window.captures(overlapping: range)
     }
 
     /// Captures for `range` only if an already-queried window covers it; never runs a query.
@@ -392,7 +401,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             captureWindows.remove(at: index)
             captureWindows.append(window)
         }
-        return window.captures.filter { $0.byteRange.overlaps(range) }
+        return window.captures(overlapping: range)
     }
 
     /// Must be called while holding `parseLock`.
@@ -416,9 +425,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     func strategyForInsertingLineBreak(from startLinePosition: LinePosition,
                                        to endLinePosition: LinePosition,
                                        using indentStrategy: IndentStrategy) -> InsertLineBreakIndentStrategy {
-        let startLayerAndNode = rootLanguageLayer.layerAndNode(at: startLinePosition)
-        let endLayerAndNode = rootLanguageLayer.layerAndNode(at: endLinePosition)
-        if let indentationScopes = startLayerAndNode?.layer.language.indentationScopes ?? endLayerAndNode?.layer.language.indentationScopes {
+        let startLayerAndNode = nodeLookup(at: startLinePosition)
+        let endLayerAndNode = nodeLookup(at: endLinePosition)
+        if let indentationScopes = startLayerAndNode?.language.indentationScopes ?? endLayerAndNode?.language.indentationScopes {
             let indentController = TreeSitterIndentController(
                 indentationScopes: indentationScopes,
                 stringView: stringView,
@@ -445,7 +454,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 return nil
             }
         }
-        if let node = rootLanguageLayer.layerAndNode(at: linePosition)?.node, let type = node.type {
+        if let node = nodeLookup(at: linePosition)?.node, let type = node.type {
             let startLocation = TextLocation(LinePosition(node.startPoint))
             let endLocation = TextLocation(LinePosition(node.endPoint))
             return SyntaxNode(type: type, startLocation: startLocation, endLocation: endLocation)
@@ -455,7 +464,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     }
 
     func detectIndentStrategy() -> DetectedIndentStrategy {
-        if let tree = rootLanguageLayer.tree {
+        if let tree = rootTreeSnapshot() {
             let detector = TreeSitterIndentStrategyDetector(lineManager: lineManager, tree: tree, stringView: stringView)
             return detector.detect()
         } else {
@@ -463,17 +472,27 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
     }
 
+    /// Root of a private copy of the tree, safe to walk on the main thread while a background
+    /// parse runs. The node keeps its copy alive.
     var rootSyntaxNode: TreeSitterNode? {
-        rootLanguageLayer.tree?.rootNode
+        rootTreeSnapshot()?.rootNode
+    }
+
+    /// `ts_tree_copy` is O(1); a copy is what tree-sitter requires to use a tree on two threads.
+    private func rootTreeSnapshot() -> TreeSitterTree? {
+        parseLock.withLock {
+            parseInFlight ? treeSnapshotDuringParse?.copy() : rootLanguageLayer.tree?.copy()
+        }
     }
 
     /// The smallest (injection-aware) tree-sitter node at `linePosition`, for callers that need
     /// the live tree structure — parent chain, sibling rows — rather than the flattened
-    /// ``SyntaxNode``. Returns `nil` while a parse is in flight or the position is outside a
-    /// viewport parse window.
+    /// ``SyntaxNode``. Returns `nil` when the position is outside a viewport parse window. While a
+    /// parse is in flight the node comes from the root tree as it was when the parse started
+    /// (see `nodeLookup(at:)`).
     ///
-    /// - Important: The returned node points into a tree that is freed on the next reparse.
-    ///   Read what you need from it immediately; never hold it across a text edit.
+    /// - Important: Read what you need from the returned node immediately; never hold it across
+    ///   a text edit (edits shift the tree it points into).
     func treeSitterNode(at linePosition: LinePosition) -> TreeSitterNode? {
         let parsed = parseLock.withLock { parseInFlight ? nil : parsedUTF16Range }
         if let parsed, parsed.length < stringView.length {
@@ -483,7 +502,25 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 return nil
             }
         }
-        return rootLanguageLayer.layerAndNode(at: linePosition)?.node
+        return nodeLookup(at: linePosition)?.node
+    }
+
+    /// Smallest node at `linePosition` and the language of the layer it belongs to, read without
+    /// racing a background parse, which replaces layer trees outside `parseLock`. With no parse
+    /// running the lookup runs under the lock and is injection-aware. During a parse it uses a
+    /// copy of the root tree taken when the parse started, so injected layers are skipped until
+    /// it lands. The node keeps its tree alive; only the main thread edits trees.
+    private func nodeLookup(at linePosition: LinePosition) -> (node: TreeSitterNode, language: TreeSitterInternalLanguage)? {
+        parseLock.withLock {
+            if parseInFlight {
+                guard let tree = treeSnapshotDuringParse?.copy() else {
+                    return nil
+                }
+                let point = TreeSitterTextPoint(linePosition)
+                return (tree.rootNode.descendantForRange(from: point, to: point), rootLanguageLayer.language)
+            }
+            return rootLanguageLayer.layerAndNode(at: linePosition).map { ($0.node, $0.layer.language) }
+        }
     }
 
     private func expandedCaptureRange(covering range: ByteRange) -> ByteRange {
@@ -505,9 +542,67 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     }
 }
 
-private struct CaptureWindow {
+/// The captures of one queried byte window, indexed so a line can pick out the captures that
+/// overlap it without scanning the whole window (layout asks once per visible line, under
+/// `parseLock`, and a 32k window holds thousands of captures).
+struct CaptureWindow {
     let range: ByteRange
     let captures: [TreeSitterCapture]
+    /// `maxEnd[i]`: largest capture end among `captures[0...i]` (non-decreasing).
+    private let maxEnd: [Int]
+    /// `minStart[i]`: smallest capture start among `captures[i...]` (non-decreasing).
+    private let minStart: [Int]
+
+    init(range: ByteRange, captures: [TreeSitterCapture]) {
+        self.range = range
+        self.captures = captures
+        var maxEnd: [Int] = []
+        maxEnd.reserveCapacity(captures.count)
+        var runningEnd = Int.min
+        for capture in captures {
+            runningEnd = max(runningEnd, capture.byteRange.upperBound.value)
+            maxEnd.append(runningEnd)
+        }
+        var minStart = [Int](repeating: 0, count: captures.count)
+        var runningStart = Int.max
+        for index in captures.indices.reversed() {
+            runningStart = min(runningStart, captures[index].byteRange.lowerBound.value)
+            minStart[index] = runningStart
+        }
+        self.maxEnd = maxEnd
+        self.minStart = minStart
+    }
+
+    /// Exactly `captures.filter { $0.byteRange.overlaps(range) }`, in the same order. A capture
+    /// overlaps (closed ranges) when `start <= range.upper && range.lower <= end`, so everything
+    /// before the first `maxEnd >= range.lower` and from the first `minStart > range.upper` on
+    /// can't overlap.
+    func captures(overlapping range: ByteRange) -> [TreeSitterCapture] {
+        let lower = range.lowerBound.value
+        let upper = range.upperBound.value
+        let first = Self.firstIndex(in: maxEnd) { $0 >= lower }
+        let end = Self.firstIndex(in: minStart) { $0 > upper }
+        guard first < end else {
+            return []
+        }
+        return captures[first ..< end].filter { $0.byteRange.overlaps(range) }
+    }
+
+    /// First index whose value satisfies `predicate`, for a predicate that is false then true
+    /// along the (non-decreasing) array; `values.count` when none does.
+    private static func firstIndex(in values: [Int], where predicate: (Int) -> Bool) -> Int {
+        var low = 0
+        var high = values.count
+        while low < high {
+            let mid = (low + high) / 2
+            if predicate(values[mid]) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        return low
+    }
 }
 
 extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {

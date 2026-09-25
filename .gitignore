@@ -1,5 +1,6 @@
 .build
 **/.build
+.build-tsan
 .idea
 .DS_Store
 Tools/PerfHarness/Fixtures/

@@ -15,8 +15,14 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
     private(set) var visibleViews: [Key: View] = [:]
 
     private var queuedViews: Set<View> = []
+    /// Keep queued views in their superview, hidden, instead of removing them. Detaching and
+    /// re-adding an `NSView` (window, layer tree, constraint and display invalidation) was most of
+    /// the gutter's cost when scrolling a page. Only for queues whose views always go back into
+    /// the same container.
+    private let hidesQueuedViews: Bool
 
-    init() {
+    init(hidesQueuedViews: Bool = false) {
+        self.hidesQueuedViews = hidesQueuedViews
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(clearMemory),
@@ -37,8 +43,11 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
         for key in keys {
             if let view = visibleViews.removeValue(forKey: key) {
                 view.prepareForReuse()
-                view.removeFromSuperview()
-                queueViewIfNeeded(view, usedViewCount: usedViewCount)
+                if !queueViewIfNeeded(view, usedViewCount: usedViewCount) || !hidesQueuedViews {
+                    view.removeFromSuperview()
+                } else {
+                    view.isHidden = true
+                }
             }
         }
     }
@@ -48,6 +57,7 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
             return view
         } else if !queuedViews.isEmpty {
             let view = queuedViews.removeFirst()
+            view.isHidden = false
             visibleViews[key] = view
             return view
         } else {
@@ -57,16 +67,25 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
         }
     }
 
-    private func queueViewIfNeeded(_ view: View, usedViewCount: Int) {
+    /// Returns whether `view` was kept for reuse.
+    @discardableResult
+    private func queueViewIfNeeded(_ view: View, usedViewCount: Int) -> Bool {
         // There's no need to let the queue grow large but deciding on a good number of views to allow in the queue is difficult.
         // We cap it at the number of views that were in use just before this batch of removals: there'll rarely be any need
         // for the queue to grow larger than that, but it also won't be starved mid-batch the way a shrinking live count would.
         if queuedViews.count < usedViewCount {
             queuedViews.insert(view)
+            return true
         }
+        return false
     }
 
     @objc private func clearMemory() {
+        if hidesQueuedViews {
+            for view in queuedViews {
+                view.removeFromSuperview()
+            }
+        }
         queuedViews.removeAll()
     }
 }

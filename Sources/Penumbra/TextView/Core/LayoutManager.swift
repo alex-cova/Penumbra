@@ -197,7 +197,7 @@ final class LayoutManager {
         }
     }
     private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
-    private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
+    private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>(hidesQueuedViews: true)
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     var currentlyVisibleLineIDs: Set<DocumentLineNodeID> { visibleLineIDs }
     private let linesContainerView = UIView()
@@ -579,23 +579,32 @@ extension LayoutManager {
         let adjustedXPosition = point.x - leadingLineSpacing
         let adjustedYPosition = point.y - textContainerInset.top
         let adjustedPoint = CGPoint(x: adjustedXPosition, y: adjustedYPosition)
-        if let line = lineManager.line(containingYOffset: adjustedPoint.y), let lineController = lineControllerStorage[line.id] {
-            return closestIndex(to: adjustedPoint, in: lineController)
+        if let line = lineManager.line(containingYOffset: adjustedPoint.y) {
+            return closestIndex(to: adjustedPoint, in: typesetLineController(for: line))
         } else if adjustedPoint.y <= 0 {
-            let firstLine = lineManager.firstLine
-            if let lineController = lineControllerStorage[firstLine.id] {
-                return closestIndex(to: adjustedPoint, in: lineController)
-            } else {
-                return 0
-            }
+            return closestIndex(to: adjustedPoint, in: typesetLineController(for: lineManager.firstLine))
         } else {
             let lastLine = lineManager.lastLine
-            if adjustedPoint.y >= lastLine.yPosition, let lineController = lineControllerStorage[lastLine.id] {
-                return closestIndex(to: adjustedPoint, in: lineController)
+            if adjustedPoint.y >= lastLine.yPosition {
+                return closestIndex(to: adjustedPoint, in: typesetLineController(for: lastLine))
             } else {
                 return stringView.length
             }
         }
+    }
+
+    /// The controller for `line`, typeset in full. Controllers far from the viewport are evicted
+    /// (`evictDistantLineControllers`) and lines outside the laid-out band were never typeset, so
+    /// a point or caret on such a line (keyboard movement from an off-screen caret) lays it out
+    /// here instead of falling back to the document's start or end.
+    private func typesetLineController(for line: DocumentLineNode) -> LineController {
+        let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+        // A new controller reports finished typesetting with no fragments until it's prepared.
+        if lineController.numberOfLineFragments == 0 || !lineController.isFinishedTypesetting {
+            lineController.constrainingWidth = constrainingLineWidth
+            lineController.prepareToDisplayString(toLocation: line.data.totalLength, syntaxHighlightAsynchronously: true)
+        }
+        return lineController
     }
 
     private func closestIndex(to point: CGPoint, in lineController: LineController) -> Int {
@@ -848,8 +857,10 @@ extension LayoutManager {
         // view already have their fragments and views prepared (see verticalLayoutPadding).
         let layoutBounds = paddedInsetViewport
         var nextLine = lineManager.line(containingYOffset: layoutBounds.minY)
+        var laidOutRows: ClosedRange<Int>?
         if let startLine = nextLine {
             let endLine = lineManager.line(containingYOffset: layoutBounds.maxY) ?? lineManager.lastLine
+            laidOutRows = startLine.index ... max(startLine.index, endLine.index)
             let start = startLine.location
             let end = endLine.location + endLine.data.totalLength
             stringView.prefetch(utf16Range: NSRange(location: start, length: max(0, end - start)))
@@ -998,6 +1009,9 @@ extension LayoutManager {
         }
         lineNumberLabelReuseQueue.enqueueViews(withKeys: disappearedLineIDs)
         paintBackend.removeFragments(ids: disappearedLineFragmentIDs)
+        if let laidOutRows {
+            evictDistantLineControllers(around: laidOutRows)
+        }
         // Adjust the content offset on the Y-axis if necessary.
         if contentOffsetAdjustmentY != 0 {
             let contentOffsetAdjustment = CGPoint(x: 0, y: contentOffsetAdjustmentY)
@@ -1332,6 +1346,32 @@ private extension LayoutManager {
 
 // MARK: - Memory Management
 private extension LayoutManager {
+    /// Bounds `LineControllerStorage`, which otherwise keeps a controller for every line ever laid
+    /// out. Past the cap (8× the laid-out rows, at least
+    /// `EditorPerformanceConstants.minimumRetainedLineControllers`) it keeps only rows within a
+    /// margin of the viewport, so evictions are rare. The lines holding the selection's ends and
+    /// marked text are kept too: caret rects and line-boundary moves read their typesetting
+    /// without laying them out. Line widths stay cached in `ContentSizeService`, so the content
+    /// width doesn't change.
+    func evictDistantLineControllers(around laidOutRows: ClosedRange<Int>) {
+        let laidOutCount = laidOutRows.count
+        let limit = max(EditorPerformanceConstants.minimumRetainedLineControllers, laidOutCount * 8)
+        guard lineControllerStorage.numberOfLineControllers > limit else {
+            return
+        }
+        let margin = max(256, laidOutCount * 2)
+        let keptRows = max(0, laidOutRows.lowerBound - margin) ... (laidOutRows.upperBound + margin)
+        var pinned: Set<DocumentLineNodeID> = []
+        for range in [selectedRange, markedRange].compactMap({ $0 }) {
+            for location in [range.location, NSMaxRange(range)] {
+                if let line = lineManager.line(containingCharacterAt: min(max(location, 0), stringView.length)) {
+                    pinned.insert(line.id)
+                }
+            }
+        }
+        lineControllerStorage.evictLineControllers(ifMoreThan: limit, keepingRows: keptRows, pinnedLineIDs: pinned)
+    }
+
     @objc private func clearMemory() {
         lineControllerStorage.removeAllLineControllers(exceptLinesWithID: visibleLineIDs)
         contentSizeService.removeLineWidths(exceptLinesWithID: visibleLineIDs)

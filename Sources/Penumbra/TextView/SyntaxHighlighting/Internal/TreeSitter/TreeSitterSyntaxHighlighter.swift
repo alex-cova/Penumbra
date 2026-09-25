@@ -19,7 +19,7 @@ enum TreeSitterSyntaxHighlighterError: LocalizedError {
 }
 
 final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Sendable {
-    var theme: Theme = DefaultTheme()
+    var theme: Theme = DefaultTheme.placeholder
     var kern: CGFloat = 0
     var canHighlight: Bool {
         languageMode.canHighlight

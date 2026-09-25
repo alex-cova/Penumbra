@@ -1091,6 +1091,22 @@ public struct DocumentTextExport: Sendable {
         get { textInputView.onMetalRenderingFailure }
         set { textInputView.onMetalRenderingFailure = newValue }
     }
+    /// `LineManager` handle-table counters. Benchmarks only (`@_spi(Benchmarks) import Penumbra`).
+    @_spi(Benchmarks)
+    public var lineHandleStatistics: LineHandleStatistics {
+        let lineManager = textInputView.lineManager
+        return LineHandleStatistics(
+            lineCount: lineManager.lineCount,
+            liveHandles: lineManager.handleCount,
+            handlesCreated: lineManager.handlesCreated,
+            shiftVisits: lineManager.handleShiftVisits
+        )
+    }
+    /// Zeroes `lineHandleStatistics.handlesCreated` and `.shiftVisits`. Benchmarks only.
+    @_spi(Benchmarks)
+    public func resetLineHandleCounters() {
+        textInputView.lineManager.resetHandleCounters()
+    }
     /// Resident coverage (R8) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
     public var metalGlyphAtlasBytes: Int { textInputView.metalDebugStats?.coverageAtlasBytes ?? 0 }
     /// Resident color (BGRA) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
@@ -1200,6 +1216,8 @@ public struct DocumentTextExport: Sendable {
     var minimapViewForTesting: MinimapView { minimapView }
     /// Test hook — the overlay scrollers, so tests can probe and drive them directly.
     var scrollerOverlayForTesting: ScrollerOverlayController { scrollerOverlay }
+    /// Test hook — how many `LineController`s are currently kept.
+    var lineControllerCountForTesting: Int { textInputView.lineControllerCount }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
