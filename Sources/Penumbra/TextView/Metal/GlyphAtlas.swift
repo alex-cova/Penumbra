@@ -60,6 +60,9 @@ final class GlyphAtlas {
     private var coveragePages: [AtlasPage] = []
     private var colorPages: [AtlasPage] = []
     private var cache: [GlyphKey: CacheEntry] = [:]
+    /// Font-space glyph bounds for extraction. Not main-actor state, so the (non-isolated) per-run
+    /// extraction code can use it without executor checks.
+    nonisolated let glyphBoundsCache = GlyphBoundsCache()
     private var nextPageID: UInt32 = 1
     private var lruClock: UInt64 = 0
 
@@ -142,6 +145,7 @@ final class GlyphAtlas {
     /// Drops every page and cached slot. Used when the backing scale changes (keys embed scale).
     func removeAll() {
         cache.removeAll()
+        glyphBoundsCache.removeAll()
         coveragePages.removeAll()
         colorPages.removeAll()
         hitCount = 0
@@ -214,6 +218,21 @@ final class GlyphAtlas {
             subpixel: subpixel,
             isColor: color
         )
+        return lookup(key: key, font: font, glyph: glyph, scale: scale, runMatrix: runMatrix, subpixel: subpixel, isColor: color)
+    }
+
+    /// `lookup(font:glyph:…)` with the key already built (it must equal `GlyphKey.make` for the
+    /// same arguments). Extraction builds one key per run and varies only glyph and subpixel.
+    @discardableResult
+    func lookup(
+        key: GlyphKey,
+        font: CTFont,
+        glyph: CGGlyph,
+        scale: CGFloat,
+        runMatrix: CGAffineTransform,
+        subpixel: UInt8,
+        isColor color: Bool
+    ) -> GlyphAtlasResult {
         if let entry = cache[key] {
             switch entry {
             case .slot(let slot):
@@ -754,4 +773,62 @@ private func tightlyPacked(_ data: Data, width: Int, height: Int, bytesPerRow: I
         }
     }
     return packed
+}
+
+/// Font-space glyph bounds (`CTFontGetBoundingRectsForGlyphs`), keyed by the glyph's atlas key with
+/// `subpixel` 0. Core Text works them out from the glyph outline on every call, which was the
+/// largest cost of extracting a line's glyphs while scrolling. Lock-protected rather than
+/// main-actor-isolated so extraction's per-glyph code stays free of executor checks.
+final class GlyphBoundsCache: @unchecked Sendable {
+    static let limit = 50_000
+    private let lock = NSLock()
+    private var bounds: [GlyphKey: CGRect] = [:]
+
+    /// Bounds of `glyphs` in `font`, as `CTFontGetBoundingRectsForGlyphs` returns them; misses are
+    /// queried from Core Text in one call. `keyTemplate` is the run's `GlyphKey` (any glyph and
+    /// subpixel): bounds depend only on the font, its size and the matrices.
+    func glyphBounds(for glyphs: [CGGlyph], font: CTFont, keyTemplate: GlyphKey) -> [CGRect] {
+        var key = keyTemplate
+        key.subpixel = 0
+        var result = [CGRect](repeating: .zero, count: glyphs.count)
+        var missIndices: [Int] = []
+        lock.lock()
+        for index in glyphs.indices {
+            key.glyph = UInt16(glyphs[index])
+            if let cached = bounds[key] {
+                result[index] = cached
+            } else {
+                missIndices.append(index)
+            }
+        }
+        lock.unlock()
+        guard !missIndices.isEmpty else {
+            return result
+        }
+        var missGlyphs = [CGGlyph]()
+        missGlyphs.reserveCapacity(missIndices.count)
+        for index in missIndices {
+            missGlyphs.append(glyphs[index])
+        }
+        var missBounds = [CGRect](repeating: .zero, count: missGlyphs.count)
+        CTFontGetBoundingRectsForGlyphs(font, .default, &missGlyphs, &missBounds, missGlyphs.count)
+        lock.lock()
+        if bounds.count + missGlyphs.count > Self.limit {
+            bounds.removeAll(keepingCapacity: true)
+        }
+        for missIndex in missIndices.indices {
+            let index = missIndices[missIndex]
+            result[index] = missBounds[missIndex]
+            key.glyph = UInt16(glyphs[index])
+            bounds[key] = missBounds[missIndex]
+        }
+        lock.unlock()
+        return result
+    }
+
+    func removeAll() {
+        lock.lock()
+        bounds.removeAll()
+        lock.unlock()
+    }
 }

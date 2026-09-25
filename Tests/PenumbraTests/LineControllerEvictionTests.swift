@@ -60,6 +60,8 @@ final class LineControllerEvictionTests: XCTestCase {
             offsetY += textView.bounds.height
         }
         XCTAssertLessThanOrEqual(textView.lineControllerCountForTesting, 400, "controllers stay bounded")
+        let lineManager = textView.minimapViewForTesting.lineDataSource!.lineManager
+        XCTAssertLessThan(lineManager.handleCount, 1_000, "handles are released with their controllers")
         XCTAssertEqual(textView.contentSize.width, contentWidth, "evicting controllers keeps line widths")
 
         // The caret line (row 0) is far from the viewport now; moving down must still work.

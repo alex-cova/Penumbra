@@ -117,10 +117,15 @@ final class LineManager {
     var lastLine: DocumentLineNode {
         line(atRow: lineCount - 1)
     }
-    private(set) weak var initialLongestLine: DocumentLineNode?
+    /// Held strongly so handle pruning keeps it; cleared when the line is removed (it used to be
+    /// `weak`, kept alive only because the handle table never released anything).
+    private(set) var initialLongestLine: DocumentLineNode?
 
     private let packed: PackedLineIndex
     private var handles: [UInt32: DocumentLineNode] = [:]
+    /// Fewest handles kept before `releaseUnreferencedHandles()` runs on its own.
+    static let minimumHandlePruneThreshold = 4_096
+    private var handlePruneThreshold = LineManager.minimumHandlePruneThreshold
     /// Handle-table instrumentation for PerfHarness (see docs/EDITOR_PERF_PLAN.md). Plain counters,
     /// cheap enough to keep in release builds.
     var handleCount: Int { handles.count }
@@ -314,6 +319,9 @@ final class LineManager {
         )
         handles[packedLine.id] = node
         handlesCreated += 1
+        if handles.count > handlePruneThreshold {
+            releaseUnreferencedHandles()
+        }
         return node
     }
 
@@ -324,6 +332,25 @@ final class LineManager {
     /// The stable ID of the line at `row`, without creating a `DocumentLineNode` handle.
     func lineID(atRow row: Int) -> DocumentLineNodeID {
         DocumentLineNodeID(value: packed.line(atRow: row).id)
+    }
+
+    /// A read-only snapshot of the line at `row`: one tree descent, no `DocumentLineNode` handle.
+    /// For loops that visit many rows once (the minimap walks hundreds per frame).
+    func lineInfo(atRow row: Int) -> LineInfo {
+        let (line, location) = packed.lineAndLocation(atRow: row)
+        return LineInfo(
+            id: DocumentLineNodeID(value: line.id),
+            row: min(max(row, 0), max(packed.lineCount - 1, 0)),
+            location: location,
+            totalLength: Int(line.utf16Length),
+            delimiterLength: Int(line.delimiterLength),
+            lineHeight: CGFloat(line.height)
+        )
+    }
+
+    /// Row of the line containing `yOffset` (clamped to the document), without creating a handle.
+    func row(containingYOffset yOffset: CGFloat) -> Int? {
+        packed.row(containingYOffset: yOffset)
     }
 
     /// UTF-16 range of the line at `row` without its line break, without creating a handle.
@@ -376,6 +403,18 @@ final class LineManager {
 
     func createLineIterator() -> LineIterator {
         LineIterator(lineManager: self)
+    }
+
+    /// Handles only the table references are dropped once it passes `handlePruneThreshold`:
+    /// otherwise it keeps one per line ever visited (~180 B each), and every line insert/removal
+    /// walks all of them. A handle held anywhere else stays and keeps receiving `row` updates; a
+    /// dropped one is recreated with the same ID on the next `line(atRow:)`. Also called right
+    /// after layout releases line controllers, which are what usually keep handles alive.
+    func releaseUnreferencedHandles() {
+        for lineID in Array(handles.keys) where isKnownUniquelyReferenced(&handles[lineID]) {
+            handles.removeValue(forKey: lineID)
+        }
+        handlePruneThreshold = max(Self.minimumHandlePruneThreshold, handles.count * 2)
     }
 }
 
@@ -479,10 +518,31 @@ private extension LineManager {
     }
 
     private func shiftHandlesAfterRemoval(atRow row: Int, removedID: UInt32) {
+        if initialLongestLine?.id.value == removedID {
+            initialLongestLine = nil
+        }
         handles.removeValue(forKey: removedID)
         handleShiftVisits += handles.count
         for handle in handles.values where handle.row > row {
             handle.row -= 1
         }
+    }
+}
+
+/// Value snapshot of one line, from ``LineManager/lineInfo(atRow:)``. Unlike a
+/// ``DocumentLineNode`` it isn't kept by the line manager and doesn't follow edits.
+struct LineInfo {
+    let id: DocumentLineNodeID
+    let row: Int
+    /// UTF-16 location of the line's first character.
+    let location: Int
+    /// UTF-16 length including the line break.
+    let totalLength: Int
+    let delimiterLength: Int
+    let lineHeight: CGFloat
+
+    /// UTF-16 length without the line break.
+    var length: Int {
+        totalLength - delimiterLength
     }
 }

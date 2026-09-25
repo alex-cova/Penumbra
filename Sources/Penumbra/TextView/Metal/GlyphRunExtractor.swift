@@ -166,8 +166,10 @@ enum GlyphRunExtractor {
         }
         var prepared: [PreparedRun] = []
         prepared.reserveCapacity(runs.count)
+        var runAttributes = RunAttributeCache()
         for (runIndex, run) in runs.enumerated() {
-            switch prepare(run, runIndex: runIndex, request: request, baselineY: baselineY) {
+            switch prepare(run, runIndex: runIndex, request: request, baselineY: baselineY,
+                           boundsCache: atlas.glyphBoundsCache, runAttributes: &runAttributes) {
             case .skip(let skip):
                 result.skips.append(skip)
             case .run(let preparedRun):
@@ -251,6 +253,8 @@ private extension GlyphRunExtractor {
         var runMatrix: CGAffineTransform
         var isColor: Bool
         var matrixHash: UInt64
+        /// The run's atlas key with glyph and subpixel 0; `resolve` fills those in per glyph.
+        var keyTemplate: GlyphKey
         var glyphs: [PendingGlyph]
         /// Set when the per-glyph coverage atlas cannot represent this run (`NSShadow`, a glyph over
         /// the size cap). The whole run is rasterized into one BGRA tile instead — see PR 8.
@@ -266,6 +270,37 @@ private extension GlyphRunExtractor {
     enum PrepareResult {
         case skip(GlyphRunSkip)
         case run(PreparedRun)
+    }
+
+    /// Per-line memo of run colours and colour-font checks, matched by object identity. With
+    /// syntax highlighting every token is its own run, and the runs of a line share a handful of
+    /// theme `NSColor`s and fonts; the shared `MetalColor` cache hashes colour, appearance and
+    /// colour space under a lock, and `isColorFont` copies a font attribute, on every run.
+    struct RunAttributeCache {
+        private var colors: [(color: NSColor, value: SIMD4<Float>)] = []
+        private var fonts: [(font: CTFont, isColor: Bool)] = []
+
+        mutating func premultiplied(_ color: NSColor, request: GlyphExtractRequest) -> SIMD4<Float> {
+            for entry in colors where entry.color === color {
+                return entry.value
+            }
+            let value = MetalColor.premultiplied(color, appearance: request.appearance, colorSpace: request.colorSpace)
+            if colors.count < 16 {
+                colors.append((color, value))
+            }
+            return value
+        }
+
+        mutating func isColorFont(_ font: CTFont) -> Bool {
+            for entry in fonts where entry.font === font {
+                return entry.isColor
+            }
+            let isColor = GlyphRasterizer.isColorFont(font)
+            if fonts.count < 8 {
+                fonts.append((font, isColor))
+            }
+            return isColor
+        }
     }
 
     enum ResolveResult {
@@ -287,7 +322,9 @@ private extension GlyphRunExtractor {
         _ run: CTRun,
         runIndex: Int,
         request: GlyphExtractRequest,
-        baselineY: CGFloat
+        baselineY: CGFloat,
+        boundsCache: GlyphBoundsCache,
+        runAttributes: inout RunAttributeCache
     ) -> PrepareResult {
         // Read the CFDictionary directly: bridging it to a Swift dictionary per run was ~25% of prepare.
         let attributes = CTRunGetAttributes(run) as NSDictionary
@@ -297,17 +334,27 @@ private extension GlyphRunExtractor {
         // Run text matrix copies CTFontGetMatrix for synthetic italic; extra is run * font⁻¹ so bounds are not sheared twice.
         let runMatrix = extraRunMatrix(CTRunGetTextMatrix(run), fontMatrix: fontMatrix)
         let applyRunMatrix = !runMatrix.isIdentity
-        let isColor = GlyphRasterizer.isColorFont(font)
-        let runColor = resolveColor(attributes: attributes, request: request)
+        let isColor = runAttributes.isColorFont(font)
+        // The run's foreground colour, looked up once for both the instance colour and fallbacks.
         let foregroundColor = (attributes[NSAttributedString.Key.foregroundColor] as? NSColor) ?? request.fallbackColor
+        let runColor = runAttributes.premultiplied(foregroundColor, request: request)
         let glyphCount = CTRunGetGlyphCount(run)
         let matrixHash = GlyphKey.matrixHash(fontMatrix: fontMatrix, runMatrix: runMatrix)
+        let keyTemplate = GlyphKey.make(
+            font: font,
+            glyph: 0,
+            scale: request.scale,
+            runMatrix: runMatrix,
+            subpixel: 0,
+            isColor: isColor
+        )
         var preparedRun = PreparedRun(
             runIndex: runIndex,
             font: font,
             runMatrix: runMatrix,
             isColor: isColor,
             matrixHash: matrixHash,
+            keyTemplate: keyTemplate,
             glyphs: [],
             forcedFallback: shadow != nil ? .shadow : nil,
             runColor: runColor,
@@ -338,15 +385,23 @@ private extension GlyphRunExtractor {
         let bands = request.emitRect.union(request.atlasWarmRect)
         let minX = bands.isNull ? -CGFloat.infinity : bands.minX - reach
         let maxX = bands.isNull ? CGFloat.infinity : bands.maxX + reach
+        var candidates: [Int] = []
+        var candidateGlyphs: [CGGlyph] = []
+        candidates.reserveCapacity(glyphCount)
+        candidateGlyphs.reserveCapacity(glyphCount)
         for index in 0..<glyphCount {
-            var position = positions[index]
+            let position = positions[index]
             let penX = request.fragmentFrame.minX + (applyRunMatrix ? position.applying(runMatrix).x : position.x)
-            if penX < minX || penX > maxX {
-                continue
+            if penX >= minX && penX <= maxX {
+                candidates.append(index)
+                candidateGlyphs.append(glyphs[index])
             }
-            var glyph = glyphs[index]
-            var bounds = CGRect.zero
-            CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, &bounds, 1)
+        }
+        let candidateBounds = boundsCache.glyphBounds(for: candidateGlyphs, font: font, keyTemplate: keyTemplate)
+        for (candidateIndex, index) in candidates.enumerated() {
+            var position = positions[index]
+            let glyph = glyphs[index]
+            var bounds = candidateBounds[candidateIndex]
             if applyRunMatrix {
                 position = position.applying(runMatrix)
                 bounds = bounds.applying(runMatrix)
@@ -411,14 +466,9 @@ private extension GlyphRunExtractor {
             forX: request.fragmentFrame.minX + pending.position.x,
             scale: request.scale
         )
-        let key = GlyphKey.make(
-            font: preparedRun.font,
-            glyph: pending.glyph,
-            scale: request.scale,
-            runMatrix: preparedRun.runMatrix,
-            subpixel: subpixel,
-            isColor: preparedRun.isColor
-        )
+        var key = preparedRun.keyTemplate
+        key.glyph = UInt16(pending.glyph)
+        key.subpixel = subpixel
         if !atlas.hasEntry(key) {
             guard budget.consume() else {
                 return pending.band == .emit ? .needsRasterCap : .skipped
@@ -426,6 +476,7 @@ private extension GlyphRunExtractor {
         }
         let slot: GlyphAtlasSlot
         switch atlas.lookup(
+            key: key,
             font: preparedRun.font,
             glyph: pending.glyph,
             scale: request.scale,
@@ -684,15 +735,6 @@ private extension GlyphRunExtractor {
 
     static func isFocused(_ stringIndex: Int, ranges: [NSRange]) -> Bool {
         ranges.contains { NSLocationInRange(stringIndex, $0) }
-    }
-
-    static func resolveColor(attributes: NSDictionary, request: GlyphExtractRequest) -> SIMD4<Float> {
-        let color = (attributes[NSAttributedString.Key.foregroundColor] as? NSColor) ?? request.fallbackColor
-        return MetalColor.premultiplied(
-            color,
-            appearance: request.appearance,
-            colorSpace: request.colorSpace
-        )
     }
 
     static func previousColor(at stringIndex: Int, request: GlyphExtractRequest) -> SIMD4<Float>? {

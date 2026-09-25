@@ -1,7 +1,29 @@
 # Editor performance plan: line handles and Enter
 
 Follow-up to commit `7ec358d` (minimap, line index and text-read fixes from an Umbra Instruments
-trace). This plan covers the next two costs: the `LineManager` handle table and the Enter key.
+trace). It started with two costs, the `LineManager` handle table and the Enter key, and grew to
+cover what the measurements turned up along the way (folding, races, memory, scrolling).
+
+## Status
+
+| Item | Status | Where |
+|---|---|---|
+| Phase 0 — `PerfHarness enter-session` (Enter, handles, scroll, memory) | Done | `d52cf54`; `--hold-seconds` and per-step autorelease pools uncommitted |
+| Phase 1 — Bound the Enter indent scan | Not started (deprioritized: a Debug-build cost) | — |
+| Phase 2 — Release unused handles | Done | uncommitted |
+| Phase 3 — Handle-free reads on hot paths | Partly done: folding (`lineID(atRow:)`, `d52cf54`), indentation fold provider (`contentRange(atRow:)`, `d52cf54`), minimap (`lineInfo(atRow:)`, uncommitted). Open: Select All Occurrences, go-to-line, `ViewportParseWindow`, `MethodSeparatorView` | — |
+| Phase 4 — Relayout after Enter | Not started | — |
+| Phase 4 — O(1) row lookup by ID | Not needed: with Phase 2, Enter visits a few hundred handles | — |
+| Phase 5 — Verify in a Release Umbra build with Instruments | Not started | — |
+| Folding: no handle per hidden row on every edit | Done | `d52cf54` |
+| Crash races: `StringView` lock, tree-sitter tree reads, node lookups | Done | `d52cf54` |
+| Scrolling: placeholder theme, capture-window index, line-number view reuse | Done | `d52cf54` |
+| Memory: bounded `LineControllerStorage` | Done | `d52cf54` |
+| Scrolling: glyph extraction (bounds cache, key template, executor checks, run attribute cache) | Done | uncommitted |
+| Select All Occurrences with tens of thousands of matches | Open | — |
+| Scrolling: instance-buffer rebuild, typesetting | Open | — |
+
+Details and numbers for each item are in the results log below.
 
 ## Baseline (2026-09-25, Debug build, M-series MacBook Pro)
 
@@ -54,7 +76,7 @@ text to scan, which is why the top is fast.
   `removeAllLineControllers(exceptLinesWithID:)`), `initialLongestLine` (weak),
   `DocumentLineNodeData.node` (weak), and per-call locals.
 
-## Release baseline and Phase 1 result (2026-09-25)
+## Release baseline, folding fix and race fixes (2026-09-25)
 
 `swift run -c release PerfHarness enter-session synthetic --lines N` (median of 15 Enters, two runs
 each; see `Tools/PerfHarness/Sources/EnterSessionProfile.swift`):
@@ -104,7 +126,7 @@ What Release showed, against the Debug numbers above:
 
 ## Plan
 
-### Phase 0 — Repeatable measurement (small)
+### Phase 0 — Repeatable measurement (small) — done
 
 - Turn the temporary session test into a `PerfHarness` command (`swift run -c release PerfHarness
   enter-session <path|synthetic>`) that prints the tables above, so every phase is measured the
@@ -112,7 +134,7 @@ What Release showed, against the Debug numbers above:
 - Keep the DEBUG counters on `LineManager`.
 - Exit: Release baseline recorded in this file.
 
-### Phase 1 — Bound the Enter indent scan (Debug builds; deprioritized, see above)
+### Phase 1 — Bound the Enter indent scan — not started (Debug-build cost; deprioritized, see above)
 
 Goal: Enter cost independent of caret position.
 
@@ -130,7 +152,7 @@ Goal: Enter cost independent of caret position.
   inside a class after 300K of preceding code; result must equal the unbounded scan).
 - Exit: middle-of-file Enter within ~1 ms of top-of-file Enter at 20k and 120k lines.
 
-### Phase 2 — Release unused handles (medium risk, contained in `LineManager`)
+### Phase 2 — Release unused handles (medium risk, contained in `LineManager`) — done
 
 Goal: live handle count scales with what's on screen, not with what has been visited.
 
@@ -151,7 +173,7 @@ Goal: live handle count scales with what's on screen, not with what has been vis
 - Exit: after the full session, handle count < ~2× viewport lines + held controllers; Enter
   shift visits in the hundreds, not tens of thousands; ~15 MB saved at 82k lines.
 
-### Phase 3 — Handle-free reads on hot paths (medium, incremental)
+### Phase 3 — Handle-free reads on hot paths (medium, incremental) — partly done
 
 Goal: stop creating handles for rows that are only read once.
 
@@ -164,7 +186,7 @@ Goal: stop creating handles for rows that are only read once.
 - Exit: `debugHandlesCreated` after the session drops by most of the remaining churn; minimap
   and scroll numbers from the commit `7ec358d` benchmark improve further.
 
-### Phase 4 — Only if still needed
+### Phase 4 — Only if still needed — not started (O(1) row lookup no longer needed)
 
 - Relayout after Enter: `LayoutManager.relayoutVisibleFragmentsAfterLineStructureChange` was the
   next item in the Enter profile (~13% of `insertText`, most of the post-Enter layout).
@@ -172,19 +194,19 @@ Goal: stop creating handles for rows that are only read once.
 - O(1) row lookup by ID (so handles need no row shifting at all): a generation-stamped lazy
   `row`. Only if Phase 2 leaves shifting measurable.
 
-### Phase 5 — Verify in Umbra
+### Phase 5 — Verify in Umbra — not started
 
 - Instruments Time Profiler on a Release build of Umbra: open a large Java file, scroll through
   it, type in the middle. Compare against the trace from 2026-09-25.
 - Exit: no main-thread hangs from minimap/layout/Enter; Enter feels instant anywhere in a
   100k-line file.
 
-## Order and sizing
+## Results log
 
-Done: Phase 0 (`enter-session`), the folding fix and the two race fixes above.
+### Indentation fold provider (2026-09-25)
 
-Also done: `LineIndentationFoldProvider` reads rows through `LineManager.contentRange(atRow:)`
-(no handle) and stops at the first non-whitespace character; regression test
+`LineIndentationFoldProvider` reads rows through `LineManager.contentRange(atRow:)` (no handle) and
+stops at the first non-whitespace character; regression test
 `FoldingControllerTests.testIndentationProviderRecomputeCreatesNoLineHandles`.
 
 ### Scrolling (2026-09-25)
@@ -218,7 +240,7 @@ Then, in the same profile:
 - Page time: 5.4–5.6 ms → 3.8–4.1 ms (20k and 120k lines). From the start of this pass:
   6.2–6.3 ms → ~3.9 ms.
 
-### Memory: line controllers are never released (2026-09-25)
+### Memory: line controllers were never released (2026-09-25)
 
 `enter-session` now reports malloc bytes in use per step and posts a memory warning at the end.
 
@@ -265,12 +287,65 @@ Not changed: `CaretRectService`, `TextInputStringTokenizer` (line-boundary moves
 still read controllers without laying them out; they behave for an evicted line exactly as for a
 never-laid-out one (the primary selection's lines are pinned, so the common case is covered).
 
+### Phase 2: handles are released (2026-09-25)
+
+- `LineManager.releaseUnreferencedHandles()` drops handles only the table references
+  (`isKnownUniquelyReferenced`) once it passes max(4,096, 2× the last survivors), and right after
+  layout evicts line controllers (which are what keep handles alive) and in `clearMemory()`.
+  `initialLongestLine` is now held strongly (it was `weak`, alive only because nothing was ever
+  released) and cleared when its line is removed.
+- The minimap walks rows with `LineManager.lineInfo(atRow:)` / `row(containingYOffset:)` (value
+  snapshots, no handles).
+- Tests: `LineManagerTests` (bounded table, held handles keep following edits, recreated handles
+  keep their ID, `initialLongestLine`), `LineControllerEvictionTests` (handles released with their
+  controllers; 1,379 live without the release call, bound 1,000).
+- The harness now drains an autorelease pool per step (top-level code never drained the outer
+  pool: ~16 MB of pool pages at 120k lines). Heap breakdown after a 120k-line session: ~110 MB
+  is tree-sitter's syntax tree (1.07M subtree allocations from the background full parse), the
+  rest is small (line widths ~5 MB, a highlight-fragment table ~6 MB after Select All).
+
+| 120k lines, Release | Before | After |
+|---|---|---|
+| Live handles after scrolling the whole file | 120,007 | 944 |
+| Live handles after Select All Occurrences | 120,007 | 436 |
+| Enter after the full walk | ~2.2 ms | ~1.8 ms |
+| Scroll page | 4.0–4.3 ms | ~3.7 ms |
+| malloc after scrolling | 164 MB (pool pages drained) | 141 MB |
+
+`TextViewTypewriterScrollingTests.testUserScrollWheelSuspendsTypewriterUntilKeyPress` failed once in
+a full run and passed in isolation and in two further full runs (60-line document; neither the
+handle prune nor controller eviction can trigger there): a pre-existing timing flake.
+
+### Glyph extraction (2026-09-25)
+
+Release profile of a 20k-line scroll: `MetalRenderer.upsertFragment` ~40% of a page, almost all
+`GlyphRunExtractor.extract`.
+
+- `prepare` asked Core Text for each glyph's bounds one glyph at a time
+  (`CTFontGetBoundingRectsForGlyphs` → outline path per call). `GlyphBoundsCache` (owned by the
+  atlas, lock-protected so extraction stays non-isolated) keys bounds by the glyph's atlas key
+  with subpixel 0 and batch-queries misses. `GlyphAtlasTests.testCachedGlyphBoundsMatchCoreText`.
+- `resolve` built each glyph's `GlyphKey` twice (`GlyphKey.make` for `hasEntry`, again inside
+  `atlas.lookup`), each time copying the `CGFont` and hashing the matrices. A run now builds a key
+  template once and `GlyphAtlas.lookup(key:…)` takes it.
+  `GlyphAtlasTests.testKeyTemplateMatchesMakeForEachGlyph`.
+- Swift 6 executor checks: a main-actor closure or `@objc` member entered from non-isolated code
+  checks the executor on every call. Removed from the minimap's per-line capture loop (plain loop),
+  `UIView.isFlipped` (`nonisolated`; AppKit calls it on every coordinate conversion), and avoided
+  in `prepare` (a first attempt made it `@MainActor`, which added checks to its closures).
+- `RunAttributeCache`: per-line identity memo of run colours and colour-font checks (every token
+  is a run). Colour path 4.6% → 2.0% of scroll samples; below timing noise on its own.
+
+Interleaved A/B (20k lines, median of 3–4 paired runs; machine timings drift between sessions, so
+compare pairs, not with earlier tables): without these changes 4.08 ms/page, with them ~3.7 ms
+(≈9%); p90 improved similarly. Remaining shares of a page: upsert/extraction ~34%, syntax
+highlighting ~19%, `prepareToDisplayString` ~19% (typesetting ~10%), Metal encode and instance
+rebuild ~10% each, line-number views ~8%.
+
 ## Next
 
-1. Phase 2: release unreferenced handles (with the handle-free minimap walk). With controllers
-   bounded, handles are now the largest per-line item left (~120k live, ~22 MB at 120k lines);
-   then break down the remaining ~165 MB above the 13 MB open baseline.
-2. Smooth eviction: dropping a few hundred controllers at once likely explains the higher p90;
-   evicting smaller batches more often would spread it.
-3. Scrolling: glyph extraction/upload (~27% of a page) is the largest share.
-4. Phase 1 (Debug-only Enter cost) and Phases 4–5 as follow-up.
+1. Scrolling: `MetalRenderer.rebuildInstanceBuffers` (~10%, includes a sort per rebuild) and
+   typesetting of lines entering the viewport.
+2. Select All Occurrences on tens of thousands of matches creates and typesets a controller per
+   caret line before layout evicts them.
+3. Phase 1 (Debug-only Enter cost) and Phases 4–5 (Instruments trace of a Release Umbra build).

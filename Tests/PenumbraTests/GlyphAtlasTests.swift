@@ -426,6 +426,48 @@ final class GlyphAtlasTests: XCTestCase {
         XCTAssertEqual(atlas.missCount, 2)
         XCTAssertTrue(atlas.contains(italicKey))
     }
+
+    /// Extraction builds one key per run and fills in glyph and subpixel; that must equal the key
+    /// `GlyphKey.make` builds for the glyph directly.
+    func testKeyTemplateMatchesMakeForEachGlyph() throws {
+        let font = makeMenlo(pointSize: 13)
+        var shear = CGAffineTransform(a: 1, b: 0, c: 0.2, d: 1, tx: 0, ty: 0)
+        let runMatrix = CGAffineTransform(a: 1, b: 0, c: 0.1, d: 1, tx: 0, ty: 0)
+        let italic = CTFontCreateCopyWithAttributes(font, 0, &shear, nil)
+        for testFont in [font, italic] {
+            let template = GlyphKey.make(font: testFont, glyph: 0, scale: 2, runMatrix: runMatrix, subpixel: 0, isColor: false)
+            for character in ["A", "g", "{", "0"] {
+                let glyph = try XCTUnwrap(GlyphRasterizer.glyph(for: character, font: testFont))
+                for subpixel: UInt8 in [0, 2] {
+                    var key = template
+                    key.glyph = UInt16(glyph)
+                    key.subpixel = subpixel
+                    XCTAssertEqual(key, GlyphKey.make(font: testFont, glyph: glyph, scale: 2, runMatrix: runMatrix, subpixel: subpixel, isColor: false))
+                }
+            }
+        }
+    }
+
+    /// Cached bounds must equal what Core Text returns, on the batched miss and on a later hit.
+    @MainActor
+    func testCachedGlyphBoundsMatchCoreText() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 13)
+        let glyphs = try ["A", "g", "W", "{", "j", "A"].map { try XCTUnwrap(GlyphRasterizer.glyph(for: $0, font: font)) }
+        var expected = [CGRect](repeating: .zero, count: glyphs.count)
+        var query = glyphs
+        CTFontGetBoundingRectsForGlyphs(font, .default, &query, &expected, glyphs.count)
+        let template = GlyphKey.make(font: font, glyph: 0, scale: 2, isColor: false)
+        XCTAssertEqual(atlas.glyphBoundsCache.glyphBounds(for: glyphs, font: font, keyTemplate: template), expected)
+        XCTAssertEqual(atlas.glyphBoundsCache.glyphBounds(for: glyphs.reversed(), font: font, keyTemplate: template), expected.reversed())
+        let bigger = makeMenlo(pointSize: 26)
+        var biggerExpected = [CGRect](repeating: .zero, count: 1)
+        var biggerGlyph = [glyphs[0]]
+        CTFontGetBoundingRectsForGlyphs(bigger, .default, &biggerGlyph, &biggerExpected, 1)
+        let biggerTemplate = GlyphKey.make(font: bigger, glyph: 0, scale: 2, isColor: false)
+        XCTAssertEqual(atlas.glyphBoundsCache.glyphBounds(for: [glyphs[0]], font: bigger, keyTemplate: biggerTemplate), biggerExpected,
+                       "a different size is a different cache entry")
+    }
 }
 
 private extension GlyphAtlasTests {

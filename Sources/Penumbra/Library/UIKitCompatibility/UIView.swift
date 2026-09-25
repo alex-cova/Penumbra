@@ -25,7 +25,9 @@ open class UIView: NSView {
     open func reloadInputViews() {}
     private var uiGestureRecognizers: [UIGestureRecognizer] = []
 
-    override open var isFlipped: Bool { true }
+    /// `nonisolated`: AppKit calls this thousands of times per frame (every coordinate conversion),
+    /// and a main-actor override pays a Swift 6 executor check on each call. It reads no state.
+    nonisolated override open var isFlipped: Bool { true }
 
     /// Frame-driven UIKit port: never participate in Auto Layout measuring.
     override open var intrinsicContentSize: NSSize {

@@ -15,7 +15,7 @@ import PenumbraLanguages
 /// Backspace so every position is measured on the same text.
 @MainActor
 enum EnterSessionProfile {
-    static func run(pathOrSynthetic: String, lines: Int, samples: Int) {
+    static func run(pathOrSynthetic: String, lines: Int, samples: Int, holdSeconds: Double = 0) {
         let text = pathOrSynthetic == "synthetic" || pathOrSynthetic == "-"
             ? syntheticJava(lines: lines)
             : ((try? String(contentsOfFile: pathOrSynthetic, encoding: .utf8)) ?? syntheticJava(lines: lines))
@@ -45,16 +45,22 @@ enum EnterSessionProfile {
             textView.resetLineHandleCounters()
             var times: [Double] = []
             times.reserveCapacity(samples)
+            // Each step in its own pool, as an app event would be: top-level code never drains
+            // the outer pool, which otherwise shows up as ~16 MB of pool pages at 120k lines.
             for _ in 0 ..< samples {
-                let start = CFAbsoluteTimeGetCurrent()
-                textView.insertText("\n")
-                textView.layoutIfNeeded()
-                times.append(CFAbsoluteTimeGetCurrent() - start)
+                autoreleasepool {
+                    let start = CFAbsoluteTimeGetCurrent()
+                    textView.insertText("\n")
+                    textView.layoutIfNeeded()
+                    times.append(CFAbsoluteTimeGetCurrent() - start)
+                }
                 Measurement.pumpRunLoop(seconds: 0.003)
             }
             let visits = textView.lineHandleStatistics.shiftVisits / max(samples, 1)
             for _ in 0 ..< samples {
-                textView.deleteBackward()
+                autoreleasepool {
+                    textView.deleteBackward()
+                }
             }
             pump(textView)
             let median = Measurement.percentile(times, 0.5)
@@ -79,11 +85,13 @@ enum EnterSessionProfile {
         var offsetY: CGFloat = 0
         var pageTimes: [Double] = []
         while offsetY < textView.contentSize.height {
-            let start = CFAbsoluteTimeGetCurrent()
-            textView.contentOffset = CGPoint(x: 0, y: offsetY)
-            textView.layoutIfNeeded()
-            textView.displayIfNeeded()
-            pageTimes.append(CFAbsoluteTimeGetCurrent() - start)
+            autoreleasepool {
+                let start = CFAbsoluteTimeGetCurrent()
+                textView.contentOffset = CGPoint(x: 0, y: offsetY)
+                textView.layoutIfNeeded()
+                textView.displayIfNeeded()
+                pageTimes.append(CFAbsoluteTimeGetCurrent() - start)
+            }
             Measurement.pumpRunLoop(seconds: 0.01)
             offsetY += page
         }
@@ -117,6 +125,12 @@ enum EnterSessionProfile {
         measureEnter("walked_top", row: top)
         measureEnter("walked_middle", row: middle)
         measureEnter("walked_end", row: end)
+
+        // Keep the process (and text view) alive for `heap <pid>` / `vmmap` inspection.
+        if holdSeconds > 0 {
+            warn("  holding for \(holdSeconds)s: pid \(ProcessInfo.processInfo.processIdentifier)")
+            Measurement.pumpRunLoop(seconds: holdSeconds)
+        }
     }
 
     private static func makeTextView(text: String) -> (NSWindow, TextView) {
@@ -138,8 +152,10 @@ enum EnterSessionProfile {
     }
 
     private static func pump(_ textView: TextView) {
-        textView.layoutIfNeeded()
-        textView.displayIfNeeded()
+        autoreleasepool {
+            textView.layoutIfNeeded()
+            textView.displayIfNeeded()
+        }
         Measurement.pumpRunLoop(seconds: 0.01)
     }
 

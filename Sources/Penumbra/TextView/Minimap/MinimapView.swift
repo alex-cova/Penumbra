@@ -122,7 +122,7 @@ final class MinimapView: UIView {
     // MARK: - Drawing
 
     private struct VisibleLine {
-        let line: DocumentLineNode
+        let line: LineInfo
         let bandY: CGFloat
         let barHeight: CGFloat
     }
@@ -222,13 +222,16 @@ final class MinimapView: UIView {
         // The y-range naturally holds about `bounds.height / minimapRowHeight` rows; this is only
         // a safety net against a non-advancing lookup, so give it generous slack.
         let iterationLimit = Int(bounds.height / max(minimapRowHeight, 0.5)) * 2 + 64
-        var next = lineManager.line(containingYOffset: docY)
-        var nextY = next?.yPosition ?? 0
+        // Value snapshots, not `DocumentLineNode` handles: the minimap spans far more rows than
+        // the editor viewport, and creating a handle per row made it the source of ~80% of the
+        // handles created while scrolling.
+        var next = lineManager.row(containingYOffset: docY).map { lineManager.lineInfo(atRow: $0) }
+        var nextY = next.map { lineManager.yPosition(ofRow: $0.row) } ?? 0
         let lineCount = lineManager.lineCount
         while let line = next, docY <= yRange.upperBound, iterations <= iterationLimit {
             iterations += 1
             let lineY = nextY
-            let height = line.data.lineHeight
+            let height = line.lineHeight
             if height > 0, !source.isLineHidden(line.id) {
                 let bandY = geometry.bandY(forLineYPosition: lineY)
                 let barHeight = max(geometry.bandHeight(forDocumentHeight: min(height, estimated)) - 1, 1)
@@ -246,16 +249,16 @@ final class MinimapView: UIView {
             guard nextRow < lineCount else {
                 break
             }
-            let candidate = lineManager.line(atRow: nextRow)
-            if candidate.data.lineHeight > 0 {
+            let candidate = lineManager.lineInfo(atRow: nextRow)
+            if candidate.lineHeight > 0 {
                 next = candidate
                 nextY = lineY + height
             } else {
-                guard let jumped = lineManager.line(containingYOffset: docY), jumped.row > line.row else {
+                guard let jumpedRow = lineManager.row(containingYOffset: docY), jumpedRow > line.row else {
                     break
                 }
-                next = jumped
-                nextY = jumped.yPosition
+                next = lineManager.lineInfo(atRow: jumpedRow)
+                nextY = lineManager.yPosition(ofRow: jumpedRow)
             }
         }
         return result
@@ -265,7 +268,7 @@ final class MinimapView: UIView {
                              source: TextInputView,
                              builder: MinimapRowBuilder,
                              into rowByLineID: inout [DocumentLineNodeID: MinimapRow]) {
-        var misses: [DocumentLineNode] = []
+        var misses: [LineInfo] = []
         for entry in slice {
             if let cached = cache.cachedRow(for: entry.line.id) {
                 rowByLineID[entry.line.id] = cached
@@ -277,7 +280,7 @@ final class MinimapView: UIView {
             return
         }
         let spanStart = first.location
-        let spanEnd = last.location + last.data.totalLength
+        let spanEnd = last.location + last.totalLength
         let spanRange = NSRange(location: spanStart, length: max(0, spanEnd - spanStart))
         guard spanRange.length > 0, spanRange.length <= 1 << 16 else {
             for line in misses {
@@ -321,22 +324,23 @@ final class MinimapView: UIView {
                 return (range.location ..< range.location + range.length, colorIndex)
             }
             for line in misses {
-                // `location` walks the line index; read it once per line, not per capture.
                 let lineLocation = line.location
                 let localStart = lineLocation - spanStart
-                let lineLength = line.data.length
+                let lineLength = line.length
                 guard localStart >= 0, localStart + lineLength <= chars.count else {
                     rowByLineID[line.id] = flatRow(for: line, source: source, builder: builder)
                     continue
                 }
                 let lineSlice = chars[localStart ..< localStart + lineLength]
-                let spans: [(range: Range<Int>, colorIndex: Int)] = colored.compactMap { entry -> (range: Range<Int>, colorIndex: Int)? in
+                // A plain loop, not `compactMap`: this runs for every capture of every line, and a
+                // closure in main-actor code pays a Swift 6 executor check on each call.
+                var spans: [(range: Range<Int>, colorIndex: Int)] = []
+                for entry in colored {
                     let lower = max(0, entry.range.lowerBound - lineLocation)
                     let upper = min(lineLength, entry.range.upperBound - lineLocation)
-                    guard lower < upper else {
-                        return nil
+                    if lower < upper {
+                        spans.append((lower ..< upper, entry.colorIndex))
                     }
-                    return (lower ..< upper, entry.colorIndex)
                 }
                 let row = builder.makeRow(utf16: lineSlice, colorSpans: spans)
                 rowByLineID[line.id] = row
@@ -345,8 +349,8 @@ final class MinimapView: UIView {
         }
     }
 
-    private func flatRow(for line: DocumentLineNode, source: TextInputView, builder: MinimapRowBuilder) -> MinimapRow {
-        let range = NSRange(location: line.location, length: line.data.length)
+    private func flatRow(for line: LineInfo, source: TextInputView, builder: MinimapRowBuilder) -> MinimapRow {
+        let range = NSRange(location: line.location, length: line.length)
         guard range.length > 0, let text = source.stringView.substring(in: range) else {
             return .empty
         }

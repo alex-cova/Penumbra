@@ -1369,11 +1369,14 @@ private extension LayoutManager {
                 }
             }
         }
-        lineControllerStorage.evictLineControllers(ifMoreThan: limit, keepingRows: keptRows, pinnedLineIDs: pinned)
+        if lineControllerStorage.evictLineControllers(ifMoreThan: limit, keepingRows: keptRows, pinnedLineIDs: pinned) > 0 {
+            lineManager.releaseUnreferencedHandles()
+        }
     }
 
     @objc private func clearMemory() {
         lineControllerStorage.removeAllLineControllers(exceptLinesWithID: visibleLineIDs)
         contentSizeService.removeLineWidths(exceptLinesWithID: visibleLineIDs)
+        lineManager.releaseUnreferencedHandles()
     }
 }
