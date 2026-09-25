@@ -29,7 +29,11 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var frame: CGRect
         var lineID: DocumentLineNodeID
         var cacheKey: GlyphExtractCacheKey?
+        /// Content-space instances as extracted, when the fragment's origin was `glyphsOrigin`. A
+        /// fragment that later moves vertically keeps them; `alignedGlyphs` applies the offset in
+        /// one step, so repeated moves don't accumulate `Float` rounding.
         var glyphs: [GlyphInstance]
+        var glyphsOrigin: CGPoint = .zero
         var alignedGlyphs: [GlyphInstance]?
         var colorSamples: [GlyphColorSample]
         var decorations: MetalDecorationGeometry
@@ -37,8 +41,11 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var decorationNeedsRetry = false
     }
 
+    /// Keyed on the frame's size, not its position: a fragment without decorations (most of
+    /// them) that only moved has nothing to rebuild. Non-empty geometry is content-space, so it's
+    /// rebuilt when the frame moves.
     private struct DecorationBuildKey: Equatable {
-        var frame: CGRect
+        var frameSize: CGSize
         var lineRevision: UInt64
         var decorations: LineFragmentDecorations
         var scale: CGFloat
@@ -293,6 +300,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var decorationBuildCount = 0
         var glyphBufferRebuildCount = 0
         var solidBufferRebuildCount = 0
+        var glyphExtractCount = 0
         var atlasCoverageNonZeroTexels = 0
         var atlasCoverageTexelCount = 0
         var atlasCoveragePages = 0
@@ -306,6 +314,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private var decorationBuildCount = 0
     private var glyphBufferRebuildCount = 0
     private var solidBufferRebuildCount = 0
+    private var glyphExtractCount = 0
     private(set) var paintGeneration: UInt64 = 0
 
     var debugStats: DebugStats {
@@ -324,7 +333,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             instanceRebuildNanos: lastInstanceRebuildNanos,
             decorationBuildCount: decorationBuildCount,
             glyphBufferRebuildCount: glyphBufferRebuildCount,
-            solidBufferRebuildCount: solidBufferRebuildCount
+            solidBufferRebuildCount: solidBufferRebuildCount,
+            glyphExtractCount: glyphExtractCount
         )
     }
 
@@ -346,7 +356,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     func debugGlyphOrigins(forLineID lineID: DocumentLineNodeID? = nil) -> [SIMD2<Float>] {
         fragments.values
             .filter { lineID == nil || $0.lineID == lineID }
-            .flatMap { $0.glyphs.map(\.origin) }
+            .flatMap { fragment in
+                let offset = Self.glyphOffset(of: fragment)
+                return fragment.glyphs.map { $0.origin + offset }
+            }
+    }
+
+    /// How far `fragment` moved since its glyphs were extracted (vertical only; see `upsertFragment`).
+    private static func glyphOffset(of fragment: GPUFragment) -> SIMD2<Float> {
+        SIMD2(0, Float(fragment.frame.minY - fragment.glyphsOrigin.y))
     }
 
     init?(canvasView: MetalTextCanvasView, context: MetalContext = .shared, atlas: GlyphAtlas? = nil) {
@@ -403,6 +421,14 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     func upsertFragment(_ spec: LineFragmentPaintSpec) {
         let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
         let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: spec.frame, scale: scale)
+        let decorationKey = DecorationBuildKey(
+            frameSize: spec.frame.size,
+            lineRevision: spec.lineRevision,
+            decorations: spec.decorations,
+            scale: scale,
+            appearanceName: spec.appearance?.name,
+            usesDisplayP3: spec.colorSpace == .displayP3
+        )
         if let existing = fragments[spec.id],
            existing.frame == spec.frame,
            existing.cacheKey != nil,
@@ -413,14 +439,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                emitRect: keyEmitRect,
                isPending: spec.isSyntaxHighlightPending
            ),
-           existing.decorationKey == DecorationBuildKey(
-               frame: spec.frame,
-               lineRevision: spec.lineRevision,
-               decorations: spec.decorations,
-               scale: scale,
-               appearanceName: spec.appearance?.name,
-               usesDisplayP3: spec.colorSpace == .displayP3
-           ) {
+           existing.decorationKey == decorationKey {
             return
         }
         var fragment = fragments[spec.id] ?? GPUFragment(
@@ -445,12 +464,17 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         let frameChanged = previousFrame != spec.frame
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
+        // A vertical move (every line below a Return) reuses the glyphs: the key's emit rect is
+        // fragment-relative. That holds while highlighting is pending too: an equal key means the
+        // same typeset and the same carried-over `colorSamples` (only a non-pending extract
+        // updates them). A horizontal move re-extracts, since glyphs are binned by their absolute
+        // subpixel X.
         let shouldExtract = GlyphExtractCacheKey.shouldRebuild(
             previous: fragment.cacheKey,
             revision: spec.lineRevision,
             emitRect: keyEmitRect,
             isPending: spec.isSyntaxHighlightPending
-        ) || (spec.isSyntaxHighlightPending && previousFrame != spec.frame)
+        ) || spec.frame.minX != fragment.glyphsOrigin.x
         if shouldExtract {
             let request = GlyphExtractRequest(
                 line: spec.line,
@@ -469,8 +493,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 colorSpace: spec.colorSpace,
                 previousColors: spec.isSyntaxHighlightPending ? fragment.colorSamples : []
             )
+            glyphExtractCount += 1
             let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &rasterBudget)
             fragment.glyphs = result.instances
+            fragment.glyphsOrigin = spec.frame.origin
             if result.skips.contains(where: { $0.reason == .rasterCap }) {
                 rasterCapSkipCount += 1
                 // Budget ran out mid-fragment; leave the cache key unset so the next layout pass
@@ -489,43 +515,23 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                     GlyphColorSample(stringIndex: $0.stringIndex, color: $0.instance.color)
                 }
             }
-        } else if frameChanged, previousFrame != .zero {
-            // Return at end-of-line does not change the following line's CTLine, so extract is
-            // skipped. Origins were baked with the old fragmentFrame and must move with it.
-            let delta = SIMD2(
-                Float(spec.frame.minX - previousFrame.minX),
-                Float(spec.frame.minY - previousFrame.minY)
-            )
-            if delta != .zero {
-                fragment.glyphs = fragment.glyphs.map { instance in
-                    var moved = instance
-                    moved.origin += delta
-                    return moved
-                }
-            }
         }
         if fragment.alignedGlyphs == nil
             || fragment.glyphs != previousGlyphs
             || previousFrame != spec.frame {
+            let offset = Self.glyphOffset(of: fragment)
             fragment.alignedGlyphs = fragment.glyphs.map { instance in
                 var aligned = instance
                 aligned.origin = MetalProjection.pixelAligned(
-                    instance.origin,
+                    instance.origin + offset,
                     canvasFrame: canvasFrame,
                     scale: scale
                 )
                 return aligned
             }
         }
-        let decorationKey = DecorationBuildKey(
-            frame: spec.frame,
-            lineRevision: spec.lineRevision,
-            decorations: spec.decorations,
-            scale: scale,
-            appearanceName: spec.appearance?.name,
-            usesDisplayP3: spec.colorSpace == .displayP3
-        )
         if fragment.decorationKey != decorationKey
+            || (frameChanged && !fragment.decorations.isEmpty)
             || (fragment.decorationNeedsRetry && rasterBudget.hasRemaining) {
             decorationBuildCount += 1
             fragment.decorations = MetalDecorationBuilder.build(

@@ -14,15 +14,14 @@ final class MethodSeparatorView: UIView {
         didSet { if textContainerInsetTop != oldValue { needsDisplay = true } }
     }
     /// 0-based document rows that get a separator drawn along their top edge.
-    var separatorRows: Set<Int> = [] {
+    /// Sorted and unique (as ``MethodSeparatorController`` publishes them).
+    var separatorRows: [Int] = [] {
         didSet {
             if separatorRows != oldValue {
-                sortedSeparatorRows = separatorRows.sorted()
                 needsDisplay = true
             }
         }
     }
-    private var sortedSeparatorRows: [Int] = []
     var separatorColor: UIColor = .separatorColor {
         didSet { needsDisplay = true }
     }
@@ -53,7 +52,7 @@ final class MethodSeparatorView: UIView {
         let slack = separatorWidth + 1
         let firstRow = lineManager.line(containingYOffset: clip.minY - textContainerInsetTop - slack)?.row ?? 0
         let lastRow = (lineManager.line(containingYOffset: clip.maxY - textContainerInsetTop + slack)?.row ?? lineCount) + 1
-        let rows = sortedSeparatorRows
+        let rows = separatorRows
         var low = 0
         var high = rows.count
         while low < high {

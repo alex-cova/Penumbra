@@ -9,13 +9,14 @@ import PenumbraLanguages
 ///
 ///   swift run -c release PerfHarness enter-session synthetic [--lines 120000] [--samples 15]
 ///   swift run -c release PerfHarness enter-session Path/To/Big.java
+///   swift run -c release PerfHarness enter-session synthetic --enter-only --samples 2000  # for `sample`
 ///
 /// The text view matches Umbra's defaults: line numbers, folding, minimap, method separators and
 /// Metal on. Each Enter is timed as `insertText("\n")` plus `layoutIfNeeded()`, then undone with
 /// Backspace so every position is measured on the same text.
 @MainActor
 enum EnterSessionProfile {
-    static func run(pathOrSynthetic: String, lines: Int, samples: Int, holdSeconds: Double = 0) {
+    static func run(pathOrSynthetic: String, lines: Int, samples: Int, holdSeconds: Double = 0, enterOnly: Bool = false) {
         let text = pathOrSynthetic == "synthetic" || pathOrSynthetic == "-"
             ? syntheticJava(lines: lines)
             : ((try? String(contentsOfFile: pathOrSynthetic, encoding: .utf8)) ?? syntheticJava(lines: lines))
@@ -43,6 +44,7 @@ enum EnterSessionProfile {
             textView.deleteBackward()
             pump(textView)
             textView.resetLineHandleCounters()
+            let metalBefore = textView.metalPerformanceStats
             var times: [Double] = []
             times.reserveCapacity(samples)
             // Each step in its own pool, as an app event would be: top-level code never drains
@@ -57,6 +59,11 @@ enum EnterSessionProfile {
                 Measurement.pumpRunLoop(seconds: 0.003)
             }
             let visits = textView.lineHandleStatistics.shiftVisits / max(samples, 1)
+            // Paint work per Enter: glyph extracts and decoration builds (lines below the caret
+            // only move, so ideally neither grows with the viewport).
+            let metalAfter = textView.metalPerformanceStats
+            let extracts = ((metalAfter?.glyphExtractCount ?? 0) - (metalBefore?.glyphExtractCount ?? 0)) / max(samples, 1)
+            let decorations = ((metalAfter?.decorationBuildCount ?? 0) - (metalBefore?.decorationBuildCount ?? 0)) / max(samples, 1)
             for _ in 0 ..< samples {
                 autoreleasepool {
                     textView.deleteBackward()
@@ -66,10 +73,10 @@ enum EnterSessionProfile {
             let median = Measurement.percentile(times, 0.5)
             let p90 = Measurement.percentile(times, 0.9)
             let live = textView.lineHandleStatistics.liveHandles
-            warn(String(format: "  Enter %-28@ median=%7.3f ms  p90=%7.3f ms  shiftVisits/Enter=%d  live=%d",
-                        label as NSString, median * 1000, p90 * 1000, visits, live))
+            warn(String(format: "  Enter %-28@ median=%7.3f ms  p90=%7.3f ms  shiftVisits/Enter=%d  live=%d  extracts/Enter=%d  decorations/Enter=%d",
+                        label as NSString, median * 1000, p90 * 1000, visits, live, extracts, decorations))
             ResultLog.row("enter_\(label)", file: file, sizeBytes: sizeBytes, seconds: median,
-                          extra: "p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live)")
+                          extra: "p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live) extracts=\(extracts) decorations=\(decorations)")
         }
 
         let top = min(40, lineCount - 1)
@@ -78,6 +85,10 @@ enum EnterSessionProfile {
         reportHandles("open")
         measureEnter("fresh_top", row: top)
         measureEnter("fresh_middle", row: middle)
+        // Only Enter in the middle of the file, e.g. with many samples under a profiler.
+        if enterOnly {
+            return
+        }
 
         // Read the whole file a page at a time, then jump around and select occurrences.
         // Each page is timed as offset change + layout + display (editor, gutter, minimap).
@@ -142,6 +153,8 @@ enum EnterSessionProfile {
         textView.showMinimap = true
         textView.showMethodSeparators = true
         textView.isMetalRenderingEnabled = true
+        // Umbra sets this; it selects the Java declaration rules (method separators).
+        textView.languageIdentifier = "java"
         window.contentView = textView
         window.makeKeyAndOrderFront(nil)
         textView.setState(TextViewState(text: text, language: TreeSitterLanguage.bundled(forIdentifier: "java") ?? .java))

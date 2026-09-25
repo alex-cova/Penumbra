@@ -712,7 +712,7 @@ extension LayoutManager {
     }
 
     /// Publish the row set the method-separator overlay should draw.
-    func setMethodSeparatorRows(_ rows: Set<Int>) {
+    func setMethodSeparatorRows(_ rows: [Int]) {
         guard rows != methodSeparatorView.separatorRows else {
             return
         }

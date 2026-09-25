@@ -36,7 +36,7 @@ func printUsageAndExit() -> Never {
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR]
       java-completion synthetic
-      enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S]
+      enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
 
     scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
     manual / nightly (print numbers, never fail on frame time). Use `synthetic` for a
@@ -93,7 +93,8 @@ do {
         let samples = Int(flagValue("--samples", in: rest) ?? "") ?? 15
         MainActor.assumeIsolated {
             EnterSessionProfile.run(pathOrSynthetic: path, lines: lines, samples: samples,
-                                    holdSeconds: Double(flagValue("--hold-seconds", in: rest) ?? "") ?? 0)
+                                    holdSeconds: Double(flagValue("--hold-seconds", in: rest) ?? "") ?? 0,
+                                    enterOnly: rest.contains("--enter-only"))
         }
     case "open":
         try Commands.open(path: path, options: options)

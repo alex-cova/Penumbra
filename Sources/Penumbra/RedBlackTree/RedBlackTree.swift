@@ -43,7 +43,30 @@ final class RedBlackTree<NodeID: RedBlackTreeNodeID, NodeValue: RedBlackTreeNode
             return nil
             #endif
         }
-        return node(containingLocation: location, minimumValue: minimumValue, valueKeyPath: \.value, totalValueKeyPath: \.nodeTotalValue)
+        // Written out rather than through the key-path variant: a key path literal inside this
+        // generic class is instantiated at runtime (`swift_getKeyPath`) on every call.
+        if location == root.nodeTotalValue {
+            return root.rightMost
+        }
+        var remainingLocation = location
+        var node = root!
+        while true {
+            if let leftNode = node.left, remainingLocation < leftNode.nodeTotalValue {
+                node = leftNode
+            } else {
+                if let leftNode = node.left {
+                    remainingLocation -= leftNode.nodeTotalValue
+                }
+                remainingLocation -= node.value
+                if remainingLocation < minimumValue {
+                    return node
+                } else if let rightNode = node.right {
+                    node = rightNode
+                } else {
+                    return nil
+                }
+            }
+        }
     }
 
     func node<T: Comparable & AdditiveArithmetic>(containingLocation location: T,
@@ -119,18 +142,15 @@ final class RedBlackTree<NodeID: RedBlackTreeNodeID, NodeValue: RedBlackTreeNode
     }
 
     func location(of node: Node) -> NodeValue {
-        offset(of: node, valueKeyPath: \.value, totalValueKeyPath: \.nodeTotalValue, minimumValue: minimumValue)
-    }
-
-    func offset<T: AdditiveArithmetic>(of node: Node, valueKeyPath: KeyPath<Node, T>, totalValueKeyPath: KeyPath<Node, T>, minimumValue: T) -> T {
-        var location = node.left?[keyPath: totalValueKeyPath] ?? minimumValue
+        // No key paths here either (see `node(containingLocation:)`).
+        var location = node.left?.nodeTotalValue ?? minimumValue
         var workingNode = node
         while let parentNode = workingNode.parent {
-            if workingNode === workingNode.parent?.right {
-                if let leftNode = workingNode.parent?.left {
-                    location += leftNode[keyPath: totalValueKeyPath]
+            if workingNode === parentNode.right {
+                if let leftNode = parentNode.left {
+                    location += leftNode.nodeTotalValue
                 }
-                location += parentNode[keyPath: valueKeyPath]
+                location += parentNode.value
             }
             workingNode = parentNode
         }
@@ -257,12 +277,14 @@ final class RedBlackTree<NodeID: RedBlackTreeNodeID, NodeValue: RedBlackTreeNode
     -> [RedBlackTreeSearchMatch<NodeID, NodeValue, NodeData>]
     where T.NodeID == NodeID, T.NodeValue == NodeValue, T.NodeData == NodeData {
         var matches: [RedBlackTreeSearchMatch<NodeID, NodeValue, NodeData>] = []
-        func search(from node: Node) {
-            let nodeLowerBound = node.location
+        // `subtreeLocation` is where `node`'s subtree starts, so a node's location comes from the
+        // descent instead of a walk back up to the root for every visited node.
+        func search(from node: Node, subtreeLocation: NodeValue) {
+            let nodeLowerBound = subtreeLocation + (node.left?.nodeTotalValue ?? .zero)
             let nodeUpperBound = nodeLowerBound + node.value
             if query.shouldTraverseLeftChildren(of: node) {
                 if let leftNode = node.left {
-                    search(from: leftNode)
+                    search(from: leftNode, subtreeLocation: subtreeLocation)
                 }
             }
             if query.shouldInclude(node) {
@@ -271,11 +293,11 @@ final class RedBlackTree<NodeID: RedBlackTreeNodeID, NodeValue: RedBlackTreeNode
             }
             if query.shouldTraverseRightChildren(of: node) {
                 if let rightNode = node.right {
-                    search(from: rightNode)
+                    search(from: rightNode, subtreeLocation: nodeUpperBound)
                 }
             }
         }
-        search(from: root)
+        search(from: root, subtreeLocation: minimumValue)
         return matches
     }
 }

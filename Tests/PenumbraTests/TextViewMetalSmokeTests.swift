@@ -120,6 +120,36 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertGreaterThan(afterY, beforeY, "a line below the Return must move down")
     }
 
+    /// Lines below a Return only move. Their glyphs are reused and offset rather than extracted
+    /// again (re-extracting every visible line was most of an Enter's paint work), and the result
+    /// must be the same glyphs, one line lower.
+    func testReturnMovesLinesBelowWithoutReextractingThem() throws {
+        try skipUnlessMetalActivatable()
+        let source = (0 ..< 40).map { "let value\($0) = \($0);" }.joined(separator: "\n")
+        let textView = makeHighlightedMetalTextView(text: source)
+        let nsSource = source as NSString
+        let probe = nsSource.range(of: "let value9 ").location
+        let originsBefore = textView.metalDebugGlyphOrigins(atLocation: probe).sorted { ($0.x, $0.y) < ($1.x, $1.y) }
+        XCTAssertFalse(originsBefore.isEmpty)
+        let extractsBefore = try XCTUnwrap(textView.metalPerformanceStats).glyphExtractCount
+
+        let endOfLine3 = nsSource.range(of: "let value3 = 3;").upperBound
+        textView.selectedRange = NSRange(location: endOfLine3, length: 0)
+        textView.insertText("\n")
+        textView.layoutIfNeeded()
+
+        let extracts = try XCTUnwrap(textView.metalPerformanceStats).glyphExtractCount - extractsBefore
+        XCTAssertLessThan(extracts, 8, "only the edited and new lines (and band edges) re-extract, not the ~36 lines below")
+        let originsAfter = textView.metalDebugGlyphOrigins(atLocation: probe + 1).sorted { ($0.x, $0.y) < ($1.x, $1.y) }
+        XCTAssertEqual(originsAfter.count, originsBefore.count)
+        let shift = try XCTUnwrap(originsAfter.first).y - originsBefore[0].y
+        XCTAssertGreaterThan(shift, 0)
+        for (before, after) in zip(originsBefore, originsAfter) {
+            XCTAssertEqual(after.x, before.x)
+            XCTAssertEqual(after.y - before.y, shift, accuracy: 0.001)
+        }
+    }
+
     /// Glyphs are culled to the canvas horizontally too. A long line that stays visible while
     /// scrolling sideways must be re-extracted for the new cull rect.
     func testHorizontalScrollReextractsLongLine() throws {

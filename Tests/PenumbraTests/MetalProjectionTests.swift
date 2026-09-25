@@ -158,6 +158,16 @@ final class MetalProjectionTests: XCTestCase {
         XCTAssertEqual(keyA, keyB)
     }
 
+    /// Every line below a Return moves down. One that stays fully on screen keeps its key, so its
+    /// glyphs are offset instead of extracted again.
+    func testRelevantEmitRectIgnoresVerticalMoveWhileFragmentStaysVisible() {
+        let fragment = CGRect(x: 0, y: 400, width: 300, height: 17)
+        let emitRect = MetalProjection.emitRect(canvasFrame: CGRect(x: 0, y: 100, width: 800, height: 600))
+        let keyA = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: fragment, scale: 2)
+        let keyB = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: fragment.offsetBy(dx: 0, dy: 17), scale: 2)
+        XCTAssertEqual(keyA, keyB)
+    }
+
     func testRelevantEmitRectChangesWhenScrollUncoversMoreOfTheFragment() {
         let fragment = CGRect(x: 0, y: 690, width: 300, height: 17)
         let canvasA = CGRect(x: 0, y: 100, width: 800, height: 600)

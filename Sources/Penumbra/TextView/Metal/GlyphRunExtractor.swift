@@ -107,13 +107,17 @@ struct GlyphExtractCacheKey: Equatable {
     /// every visible fragment every frame (~18% of main-thread time while scrolling). A glyph quad
     /// stays within the fragment frame widened by the margins below, so equal clipped rects give
     /// the same instances: a line that stays fully on screen keeps its key.
+    ///
+    /// The result is relative to the fragment's origin, so a fragment that only moved (every line
+    /// below a Return) also keeps its key: extraction is otherwise a translation of the frame,
+    /// which `MetalRenderer` applies to the glyphs it has.
     static func relevantEmitRect(_ emitRect: CGRect, fragmentFrame: CGRect, scale: CGFloat) -> CGRect {
         let pad = CGFloat(GlyphRunExtractor.padPixels) / max(scale, 0.001)
         let horizontalMargin = CGFloat(GlyphRunExtractor.maxGlyphExtentPixels) / max(scale, 0.001) + pad
         let verticalMargin = fragmentFrame.height + pad
         let reach = fragmentFrame.insetBy(dx: -horizontalMargin, dy: -verticalMargin)
         let clipped = emitRect.intersection(reach)
-        return clipped.isNull ? .zero : clipped
+        return clipped.isNull ? .zero : clipped.offsetBy(dx: -fragmentFrame.minX, dy: -fragmentFrame.minY)
     }
 
     static func shouldRebuild(

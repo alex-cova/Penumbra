@@ -13,6 +13,7 @@ final class GutterWidthService {
         didSet {
             if font != oldValue {
                 _lineNumberWidth = nil
+                widthByCharacterCount.removeAll()
             }
         }
     }
@@ -70,13 +71,15 @@ final class GutterWidthService {
         didSet {
             if gutterMinimumCharacterCount != oldValue {
                 _lineNumberWidth = nil
+                widthByCharacterCount.removeAll()
             }
         }
     }
     var lineNumberWidth: CGFloat {
         let lineCount = lineManager.lineCount
         let hasLineCountChanged = lineCount != previousLineCount
-        let hasFontChanged = font != previousFont
+        // Read for every laid-out line: compare identity first, `!=` is an `isEqual:` round trip.
+        let hasFontChanged = font !== previousFont && font != previousFont
         if let lineNumberWidth = _lineNumberWidth, !hasLineCountChanged && !hasFontChanged {
             return lineNumberWidth
         } else {
@@ -94,6 +97,9 @@ final class GutterWidthService {
     private var previousLineCount = 0
     private var previousFont: UIFont?
     private var previouslySentGutterWidth: CGFloat?
+    /// Measured widths by digit count. Every added or removed line invalidates the width, and
+    /// measuring a string was a measurable part of each Return.
+    private var widthByCharacterCount: [Int: CGFloat] = [:]
 
     init(lineManager: LineManager) {
         self.lineManager = lineManager
@@ -106,16 +112,18 @@ final class GutterWidthService {
 
 private extension GutterWidthService {
     private func computeLineNumberWidth() -> CGFloat {
-        let characterCount = "\(lineManager.lineCount)".count
-        let wideLineNumberString = String(repeating: "8", count: {
-            if let gutterMinimumCharacterCount = gutterMinimumCharacterCount, gutterMinimumCharacterCount > characterCount {
-                return gutterMinimumCharacterCount
-            }
-            return characterCount
-        }())
-        let wideLineNumberNSString = wideLineNumberString as NSString
+        var characterCount = "\(lineManager.lineCount)".count
+        if let gutterMinimumCharacterCount = gutterMinimumCharacterCount, gutterMinimumCharacterCount > characterCount {
+            characterCount = gutterMinimumCharacterCount
+        }
+        if let width = widthByCharacterCount[characterCount] {
+            return width
+        }
+        let wideLineNumberNSString = String(repeating: "8", count: characterCount) as NSString
         let size = wideLineNumberNSString.size(withAttributes: [.font: font])
-        return ceil(size.width)
+        let width = ceil(size.width)
+        widthByCharacterCount[characterCount] = width
+        return width
     }
 
     private func sendGutterWidthUpdatedIfNeeded() {

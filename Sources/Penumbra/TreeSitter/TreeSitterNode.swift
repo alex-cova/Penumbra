@@ -14,6 +14,10 @@ final class TreeSitterNode {
             return nil
         }
     }
+    /// The grammar's numeric ID for `type`; cheaper to compare than the string.
+    var symbol: UInt16 {
+        ts_node_symbol(rawValue)
+    }
     var type: String? {
         if let str = ts_node_type(rawValue) {
             return String(cString: str)

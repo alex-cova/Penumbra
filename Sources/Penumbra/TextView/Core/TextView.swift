@@ -18,6 +18,8 @@ public struct MetalPerformanceStats: Sendable {
     public let decorationBuildCount: Int
     public let glyphBufferRebuildCount: Int
     public let solidBufferRebuildCount: Int
+    /// Fragments whose glyphs were extracted from their `CTLine` (not reused or translated).
+    public let glyphExtractCount: Int
 }
 
 /// Sendable document export for background tokenization without exposing piece-tree internals.
@@ -1137,7 +1139,8 @@ public struct DocumentTextExport: Sendable {
             instanceRebuildNanos: stats.instanceRebuildNanos,
             decorationBuildCount: stats.decorationBuildCount,
             glyphBufferRebuildCount: stats.glyphBufferRebuildCount,
-            solidBufferRebuildCount: stats.solidBufferRebuildCount
+            solidBufferRebuildCount: stats.solidBufferRebuildCount,
+            glyphExtractCount: stats.glyphExtractCount
         )
     }
     /// Glyph instance colors Metal currently holds for the line at `location` (or every fragment

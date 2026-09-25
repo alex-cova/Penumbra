@@ -1946,9 +1946,16 @@ private extension TextInputView {
 
     private func noteRowsNeedingSyntaxColor(_ lineChangeSet: LineChangeSet) {
         if !lineChangeSet.insertedLines.isEmpty || !lineChangeSet.removedLines.isEmpty {
-            // Rows recorded before this edit, and separator rows below it, are now off by the delta.
+            // Rows recorded before this edit are now off by the delta.
             rowsShiftedSinceSyntaxParse = true
         }
+        // The separator controller shifts its own rows, so the scan after the parse stays windowed.
+        methodSeparatorController.noteLinesReplaced(
+            afterRow: lineChangeSet.spliceRow ?? 0,
+            removed: lineChangeSet.removedLines.count,
+            inserted: lineChangeSet.insertedLines.count,
+            changedRows: lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount)
+        )
         for line in lineChangeSet.editedLines {
             rowsEditedSinceSyntaxParse.insert(line.row)
         }
@@ -1964,15 +1971,25 @@ private extension TextInputView {
         rowsShiftedSinceSyntaxParse = false
         let treeRows = (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingSyntaxRows()
         noteMinimapSyntaxRows(treeRows)
+        let lastRow = max(lineManager.lineCount - 1, 0)
         guard let treeRows, !rowsShifted else {
             invalidateVisibleLineSyntaxHighlighting()
             if !rowsShifted {
                 layoutManager.invalidateSyntaxColors(onRows: rows, lineManager: lineManager)
             }
-            methodSeparatorController.recompute()
+            if let treeRows {
+                // Lines moved: rows recorded here are stale, but the separator controller shifted
+                // its own. The tree's changed ranges are in current coordinates.
+                let lower = treeRows.map(\.lowerBound).min().map { min(max($0, 0), lastRow) }
+                let upper = treeRows.map(\.upperBound).max().map { min(max($0, 0), lastRow) }
+                methodSeparatorController.recomputeAfterParse(changedRows: lower.flatMap { lower in
+                    upper.map { lower ... max(lower, $0) }
+                })
+            } else {
+                methodSeparatorController.recompute()
+            }
             return
         }
-        let lastRow = max(lineManager.lineCount - 1, 0)
         for range in treeRows {
             let lower = max(range.lowerBound, 0)
             let upper = min(range.upperBound, lastRow)
@@ -1986,9 +2003,9 @@ private extension TextInputView {
         // A line still showing color-shifted guesses must get real colors from this tree.
         rows.formUnion(layoutManager.visibleStaleColorRows())
         layoutManager.invalidateSyntaxColors(onRows: rows, lineManager: lineManager)
-        if let lower = rows.min(), let upper = rows.max() {
-            methodSeparatorController.recompute(rowWindow: lower ... upper)
-        }
+        methodSeparatorController.recomputeAfterParse(changedRows: rows.min().flatMap { lower in
+            rows.max().map { lower ... $0 }
+        })
     }
 
     private func setupContentSizeObserver() {

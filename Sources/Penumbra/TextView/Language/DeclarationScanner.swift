@@ -69,7 +69,8 @@ enum DeclarationScanner {
             return []
         }
         var result: [ScannedDeclaration] = []
-        walk(node: root, configuration: configuration, text: text, rowWindow: rowWindow, depth: 0, into: &result)
+        var rules: [UInt16: DeclarationRule?] = [:]
+        walk(node: root, configuration: configuration, text: text, rowWindow: rowWindow, depth: 0, rules: &rules, into: &result)
         return result
     }
 
@@ -79,6 +80,7 @@ enum DeclarationScanner {
         text: NSString?,
         rowWindow: ClosedRange<Int>?,
         depth: Int,
+        rules: inout [UInt16: DeclarationRule?],
         into result: inout [ScannedDeclaration]
     ) {
         let startRow = Int(node.startPoint.row)
@@ -87,7 +89,18 @@ enum DeclarationScanner {
             return
         }
         var childDepth = depth
-        if let type = node.type, let rule = configuration.rule(forNodeType: type) {
+        // One tree is one grammar, so a symbol always resolves to the same rule. Matching every
+        // node's type string against every rule (substrings, for the generic configuration) made
+        // a whole-tree walk take seconds on a large file.
+        let symbol = node.symbol
+        let matchedRule: DeclarationRule?
+        if let cached = rules[symbol] {
+            matchedRule = cached
+        } else {
+            matchedRule = node.type.flatMap { configuration.rule(forNodeType: $0) }
+            rules[symbol] = matchedRule
+        }
+        if let rule = matchedRule {
             let container = DeclarationSpan(node: node)
             let nameNode = rule.nameNodeTypes.isEmpty ? nil : firstChild(of: node, ofAnyType: rule.nameNodeTypes)
             let nameSpan = nameNode.map(DeclarationSpan.init) ?? DeclarationSpan(
@@ -117,7 +130,15 @@ enum DeclarationScanner {
         }
         for index in 0 ..< node.childCount {
             if let child = node.child(at: index) {
-                walk(node: child, configuration: configuration, text: text, rowWindow: rowWindow, depth: childDepth, into: &result)
+                walk(
+                    node: child,
+                    configuration: configuration,
+                    text: text,
+                    rowWindow: rowWindow,
+                    depth: childDepth,
+                    rules: &rules,
+                    into: &result
+                )
             }
         }
     }

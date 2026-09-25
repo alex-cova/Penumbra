@@ -8,18 +8,19 @@ cover what the measurements turned up along the way (folding, races, memory, scr
 
 | Item | Status | Where |
 |---|---|---|
-| Phase 0 — `PerfHarness enter-session` (Enter, handles, scroll, memory) | Done | `d52cf54`; `--hold-seconds` and per-step autorelease pools uncommitted |
+| Phase 0 — `PerfHarness enter-session` (Enter, handles, scroll, memory) | Done | `d52cf54`; `--hold-seconds` and per-step autorelease pools `7367de5` |
 | Phase 1 — Bound the Enter indent scan | Not started (deprioritized: a Debug-build cost) | — |
-| Phase 2 — Release unused handles | Done | uncommitted |
-| Phase 3 — Handle-free reads on hot paths | Partly done: folding (`lineID(atRow:)`, `d52cf54`), indentation fold provider (`contentRange(atRow:)`, `d52cf54`), minimap (`lineInfo(atRow:)`, uncommitted). Open: Select All Occurrences, go-to-line, `ViewportParseWindow`, `MethodSeparatorView` | — |
-| Phase 4 — Relayout after Enter | Not started | — |
+| Phase 2 — Release unused handles | Done | `7367de5` |
+| Phase 3 — Handle-free reads on hot paths | Partly done: folding (`lineID(atRow:)`, `d52cf54`), indentation fold provider (`contentRange(atRow:)`, `d52cf54`), minimap (`lineInfo(atRow:)`, `7367de5`). Open: Select All Occurrences, go-to-line, `ViewportParseWindow`, `MethodSeparatorView` | — |
+| Phase 4 — Relayout after Enter | Done: moved lines reuse their glyphs and decorations; tree-search key paths; gutter width memo | uncommitted |
+| Method separators: no whole-tree scan after every line-changing edit | Done | uncommitted |
 | Phase 4 — O(1) row lookup by ID | Not needed: with Phase 2, Enter visits a few hundred handles | — |
 | Phase 5 — Verify in a Release Umbra build with Instruments | Not started | — |
 | Folding: no handle per hidden row on every edit | Done | `d52cf54` |
 | Crash races: `StringView` lock, tree-sitter tree reads, node lookups | Done | `d52cf54` |
 | Scrolling: placeholder theme, capture-window index, line-number view reuse | Done | `d52cf54` |
 | Memory: bounded `LineControllerStorage` | Done | `d52cf54` |
-| Scrolling: glyph extraction (bounds cache, key template, executor checks, run attribute cache) | Done | uncommitted |
+| Scrolling: glyph extraction (bounds cache, key template, executor checks, run attribute cache) | Done | `7367de5` |
 | Select All Occurrences with tens of thousands of matches | Open | — |
 | Scrolling: instance-buffer rebuild, typesetting | Open | — |
 
@@ -186,11 +187,12 @@ Goal: stop creating handles for rows that are only read once.
 - Exit: `debugHandlesCreated` after the session drops by most of the remaining churn; minimap
   and scroll numbers from the commit `7ec358d` benchmark improve further.
 
-### Phase 4 — Only if still needed — not started (O(1) row lookup no longer needed)
+### Phase 4 — Relayout after Enter — done (O(1) row lookup no longer needed)
 
 - Relayout after Enter: `LayoutManager.relayoutVisibleFragmentsAfterLineStructureChange` was the
-  next item in the Enter profile (~13% of `insertText`, most of the post-Enter layout).
-  Investigate re-positioning, rather than re-laying out, fragments below the edit.
+  next item in the Enter profile. Re-position, rather than re-paint, fragments below the edit.
+  Done in `MetalRenderer` (see the results log); `LayoutManager` still builds a paint spec per
+  moved fragment (below).
 - O(1) row lookup by ID (so handles need no row shifting at all): a generation-stamped lazy
   `row`. Only if Phase 2 leaves shifting measurable.
 
@@ -342,10 +344,83 @@ compare pairs, not with earlier tables): without these changes 4.08 ms/page, wit
 highlighting ~19%, `prepareToDisplayString` ~19% (typesetting ~10%), Metal encode and instance
 rebuild ~10% each, line-number views ~8%.
 
+### Phase 4: relayout after Enter (2026-09-25)
+
+`enter-session` now sets `languageIdentifier = "java"` (as Umbra does; it selects the Java
+declaration rules for method separators), reports glyph extracts and decoration builds per Enter
+(`MetalPerformanceStats.glyphExtractCount`, `.decorationBuildCount`), and takes `--enter-only`
+(just the fresh Enters, e.g. `--samples 3000` under `sample`).
+
+Release profile of Enter in the middle of a 20k-line file: relayout was ~60% of `insertText`.
+
+- **`RedBlackTree` built key paths at runtime.** `location(of:)` and `node(containingLocation:)`
+  passed `\.value` / `\.nodeTotalValue` to key-path helpers from inside the generic class, and a
+  key path literal in a generic context is instantiated (`swift_getKeyPath`) on every call.
+  `search(using:)` also walked up to the root for every visited node to get its location.
+  `LineController.lineFragmentControllers(in:)` (every laid-out line, every pass) spent ~90% of
+  its time there. Both are now plain loops, and `search` carries each subtree's start down.
+- **Every line below a Return was extracted again.** The glyph cache key's emit rect was in
+  content space, so a fragment that only moved got a new key: ~50 extracts and ~70 decoration
+  builds per Enter. The key is now relative to the fragment's origin
+  (`GlyphExtractCacheKey.relevantEmitRect`), glyphs keep their extract-time origin and
+  `alignedGlyphs` applies the vertical offset in one step (the old in-place translation added
+  `Float(dy)` on every move, accumulating rounding at large Y), and `DecorationBuildKey` holds the
+  frame's size, so a fragment with no decorations that moved has nothing to rebuild. A horizontal
+  move still re-extracts (glyphs are binned by absolute subpixel X). The rule that re-extracted any
+  moved fragment while highlighting was pending is gone: an equal key means the same typeset and
+  the same carried-over colours. Now 6 extracts and 2 decoration builds per Enter.
+  Tests: `TextViewMetalSmokeTests.testReturnMovesLinesBelowWithoutReextractingThem` (18 extracts
+  without the fix), `MetalProjectionTests.testRelevantEmitRectIgnoresVerticalMoveWhileFragmentStaysVisible`.
+- `GutterWidthService`: each Enter invalidated the line-number width, which re-measured a string;
+  widths are now memoized by digit count, and the per-call font check compares identity first.
+
+**Method separators rescanned the whole tree after every Enter** (not in the Enter timing: it ran
+when the background parse landed). `applySyntaxColorRefreshAfterParse` fell back to a full
+`MethodSeparatorController.recompute()` whenever lines had been added or removed since the last
+parse, because the rows it had recorded were stale. A full `DeclarationScanner` walk cost ~23 ms
+at 20k lines with the Java rules and far more with the generic substring rules: in a 3,000-Enter
+`sample` run without a language identifier it was ~70% of main-thread time.
+
+- `MethodSeparatorController.noteLinesReplaced(afterRow:removed:inserted:changedRows:)` shifts
+  its rows on each edit (called from `noteRowsNeedingSyntaxColor`), and
+  `recomputeAfterParse(changedRows:)` rescans only the touched rows plus the tree's changed
+  ranges. A full scan is left for open, configuration changes and parses without a row diff.
+  Shifted rows are published after the parse, as before (publishing per edit would add a Metal
+  present to each Enter).
+- Rows are a sorted `[Int]` end to end (controller and `MethodSeparatorView`): a Java file has a
+  separator every few lines, and rebuilding a `Set` of ~50k rows on every Enter cost ~0.7 ms at
+  120k lines.
+- `DeclarationScanner` memoizes the matched rule per grammar symbol (`TreeSitterNode.symbol`) for
+  each walk, so a full walk no longer matches every node's type string against every rule: ~8 ms
+  at 20k lines with either rule set.
+- Tests: `MethodSeparatorControllerTests` (shifting, replaced rows, and a `TextView` edit sequence
+  compared with a full scan of the result; each fails if the shift is broken).
+
+Paired runs against `7367de5`, same session (the old harness has no language identifier, which
+only affects the separator work outside the Enter timing):
+
+| Release, median | Before | After |
+|---|---|---|
+| 20k lines, Enter (any position) | 1.96–2.2 ms | 1.27–1.49 ms |
+| 120k lines, Enter after the full walk | 1.46–1.57 ms | 0.81–0.92 ms |
+| 120k lines, Enter before the parse lands | 1.54–2.13 ms | 0.84–1.03 ms |
+| Scroll page (20k / 120k) | 3.70 / 3.73–3.79 ms | 3.41–3.46 / 3.12–3.49 ms |
+| Glyph extracts / decoration builds per Enter | ~50 / ~70 | 6 / 2 |
+
+Remaining in the Enter profile (20k lines, after the parse): viewport relayout ~55%, of which the
+per-fragment paint spec and upsert for moved lines ~16%, line-number views ~7%, row lookups
+(`LineManager.line(atRow:)`) ~5%; the Enter indent scan (`CStyleLineIndentProvider`) ~11%.
+
 ## Next
 
-1. Scrolling: `MetalRenderer.rebuildInstanceBuffers` (~10%, includes a sort per rebuild) and
+1. Enter: moved lines still get a full paint spec (`layoutLineFragmentView`) and upsert; a
+   translate-only call on the paint backend for lines whose only change is Y would skip that. The
+   layout walk also looks rows up one at a time (`line(atRow:)`).
+2. Scrolling: `MetalRenderer.rebuildInstanceBuffers` (~10%, includes a sort per rebuild) and
    typesetting of lines entering the viewport.
-2. Select All Occurrences on tens of thousands of matches creates and typesets a controller per
+3. Select All Occurrences on tens of thousands of matches creates and typesets a controller per
    caret line before layout evicts them.
-3. Phase 1 (Debug-only Enter cost) and Phases 4–5 (Instruments trace of a Release Umbra build).
+4. `DeclarationScanner` full walks (~8 ms at 20k lines) allocate a `TreeSitterNode` per node; a
+   `TSTreeCursor` walk would cut that for open and breadcrumbs.
+5. Phase 1 (Enter indent scan, now ~11% of a Release Enter too) and Phase 5 (Instruments trace of
+   a Release Umbra build).
