@@ -185,9 +185,9 @@ final class FoldingController {
         guard isEnabled else {
             return location
         }
-        guard let hiddenLine = line(containingCharacterAt: location),
-              isLineHidden(hiddenLine.id),
-              let fold = collapsedFold(hidingLineID: hiddenLine.id) else {
+        guard let hiddenLineID = lineID(containingCharacterAt: location),
+              isLineHidden(hiddenLineID),
+              let fold = collapsedFold(hidingLineID: hiddenLineID) else {
             return location
         }
         return endOfHeaderLine(for: fold)
@@ -216,14 +216,14 @@ final class FoldingController {
         guard isEnabled else {
             return location
         }
-        guard let hiddenLine = line(containingCharacterAt: location),
-              isLineHidden(hiddenLine.id),
-              let fold = collapsedFold(hidingLineID: hiddenLine.id) else {
+        guard let hiddenLineID = lineID(containingCharacterAt: location),
+              isLineHidden(hiddenLineID),
+              let fold = collapsedFold(hidingLineID: hiddenLineID) else {
             return location
         }
         let afterRow = fold.lineRange.upperBound + 1
         if afterRow < lineManager.lineCount {
-            return lineManager.line(atRow: afterRow).location
+            return lineManager.location(ofRow: afterRow)
         }
         return stringView.length
     }
@@ -234,9 +234,9 @@ final class FoldingController {
         guard isEnabled else {
             return location
         }
-        guard let hiddenLine = line(containingCharacterAt: location),
-              isLineHidden(hiddenLine.id),
-              let fold = collapsedFold(hidingLineID: hiddenLine.id) else {
+        guard let hiddenLineID = lineID(containingCharacterAt: location),
+              isLineHidden(hiddenLineID),
+              let fold = collapsedFold(hidingLineID: hiddenLineID) else {
             return location
         }
         return endOfHeaderLine(for: fold)
@@ -280,20 +280,21 @@ final class FoldingController {
 }
 
 private extension FoldingController {
-    private func line(containingCharacterAt location: Int) -> DocumentLineNode? {
+    /// No handle: this runs for every selection bound (Select All Occurrences sanitizes each
+    /// match).
+    private func lineID(containingCharacterAt location: Int) -> DocumentLineNodeID? {
         guard location >= 0 else {
             return nil
         }
         let safeLocation = min(location, max(stringView.length - 1, 0))
-        guard stringView.length > 0 else {
+        guard stringView.length > 0, let row = lineManager.row(containingCharacterAt: safeLocation) else {
             return nil
         }
-        return lineManager.line(containingCharacterAt: safeLocation)
+        return lineManager.lineID(atRow: row)
     }
 
     private func endOfHeaderLine(for fold: FoldRange) -> Int {
-        let headerLine = lineManager.line(atRow: fold.lineRange.lowerBound)
-        return headerLine.location + headerLine.data.length
+        lineManager.contentRange(atRow: fold.lineRange.lowerBound).upperBound
     }
 
     private func expandAll() {

@@ -273,13 +273,17 @@ final class LineManager {
         return changeSet
     }
 
+    /// Row and column of `location`, without creating a `DocumentLineNode` handle.
     func linePosition(at location: Int) -> LinePosition? {
-        if let line = line(containingCharacterAt: location) {
-            let column = location - line.location
-            return LinePosition(row: line.index, column: column)
-        } else {
+        guard let row = row(containingCharacterAt: location) else {
             return nil
         }
+        return LinePosition(row: row, column: location - packed.location(ofRow: row))
+    }
+
+    /// Row of the line containing `location`, without creating a `DocumentLineNode` handle.
+    func row(containingCharacterAt location: Int) -> Int? {
+        packed.row(containingUTF16: location)
     }
 
     func line(containingCharacterAt location: Int) -> DocumentLineNode? {
@@ -546,3 +550,4 @@ struct LineInfo {
         totalLength - delimiterLength
     }
 }
+

@@ -55,6 +55,17 @@ final class GoToLinePaletteProviderTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange.length, 0)
     }
 
+    /// `.end` used to select from the line's length (an offset near the top of the document)
+    /// instead of placing the caret at the end of the target line.
+    func testTextViewGoToLineEndAndLineSelections() {
+        let textView = makeTextView(text: "alpha\nbeta\ngamma\n")
+        XCTAssertTrue(textView.goToLine(2, select: .end))
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 16, length: 0))
+
+        XCTAssertTrue(textView.goToLine(1, select: .line))
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 6, length: 4))
+    }
+
     func testTextViewGoToLineRejectsOutOfRangeWithoutCrashing() {
         let textView = makeTextView(text: "only\ntwo\n")
         let original = textView.selectedRange

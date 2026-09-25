@@ -29,29 +29,18 @@ enum ViewportParseWindow {
             maxY = lineManager.estimatedLineHeight * 80
         }
 
-        let startLine: DocumentLineNode
-        if let line = lineManager.line(containingYOffset: max(minY, 0)) {
-            startLine = line
-        } else if minY > 0 {
-            startLine = lineManager.lastLine
-        } else {
-            startLine = lineManager.firstLine
-        }
-        let endLine = lineManager.line(containingYOffset: maxY) ?? lineManager.lastLine
-        var start = Int(startLine.location)
-        var end = Int(endLine.location) + endLine.data.totalLength
+        // Row lookups only (they clamp to the document): this runs for every viewport parse, and
+        // handles would pile up for rows nothing else keeps.
+        let startRow = lineManager.row(containingYOffset: minY) ?? 0
+        let endRow = lineManager.row(containingYOffset: maxY) ?? max(lineManager.lineCount - 1, 0)
+        let endLine = lineManager.lineInfo(atRow: endRow)
+        var start = lineManager.location(ofRow: startRow)
+        var end = endLine.location + endLine.totalLength
 
         if end - start > maxWindowLength {
             let visibleY = max(viewport.minY, 0)
-            let visibleLine: DocumentLineNode
-            if let line = lineManager.line(containingYOffset: visibleY) {
-                visibleLine = line
-            } else if visibleY > 0 {
-                visibleLine = lineManager.lastLine
-            } else {
-                visibleLine = startLine
-            }
-            start = Int(visibleLine.location)
+            let visibleRow = lineManager.row(containingYOffset: visibleY) ?? startRow
+            start = lineManager.location(ofRow: visibleRow)
             end = min(stringLength, start + maxWindowLength)
         }
 
@@ -73,8 +62,10 @@ enum ViewportParseWindow {
             return nil
         }
         let endLocation = NSMaxRange(utf16Range)
-        let endPosition = lineManager.linePosition(at: endLocation)
-            ?? LinePosition(row: lineManager.lastLine.index, column: lineManager.lastLine.data.totalLength)
+        let endPosition = lineManager.linePosition(at: endLocation) ?? {
+            let lastLine = lineManager.lineInfo(atRow: lineManager.lineCount - 1)
+            return LinePosition(row: lastLine.row, column: lastLine.totalLength)
+        }()
         return TreeSitterTextRange(
             startPoint: TreeSitterTextPoint(startPosition),
             endPoint: TreeSitterTextPoint(endPosition),

@@ -24,11 +24,11 @@ final class SelectionRectService {
         guard range.length > 0 else {
             return []
         }
-        guard let endLine = lineManager.line(containingCharacterAt: range.upperBound) else {
+        guard let endRow = lineManager.row(containingCharacterAt: range.upperBound) else {
             return []
         }
         let leadingLineSpacing = gutterWidthService.gutterWidth + textContainerInset.left
-        let selectsLineEnding = range.upperBound == endLine.location
+        let selectsLineEnding = range.upperBound == lineManager.location(ofRow: endRow)
         let adjustedRange = NSRange(location: range.location, length: selectsLineEnding ? range.length - 1 : range.length)
         let startCaretRect = caretRectService.caretRect(at: adjustedRange.lowerBound, allowMovingCaretToNextLineFragment: true)
         let endCaretRect = caretRectService.caretRect(at: adjustedRange.upperBound, allowMovingCaretToNextLineFragment: false)

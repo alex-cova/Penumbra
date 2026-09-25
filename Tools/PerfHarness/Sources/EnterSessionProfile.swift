@@ -121,8 +121,35 @@ enum EnterSessionProfile {
         let word = (textView.text as NSString).range(of: "total")
         if word.location != NSNotFound {
             textView.selectedRange = word
-            textView.selectAllOccurrences()
+            // Selecting (plus the layout it triggers), then scrolling while every match is
+            // selected: selection chrome is refreshed on each layout pass.
+            let selectStart = CFAbsoluteTimeGetCurrent()
+            autoreleasepool {
+                textView.selectAllOccurrences()
+                textView.layoutIfNeeded()
+                textView.displayIfNeeded()
+            }
+            let selectTime = CFAbsoluteTimeGetCurrent() - selectStart
+            let selectionCount = textView.selectedRanges.count
             pump(textView)
+            var selectedPageTimes: [Double] = []
+            for index in 0 ..< 40 {
+                autoreleasepool {
+                    let start = CFAbsoluteTimeGetCurrent()
+                    textView.contentOffset = CGPoint(x: 0, y: CGFloat(index) * page)
+                    textView.layoutIfNeeded()
+                    textView.displayIfNeeded()
+                    selectedPageTimes.append(CFAbsoluteTimeGetCurrent() - start)
+                }
+                Measurement.pumpRunLoop(seconds: 0.01)
+            }
+            let selectedPageMedian = Measurement.percentile(selectedPageTimes, 0.5)
+            warn(String(format: "  Select All Occurrences (%d)          %7.3f ms  scroll page with them median=%7.3f ms",
+                        selectionCount, selectTime * 1000, selectedPageMedian * 1000))
+            ResultLog.row("select_all_occurrences", file: file, sizeBytes: sizeBytes, seconds: selectTime,
+                          extra: "selections=\(selectionCount)")
+            ResultLog.row("scroll_page_with_selections", file: file, sizeBytes: sizeBytes, seconds: selectedPageMedian,
+                          extra: "p90=\(String(format: "%.6f", Measurement.percentile(selectedPageTimes, 0.9)))")
             textView.selectedRange = NSRange(location: 0, length: 0)
             pump(textView)
         }

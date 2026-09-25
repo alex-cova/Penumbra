@@ -15,6 +15,12 @@ final class SelectionOverlayController {
     private var blinkTimer: Timer?
     private var isCaretVisible = true
     private var isAdjustingSelection = false
+    /// Secondary caret views placed by the last ``updateCarets()``; the rest stay hidden.
+    private var shownSecondaryCaretCount = 0
+
+    var selectionRects: [TextSelectionRect] {
+        selectionOverlayView.selectionRects
+    }
 
     var isEnabled = false {
         didSet {
@@ -133,7 +139,9 @@ final class SelectionOverlayController {
         }
         isCaretVisible = true
         caretView.isHidden = false
-        secondaryCaretViews.forEach { $0.isHidden = false }
+        for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
+            secondaryCaretViews[index].isHidden = false
+        }
         startCaretBlinkIfNeeded()
     }
 }
@@ -149,6 +157,19 @@ private extension SelectionOverlayController {
 
     private var highlightedRanges: [NSRange] {
         textInputView.selectedRanges.filter { $0.length > 0 }
+    }
+
+    /// `ranges` that touch the laid-out rows. `updateLayout()` runs on every layout pass, and
+    /// Select All Occurrences can leave tens of thousands of ranges: measuring each one would lay
+    /// out its line on every scroll frame. The first range is always kept (the primary caret).
+    private func rangesNearViewport(_ ranges: [NSRange]) -> [NSRange] {
+        guard ranges.count > 1, let visibleRange = textInputView.laidOutCharacterRange else {
+            return ranges
+        }
+        return ranges.enumerated().compactMap { index, range in
+            let touches = range.location <= visibleRange.upperBound && range.upperBound >= visibleRange.location
+            return index == 0 || touches ? range : nil
+        }
     }
 
     private var shouldShowCarets: Bool {
@@ -198,7 +219,7 @@ private extension SelectionOverlayController {
             selectionOverlayView.setNeedsDisplay()
             return
         }
-        selectionOverlayView.selectionRects = highlightedRanges.flatMap { range in
+        selectionOverlayView.selectionRects = rangesNearViewport(highlightedRanges).flatMap { range in
             selectionRectService.selectionRects(in: range)
         }
     }
@@ -224,9 +245,11 @@ private extension SelectionOverlayController {
         guard shouldShowCarets else {
             caretView.isHidden = true
             secondaryCaretViews.forEach { $0.isHidden = true }
+            shownSecondaryCaretCount = 0
             return
         }
-        let ranges = caretRanges
+        let ranges = rangesNearViewport(caretRanges)
+        shownSecondaryCaretCount = max(ranges.count - 1, 0)
         while secondaryCaretViews.count < max(ranges.count - 1, 0) {
             let caretView = CaretView()
             caretView.isUserInteractionEnabled = false
@@ -265,7 +288,9 @@ private extension SelectionOverlayController {
         }
         isCaretVisible = true
         caretView.isHidden = false
-        secondaryCaretViews.forEach { $0.isHidden = false }
+        for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
+            secondaryCaretViews[index].isHidden = false
+        }
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.toggleCaretVisibility()
@@ -286,8 +311,7 @@ private extension SelectionOverlayController {
         }
         isCaretVisible.toggle()
         caretView.isHidden = !isCaretVisible
-        let visibleSecondaryCount = caretRanges.count > 0 ? max(caretRanges.count - 1, 0) : 0
-        for index in 0..<visibleSecondaryCount where index < secondaryCaretViews.count {
+        for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
             secondaryCaretViews[index].isHidden = !isCaretVisible
         }
     }

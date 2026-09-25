@@ -257,6 +257,22 @@ final class LayoutManager {
     private var paddedInsetViewport: CGRect {
         insetViewport.insetBy(dx: 0, dy: -verticalLayoutPadding)
     }
+    /// UTF-16 range of the rows ``layoutLinesInViewport()`` lays out (``verticalLayoutPadding``
+    /// included), or nil before there is a viewport. Selection chrome skips ranges outside it;
+    /// it is recomputed on every layout pass, so scrolling brings them in.
+    var laidOutCharacterRange: NSRange? {
+        guard viewport.height > 0 else {
+            return nil
+        }
+        let layoutBounds = paddedInsetViewport
+        guard let firstRow = lineManager.row(containingYOffset: layoutBounds.minY),
+              let lastRow = lineManager.row(containingYOffset: layoutBounds.maxY) else {
+            return nil
+        }
+        let start = lineManager.location(ofRow: firstRow)
+        let lastLine = lineManager.lineInfo(atRow: lastRow)
+        return NSRange(location: start, length: lastLine.location + lastLine.totalLength - start)
+    }
     private let contentSizeService: ContentSizeService
     private let gutterWidthService: GutterWidthService
     private let caretRectService: CaretRectService

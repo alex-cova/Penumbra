@@ -968,6 +968,7 @@ final class TextInputView: UIView, UITextInput {
     private let lineControllerFactory: LineControllerFactory
     private let lineControllerStorage: LineControllerStorage
     var lineControllerCount: Int { lineControllerStorage.numberOfLineControllers }
+    var selectionRectsForTesting: [TextSelectionRect] { selectionOverlayController.selectionRects }
     private let layoutManager: LayoutManager
     private let timedUndoManager = TimedUndoManager()
     private let indentController: IndentController
@@ -1668,6 +1669,10 @@ final class TextInputView: UIView, UITextInput {
 
     func prepareLineForDisplay(atLocation location: Int) {
         layoutManager.prepareLineForDisplay(atLocation: location)
+    }
+
+    var laidOutCharacterRange: NSRange? {
+        layoutManager.laidOutCharacterRange
     }
 
     func lineAnchorY(at location: Int) -> CGFloat? {

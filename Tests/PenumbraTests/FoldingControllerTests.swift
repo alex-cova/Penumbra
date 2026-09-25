@@ -310,6 +310,33 @@ final class FoldingControllerTests: XCTestCase {
         XCTAssertLessThan(lineManager.handlesCreated, 16, "incremental recompute after an edit")
     }
 
+    /// Select All Occurrences sanitizes every match through `adjustedSelection`, which used to
+    /// make a line handle per selection bound.
+    func testAdjustedSelectionCreatesNoLineHandles() {
+        var text = "class Outer {\n"
+        for index in 0..<200 {
+            text += "    func f\(index)() {\n        let x = \(index)\n    }\n"
+        }
+        text += "}\n"
+        let (foldingController, lineManager, _) = makeFoldingController(text: text)
+        lineManager.rebuild()
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        let fold = try! XCTUnwrap(foldingController.folds.first { $0.lineRange.lowerBound == 1 })
+        foldingController.toggleCollapse(fold)
+        lineManager.resetHandleCounters()
+        for row in stride(from: 10, to: 600, by: 3) {
+            let location = lineManager.location(ofRow: row)
+            _ = foldingController.adjustedSelection(NSRange(location: location, length: 2))
+        }
+        XCTAssertEqual(lineManager.handlesCreated, 0)
+
+        // A caret inside the collapsed fold still lands at the end of its header line.
+        let hidden = lineManager.location(ofRow: 2) + 3
+        let headerEnd = lineManager.contentRange(atRow: 1).upperBound
+        XCTAssertEqual(foldingController.adjustedSelection(NSRange(location: hidden, length: 0)), NSRange(location: headerEnd, length: 0))
+    }
+
     /// The indentation provider (plain text and languages without a tree-sitter fold provider)
     /// used to read every scanned row through a line handle.
     func testIndentationProviderRecomputeCreatesNoLineHandles() {

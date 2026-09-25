@@ -9,9 +9,9 @@ cover what the measurements turned up along the way (folding, races, memory, scr
 | Item | Status | Where |
 |---|---|---|
 | Phase 0 — `PerfHarness enter-session` (Enter, handles, scroll, memory) | Done | `d52cf54`; `--hold-seconds` and per-step autorelease pools `7367de5` |
-| Phase 1 — Bound the Enter indent scan | Not started (deprioritized: a Debug-build cost) | — |
+| Phase 1 — Bound the Enter indent scan | Not started. **Reprioritized:** not a Debug-only cost after all; mid-file Enter is ~12 ms in Release (see Phase 3 results) | — |
 | Phase 2 — Release unused handles | Done | `7367de5` |
-| Phase 3 — Handle-free reads on hot paths | Partly done: folding (`lineID(atRow:)`, `d52cf54`), indentation fold provider (`contentRange(atRow:)`, `d52cf54`), minimap (`lineInfo(atRow:)`, `7367de5`). Open: Select All Occurrences, go-to-line, `ViewportParseWindow`, `MethodSeparatorView` | — |
+| Phase 3 — Handle-free reads on hot paths | Done: folding (`d52cf54`), indentation fold provider (`d52cf54`), minimap (`7367de5`); Select All Occurrences (selection chrome near the viewport only), go-to-line, `ViewportParseWindow`, `MethodSeparatorView`, `linePosition(at:)` | uncommitted |
 | Phase 4 — Relayout after Enter | Done: moved lines reuse their glyphs and decorations; tree-search key paths; gutter width memo | uncommitted |
 | Method separators: no whole-tree scan after every line-changing edit | Done | uncommitted |
 | Phase 4 — O(1) row lookup by ID | Not needed: with Phase 2, Enter visits a few hundred handles | — |
@@ -21,7 +21,8 @@ cover what the measurements turned up along the way (folding, races, memory, scr
 | Scrolling: placeholder theme, capture-window index, line-number view reuse | Done | `d52cf54` |
 | Memory: bounded `LineControllerStorage` | Done | `d52cf54` |
 | Scrolling: glyph extraction (bounds cache, key template, executor checks, run attribute cache) | Done | `7367de5` |
-| Select All Occurrences with tens of thousands of matches | Open | — |
+| Select All Occurrences with tens of thousands of matches | Scrolling fixed (256 → 12 ms/page at 38k matches); selecting still ~0.5 s | uncommitted |
+| Harness: `goToLine(_:select: .end)` placed Enter near the top of the file | Fixed; earlier "middle"/"end" Enter numbers were measured at the top | uncommitted |
 | Scrolling: instance-buffer rebuild, typesetting | Open | — |
 
 Details and numbers for each item are in the results log below.
@@ -92,6 +93,8 @@ each; see `Tools/PerfHarness/Sources/EnterSessionProfile.swift`):
 What Release showed, against the Debug numbers above:
 
 - **The indent scan is a Debug-build cost.** In Release, Enter doesn't depend on caret position.
+  *(Superseded: the harness placed every Enter near the top of the file; see "Phase 3: handle-free
+  reads" in the results log. Mid-file Enter is ~12 ms in Release.)*
   Bounding the scan is still worth doing for people running Umbra from Xcode, but it's no longer
   the first priority.
 - **The real Release cost was folding.** `FoldingController.applyRecomputedFolds` walked every
@@ -174,7 +177,7 @@ Goal: live handle count scales with what's on screen, not with what has been vis
 - Exit: after the full session, handle count < ~2× viewport lines + held controllers; Enter
   shift visits in the hundreds, not tens of thousands; ~15 MB saved at 82k lines.
 
-### Phase 3 — Handle-free reads on hot paths (medium, incremental) — partly done
+### Phase 3 — Handle-free reads on hot paths (medium, incremental) — done
 
 Goal: stop creating handles for rows that are only read once.
 
@@ -186,6 +189,9 @@ Goal: stop creating handles for rows that are only read once.
 - `LayoutManager` keeps handles (they back `LineController`s).
 - Exit: `debugHandlesCreated` after the session drops by most of the remaining churn; minimap
   and scroll numbers from the commit `7ec358d` benchmark improve further.
+- Result: outside layout (which needs its handles), the session now creates handles only for a
+  few rows per step: Select All Occurrences went from 1.66M handles to ~2,300 at 120k lines. See
+  the results log.
 
 ### Phase 4 — Relayout after Enter — done (O(1) row lookup no longer needed)
 
@@ -204,6 +210,63 @@ Goal: stop creating handles for rows that are only read once.
   100k-line file.
 
 ## Results log
+
+### Phase 3: handle-free reads, Select All Occurrences, and a harness bug (2026-09-25)
+
+To attribute handle creation, a temporary call-stack counter in `LineManager.line(atRow:)` ran
+over the harness session (removed afterwards). Go-to-line only created handles for the lines
+layout lays out. Select All Occurrences created one or more per match, from two callers:
+
+- `SelectionOverlayController.updateLayout()` runs on **every layout pass** and computed selection
+  rects (`SelectionRectService`, two `CaretRectService.caretRect` calls, each laying out the
+  line's `LineController`) for **every** selected range, and a caret frame for every empty one.
+  With 38k matches every scrolled page did that 38k times. It now handles only the ranges that
+  touch `LayoutManager.laidOutCharacterRange` (rows laid out for the viewport, padding included,
+  from row lookups); the first range is always kept. Scrolling brings others in on the next
+  pass. Secondary caret views beyond the ones placed stay hidden when blinking restarts
+  (`shownSecondaryCaretCount`; `startCaretBlinkIfNeeded`/`enableCursorBlinks` used to unhide all
+  of them, including stale ones).
+- `FoldingController.visibleCaretLocation` (run by `sanitizedSelection` for each bound of each
+  match) read the line only for its ID: now `lineID(atRow:)` via
+  `LineManager.row(containingCharacterAt:)`. `visibleLocationForForwardNavigation` and
+  `endOfHeaderLine` use `location(ofRow:)` / `contentRange(atRow:)`.
+
+Also handle-free now: `SelectionRectService` (row + `location(ofRow:)`), `ViewportParseWindow`
+(row lookups, which clamp to the document), `MethodSeparatorView.separatorLineFrames`
+(`row(containingYOffset:)`, `lineInfo(atRow:)`, `yPosition(ofRow:)`), `TextView.goToLine` and
+`TextView.location(at:)` (`lineInfo(atRow:)`), and `LineManager.linePosition(at:)` (31 callers,
+among them `ViewportParseWindow.textRange`).
+
+**`goToLine(_:select: .end)` was broken** (inherited from upstream): it selected
+`NSRange(location: line.length, length: line.length)`, a range near the top of the document,
+instead of a caret at the end of the line. `.line` also passed through the same code. The
+harness's `measureEnter` uses `.end`, so since `d52cf54` every "middle" and "end" Enter replaced a
+short selection near the top of the file while the viewport showed the middle. **The Release
+"Enter doesn't depend on caret position" conclusion above is wrong**: with the fix, mid-file
+Enter is ~12 ms at 20k lines and ~11.5 ms at 120k, against ~0.7–1.4 ms at the top. A `sample` of
+400 mid-file Enters (20k lines) puts `CStyleLineIndentProvider` at ~74% of `insertText`: Phase 1
+is the top Enter item in Release too. Tests: `GoToLinePaletteProviderTests.testTextViewGoToLineEndAndLineSelections`.
+
+`enter-session` now times Select All Occurrences (the call plus the layout and display it
+triggers) and 40 scrolled pages while every match is selected.
+
+Paired runs, same session; "before" is `befb566` plus only the `goToLine` fix, so Enter lands on
+the same spot in both:
+
+| Release, median of 2 runs | Before | After |
+|---|---|---|
+| 20k lines: Select All Occurrences (6,336 matches) | 91–96 ms | 27–32 ms |
+| 20k lines: scroll page with them selected | 36.3–36.5 ms | 5.3 ms |
+| 20k lines: handles created by the Select All step | ~272,500 | ~2,300 |
+| 120k lines: Select All Occurrences (37,896 matches) | 1,012–1,017 ms | 528–547 ms |
+| 120k lines: scroll page with them selected | 255–256 ms | 11.5–11.7 ms |
+| 120k lines: handles created by the Select All step | ~1,661,000 | ~2,300 |
+| Scroll page, Enter (top and middle), go-to-line | unchanged | unchanged |
+
+Tests: `SelectionOverlayViewportTests` (10,000 matches: fewer than 500 handles and rects, and the
+ranges in the middle get rects once scrolled there; a selection spanning the viewport is still
+drawn; the first test fails with 9,648 handles and 10,000 rects without the change),
+`FoldingControllerTests.testAdjustedSelectionCreatesNoLineHandles`.
 
 ### Indentation fold provider (2026-09-25)
 
@@ -413,14 +476,17 @@ per-fragment paint spec and upsert for moved lines ~16%, line-number views ~7%, 
 
 ## Next
 
+0. **Phase 1, Enter indent scan.** With the harness fixed, mid-file Enter is ~12 ms in Release
+   (top of file ~1 ms), and `CStyleLineIndentProvider` is ~74% of it. This is now the largest
+   known typing cost.
 1. Enter: moved lines still get a full paint spec (`layoutLineFragmentView`) and upsert; a
    translate-only call on the paint backend for lines whose only change is Y would skip that. The
    layout walk also looks rows up one at a time (`line(atRow:)`).
 2. Scrolling: `MetalRenderer.rebuildInstanceBuffers` (~10%, includes a sort per rebuild) and
    typesetting of lines entering the viewport.
-3. Select All Occurrences on tens of thousands of matches creates and typesets a controller per
-   caret line before layout evicts them.
+3. Select All Occurrences still takes ~0.5 s for 38k matches at 120k lines (not profiled yet:
+   `MultiSelectionController.normalize`, `sanitizedSelection` per range, and the match search
+   itself are the candidates). Chrome is no longer the cost.
 4. `DeclarationScanner` full walks (~8 ms at 20k lines) allocate a `TreeSitterNode` per node; a
    `TSTreeCursor` walk would cut that for open and breadcrumbs.
-5. Phase 1 (Enter indent scan, now ~11% of a Release Enter too) and Phase 5 (Instruments trace of
-   a Release Umbra build).
+5. Phase 5 (Instruments trace of a Release Umbra build).

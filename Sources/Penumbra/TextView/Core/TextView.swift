@@ -1221,6 +1221,8 @@ public struct DocumentTextExport: Sendable {
     var scrollerOverlayForTesting: ScrollerOverlayController { scrollerOverlay }
     /// Test hook — how many `LineController`s are currently kept.
     var lineControllerCountForTesting: Int { textInputView.lineControllerCount }
+    /// Test hook — the selection highlight rects the overlay currently draws.
+    var selectionRectsForTesting: [TextSelectionRect] { textInputView.selectionRectsForTesting }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
@@ -1631,8 +1633,8 @@ public struct DocumentTextExport: Sendable {
         guard lineIndex >= 0 && lineIndex < textInputView.lineManager.lineCount else {
             return nil
         }
-        let line = textInputView.lineManager.line(atRow: lineIndex)
-        guard textLocation.column >= 0 && textLocation.column <= line.data.totalLength else {
+        let line = textInputView.lineManager.lineInfo(atRow: lineIndex)
+        guard textLocation.column >= 0 && textLocation.column <= line.totalLength else {
             return nil
         }
         return line.location + textLocation.column
@@ -2006,7 +2008,7 @@ public struct DocumentTextExport: Sendable {
         // jumped to the specified line.
         resignFirstResponder()
         becomeFirstResponder()
-        let line = textInputView.lineManager.line(atRow: lineIndex)
+        let line = textInputView.lineManager.lineInfo(atRow: lineIndex)
         textInputView.prepareLineForDisplay(atLocation: line.location)
         scrollLocationToVisible(line.location)
         layoutIfNeeded()
@@ -2014,9 +2016,9 @@ public struct DocumentTextExport: Sendable {
         case .beginning:
             textInputView.selection = NSRange(location: line.location, length: 0)
         case .end:
-            textInputView.selection = NSRange(location: line.data.length, length: line.data.length)
+            textInputView.selection = NSRange(location: line.location + line.length, length: 0)
         case .line:
-            textInputView.selection = NSRange(location: line.location, length: line.data.length)
+            textInputView.selection = NSRange(location: line.location, length: line.length)
         }
         return true
     }

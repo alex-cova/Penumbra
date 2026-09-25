@@ -50,8 +50,8 @@ final class MethodSeparatorView: UIView {
         // Only rows whose top edge can land inside `clip`: this runs on every layout pass, and a
         // large file has thousands of declarations.
         let slack = separatorWidth + 1
-        let firstRow = lineManager.line(containingYOffset: clip.minY - textContainerInsetTop - slack)?.row ?? 0
-        let lastRow = (lineManager.line(containingYOffset: clip.maxY - textContainerInsetTop + slack)?.row ?? lineCount) + 1
+        let firstRow = lineManager.row(containingYOffset: clip.minY - textContainerInsetTop - slack) ?? 0
+        let lastRow = (lineManager.row(containingYOffset: clip.maxY - textContainerInsetTop + slack) ?? lineCount) + 1
         let rows = separatorRows
         var low = 0
         var high = rows.count
@@ -73,11 +73,11 @@ final class MethodSeparatorView: UIView {
             guard row > 0, row < lineCount else {
                 return nil
             }
-            let line = lineManager.line(atRow: row)
-            guard line.data.lineHeight > 0 else {
+            // Handle-free reads: this runs on every layout pass.
+            guard lineManager.lineInfo(atRow: row).lineHeight > 0 else {
                 return nil
             }
-            return line.yPosition
+            return lineManager.yPosition(ofRow: row)
         }
         return MethodSeparatorGeometry.frames(
             lineYPositions: lineYPositions,
