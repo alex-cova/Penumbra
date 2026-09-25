@@ -184,8 +184,11 @@ final class TextViewMetalSmokeTests: XCTestCase {
         textView.isMetalRenderingEnabled = true
         textView.layoutIfNeeded()
         // Deferred present encodes on the display link, not synchronously during layout.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-        textView.layoutIfNeeded()
+        let deadline = Date().addingTimeInterval(1.0)
+        while textView.metalInstanceCount == 0, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.016))
+            textView.layoutIfNeeded()
+        }
         XCTAssertTrue(textView.isMetalRenderingActive)
         XCTAssertGreaterThan(textView.metalFragmentCount, 0, "layout should have upserted visible fragments")
         XCTAssertGreaterThan(
