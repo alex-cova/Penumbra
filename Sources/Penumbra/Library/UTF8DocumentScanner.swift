@@ -56,9 +56,18 @@ enum UTF8DocumentScanner {
         }
         var utf16 = 0
         var index = 0
-        while index < bytes.count {
+        let count = bytes.count
+        while index < count {
             if utf16 >= utf16Offset {
                 return (index, 0)
+            }
+            // Eight ASCII bytes are eight UTF-16 units: skip them a word at a time. Callers start
+            // from a checkpoint up to 64KB back, so this loop runs for every line substring.
+            if utf16Offset - utf16 >= 8, index + 8 <= count, let base = bytes.baseAddress,
+               base.loadUnaligned(fromByteOffset: index, as: UInt64.self) & 0x8080_8080_8080_8080 == 0 {
+                utf16 += 8
+                index += 8
+                continue
             }
             let (units, advance) = utf8Scalar(at: index, in: bytes)
             if utf16 + units > utf16Offset {
@@ -82,7 +91,11 @@ enum UTF8DocumentScanner {
             return
         }
         let start = utf8Position(forUTF16Offset: utf16Offset, in: bytes)
-        let utf8End = utf8EndOffset(forUTF16Offset: utf16Offset + length, in: bytes)
+        // Resolve the end from the start's scalar instead of rescanning from byte 0.
+        let scalarStartUTF16 = utf16Offset - start.skip
+        let tail = UnsafeRawBufferPointer(rebasing: bytes[start.utf8Offset...])
+        let utf8End = start.utf8Offset
+            + utf8EndOffset(forUTF16Offset: utf16Offset + length - scalarStartUTF16, in: tail)
         guard utf8End > start.utf8Offset else {
             return
         }

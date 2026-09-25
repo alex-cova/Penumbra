@@ -16,24 +16,75 @@ struct PackedLine {
 final class PackedLeafData {
     static let capacity = 64
 
-    var lines: [PackedLine]
+    /// Every mutation refreshes the sums and drops the prefix tables. Reads vastly outnumber
+    /// writes: layout, the minimap and tree searches read these once per line or tree level.
+    var lines: [PackedLine] {
+        didSet {
+            recomputeSums()
+        }
+    }
     var nodeTotalLineCount = 0
     var totalLineHeight: CGFloat = 0
     var nodeTotalByteCount = ByteCount(0)
 
-    var utf16Sum: Int {
-        lines.reduce(0) { $0 + Int($1.utf16Length) }
-    }
-
-    var heightSum: CGFloat {
-        lines.reduce(0) { $0 + CGFloat($1.height) }
-    }
+    private(set) var utf16Sum = 0
+    private(set) var heightSum: CGFloat = 0
+    private var utf16PrefixTable: [Int]?
+    private var heightPrefixTable: [CGFloat]?
 
     init(lines: [PackedLine]) {
         self.lines = lines
+        recomputeSums()
         nodeTotalLineCount = lines.count
         totalLineHeight = heightSum
         nodeTotalByteCount = ByteCount(utf16Length: utf16Sum)
+    }
+
+    /// UTF-16 length of the lines before `slot`.
+    func utf16Prefix(slot: Int) -> Int {
+        if let table = utf16PrefixTable {
+            return table[slot]
+        }
+        var table: [Int] = []
+        table.reserveCapacity(lines.count + 1)
+        var total = 0
+        for line in lines {
+            table.append(total)
+            total += Int(line.utf16Length)
+        }
+        table.append(total)
+        utf16PrefixTable = table
+        return table[slot]
+    }
+
+    /// Height of the lines before `slot`, summed in the same order as `heightSum`.
+    func heightPrefix(slot: Int) -> CGFloat {
+        if let table = heightPrefixTable {
+            return table[slot]
+        }
+        var table: [CGFloat] = []
+        table.reserveCapacity(lines.count + 1)
+        var total: CGFloat = 0
+        for line in lines {
+            table.append(total)
+            total += CGFloat(line.height)
+        }
+        table.append(total)
+        heightPrefixTable = table
+        return table[slot]
+    }
+
+    private func recomputeSums() {
+        var utf16 = 0
+        var height: CGFloat = 0
+        for line in lines {
+            utf16 += Int(line.utf16Length)
+            height += CGFloat(line.height)
+        }
+        utf16Sum = utf16
+        heightSum = height
+        utf16PrefixTable = nil
+        heightPrefixTable = nil
     }
 }
 
@@ -173,6 +224,12 @@ final class PackedLineIndex {
     func line(atRow row: Int) -> PackedLine {
         let (leaf, slot, _) = locate(row: row)
         return leaf.data.lines[slot]
+    }
+
+    /// The line at `row` and its UTF-16 start, from a single tree descent.
+    func lineAndLocation(atRow row: Int) -> (line: PackedLine, location: Int) {
+        let found = locate(row: row)
+        return (found.leaf.data.lines[found.slot], found.utf16Start + slotUTF16Prefix(leaf: found.leaf, slot: found.slot))
     }
 
     func location(ofRow row: Int) -> Int {
@@ -380,18 +437,10 @@ final class PackedLineIndex {
     }
 
     private func slotUTF16Prefix(leaf: PackedLeafNode, slot: Int) -> Int {
-        var total = 0
-        for index in 0..<slot {
-            total += Int(leaf.data.lines[index].utf16Length)
-        }
-        return total
+        leaf.data.utf16Prefix(slot: slot)
     }
 
     private func slotHeightPrefix(leaf: PackedLeafNode, slot: Int) -> CGFloat {
-        var total: CGFloat = 0
-        for index in 0..<slot {
-            total += CGFloat(leaf.data.lines[index].height)
-        }
-        return total
+        leaf.data.heightPrefix(slot: slot)
     }
 }

@@ -289,13 +289,12 @@ final class LineManager {
     }
 
     func line(atRow row: Int) -> DocumentLineNode {
-        let packedLine = packed.line(atRow: row)
+        let (packedLine, location) = packed.lineAndLocation(atRow: row)
         if let existing = handles[packedLine.id] {
             existing.row = row
-            refreshData(existing, row: row)
+            refreshData(existing, line: packedLine, location: location)
             return existing
         }
-        let location = packed.location(ofRow: row)
         let data = packed.dataSnapshot(atRow: row, location: location, estimatedFallbackHeight: estimatedLineHeight)
         let node = DocumentLineNode(
             id: DocumentLineNodeID(value: packedLine.id),
@@ -442,13 +441,12 @@ private extension LineManager {
         stringView.character(at: location)
     }
 
-    private func refreshData(_ node: DocumentLineNode, row: Int) {
-        let packedLine = packed.line(atRow: row)
+    private func refreshData(_ node: DocumentLineNode, line packedLine: PackedLine, location: Int) {
         node.data.totalLength = Int(packedLine.utf16Length)
         node.data.delimiterLength = Int(packedLine.delimiterLength)
         node.data.lineHeight = CGFloat(packedLine.height)
         node.data.byteCount = ByteCount(utf16Length: Int(packedLine.utf16Length))
-        node.data.cachedStartByte = packed.startByte(ofRow: row)
+        node.data.cachedStartByte = ByteCount(utf16Length: location)
     }
 
     private func shiftHandlesAfterInsert(atRow row: Int) {

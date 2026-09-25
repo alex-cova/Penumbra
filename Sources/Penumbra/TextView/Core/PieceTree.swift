@@ -268,7 +268,16 @@ final class PieceTree {
 
     static let prefetchByteCap = 256 * 1024
 
-    private var original: FileMapping?
+    private var original: FileMapping? {
+        didSet {
+            originalReadCursor = nil
+        }
+    }
+    /// Where the last read from `original` started, in original-buffer coordinates. The mapping is
+    /// immutable, so this stays valid across edits; it lets sequential reads (layout top to
+    /// bottom, captures in document order) resume here instead of at a checkpoint up to 64KB
+    /// back. Guarded, like the rest of the tree, by `StringView`'s lock.
+    private var originalReadCursor: (utf8Offset: Int, utf16Offset: Int)?
     private var addBuffer = Data()
     private let tree: PieceNodeTree
     private var originalCheckpoints: [UTF8DocumentScanner.Checkpoint]
@@ -1059,13 +1068,26 @@ final class PieceTree {
                 baseUTF16 = checkpoint.utf16Offset
             }
             let limit = piece.utf8Offset + piece.utf8Length
+            if let cursor = originalReadCursor,
+               cursor.utf16Offset <= targetUTF16,
+               cursor.utf16Offset > baseUTF16,
+               cursor.utf8Offset >= startUTF8,
+               cursor.utf8Offset <= limit {
+                startUTF8 = cursor.utf8Offset
+                baseUTF16 = cursor.utf16Offset
+            }
             let extraBytes = UnsafeRawBufferPointer(
                 start: bytes.baseAddress.map { $0 + (startUTF8 - piece.utf8Offset) },
                 count: max(limit - startUTF8, 0)
             )
+            // Resolve the start scalar here so the cursor can remember it.
+            let position = UTF8DocumentScanner.utf8Position(forUTF16Offset: targetUTF16 - baseUTF16, in: extraBytes)
+            let scalarUTF8 = startUTF8 + position.utf8Offset
+            originalReadCursor = (scalarUTF8, targetUTF16 - position.skip)
+            let scalarBytes = UnsafeRawBufferPointer(rebasing: extraBytes[position.utf8Offset...])
             UTF8DocumentScanner.appendUTF16Units(
-                from: extraBytes,
-                utf16Offset: targetUTF16 - baseUTF16,
+                from: scalarBytes,
+                utf16Offset: position.skip,
                 length: take,
                 into: &result
             )

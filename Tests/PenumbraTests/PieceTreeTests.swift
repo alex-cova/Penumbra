@@ -86,6 +86,39 @@ final class PieceTreeTests: XCTestCase {
         }
     }
 
+    /// Reads resume from the last read position in the original buffer; any order must still
+    /// return the same text, including after an edit splits the original piece.
+    func testFileBackedSubstringsInAnyOrderAcrossCheckpoints() throws {
+        let original = UTF8DocumentScanner.checkpointStride
+        UTF8DocumentScanner.checkpointStride = 256
+        defer { UTF8DocumentScanner.checkpointStride = original }
+        var text = ""
+        for index in 0..<200 {
+            text += index % 3 == 0 ? "línea \(index) 😀 ok\n" : "plain ascii line \(index)\n"
+        }
+        let view = try awaitLoad(try writeTemp(text))
+        var groundTruth = text as NSString
+        var ranges: [NSRange] = []
+        var location = 0
+        while location < groundTruth.length {
+            let length = min(23, groundTruth.length - location)
+            ranges.append(NSRange(location: location, length: length))
+            location += 17
+        }
+        var rng = SystemRandomNumberGenerator()
+        let orders = [ranges, ranges.reversed(), ranges.shuffled(using: &rng)]
+        for order in orders {
+            for range in order {
+                XCTAssertEqual(view.substring(in: range), groundTruth.substring(with: range), "range \(range)")
+            }
+        }
+        view.replaceText(in: NSRange(location: 1000, length: 5), with: "é")
+        groundTruth = groundTruth.replacingCharacters(in: NSRange(location: 1000, length: 5), with: "é") as NSString
+        for range in ranges.shuffled(using: &rng) where NSMaxRange(range) <= groundTruth.length {
+            XCTAssertEqual(view.substring(in: range), groundTruth.substring(with: range), "after edit, range \(range)")
+        }
+    }
+
     func testAddBufferBytesAcrossSurrogatePairBoundary() throws {
         var text = String(repeating: "x", count: 300_000)
         for offset in stride(from: 4_000, to: text.count, by: 4_096) {

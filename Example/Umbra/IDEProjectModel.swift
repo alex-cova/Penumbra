@@ -147,11 +147,17 @@ final class IDEProjectModel {
         guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else { return }
 
         var current = root
-        expandedPaths.insert(current.path)
+        var ancestors = [current.path]
         let relative = targetPath.dropFirst(rootPath.count)
         for component in relative.split(separator: "/") where !component.isEmpty {
             current.appendPathComponent(String(component))
-            expandedPaths.insert(current.path)
+            ancestors.append(current.path)
+        }
+        // Every write notifies observers (and re-renders the Explorer), even when nothing changes.
+        // Revealing an already-visible file is the common case, so only write when a path is new.
+        let missing = ancestors.filter { !expandedPaths.contains($0) }
+        if !missing.isEmpty {
+            expandedPaths.formUnion(missing)
         }
     }
 

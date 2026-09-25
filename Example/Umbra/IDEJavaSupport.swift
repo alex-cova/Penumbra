@@ -883,6 +883,27 @@ final class IDEJavaSupport {
             gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
         }
         var completedTargets = 0
+        // A dependency-heavy project reports two events per JAR, sometimes hundreds a second.
+        // Every write to `gradleConsole` / `statusMessage` re-renders their views, so collect
+        // them and publish at most every 100 ms.
+        var pendingNotes: [String] = []
+        var pendingStatus: String?
+        var lastFlush = ContinuousClock.now
+        func flush() {
+            if !pendingNotes.isEmpty {
+                var console = gradleConsole
+                for note in pendingNotes {
+                    console.appendNote(note)
+                }
+                gradleConsole = console
+                pendingNotes.removeAll(keepingCapacity: true)
+            }
+            if let status = pendingStatus {
+                statusMessage = status
+                pendingStatus = nil
+            }
+            lastFlush = .now
+        }
         for await progress in await scheduler.index(targets) {
             guard isCurrent(generation) else { return }
             switch progress {
@@ -890,33 +911,36 @@ final class IDEJavaSupport {
                 continue
             case .rootStarted(let id):
                 if logToConsole {
-                    gradleConsole.appendNote("Indexing \(Self.shortRootName(id))…")
+                    pendingNotes.append("Indexing \(Self.shortRootName(id))…")
                 }
                 if logToConsole, totalTargets > 0 {
-                    statusMessage = "Indexing dependencies… (\(completedTargets)/\(totalTargets)): \(Self.shortRootName(id))"
+                    pendingStatus = "Indexing dependencies… (\(completedTargets)/\(totalTargets)): \(Self.shortRootName(id))"
                 }
-                continue
             case .rootSkipped(let id, let reason):
                 completedTargets += 1
                 if logToConsole {
-                    gradleConsole.appendNote("Skipped \(Self.shortRootName(id)) (\(reason))")
+                    pendingNotes.append("Skipped \(Self.shortRootName(id)) (\(reason))")
                 }
             case .rootFinished(let id, let classCount):
                 completedTargets += 1
                 if logToConsole {
-                    gradleConsole.appendNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
+                    pendingNotes.append("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
                 }
             case .rootFailed(let id, let message):
                 completedTargets += 1
                 if logToConsole {
-                    gradleConsole.appendNote("Failed to index \(Self.shortRootName(id)): \(message)")
+                    pendingNotes.append("Failed to index \(Self.shortRootName(id)): \(message)")
                 }
             }
-            if logToConsole, totalTargets > 0 {
-                statusMessage = "Indexing dependencies… (\(completedTargets)/\(totalTargets))"
+            if logToConsole, totalTargets > 0, !progress.isRootStarted {
+                pendingStatus = "Indexing dependencies… (\(completedTargets)/\(totalTargets))"
+            }
+            if ContinuousClock.now - lastFlush >= .milliseconds(100) {
+                flush()
             }
         }
         guard isCurrent(generation) else { return }
+        flush()
 
         // Opening a shard decodes its whole string table: ~750 ms on main for a Gradle project's
         // dependency JARs, twice at launch (session restore, then the recent project).
@@ -1156,5 +1180,14 @@ final class IDEJavaSupport {
         if let watcher {
             Task { await watcher.stop() }
         }
+    }
+}
+
+private extension JavaIndexScheduler.Progress {
+    var isRootStarted: Bool {
+        if case .rootStarted = self {
+            return true
+        }
+        return false
     }
 }

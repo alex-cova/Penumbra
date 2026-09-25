@@ -222,14 +222,15 @@ final class MinimapView: UIView {
         // The y-range naturally holds about `bounds.height / minimapRowHeight` rows; this is only
         // a safety net against a non-advancing lookup, so give it generous slack.
         let iterationLimit = Int(bounds.height / max(minimapRowHeight, 0.5)) * 2 + 64
-        while docY <= yRange.upperBound, iterations <= iterationLimit {
+        var next = lineManager.line(containingYOffset: docY)
+        var nextY = next?.yPosition ?? 0
+        let lineCount = lineManager.lineCount
+        while let line = next, docY <= yRange.upperBound, iterations <= iterationLimit {
             iterations += 1
-            guard let line = lineManager.line(containingYOffset: docY) else {
-                break
-            }
+            let lineY = nextY
             let height = line.data.lineHeight
             if height > 0, !source.isLineHidden(line.id) {
-                let bandY = geometry.bandY(forLineYPosition: line.yPosition)
+                let bandY = geometry.bandY(forLineYPosition: lineY)
                 let barHeight = max(geometry.bandHeight(forDocumentHeight: min(height, estimated)) - 1, 1)
                 if bandY + barHeight >= 0, bandY <= bounds.height {
                     result.append(VisibleLine(line: line, bandY: bandY, barHeight: barHeight))
@@ -238,7 +239,24 @@ final class MinimapView: UIView {
             // Advance by the line's real height so no short line is skipped; `max(_, 1)` (and the
             // `docY + 1` floor) guarantees forward progress across a run of zero-height folded
             // lines.
-            docY = max(line.yPosition + max(height, 1), docY + 1)
+            docY = max(lineY + max(height, 1), docY + 1)
+            // Step to the next row directly, carrying y forward. Only a folded (zero-height) row
+            // takes the y lookup, which jumps the whole fold in one descent.
+            let nextRow = line.row + 1
+            guard nextRow < lineCount else {
+                break
+            }
+            let candidate = lineManager.line(atRow: nextRow)
+            if candidate.data.lineHeight > 0 {
+                next = candidate
+                nextY = lineY + height
+            } else {
+                guard let jumped = lineManager.line(containingYOffset: docY), jumped.row > line.row else {
+                    break
+                }
+                next = jumped
+                nextY = jumped.yPosition
+            }
         }
         return result
     }
@@ -303,7 +321,9 @@ final class MinimapView: UIView {
                 return (range.location ..< range.location + range.length, colorIndex)
             }
             for line in misses {
-                let localStart = line.location - spanStart
+                // `location` walks the line index; read it once per line, not per capture.
+                let lineLocation = line.location
+                let localStart = lineLocation - spanStart
                 let lineLength = line.data.length
                 guard localStart >= 0, localStart + lineLength <= chars.count else {
                     rowByLineID[line.id] = flatRow(for: line, source: source, builder: builder)
@@ -311,8 +331,8 @@ final class MinimapView: UIView {
                 }
                 let lineSlice = chars[localStart ..< localStart + lineLength]
                 let spans: [(range: Range<Int>, colorIndex: Int)] = colored.compactMap { entry -> (range: Range<Int>, colorIndex: Int)? in
-                    let lower = max(0, entry.range.lowerBound - line.location)
-                    let upper = min(lineLength, entry.range.upperBound - line.location)
+                    let lower = max(0, entry.range.lowerBound - lineLocation)
+                    let upper = min(lineLength, entry.range.upperBound - lineLocation)
                     guard lower < upper else {
                         return nil
                     }

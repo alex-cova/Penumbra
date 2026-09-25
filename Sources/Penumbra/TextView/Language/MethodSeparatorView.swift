@@ -15,8 +15,14 @@ final class MethodSeparatorView: UIView {
     }
     /// 0-based document rows that get a separator drawn along their top edge.
     var separatorRows: Set<Int> = [] {
-        didSet { if separatorRows != oldValue { needsDisplay = true } }
+        didSet {
+            if separatorRows != oldValue {
+                sortedSeparatorRows = separatorRows.sorted()
+                needsDisplay = true
+            }
+        }
     }
+    private var sortedSeparatorRows: [Int] = []
     var separatorColor: UIColor = .separatorColor {
         didSet { needsDisplay = true }
     }
@@ -42,7 +48,29 @@ final class MethodSeparatorView: UIView {
             return []
         }
         let lineCount = lineManager.lineCount
-        let lineYPositions: [CGFloat] = separatorRows.sorted().compactMap { row in
+        // Only rows whose top edge can land inside `clip`: this runs on every layout pass, and a
+        // large file has thousands of declarations.
+        let slack = separatorWidth + 1
+        let firstRow = lineManager.line(containingYOffset: clip.minY - textContainerInsetTop - slack)?.row ?? 0
+        let lastRow = (lineManager.line(containingYOffset: clip.maxY - textContainerInsetTop + slack)?.row ?? lineCount) + 1
+        let rows = sortedSeparatorRows
+        var low = 0
+        var high = rows.count
+        while low < high {
+            let mid = (low + high) / 2
+            if rows[mid] < firstRow {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        var candidates: [Int] = []
+        var index = low
+        while index < rows.count, rows[index] <= lastRow {
+            candidates.append(rows[index])
+            index += 1
+        }
+        let lineYPositions: [CGFloat] = candidates.compactMap { row in
             guard row > 0, row < lineCount else {
                 return nil
             }
