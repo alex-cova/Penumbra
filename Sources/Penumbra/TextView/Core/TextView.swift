@@ -139,7 +139,10 @@ public struct DocumentTextExport: Sendable {
     /// Piece-tree metadata captured on the main actor; call ``DocumentTextExport/materializeUTF16Text()``
     /// from a background task to build the full string without blocking typing.
     public func exportDocumentText() -> DocumentTextExport {
-        DocumentTextExport(snapshot: pieceTreeContentSnapshot(), fallback: text)
+        if let snapshot = pieceTreeContentSnapshot() {
+            return DocumentTextExport(snapshot: snapshot, fallback: "")
+        }
+        return DocumentTextExport(snapshot: nil, fallback: text)
     }
 
     /// Times the piece tree has been copied into a contiguous string. Stays at zero when a

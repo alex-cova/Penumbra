@@ -76,6 +76,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private var parseEpoch: UInt = 0
     /// UTF-16 window currently fed to `ts_parser_set_included_ranges`. `nil` means a full-document tree.
     private(set) var parsedUTF16Range: NSRange?
+    /// Rows whose syntax tree changed in the last background parse that had a previous tree.
+    /// `nil` means the caller should recolor the visible lines (no tree to diff against).
+    private var pendingSyntaxRows: [ClosedRange<Int>]?
 
     init(language: TreeSitterInternalLanguage, languageProvider: TreeSitterLanguageProvider?, stringView: StringView, lineManager: LineManager) {
         self.stringView = stringView
@@ -204,6 +207,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         let epoch = parseEpoch
         parser.shouldCancel = isCancelled
         parseInFlight = true
+        // Snapshot after `ts_tree_edit` and before the parser replaces `tree`, so the diff
+        // compares the edited tree with the one parse returns. A retain of the live tree
+        // would be freed when the parser swaps it out.
+        let previousTree = rootLanguageLayer.tree?.copy()
         parseLock.unlock()
 
         work()
@@ -221,8 +228,35 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             hasCompletedInitialParse = rootLanguageLayer.tree != nil
             parsedUTF16Range = publish()
             captureWindows.removeAll()
+            if let previousTree, let newTree = rootLanguageLayer.tree {
+                pendingSyntaxRows = Self.changedRowRanges(from: previousTree, to: newTree)
+            } else {
+                pendingSyntaxRows = nil
+            }
         }
         parseLock.unlock()
+    }
+
+    /// Rows to recolor after the background parse that just finished.
+    /// `nil` means there was no previous tree, so the caller recolors what is on screen.
+    func consumePendingSyntaxRows() -> [ClosedRange<Int>]? {
+        parseLock.withLock {
+            defer { pendingSyntaxRows = nil }
+            return pendingSyntaxRows
+        }
+    }
+
+    private static func changedRowRanges(from oldTree: TreeSitterTree, to newTree: TreeSitterTree) -> [ClosedRange<Int>] {
+        var ranges: [ClosedRange<Int>] = []
+        for changed in oldTree.rangesChanged(comparingTo: newTree) {
+            let start = Int(changed.startPoint.row)
+            let end = Int(changed.endPoint.row)
+            guard start <= end else {
+                continue
+            }
+            ranges.append(start ... end)
+        }
+        return ranges
     }
 
     func textDidChange(_ change: TextChange) -> LineChangeSet {

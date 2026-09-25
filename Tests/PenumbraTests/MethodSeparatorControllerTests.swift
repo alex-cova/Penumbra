@@ -56,6 +56,25 @@ final class MethodSeparatorControllerTests: XCTestCase {
         XCTAssertTrue(controller.separatorRows.isEmpty)
     }
 
+    func testWindowedRecomputeKeepsSeparatorsOutsideTheEditedRows() {
+        let (controller, mode) = makeController(text: """
+        class Widget {
+            render() {
+                return 1;
+            }
+            update() {
+                return 2;
+            }
+        }
+        """)
+        _ = mode
+        XCTAssertTrue(controller.separatorRows.contains(1))
+        XCTAssertTrue(controller.separatorRows.contains(4))
+        controller.recompute(rowWindow: 1 ... 2)
+        XCTAssertTrue(controller.separatorRows.contains(1))
+        XCTAssertTrue(controller.separatorRows.contains(4))
+    }
+
     func testOnRowsChangedFiresWhenRowsChange() {
         let mode = LanguageModeFactory.javaScriptLanguageMode(text: "class C {\n  a() {}\n}")
         let controller = MethodSeparatorController()

@@ -809,7 +809,9 @@ final class TextInputView: UIView, UITextInput {
                     isMultiCaret: isMultiCursorActive
                 )
                 updateFocusModeIfNeeded()
-                setNeedsLayout()
+                // The caret overlay and the current-line bar do not need a viewport walk.
+                // A line-structure edit sets needsLayout itself once it knows the height changed.
+                layoutManager.layoutLineSelectionIfNeeded()
             }
         }
     }
@@ -923,6 +925,9 @@ final class TextInputView: UIView, UITextInput {
     private var lastReplaceEditRange = NSRange(location: 0, length: 0)
     private var lastReplaceNewString = ""
     private var hasNotifiedSyntaxParse = false
+    /// Rows edited since the last successful background parse. Recoloring only these, plus the
+    /// rows tree-sitter reports, keeps a finished parse from re-extracting every visible Metal glyph.
+    private var rowsEditedSinceSyntaxParse = Set<Int>()
     /// Window last handed to ``startViewportParse``. Prevents layout + `contentOffset` from
     /// cancelling the same in-flight expansion by starting it twice.
     private var inFlightViewportParseRange: NSRange?
@@ -1579,8 +1584,7 @@ final class TextInputView: UIView, UITextInput {
 
     private func handleSyntaxParseFinished(state: TextViewState?, notify: Bool) {
         state?.applyDetectedIndentStrategy()
-        invalidateVisibleLineSyntaxHighlighting()
-        methodSeparatorController.recompute()
+        applySyntaxColorRefreshAfterParse()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
         // Every other invalidation path that can flip glyphs from stale to highlighted
@@ -1866,6 +1870,42 @@ private extension TextInputView {
             lineController.lineBreakMode = lineBreakMode
         }
         layoutManager.invalidateSyntaxHighlightingOnVisibleLines()
+    }
+
+    private func noteRowsNeedingSyntaxColor(_ lineChangeSet: LineChangeSet) {
+        for line in lineChangeSet.editedLines {
+            rowsEditedSinceSyntaxParse.insert(line.row)
+        }
+        for line in lineChangeSet.insertedLines {
+            rowsEditedSinceSyntaxParse.insert(line.row)
+        }
+    }
+
+    private func applySyntaxColorRefreshAfterParse() {
+        let edited = rowsEditedSinceSyntaxParse
+        rowsEditedSinceSyntaxParse.removeAll()
+        guard let treeRows = (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingSyntaxRows() else {
+            invalidateVisibleLineSyntaxHighlighting()
+            layoutManager.invalidateSyntaxColors(onRows: edited, lineManager: lineManager)
+            methodSeparatorController.recompute()
+            return
+        }
+        var rows = edited
+        let lastRow = max(lineManager.lineCount - 1, 0)
+        for range in treeRows {
+            let lower = max(range.lowerBound, 0)
+            let upper = min(range.upperBound, lastRow)
+            guard lower <= upper else {
+                continue
+            }
+            for row in lower ... upper {
+                rows.insert(row)
+            }
+        }
+        layoutManager.invalidateSyntaxColors(onRows: rows, lineManager: lineManager)
+        if let lower = rows.min(), let upper = rows.max() {
+            methodSeparatorController.recompute(rowWindow: lower ... upper)
+        }
     }
 
     private func setupContentSizeObserver() {
@@ -2386,7 +2426,6 @@ extension TextInputView {
             }
         } else {
             replaceText(in: replacementRange, with: preparedText)
-            setNeedsLayout()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.delegate?.textInputViewDidChangeSelection(self)
@@ -2675,6 +2714,11 @@ extension TextInputView {
             languageMode.textDidChange(textChange)
         }
         lineChangeSet.union(with: languageModeLineChangeSet)
+        if !languageMode.isSyntaxTreeReady {
+            noteRowsNeedingSyntaxColor(lineChangeSet)
+        } else {
+            rowsEditedSinceSyntaxParse.removeAll()
+        }
         EditorPerformanceTrace.shared.measure(.visibleLayout) {
             applyLineChangesToLayoutManager(lineChangeSet)
         }
@@ -2736,7 +2780,11 @@ extension TextInputView {
         } else {
             colorShift = nil
         }
-        layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift)
+        let contentSizeBeforeEdit = contentSize
+        let heightChanged = layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift)
+        if contentSize != contentSizeBeforeEdit {
+            delegate?.textInputViewDidInvalidateContentSize(self)
+        }
         if !didAddOrRemoveLines {
             selectionOverlayController.updateLayout()
         }
@@ -2762,6 +2810,14 @@ extension TextInputView {
                 foldingController.setNeedsRecompute()
             }
         }
+        // One existing line whose height did not change is already typeset and on the canvas.
+        // Walking the rest of the viewport here is what made a 360-line file hitch on every character.
+        let stableSingleLine = !didAddOrRemoveLines && editedLineIDs.count <= 1 && !heightChanged
+        if stableSingleLine {
+            layoutManager.clearRecentlyEditedLineIDs()
+            return
+        }
+        layoutManager.setNeedsLayoutLineSelection()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
         scheduleDeferredLayoutIfNeeded()

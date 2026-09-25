@@ -47,6 +47,21 @@ final class LineController: @unchecked Sendable {
     var lineWidth: CGFloat {
         ceil(typesetter.maximumLineWidth)
     }
+    /// Text, colours, and the typeset line are still the ones on screen. A viewport layout can
+    /// leave this line's Metal glyphs where they are.
+    var isPaintStable: Bool {
+        !isStringInvalid
+            && !isDefaultAttributesInvalid
+            && !isSyntaxHighlightingInvalid
+            && !isTypesetterInvalid
+            && !isLineFragmentCacheInvalid
+            && _lineHeight != nil
+    }
+
+    var lineFragmentIDs: [LineFragmentID] {
+        lineFragmentControllers.values.map { $0.lineFragment.id }
+    }
+
     var lineHeight: CGFloat {
         if let lineHeight = _lineHeight {
             return lineHeight
@@ -212,6 +227,12 @@ final class LineController: @unchecked Sendable {
         _lineHeight = nil
     }
 
+    /// The line's text and typeset glyphs are still valid. The next highlight pass only
+    /// replaces colours, so Metal does not re-extract the line until that pass finishes.
+    func invalidateSyntaxColorsOnly() {
+        isSyntaxHighlightingInvalid = true
+    }
+
     func lineFragmentControllers(in rect: CGRect) -> [LineFragmentController] {
         let lineYPosition = line.yPosition
         let localMinY = rect.minY - lineYPosition
@@ -353,7 +374,9 @@ private extension LineController {
     }
 
     private func updateSyntaxHighlightingIfNecessary(async: Bool) {
-        if colorsStale, !async {
+        // A color-shifted keystroke must not query tree-sitter while the tree is still
+        // catching up. Once a parse has explicitly invalidated colours, highlight anyway.
+        if colorsStale, !async, !isSyntaxHighlightingInvalid {
             return
         }
         guard isSyntaxHighlightingInvalid else {
@@ -379,7 +402,12 @@ private extension LineController {
                 Task { @MainActor in
                     if case .success = result, let self = self {
                         let oldWidth = self.lineWidth
+                        self.colorsStale = false
                         self.isSyntaxHighlightingInvalid = false
+                        let colorsChanged = (self.syntaxHighlighter as? TreeSitterSyntaxHighlighter)?.lastHighlightChangedAttributes ?? true
+                        guard colorsChanged else {
+                            return
+                        }
                         self.isTypesetterInvalid = true
                         self.redisplayLineFragments()
                         self.delegate?.lineControllerDidRefreshDisplayedLineFragments(self)
@@ -392,6 +420,7 @@ private extension LineController {
         } else {
             syntaxHighlighter.cancel()
             syntaxHighlighter.syntaxHighlight(input)
+            colorsStale = false
             isSyntaxHighlightingInvalid = false
             isTypesetterInvalid = true
         }

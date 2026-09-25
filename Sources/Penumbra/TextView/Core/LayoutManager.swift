@@ -324,10 +324,15 @@ final class LayoutManager {
         setNeedsLayout()
     }
 
-    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>, colorShift: (utf16RangeInLine: NSRange, text: String)? = nil) {
+    /// Returns whether any visible edited line changed height. A same-height edit does not need
+    /// another viewport layout; the line was just typeset and upserted here.
+    @discardableResult
+    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>, colorShift: (utf16RangeInLine: NSRange, text: String)? = nil) -> Bool {
         recentlyEditedLineIDs.formUnion(lineIDs)
+        var heightChanged = false
         for lineID in lineIDs {
             if let lineController = lineControllerStorage[lineID] {
+                let oldHeight = lineController.lineHeight
                 let usedColorShift: Bool
                 if let colorShift, lineIDs.count == 1 {
                     usedColorShift = lineController.applyColorShift(
@@ -345,6 +350,11 @@ final class LayoutManager {
                     let lineYPosition = lineController.line.yPosition
                     let lineLocalViewport = CGRect(x: 0, y: lineYPosition, width: insetViewport.width, height: insetViewport.maxY - lineYPosition)
                     lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: false)
+                    let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
+                    contentSizeService.setSize(of: lineController.line, to: lineSize)
+                    if abs(lineController.lineHeight - oldHeight) > .ulpOfOne {
+                        heightChanged = true
+                    }
                 }
             }
         }
@@ -356,6 +366,11 @@ final class LayoutManager {
                 }
             }
         }
+        return heightChanged
+    }
+
+    func clearRecentlyEditedLineIDs() {
+        recentlyEditedLineIDs.removeAll()
     }
 
     /// Return at end-of-line does not change the edited line's glyphs. The new line also has no
@@ -387,7 +402,21 @@ final class LayoutManager {
 
     func invalidateSyntaxHighlightingOnVisibleLines() {
         for lineID in visibleLineIDs {
-            lineControllerStorage[lineID]?.invalidateSyntaxHighlighting()
+            lineControllerStorage[lineID]?.invalidateSyntaxColorsOnly()
+        }
+    }
+
+    func invalidateSyntaxColors(onRows rows: Set<Int>, lineManager: LineManager) {
+        guard !rows.isEmpty, lineManager.lineCount > 0 else {
+            return
+        }
+        let lastRow = lineManager.lineCount - 1
+        for row in rows {
+            guard row >= 0, row <= lastRow else {
+                continue
+            }
+            let line = lineManager.line(atRow: row)
+            lineControllerStorage[line.id]?.invalidateSyntaxColorsOnly()
         }
     }
 
@@ -813,6 +842,10 @@ extension LayoutManager {
         var appearedLineFragmentIDs: Set<LineFragmentID> = []
         var maxY = layoutBounds.minY
         var contentOffsetAdjustmentY: CGFloat = 0
+        // A character on one line must not re-extract every other visible line. Once a line above
+        // changes height, lines below have new Y positions and cannot take this path.
+        var geometryShifted = false
+        let focusDimmed = (focusModeController?.effectiveUnfocusedAlpha ?? 1) < 0.999
         while let line = nextLine, maxY < layoutBounds.maxY, constrainingLineWidth > 0 {
             // A folded-away line contributes zero height and no views; skip it entirely rather
             // than typesetting it, and move on to the next row without advancing maxY. (The
@@ -825,15 +858,38 @@ extension LayoutManager {
                 continue
             }
             appearedLineIDs.insert(line.id)
+            let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+            let nextInlayHints = InlayHintIndex.localHints(
+                in: inlayHints, lineLocation: line.location, lineLength: line.data.length
+            )
+            let widthUnchanged = abs(lineController.constrainingWidth - constrainingLineWidth) < 0.5
+            let fragmentIDs = lineController.lineFragmentIDs
+            let fragmentsAlreadyPainted = !fragmentIDs.isEmpty
+                && fragmentIDs.allSatisfy { oldVisibleLineFragmentIDs.contains($0) }
+            if !geometryShifted,
+               !focusDimmed,
+               markedRange == nil,
+               widthUnchanged,
+               oldVisibleLineIDs.contains(line.id),
+               !recentlyEditedLineIDs.contains(line.id),
+               lineController.isPaintStable,
+               fragmentsAlreadyPainted,
+               lineController.inlayHints == nextInlayHints {
+                appearedLineFragmentIDs.formUnion(fragmentIDs)
+                maxY = max(maxY, textContainerInset.top + line.yPosition + lineController.lineHeight)
+                if line.index < lineManager.lineCount - 1 && maxY < layoutBounds.maxY {
+                    nextLine = lineManager.line(atRow: line.index + 1)
+                } else {
+                    nextLine = nil
+                }
+                continue
+            }
             // Prepare to line controller to display text.
             let lineLocalViewport = CGRect(x: 0, y: maxY, width: layoutBounds.width, height: layoutBounds.maxY - maxY)
-            let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let oldLineHeight = lineController.lineHeight
             lineController.constrainingWidth = constrainingLineWidth
             // Set before the line is prepared: a change re-typesets it with the hints' room.
-            lineController.inlayHints = InlayHintIndex.localHints(
-                in: inlayHints, lineLocation: line.location, lineLength: line.data.length
-            )
+            lineController.inlayHints = nextInlayHints
             let highlightAsynchronously = !recentlyEditedLineIDs.contains(line.id)
             lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: highlightAsynchronously)
             layoutLineNumberView(for: line)
@@ -887,6 +943,9 @@ extension LayoutManager {
             }
             let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
             contentSizeService.setSize(of: lineController.line, to: lineSize)
+            if abs(lineController.lineHeight - oldLineHeight) > .ulpOfOne {
+                geometryShifted = true
+            }
             let isSizingLineAboveTopEdge = line.yPosition < insetViewport.minY + textContainerInset.top
             if isSizingLineAboveTopEdge && lineController.isFinishedTypesetting {
                 contentOffsetAdjustmentY += lineController.lineHeight - oldLineHeight

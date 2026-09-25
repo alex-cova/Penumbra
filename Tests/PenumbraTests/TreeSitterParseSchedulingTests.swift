@@ -224,6 +224,41 @@ final class TreeSitterMaxSyncEditLengthTests: XCTestCase {
         super.tearDown()
     }
 
+    func testDeferredParseRecolorsChangedRowsOnly() {
+        UserDefaults.standard.set(false, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: PenumbraSyncKeystrokeParse.defaultsKey) }
+        let source = (0 ..< 80).map { "let value\($0) = \($0);" }.joined(separator: "\n") + "\n"
+        let stringView = StringView(string: source)
+        let lineManager = LineManager(stringView: stringView)
+        lineManager.rebuild()
+        let languageMode = TreeSitterInternalLanguageMode(
+            language: TreeSitterLanguage(tree_sitter_javascript()).internalLanguage,
+            languageProvider: nil,
+            stringView: stringView,
+            lineManager: lineManager
+        )
+        languageMode.parse()
+        XCTAssertTrue(languageMode.isSyntaxTreeReady)
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let edited = helper.replaceText(in: NSRange(location: 4, length: 0), with: "X")
+        _ = languageMode.textDidChange(edited.textChange)
+        XCTAssertFalse(languageMode.isSyntaxTreeReady)
+
+        let finished = expectation(description: "deferred parse published a row diff")
+        languageMode.parse { success in
+            XCTAssertTrue(success)
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 5)
+
+        let rows = languageMode.consumePendingSyntaxRows()
+        XCTAssertNotNil(rows, "an incremental reparse must publish a row diff, not a full-viewport invalidation")
+        let covered = Set(rows?.flatMap { Array($0) } ?? [])
+        XCTAssertFalse(covered.contains(70), "typing inside the first statement must not recolor line 70")
+        XCTAssertLessThan(covered.count, 8)
+    }
+
     func testSmallEditDefersParseThenHighlights() {
         UserDefaults.standard.set(false, forKey: PenumbraSyncKeystrokeParse.defaultsKey)
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))

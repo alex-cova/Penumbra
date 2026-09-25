@@ -38,6 +38,8 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     private let languageMode: TreeSitterInternalLanguageMode
     private let operationQueue: OperationQueue
     private var currentOperation: Operation?
+    /// Set by the latest highlight pass. Callers skip a re-typeset when the colours did not change.
+    private(set) var lastHighlightChangedAttributes = true
 
     init(stringView: StringView, languageMode: TreeSitterInternalLanguageMode, operationQueue: OperationQueue) {
         self.stringView = stringView
@@ -48,8 +50,9 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput) {
         let captures = languageMode.captures(in: input.byteRange)
         let tokens = self.tokens(for: captures, localTo: input.byteRange)
-        setAttributes(for: tokens, on: input.attributedString)
-        applySemanticHighlights(to: input)
+        let colorsChanged = setAttributes(for: tokens, on: input.attributedString)
+        let semanticChanged = applySemanticHighlights(to: input)
+        lastHighlightChangedAttributes = colorsChanged || semanticChanged
     }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback) {
@@ -72,8 +75,9 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
             if !operation.isCancelled {
                 DispatchQueue.main.async {
                     if !operation.isCancelled {
-                        self.setAttributes(for: tokens, on: input.attributedString)
-                        self.applySemanticHighlights(to: input)
+                        let colorsChanged = self.setAttributes(for: tokens, on: input.attributedString)
+                        let semanticChanged = self.applySemanticHighlights(to: input)
+                        self.lastHighlightChangedAttributes = colorsChanged || semanticChanged
                         completion(.success(()))
                     } else {
                         completion(.failure(TreeSitterSyntaxHighlighterError.cancelled))
@@ -110,34 +114,44 @@ private extension TreeSitterSyntaxHighlighter {
     /// Paints the host's highlights over this line, after the tree-sitter pass. Only the colour is
     /// set (never the font), so line metrics don't change. A name the theme has no colour for
     /// leaves the tree-sitter colour alone.
-    func applySemanticHighlights(to input: LineSyntaxHighlighterInput) {
-        guard let store = semanticHighlights, !store.isEmpty else { return }
+    @discardableResult
+    func applySemanticHighlights(to input: LineSyntaxHighlighterInput) -> Bool {
+        guard let store = semanticHighlights, !store.isEmpty else { return false }
         let lineStart = input.byteRange.lowerBound.utf16Length
         let lineRange = NSRange(location: lineStart, length: input.attributedString.length)
         let matches = store.highlights(intersecting: lineRange)
-        guard !matches.isEmpty else { return }
+        guard !matches.isEmpty else { return false }
+        var changed = false
         input.attributedString.beginEditing()
         for highlight in matches {
             guard let color = theme.textColor(for: highlight.highlightName),
                   let overlap = highlight.range.intersection(lineRange), overlap.length > 0 else { continue }
-            input.attributedString.addAttribute(
-                .foregroundColor, value: color,
-                range: NSRange(location: overlap.location - lineStart, length: overlap.length)
-            )
+            let local = NSRange(location: overlap.location - lineStart, length: overlap.length)
+            if !Self.attribute(attributedString: input.attributedString, key: .foregroundColor, equals: color, in: local) {
+                input.attributedString.addAttribute(.foregroundColor, value: color, range: local)
+                changed = true
+            }
         }
         input.attributedString.endEditing()
+        return changed
     }
 
-    private func setAttributes(for tokens: [TreeSitterSyntaxHighlightToken], on attributedString: NSMutableAttributedString) {
+    @discardableResult
+    private func setAttributes(for tokens: [TreeSitterSyntaxHighlightToken], on attributedString: NSMutableAttributedString) -> Bool {
         attributedString.beginEditing()
+        var changed = false
         let defaultFont = theme.font
         for token in coalesce(tokens) {
             if token.fontTraits.isEmpty && token.font == nil {
-                if let foregroundColor = token.textColor {
+                if let foregroundColor = token.textColor,
+                   !Self.attribute(attributedString: attributedString, key: .foregroundColor, equals: foregroundColor, in: token.range) {
                     attributedString.addAttribute(.foregroundColor, value: foregroundColor, range: token.range)
+                    changed = true
                 }
-                if let shadow = token.shadow {
+                if let shadow = token.shadow,
+                   !Self.attribute(attributedString: attributedString, key: .shadow, equals: shadow, in: token.range) {
                     attributedString.addAttribute(.shadow, value: shadow, range: token.range)
+                    changed = true
                 }
                 continue
             }
@@ -172,11 +186,47 @@ private extension TreeSitterSyntaxHighlighter {
             if newFont != currentFont {
                 attributes[.font] = newFont
             }
-            if !attributes.isEmpty {
-                attributedString.addAttributes(attributes, range: token.range)
+            var filtered: [NSAttributedString.Key: Any] = [:]
+            for (key, value) in attributes where !Self.attribute(
+                attributedString: attributedString, key: key, equals: value, in: token.range
+            ) {
+                filtered[key] = value
+            }
+            if !filtered.isEmpty {
+                attributedString.addAttributes(filtered, range: token.range)
+                changed = true
             }
         }
         attributedString.endEditing()
+        return changed
+    }
+
+    /// True when every character in `range` already has `value` for `key`.
+    private static func attribute(
+        attributedString: NSAttributedString,
+        key: NSAttributedString.Key,
+        equals value: Any,
+        in range: NSRange
+    ) -> Bool {
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= attributedString.length else {
+            return false
+        }
+        let expected = value as AnyObject
+        var location = range.location
+        while location < NSMaxRange(range) {
+            var effective = NSRange()
+            guard let existing = attributedString.attribute(key, at: location, effectiveRange: &effective) else {
+                return false
+            }
+            if !(existing as AnyObject).isEqual(expected) {
+                return false
+            }
+            if effective.upperBound <= location {
+                return false
+            }
+            location = effective.upperBound
+        }
+        return true
     }
 
     private func coalesce(_ tokens: [TreeSitterSyntaxHighlightToken]) -> [TreeSitterSyntaxHighlightToken] {

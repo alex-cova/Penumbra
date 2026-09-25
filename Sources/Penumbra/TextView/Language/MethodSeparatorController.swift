@@ -23,8 +23,12 @@ final class MethodSeparatorController {
     private(set) var separatorRows: Set<Int> = []
 
     /// Rescan and publish if the row set changed.
-    func recompute() {
-        let newRows = computeRows()
+    ///
+    /// `rowWindow` limits the walk to declarations that overlap those rows and keeps separators
+    /// outside it. A character typed inside one method must not walk the rest of the file.
+    /// `nil` scans the whole tree (open, theme change, or a parse with no row diff).
+    func recompute(rowWindow: ClosedRange<Int>? = nil) {
+        let newRows = computeRows(rowWindow: rowWindow)
         guard newRows != separatorRows else {
             return
         }
@@ -40,15 +44,22 @@ final class MethodSeparatorController {
         onRowsChanged?([])
     }
 
-    private func computeRows() -> Set<Int> {
+    private func computeRows(rowWindow: ClosedRange<Int>?) -> Set<Int> {
         guard isEnabled,
               let configuration,
               configuration.showsMethodSeparators,
               let root = languageMode?.rootSyntaxNode else {
             return []
         }
-        let declarations = DeclarationScanner.scan(root: root, configuration: configuration, text: nil)
-        var rows: Set<Int> = []
+        let declarations = DeclarationScanner.scan(
+            root: root,
+            configuration: configuration,
+            text: nil,
+            rowWindow: rowWindow
+        )
+        var rows: Set<Int> = rowWindow.map { window in
+            separatorRows.filter { !window.contains($0) }
+        } ?? []
         for declaration in declarations where declaration.isMethodSeparatorAnchor {
             let row = declaration.container.startRow
             if row > 0 {

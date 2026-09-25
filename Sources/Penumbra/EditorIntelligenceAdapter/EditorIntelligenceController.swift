@@ -84,6 +84,9 @@ public final class EditorIntelligenceController {
     private var signatureHelpTask: Task<Void, Never>?
     private var outlineTask: Task<Void, Never>?
     private var breadcrumbTask: Task<Void, Never>?
+    /// Last buffer exported for breadcrumbs, keyed by ``TextView/contentGeneration`` so a caret
+    /// move does not copy the file again.
+    private var breadcrumbSource: (generation: UInt64, text: String)?
     private var jumpToDefinitionController: JumpToDefinitionController?
 
     private let formattingProvider: (any FormattingProviding)?
@@ -1012,30 +1015,65 @@ public final class EditorIntelligenceController {
             publishBreadcrumbs([])
             return
         }
-        // The adapter's snapshot lags the live buffer; a language provider needs the text and the
-        // caret as they are on screen.
-        guard let document = (breadcrumbProvider != nil ? liveDocument() : nil) ?? adapter.currentDocument,
-              symbolIndex != nil || breadcrumbProvider != nil else {
+        guard symbolIndex != nil || breadcrumbProvider != nil else {
             publishBreadcrumbs([])
             return
         }
+        // `liveDocument()` used to copy the whole file here, on the caret, and Java then parsed
+        // that copy. The outline only needs to catch up after typing pauses.
         breadcrumbTask?.cancel()
         breadcrumbTask = Task { [weak self] in
-            guard let self else { return }
-            var segments = await breadcrumbProvider?.breadcrumbs(for: document)
-            if segments == nil, let symbolIndex {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard let document = await self.breadcrumbDocument() else { return }
+            var segments = await self.breadcrumbProvider?.breadcrumbs(for: document)
+            if segments == nil, let symbolIndex = self.symbolIndex {
                 let symbols = await symbolIndex.symbols(in: document.id)
                 let cursorOffset = document.cursor.position.utf16Offset
-                // Share BreadcrumbProvider's logic rather than re-deriving it here.
                 let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
                 segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
             }
             guard !Task.isCancelled else { return }
             let result = segments ?? []
-            await MainActor.run {
-                self.publishBreadcrumbs(result)
-            }
+            self.publishBreadcrumbs(result)
         }
+    }
+
+    /// The on-screen buffer for a breadcrumb pass. A piece-tree file is copied off the main actor.
+    private func breadcrumbDocument() async -> Document? {
+        guard let textView, let base = adapter.currentDocument else { return nil }
+        let generation = textView.contentGeneration
+        let caret = textView.selectedRange.location
+        let location = textView.textLocation(at: caret)
+        let position = TextPosition(
+            line: location?.lineNumber ?? 0,
+            column: location?.column ?? caret,
+            utf16Offset: caret
+        )
+        let text: String
+        if let cached = breadcrumbSource, cached.generation == generation {
+            text = cached.text
+        } else if textView.pieceTreeContentSnapshot() != nil {
+            let export = textView.exportDocumentText()
+            text = await Task.detached(priority: .utility) {
+                export.materializeUTF16Text()
+            }.value
+            guard !Task.isCancelled, textView.contentGeneration == generation else { return nil }
+            breadcrumbSource = (generation, text)
+        } else {
+            text = textView.text
+            breadcrumbSource = (generation, text)
+        }
+        return Document(
+            id: base.id,
+            url: textView.documentURL ?? base.url,
+            displayName: base.displayName,
+            contentSnapshot: TextSnapshot(version: base.version, text: text),
+            selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
+            cursor: Cursor(position: position),
+            viewport: base.viewport,
+            languageIdentifier: base.languageIdentifier ?? textView.languageIdentifier
+        )
     }
 
     private func publishBreadcrumbs(_ segments: [BreadcrumbSegment]) {

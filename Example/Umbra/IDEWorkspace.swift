@@ -134,6 +134,7 @@ public final class IDEWorkspace {
     private var javaRunFileURL: URL?
     private var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     private(set) var lastRunConfiguration: JavaRunConfiguration?
@@ -2829,6 +2830,31 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Publishes the dirty dot the first time a document changes, and does nothing after that.
+    private func noteActiveDocumentEdited() {
+        guard let document = workbench.activePane.selectedDocument,
+              var rows = tabsByPane[workbench.activePaneID],
+              let index = rows.firstIndex(where: { $0.id == document.id }) else {
+            return
+        }
+        let row = rows[index]
+        let rowChanged = row.isDirty != document.isDirty
+        let headerChanged = headerContext.documentID == document.id && headerContext.isDirty != document.isDirty
+        guard rowChanged || headerChanged else { return }
+        if rowChanged {
+            rows[index] = IDETabRow(id: row.id, title: row.title, isDirty: document.isDirty, isSelected: row.isSelected)
+            tabsByPane[workbench.activePaneID] = rows
+        }
+        if headerChanged {
+            headerContext = IDEHeaderContext(
+                documentID: headerContext.documentID,
+                pathItems: headerContext.pathItems,
+                symbolItems: headerContext.symbolItems,
+                isDirty: document.isDirty
+            )
+        }
+    }
+
     func selectBreadcrumb(_ item: IDEBreadcrumbItem) {
         switch item.target {
         case .folder(let url):
@@ -3198,6 +3224,17 @@ public final class IDEWorkspace {
     }
 
     private func refreshJavaRunAvailability(from textView: TextView) {
+        javaRunAvailabilityTask?.cancel()
+        javaRunAvailabilityTask = Task { @MainActor [weak self, weak textView] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self, let textView else { return }
+            self.refreshJavaRunAvailabilityNow(from: textView)
+        }
+    }
+
+    /// `containsMain` copies the whole buffer. That stays off the keystroke; the Run button
+    /// catches up once typing pauses.
+    private func refreshJavaRunAvailabilityNow(from textView: TextView) {
         let document = workbench.activePane.selectedDocument
         let isJava = document?.languageIdentifier == "java"
         let hasMain = isJava && JavaMainMethod.containsMain(in: textView.text)
@@ -3576,7 +3613,9 @@ extension IDEWorkspace: TextViewDelegate {
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
-        refreshPresentation()
+        // The tab dot and window chrome do not change on the second character. Rebuilding every
+        // tab row here re-renders the SwiftUI shell, which lays the editor out again.
+        noteActiveDocumentEdited()
     }
 
     public func textView(

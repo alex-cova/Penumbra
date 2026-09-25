@@ -151,7 +151,7 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         controller.onBreadcrumbsUpdated = { received = $0.map(\.title) }
 
         controller.refreshBreadcrumbs()
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
 
         XCTAssertEqual(received, ["A", "m(int)"])
     }

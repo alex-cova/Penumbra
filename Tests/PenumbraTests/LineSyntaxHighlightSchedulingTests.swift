@@ -47,6 +47,18 @@ final class LineSyntaxHighlightSchedulingTests: XCTestCase, LineControllerStorag
         XCTAssertEqual(delegate.refreshCount, 1, "async highlight completion must refresh Metal/CG paint")
     }
 
+    func testColorOnlyInvalidationHighlightsAgainWithoutCancelling() {
+        let controller = makeLineController(text: "let value = 42")
+        controller.prepareToDisplayString(toLocation: 14, syntaxHighlightAsynchronously: false)
+        XCTAssertEqual(highlighter.highlightCount, 1)
+        let cancelsAfterSync = highlighter.cancelCount
+
+        controller.invalidateSyntaxColorsOnly()
+        controller.prepareToDisplayString(toLocation: 14, syntaxHighlightAsynchronously: true)
+        XCTAssertEqual(highlighter.cancelCount, cancelsAfterSync, "a colour refresh must not rebuild the line string")
+        XCTAssertEqual(highlighter.highlightCount, 2)
+    }
+
     func testRebuildingTheLineStringCancelsInFlightHighlight() {
         let controller = makeLineController(text: "let value = 42")
         controller.prepareToDisplayString(toLocation: 14, syntaxHighlightAsynchronously: true)

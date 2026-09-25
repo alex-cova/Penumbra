@@ -37,6 +37,32 @@ final class TextViewMetalSmokeTests: XCTestCase {
         }
     }
 
+    func testTypingOneCharacterKeepsGlyphsOnLinesBelow() throws {
+        try skipUnlessMetalActivatable()
+        let source = (0 ..< 40).map { "let value\($0) = \($0);" }.joined(separator: "\n")
+        let textView = makeFocusedTextView(text: source)
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        let before = textView.metalFragmentCount
+        XCTAssertGreaterThan(before, 8)
+        let lowerLocation = (source as NSString).range(of: "let value5").location
+        XCTAssertNotEqual(lowerLocation, NSNotFound)
+        let originsBefore = textView.metalDebugGlyphOrigins(atLocation: lowerLocation)
+        XCTAssertFalse(originsBefore.isEmpty, "line 5 should be on screen and painted")
+
+        textView.selectedRange = NSRange(location: 4, length: 0)
+        textView.insertText("X")
+        textView.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertGreaterThanOrEqual(textView.metalFragmentCount, before)
+        let originsAfter = textView.metalDebugGlyphOrigins(atLocation: lowerLocation + 1)
+        XCTAssertEqual(originsAfter.count, originsBefore.count)
+        XCTAssertEqual(textView.text.hasPrefix("let Xvalue0"), true)
+    }
+
     func testTypingUnderMetalKeepsBackendActiveAndTextCorrect() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "hello\nworld")

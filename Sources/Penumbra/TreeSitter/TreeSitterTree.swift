@@ -28,7 +28,13 @@ final class TreeSitterTree {
 
     func rangesChanged(comparingTo otherTree: TreeSitterTree) -> [TreeSitterTextRange] {
         var count = CUnsignedInt(0)
-        let ptr = ts_tree_get_changed_ranges(pointer, otherTree.pointer, &count)
+        guard let ptr = ts_tree_get_changed_ranges(pointer, otherTree.pointer, &count) else {
+            return []
+        }
+        defer { free(ptr) }
+        guard count > 0 else {
+            return []
+        }
         return UnsafeBufferPointer(start: ptr, count: Int(count)).map { range in
             let startPoint = TreeSitterTextPoint(range.start_point)
             let endPoint = TreeSitterTextPoint(range.end_point)

@@ -402,6 +402,26 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     func upsertFragment(_ spec: LineFragmentPaintSpec) {
         let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
+        if let existing = fragments[spec.id],
+           existing.frame == spec.frame,
+           existing.cacheKey != nil,
+           !existing.decorationNeedsRetry,
+           !GlyphExtractCacheKey.shouldRebuild(
+               previous: existing.cacheKey,
+               revision: spec.lineRevision,
+               emitRect: emitRect,
+               isPending: spec.isSyntaxHighlightPending
+           ),
+           existing.decorationKey == DecorationBuildKey(
+               frame: spec.frame,
+               lineRevision: spec.lineRevision,
+               decorations: spec.decorations,
+               scale: scale,
+               appearanceName: spec.appearance?.name,
+               usesDisplayP3: spec.colorSpace == .displayP3
+           ) {
+            return
+        }
         var fragment = fragments[spec.id] ?? GPUFragment(
             frame: spec.frame,
             lineID: spec.lineID,
