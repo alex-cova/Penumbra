@@ -21,6 +21,10 @@ public extension CommandRegistry {
         .triggerCompletion, .triggerSmartCompletion,
         .quickDocumentation, .showContextActions, .optimizeImports,
         .rename,
+        .extractVariable, .extractField, .extractConstant, .extractMethod,
+        .inlineVariable, .inlineMethod,
+        .changeSignature, .encapsulateField, .generateAccessors,
+        .moveClass, .safeDelete,
         .typeHierarchy
     ]
 

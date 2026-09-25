@@ -67,6 +67,7 @@ final class JavaInspectionServiceTests: XCTestCase {
         let source = "class T { UnknownType value; }"
         let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))
         let walker = JavaSemanticWalker(tree: tree, source: source)
+        XCTAssertTrue(walker.run())
         let inspections = await JavaUnresolvedTypeInspection.inspect(
             source: source,
             url: scratch.appendingPathComponent("T.java"),
@@ -79,7 +80,11 @@ final class JavaInspectionServiceTests: XCTestCase {
 
     func testInspectionServiceAnalyzeNowPublishesDiagnostics() async throws {
         let index = try await makeIndex()
-        let service = JavaInspectionService(index: index, idleDelay: .milliseconds(10))
+        let service = JavaInspectionService(
+            index: index,
+            enabledRules: [.unusedImport, .duplicateImport, .missingOverride, .unresolvedType, .classFileNameMismatch],
+            idleDelay: .milliseconds(10)
+        )
         let url = scratch.appendingPathComponent("T.java")
         let source = """
         import java.util.Map;
