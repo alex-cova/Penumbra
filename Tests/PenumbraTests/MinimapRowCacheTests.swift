@@ -2,8 +2,8 @@
 import XCTest
 
 /// `MinimapRowCache` keeps built rows per line, drops everything when an invalidation input
-/// changes, evicts anything not visited in a frame, and can selectively drop the provisional
-/// (uncolored) rows drawn while syntax was still parsing.
+/// changes, drops single lines on request, evicts anything not visited in a frame, and can
+/// selectively drop the provisional (uncolored) rows drawn while syntax was still parsing.
 final class MinimapRowCacheTests: XCTestCase {
     private func id(_ value: UInt32) -> DocumentLineNodeID {
         DocumentLineNodeID(value: value)
@@ -14,14 +14,12 @@ final class MinimapRowCacheTests: XCTestCase {
     }
 
     private func begin(_ cache: MinimapRowCache,
-                       contentGeneration: UInt64 = 1,
+                       documentEpoch: UInt64 = 1,
                        themeGeneration: UInt64 = 1,
-                       parseGeneration: Int = 1,
                        maxColumns: Int = 80,
                        tabLength: Int = 4) {
-        cache.beginFrame(contentGeneration: contentGeneration,
+        cache.beginFrame(documentEpoch: documentEpoch,
                          themeGeneration: themeGeneration,
-                         parseGeneration: parseGeneration,
                          maxColumns: maxColumns,
                          tabLength: tabLength)
     }
@@ -34,14 +32,28 @@ final class MinimapRowCacheTests: XCTestCase {
         XCTAssertNil(cache.cachedRow(for: id(2)))
     }
 
-    func testContentGenerationBumpClearsEverything() {
+    func testDocumentEpochBumpClearsEverything() {
         let cache = MinimapRowCache()
-        begin(cache, contentGeneration: 1)
+        begin(cache, documentEpoch: 1)
         cache.store(row(1), for: id(1), provisional: false)
         cache.endFrame()
 
-        begin(cache, contentGeneration: 2)
+        begin(cache, documentEpoch: 2)
         XCTAssertNil(cache.cachedRow(for: id(1)))
+    }
+
+    func testRemoveDropsOnlyTheGivenLines() {
+        let cache = MinimapRowCache()
+        begin(cache)
+        cache.store(row(1), for: id(1), provisional: false)
+        cache.store(row(2), for: id(2), provisional: true)
+        cache.endFrame()
+
+        begin(cache)
+        cache.remove([id(2)])
+        XCTAssertEqual(cache.cachedRow(for: id(1)), row(1))
+        XCTAssertNil(cache.cachedRow(for: id(2)))
+        XCTAssertFalse(cache.isProvisional(id(2)))
     }
 
     func testThemeGenerationBumpClearsEverything() {

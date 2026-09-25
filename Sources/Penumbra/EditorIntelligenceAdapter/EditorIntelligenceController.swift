@@ -815,7 +815,7 @@ public final class EditorIntelligenceController {
 
     /// Refresh diagnostics and apply squiggles to the text view.
     public func refreshDiagnostics() {
-        guard let document = adapter.currentDocument, let textView else {
+        guard let document = adapter.currentDocument, textView != nil else {
             return
         }
         diagnosticsTask?.cancel()

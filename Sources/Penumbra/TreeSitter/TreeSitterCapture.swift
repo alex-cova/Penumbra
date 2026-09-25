@@ -8,6 +8,9 @@ final class TreeSitterCapture {
     let properties: [String: String]
     let textPredicates: [TreeSitterTextPredicate]
     let nameComponentCount: Int
+    /// Index of the query pattern that produced this capture. Highlight queries list specific
+    /// patterns before fallbacks (`(identifier) @variable` last), so on a tie the lower index wins.
+    let patternIndex: UInt32
 
     convenience init(node: TreeSitterNode, index: UInt32, name: String, predicates: [TreeSitterPredicate]) {
         self.init(
@@ -16,7 +19,8 @@ final class TreeSitterCapture {
             name: name,
             byteRange: node.byteRange,
             mappedPredicates: TreeSitterPredicateMapper.map(predicates),
-            nameComponentCount: name.split(separator: ".").count
+            nameComponentCount: name.split(separator: ".").count,
+            patternIndex: 0
         )
     }
 
@@ -25,7 +29,8 @@ final class TreeSitterCapture {
         index: UInt32,
         name: String,
         mappedPredicates: TreeSitterPredicateMapper.MapResult,
-        nameComponentCount: Int
+        nameComponentCount: Int,
+        patternIndex: UInt32
     ) {
         self.init(
             node: node,
@@ -33,7 +38,8 @@ final class TreeSitterCapture {
             name: name,
             byteRange: node.byteRange,
             mappedPredicates: mappedPredicates,
-            nameComponentCount: nameComponentCount
+            nameComponentCount: nameComponentCount,
+            patternIndex: patternIndex
         )
     }
 
@@ -43,7 +49,8 @@ final class TreeSitterCapture {
         name: String,
         byteRange: ByteRange,
         mappedPredicates: TreeSitterPredicateMapper.MapResult,
-        nameComponentCount: Int
+        nameComponentCount: Int,
+        patternIndex: UInt32
     ) {
         self.node = node
         self.index = index
@@ -52,6 +59,7 @@ final class TreeSitterCapture {
         self.properties = mappedPredicates.properties
         self.textPredicates = mappedPredicates.textPredicates
         self.nameComponentCount = nameComponentCount
+        self.patternIndex = patternIndex
     }
 }
 

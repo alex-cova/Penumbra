@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Observation
 import Penumbra
 import SwiftUI
@@ -237,7 +238,10 @@ public final class IDEPreferences {
         applyTheme()
     }
 
-    func apply(to textView: TextView) {
+    /// `repaint` re-typesets the visible lines and gutter, for a Settings change (the theme may be
+    /// rebuilt in place, which `TextView.theme` cannot see). Loading a document or switching tabs
+    /// passes `false`: that repaint was ~50 ms of every tab switch.
+    func apply(to textView: TextView, repaint: Bool = false) {
         textView.indentStrategy = useSpacesForTab ? .space(length: tabWidth) : .tab(length: tabWidth)
         textView.showLineNumbers = showLineNumbers
         textView.isLineFoldingEnabled = isLineFoldingEnabled
@@ -261,8 +265,10 @@ public final class IDEPreferences {
         textView.isFocusModeEnabled = isFocusModeEnabled
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
-        textView.redisplayVisibleLines()
-        textView.refreshGutterChrome()
+        if repaint {
+            textView.redisplayVisibleLines()
+            textView.refreshGutterChrome()
+        }
     }
 
     func applyTheme() {
@@ -432,18 +438,15 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
 enum IDEEditorFonts {
     static let defaultFamilyName = "Menlo"
 
+    /// Monospaced families, matched by Core Text's monospace trait. Creating an `NSFont` per
+    /// installed family to test `isFixedPitch` took ~350 ms inside the Settings view's first body.
     static let familyNames: [String] = {
-        let manager = NSFontManager.shared
-        return manager.availableFontFamilies
-            .filter { family in
-                guard let members = manager.availableMembers(ofFontFamily: family),
-                      let postScriptName = members.first?[0] as? String,
-                      let font = NSFont(name: postScriptName, size: 12) else {
-                    return false
-                }
-                return font.isFixedPitch
-            }
-            .sorted()
+        let traits = [kCTFontSymbolicTrait: NSNumber(value: CTFontSymbolicTraits.traitMonoSpace.rawValue)]
+        let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontTraitsAttribute: traits] as CFDictionary)
+        let collection = CTFontCollectionCreateWithFontDescriptors([descriptor] as CFArray, nil)
+        let matches = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []
+        let families = matches.compactMap { CTFontDescriptorCopyAttribute($0, kCTFontFamilyNameAttribute) as? String }
+        return Set(families).filter { !$0.hasPrefix(".") }.sorted()
     }()
 
     static func choices(including current: String) -> [String] {

@@ -809,9 +809,12 @@ final class TextInputView: UIView, UITextInput {
                     isMultiCaret: isMultiCursorActive
                 )
                 updateFocusModeIfNeeded()
-                // The caret overlay and the current-line bar do not need a viewport walk.
-                // A line-structure edit sets needsLayout itself once it knows the height changed.
+                // The caret overlay and the current-line bar do not need a viewport walk, so draw
+                // them now. `setNeedsLayout()` is still required: `layoutSubviews` delivers the
+                // deferred selection notifications, and it only walks the viewport when the
+                // layout manager itself needs layout.
                 layoutManager.layoutLineSelectionIfNeeded()
+                setNeedsLayout()
             }
         }
     }
@@ -928,6 +931,37 @@ final class TextInputView: UIView, UITextInput {
     /// Rows edited since the last successful background parse. Recoloring only these, plus the
     /// rows tree-sitter reports, keeps a finished parse from re-extracting every visible Metal glyph.
     private var rowsEditedSinceSyntaxParse = Set<Int>()
+    /// A line was inserted or removed since the last parse, so row numbers recorded before it
+    /// are stale. The next parse recolors every visible line and rescans all separators.
+    private var rowsShiftedSinceSyntaxParse = false
+
+    /// Bumped when the minimap's cached rows can't be trusted line by line (a document swap, an
+    /// edit made outside `replaceText`, a parse without a tree diff), so it drops every row.
+    private(set) var minimapDocumentEpoch: UInt64 = 0
+    /// Lines whose minimap row is stale since the minimap last drew. Previously every keystroke,
+    /// and again every parse after it, flushed the whole minimap cache and re-queried tree-sitter
+    /// for every visible minimap row on the main thread (~18% of main-thread time while typing).
+    private var minimapDirtyLineIDs = Set<DocumentLineNodeID>()
+    /// `stringView.contentGeneration` as of the last change the dirty set accounts for.
+    private var minimapKnownContentGeneration: UInt64?
+
+    /// Lines to recolour in the minimap, cleared on read. Bumps ``minimapDocumentEpoch`` first if
+    /// the text changed in a way the dirty set doesn't cover.
+    func takeMinimapDirtyLineIDs() -> Set<DocumentLineNodeID> {
+        let generation = stringView.contentGeneration
+        if generation != minimapKnownContentGeneration {
+            invalidateAllMinimapRows()
+            minimapKnownContentGeneration = generation
+        }
+        defer { minimapDirtyLineIDs.removeAll(keepingCapacity: true) }
+        return minimapDirtyLineIDs
+    }
+
+    private func invalidateAllMinimapRows() {
+        minimapDocumentEpoch &+= 1
+        minimapDirtyLineIDs.removeAll(keepingCapacity: true)
+    }
+
     /// Window last handed to ``startViewportParse``. Prevents layout + `contentOffset` from
     /// cancelling the same in-flight expansion by starting it twice.
     private var inFlightViewportParseRange: NSRange?
@@ -1872,7 +1906,48 @@ private extension TextInputView {
         layoutManager.invalidateSyntaxHighlightingOnVisibleLines()
     }
 
+    /// Each `replaceText` bumps `contentGeneration` exactly once. Any other step means a change
+    /// this set never saw, so fall back to a full minimap refresh.
+    private func noteMinimapEdit(_ lineChangeSet: LineChangeSet) {
+        let generation = stringView.contentGeneration
+        guard let known = minimapKnownContentGeneration, generation == known &+ 1 else {
+            invalidateAllMinimapRows()
+            minimapKnownContentGeneration = generation
+            return
+        }
+        minimapKnownContentGeneration = generation
+        for line in lineChangeSet.editedLines {
+            minimapDirtyLineIDs.insert(line.id)
+        }
+        for line in lineChangeSet.insertedLines {
+            minimapDirtyLineIDs.insert(line.id)
+        }
+    }
+
+    /// Rows are the post-parse tree's rows, so they're valid even after lines shifted.
+    private func noteMinimapSyntaxRows(_ treeRows: [ClosedRange<Int>]?) {
+        guard let treeRows else {
+            invalidateAllMinimapRows()
+            return
+        }
+        let lastRow = max(lineManager.lineCount - 1, 0)
+        for range in treeRows {
+            let lower = max(range.lowerBound, 0)
+            let upper = min(range.upperBound, lastRow)
+            guard lower <= upper else {
+                continue
+            }
+            for row in lower ... upper {
+                minimapDirtyLineIDs.insert(lineManager.line(atRow: row).id)
+            }
+        }
+    }
+
     private func noteRowsNeedingSyntaxColor(_ lineChangeSet: LineChangeSet) {
+        if !lineChangeSet.insertedLines.isEmpty || !lineChangeSet.removedLines.isEmpty {
+            // Rows recorded before this edit, and separator rows below it, are now off by the delta.
+            rowsShiftedSinceSyntaxParse = true
+        }
         for line in lineChangeSet.editedLines {
             rowsEditedSinceSyntaxParse.insert(line.row)
         }
@@ -1882,15 +1957,20 @@ private extension TextInputView {
     }
 
     private func applySyntaxColorRefreshAfterParse() {
-        let edited = rowsEditedSinceSyntaxParse
+        var rows = rowsEditedSinceSyntaxParse
+        let rowsShifted = rowsShiftedSinceSyntaxParse
         rowsEditedSinceSyntaxParse.removeAll()
-        guard let treeRows = (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingSyntaxRows() else {
+        rowsShiftedSinceSyntaxParse = false
+        let treeRows = (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingSyntaxRows()
+        noteMinimapSyntaxRows(treeRows)
+        guard let treeRows, !rowsShifted else {
             invalidateVisibleLineSyntaxHighlighting()
-            layoutManager.invalidateSyntaxColors(onRows: edited, lineManager: lineManager)
+            if !rowsShifted {
+                layoutManager.invalidateSyntaxColors(onRows: rows, lineManager: lineManager)
+            }
             methodSeparatorController.recompute()
             return
         }
-        var rows = edited
         let lastRow = max(lineManager.lineCount - 1, 0)
         for range in treeRows {
             let lower = max(range.lowerBound, 0)
@@ -1902,6 +1982,8 @@ private extension TextInputView {
                 rows.insert(row)
             }
         }
+        // A line still showing color-shifted guesses must get real colors from this tree.
+        rows.formUnion(layoutManager.visibleStaleColorRows())
         layoutManager.invalidateSyntaxColors(onRows: rows, lineManager: lineManager)
         if let lower = rows.min(), let upper = rows.max() {
             methodSeparatorController.recompute(rowWindow: lower ... upper)
@@ -2426,6 +2508,7 @@ extension TextInputView {
             }
         } else {
             replaceText(in: replacementRange, with: preparedText)
+            setNeedsLayout()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.delegate?.textInputViewDidChangeSelection(self)
@@ -2714,11 +2797,10 @@ extension TextInputView {
             languageMode.textDidChange(textChange)
         }
         lineChangeSet.union(with: languageModeLineChangeSet)
-        if !languageMode.isSyntaxTreeReady {
-            noteRowsNeedingSyntaxColor(lineChangeSet)
-        } else {
-            rowsEditedSinceSyntaxParse.removeAll()
-        }
+        // Always recorded: a color-shifted keystroke skips tree-sitter and relies on the
+        // post-parse recolor, and the tree diff does not report text changed inside a leaf.
+        noteRowsNeedingSyntaxColor(lineChangeSet)
+        noteMinimapEdit(lineChangeSet)
         EditorPerformanceTrace.shared.measure(.visibleLayout) {
             applyLineChangesToLayoutManager(lineChangeSet)
         }

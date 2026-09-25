@@ -12,6 +12,12 @@
   name: (identifier) @attribute)
 (marker_annotation
   name: (identifier) @attribute)
+(annotation
+  name: (scoped_identifier
+    name: (identifier) @attribute))
+(marker_annotation
+  name: (scoped_identifier
+    name: (identifier) @attribute))
 
 "@" @operator
 
@@ -41,6 +47,11 @@
 
 (constructor_declaration
   name: (identifier) @type)
+
+((import_declaration
+  (scoped_identifier
+    name: (identifier) @type))
+ (#match? @type "^[A-Z]"))
 
 [
   (boolean_type)

@@ -146,4 +146,24 @@ final class MetalProjectionTests: XCTestCase {
             )
         )
     }
+
+    /// Scrolling moves the canvas every frame. A fragment that stays fully on screen must keep its
+    /// glyph cache key, or every visible line is re-extracted on every scroll step.
+    func testRelevantEmitRectIgnoresVerticalScrollWhileFragmentStaysVisible() {
+        let fragment = CGRect(x: 0, y: 400, width: 300, height: 17)
+        let canvasA = CGRect(x: 0, y: 100, width: 800, height: 600)
+        let canvasB = canvasA.offsetBy(dx: 0, dy: 40)
+        let keyA = GlyphExtractCacheKey.relevantEmitRect(MetalProjection.emitRect(canvasFrame: canvasA), fragmentFrame: fragment, scale: 2)
+        let keyB = GlyphExtractCacheKey.relevantEmitRect(MetalProjection.emitRect(canvasFrame: canvasB), fragmentFrame: fragment, scale: 2)
+        XCTAssertEqual(keyA, keyB)
+    }
+
+    func testRelevantEmitRectChangesWhenScrollUncoversMoreOfTheFragment() {
+        let fragment = CGRect(x: 0, y: 690, width: 300, height: 17)
+        let canvasA = CGRect(x: 0, y: 100, width: 800, height: 600)
+        let canvasB = canvasA.offsetBy(dx: 0, dy: 10)
+        let keyA = GlyphExtractCacheKey.relevantEmitRect(MetalProjection.emitRect(canvasFrame: canvasA), fragmentFrame: fragment, scale: 2)
+        let keyB = GlyphExtractCacheKey.relevantEmitRect(MetalProjection.emitRect(canvasFrame: canvasB), fragmentFrame: fragment, scale: 2)
+        XCTAssertNotEqual(keyA, keyB)
+    }
 }

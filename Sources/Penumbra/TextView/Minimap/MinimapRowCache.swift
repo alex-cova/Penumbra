@@ -2,13 +2,12 @@ import Foundation
 
 /// Per-line cache of built `MinimapRow`s. Rebuilt each frame keeping only the rows actually
 /// visited, so it stays O(visible band) with no fixed cap and no wholesale-clear stutter. A
-/// change to any invalidation input (document content, theme, parse generation, column budget,
-/// tab width) drops everything.
+/// change to any invalidation input (document epoch, theme, column budget, tab width) drops
+/// everything; an edit or a reparse drops only the lines it touched (``remove(_:)``).
 final class MinimapRowCache {
     private struct Stamp: Equatable {
-        var contentGeneration: UInt64
+        var documentEpoch: UInt64
         var themeGeneration: UInt64
-        var parseGeneration: Int
         var maxColumns: Int
         var tabLength: Int
     }
@@ -21,14 +20,12 @@ final class MinimapRowCache {
 
     /// Call once at the top of a draw. Returns having cleared the cache if any invalidation
     /// input changed.
-    func beginFrame(contentGeneration: UInt64,
+    func beginFrame(documentEpoch: UInt64,
                     themeGeneration: UInt64,
-                    parseGeneration: Int,
                     maxColumns: Int,
                     tabLength: Int) {
-        let newStamp = Stamp(contentGeneration: contentGeneration,
+        let newStamp = Stamp(documentEpoch: documentEpoch,
                              themeGeneration: themeGeneration,
-                             parseGeneration: parseGeneration,
                              maxColumns: maxColumns,
                              tabLength: tabLength)
         if newStamp != stamp {
@@ -63,6 +60,14 @@ final class MinimapRowCache {
     /// redraw it flat without re-running a doomed syntax query.
     func isProvisional(_ id: DocumentLineNodeID) -> Bool {
         provisional.contains(id)
+    }
+
+    /// Drops the rows of lines whose text or syntax colours changed.
+    func remove(_ ids: Set<DocumentLineNodeID>) {
+        for id in ids {
+            rows.removeValue(forKey: id)
+            provisional.remove(id)
+        }
     }
 
     /// Call when a syntax parse finishes so provisional rows recolor on the next draw.

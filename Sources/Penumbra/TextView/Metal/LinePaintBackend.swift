@@ -16,6 +16,10 @@ protocol LinePaintBackend: AnyObject {
     /// Line insertion/deletion shifts every following fragment. Metal must rebuild from the
     /// updated frames even when the edited line's glyphs did not change.
     func invalidateForLineStructureChange()
+    /// Whether these fragments' last upsert is still what this pass would paint: same cull rect,
+    /// cache not dropped (scale change, raster budget, glyph invalidation). A layout pass may skip
+    /// re-upserting a line only when this is true.
+    func isPaintCurrent(for ids: [LineFragmentID]) -> Bool
 }
 
 struct CanvasPaintSpec {
@@ -176,4 +180,8 @@ final class CGLinePaintBackend: LinePaintBackend {
     func compactInstanceBuffers() {}
 
     func invalidateForLineStructureChange() {}
+
+    func isPaintCurrent(for ids: [LineFragmentID]) -> Bool {
+        true
+    }
 }

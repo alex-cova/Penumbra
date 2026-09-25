@@ -149,13 +149,15 @@ final class MinimapView: UIView {
         }
 
         let tabLength = max(source.indentStrategy.tabLength, 1)
+        // Take the dirty lines first: an untracked change bumps the epoch while taking them.
+        let dirtyLineIDs = source.takeMinimapDirtyLineIDs()
         cache.beginFrame(
-            contentGeneration: source.stringView.contentGeneration,
+            documentEpoch: source.minimapDocumentEpoch,
             themeGeneration: themeGeneration,
-            parseGeneration: source.syntaxParseGeneration,
             maxColumns: columns,
             tabLength: tabLength
         )
+        cache.remove(dirtyLineIDs)
         let builder = MinimapRowBuilder(
             maxColumns: columns,
             characterWidth: characterWidth,

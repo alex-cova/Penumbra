@@ -7,6 +7,23 @@ import XCTest
 /// that read-only (but selectable) editors still support navigation, selection and copy.
 @MainActor
 final class TextViewKeyboardSelectionTests: XCTestCase {
+    /// Arrow keys set the selection through `selectedTextRange`, whose delegate notification is
+    /// delivered from `layoutSubviews`. A caret move must still schedule that layout.
+    func testArrowKeyCaretMoveNotifiesDelegate() {
+        let textView = makeFocusedTextView(text: "hello world")
+        let delegate = SelectionCountingDelegate()
+        textView.editorDelegate = delegate
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let before = delegate.selectionChanges
+
+        send(keyEvent(keyCode: TestKeyCode.rightArrow), to: textView)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 1, length: 0))
+        XCTAssertGreaterThan(delegate.selectionChanges, before, "the host never heard about the caret move")
+    }
+
     private typealias KeyCode = TestKeyCode
 
     // MARK: - Shift-arrow extension (regression: stuck after one step)
@@ -204,5 +221,13 @@ final class TextViewKeyboardSelectionTests: XCTestCase {
             }
         }
         return nil
+    }
+}
+
+private final class SelectionCountingDelegate: TextViewDelegate {
+    var selectionChanges = 0
+
+    func textViewDidChangeSelection(_ textView: TextView) {
+        selectionChanges += 1
     }
 }

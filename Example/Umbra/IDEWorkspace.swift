@@ -1900,7 +1900,7 @@ public final class IDEWorkspace {
 
     func applyPreferencesToAllHosts() {
         for pane in workbench.panes {
-            preferences.apply(to: host(for: pane.id).textView)
+            preferences.apply(to: host(for: pane.id).textView, repaint: true)
         }
         if let textView = adapter?.textView {
             updateStatus(from: textView)

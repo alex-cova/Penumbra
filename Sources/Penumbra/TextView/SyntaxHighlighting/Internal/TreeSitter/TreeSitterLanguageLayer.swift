@@ -19,6 +19,10 @@ final class TreeSitterLanguageLayer {
     private let parser: TreeSitterParser
     private let stringView: StringView
     private var childLanguageLayerStore = TreeSitterLanguageLayerStore()
+    /// Injected layers are not diffed by `ts_tree_get_changed_ranges` on the root tree.
+    var hasChildLayers: Bool {
+        !childLanguageLayerStore.allLayers.isEmpty
+    }
     private weak var parentLanguageLayer: TreeSitterLanguageLayer?
     private let languageProvider: TreeSitterLanguageProvider?
     /// Included ranges for the root language layer under ``SyntaxParsePolicy/viewport``.
@@ -412,6 +416,9 @@ private extension TreeSitterCapture {
         //    Short captures that start at that location adds another "layer" of capturing on top of a previous capture.
         // 3. The number of components in the name. E.g. "variable.builtin" is sorted after "variable" as the styling of "variable.builtin"
         //    should be applied after applying the styling of "variable", since it's a specialization.
+        // 4. The pattern index, descending. The last capture applied wins, and highlight queries put
+        //    specific patterns before fallbacks, so `(annotation name: (identifier) @attribute)` must
+        //    be applied after the later `(identifier) @variable`.
         if lhs.byteRange.location < rhs.byteRange.location {
             return true
         } else if lhs.byteRange.location > rhs.byteRange.location {
@@ -420,8 +427,10 @@ private extension TreeSitterCapture {
             return true
         } else if lhs.byteRange.length < rhs.byteRange.length {
             return false
-        } else {
+        } else if lhs.nameComponentCount != rhs.nameComponentCount {
             return lhs.nameComponentCount < rhs.nameComponentCount
+        } else {
+            return lhs.patternIndex > rhs.patternIndex
         }
     }
 }

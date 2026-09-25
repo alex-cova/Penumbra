@@ -36,17 +36,53 @@ open class QuickTapGestureRecognizer: UITapGestureRecognizer {
 open class UIPanGestureRecognizer: UIGestureRecognizer {}
 
 open class UILabel: UIView {
+    // Setters only invalidate on a real change. The gutter reassigns text, font and colour on
+    // every layout pass, and unconditional `needsDisplay` redrew every visible line number with
+    // AppKit string drawing on every scroll frame (~6% of main-thread time).
     @objc open var text: String? {
-        didSet { needsDisplay = true }
+        didSet { if text != oldValue { invalidateDrawing() } }
     }
     @objc open var textColor: UIColor = .label {
-        didSet { needsDisplay = true }
+        didSet { if textColor != oldValue { invalidateDrawing() } }
     }
     @objc open var font: UIFont? {
-        didSet { needsDisplay = true }
+        didSet { if font != oldValue { invalidateDrawing() } }
     }
     @objc open var textAlignment: NSTextAlignment = .left {
-        didSet { needsDisplay = true }
+        didSet { if textAlignment != oldValue { invalidateDrawing() } }
+    }
+    /// Built once per change. Handing string drawing a Swift attributes dictionary makes AppKit
+    /// re-bridge it on every attribute lookup; an attributed string keeps them native.
+    private var cachedAttributedText: NSAttributedString?
+
+    private func invalidateDrawing() {
+        cachedAttributedText = nil
+        needsDisplay = true
+    }
+
+    private var attributedText: NSAttributedString? {
+        if let cachedAttributedText {
+            return cachedAttributedText
+        }
+        guard let text, let font, !text.isEmpty else {
+            return nil
+        }
+        let paragraph = NSMutableParagraphStyle()
+        switch textAlignment {
+        case .right:
+            paragraph.alignment = .right
+        case .center:
+            paragraph.alignment = .center
+        default:
+            paragraph.alignment = .left
+        }
+        let attributed = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraph
+        ])
+        cachedAttributedText = attributed
+        return attributed
     }
 
     public override init(frame frameRect: NSRect) {
@@ -80,28 +116,14 @@ open class UILabel: UIView {
     }
 
     override open func draw(_ dirtyRect: NSRect) {
-        guard let text, let font, !text.isEmpty else { return }
-        let paragraph = NSMutableParagraphStyle()
-        switch textAlignment {
-        case .right:
-            paragraph.alignment = .right
-        case .center:
-            paragraph.alignment = .center
-        default:
-            paragraph.alignment = .left
-        }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: textColor,
-            .paragraphStyle: paragraph
-        ]
-        let textSize = (text as NSString).size(withAttributes: attributes)
+        guard let attributedText else { return }
+        let textSize = attributedText.size()
         let drawRect = NSRect(
             x: 0,
             y: max((bounds.height - textSize.height) / 2, 0),
             width: bounds.width,
             height: textSize.height
         )
-        (text as NSString).draw(in: drawRect, withAttributes: attributes)
+        attributedText.draw(in: drawRect)
     }
 }

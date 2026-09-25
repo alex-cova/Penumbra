@@ -101,6 +101,21 @@ struct GlyphExtractCacheKey: Equatable {
         self.isPending = isPending
     }
 
+    /// The part of `emitRect` that can decide which of this fragment's glyphs are emitted.
+    ///
+    /// The canvas frame moves with every scroll step, so keying on the whole `emitRect` re-extracted
+    /// every visible fragment every frame (~18% of main-thread time while scrolling). A glyph quad
+    /// stays within the fragment frame widened by the margins below, so equal clipped rects give
+    /// the same instances: a line that stays fully on screen keeps its key.
+    static func relevantEmitRect(_ emitRect: CGRect, fragmentFrame: CGRect, scale: CGFloat) -> CGRect {
+        let pad = CGFloat(GlyphRunExtractor.padPixels) / max(scale, 0.001)
+        let horizontalMargin = CGFloat(GlyphRunExtractor.maxGlyphExtentPixels) / max(scale, 0.001) + pad
+        let verticalMargin = fragmentFrame.height + pad
+        let reach = fragmentFrame.insetBy(dx: -horizontalMargin, dy: -verticalMargin)
+        let clipped = emitRect.intersection(reach)
+        return clipped.isNull ? .zero : clipped
+    }
+
     static func shouldRebuild(
         previous: GlyphExtractCacheKey?,
         revision: UInt64,
@@ -274,16 +289,17 @@ private extension GlyphRunExtractor {
         request: GlyphExtractRequest,
         baselineY: CGFloat
     ) -> PrepareResult {
-        let attributes = (CTRunGetAttributes(run) as? [NSAttributedString.Key: Any]) ?? [:]
-        let shadow = attributes[.shadow] as? NSShadow
-        let font = (attributes[.font] as? NSFont) ?? (request.fallbackFont as NSFont)
+        // Read the CFDictionary directly: bridging it to a Swift dictionary per run was ~25% of prepare.
+        let attributes = CTRunGetAttributes(run) as NSDictionary
+        let shadow = attributes[NSAttributedString.Key.shadow] as? NSShadow
+        let font = (attributes[NSAttributedString.Key.font] as? NSFont) ?? (request.fallbackFont as NSFont)
         let fontMatrix = CTFontGetMatrix(font)
         // Run text matrix copies CTFontGetMatrix for synthetic italic; extra is run * font⁻¹ so bounds are not sheared twice.
         let runMatrix = extraRunMatrix(CTRunGetTextMatrix(run), fontMatrix: fontMatrix)
         let applyRunMatrix = !runMatrix.isIdentity
         let isColor = GlyphRasterizer.isColorFont(font)
         let runColor = resolveColor(attributes: attributes, request: request)
-        let foregroundColor = (attributes[.foregroundColor] as? NSColor) ?? request.fallbackColor
+        let foregroundColor = (attributes[NSAttributedString.Key.foregroundColor] as? NSColor) ?? request.fallbackColor
         let glyphCount = CTRunGetGlyphCount(run)
         let matrixHash = GlyphKey.matrixHash(fontMatrix: fontMatrix, runMatrix: runMatrix)
         var preparedRun = PreparedRun(
@@ -315,8 +331,19 @@ private extension GlyphRunExtractor {
         var pending: [PendingGlyph] = []
         pending.reserveCapacity(glyphCount)
         let scale = max(request.scale, 0.001)
+        // A glyph's quad lies within `maxGlyphExtent` of its pen position, so glyphs farther than
+        // that from the emit/warm bands can be dropped before asking Core Text for their bounds.
+        // On a long line this was a bounds query for every glyph to paint the ~100 on screen.
+        let reach = CGFloat(maxGlyphExtentPixels + padPixels) / scale
+        let bands = request.emitRect.union(request.atlasWarmRect)
+        let minX = bands.isNull ? -CGFloat.infinity : bands.minX - reach
+        let maxX = bands.isNull ? CGFloat.infinity : bands.maxX + reach
         for index in 0..<glyphCount {
             var position = positions[index]
+            let penX = request.fragmentFrame.minX + (applyRunMatrix ? position.applying(runMatrix).x : position.x)
+            if penX < minX || penX > maxX {
+                continue
+            }
             var glyph = glyphs[index]
             var bounds = CGRect.zero
             CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, &bounds, 1)
@@ -659,8 +686,8 @@ private extension GlyphRunExtractor {
         ranges.contains { NSLocationInRange(stringIndex, $0) }
     }
 
-    static func resolveColor(attributes: [NSAttributedString.Key: Any], request: GlyphExtractRequest) -> SIMD4<Float> {
-        let color = (attributes[.foregroundColor] as? NSColor) ?? request.fallbackColor
+    static func resolveColor(attributes: NSDictionary, request: GlyphExtractRequest) -> SIMD4<Float> {
+        let color = (attributes[NSAttributedString.Key.foregroundColor] as? NSColor) ?? request.fallbackColor
         return MetalColor.premultiplied(
             color,
             appearance: request.appearance,

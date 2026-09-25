@@ -846,15 +846,8 @@ final class IDEJavaSupport {
             let reindexJars = diff.addedJars.map { jar in
                 (JarRoot(jarURL: jar, languageLevel: model.maxLanguageLevel ?? Int.max) as any JavaIndexableRoot, paths.jarShard(jar))
             }
+            // `indexAllTargets` publishes readers for every model target, not just the reindexed ones.
             await indexAllTargets(reindexSources + reindexJars, model: model, generation: generation, logToConsole: logToConsole, paths: paths, scheduler: scheduler)
-            projectSources = sourceTargets.compactMap { target in
-                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
-            }
-            jarSources = jarTargets.compactMap { target in
-                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-                return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
-            }
         } else {
             buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
         }
@@ -925,16 +918,24 @@ final class IDEJavaSupport {
         }
         guard isCurrent(generation) else { return }
 
-        let sourceTargets = model.sourceIndexTargets(paths: paths)
-        let jarTargets = model.jarIndexTargets(paths: paths)
-        projectSources = sourceTargets.compactMap { target in
-            guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-            return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
-        }
-        jarSources = jarTargets.compactMap { target in
-            guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-            return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
-        }
+        // Opening a shard decodes its whole string table: ~750 ms on main for a Gradle project's
+        // dependency JARs, twice at launch (session restore, then the recent project).
+        let loaded = await Task.detached(priority: .userInitiated) {
+            let sourceTargets = model.sourceIndexTargets(paths: paths)
+            let jarTargets = model.jarIndexTargets(paths: paths)
+            let sources = sourceTargets.compactMap { target -> JavaIndex.Source? in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+            }
+            let jars = jarTargets.compactMap { target -> JavaIndex.Source? in
+                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
+            }
+            return (sources, jars)
+        }.value
+        guard isCurrent(generation) else { return }
+        projectSources = loaded.0
+        jarSources = loaded.1
     }
 
     /// After a build, annotation processors may have written (or rewritten) sources under the
@@ -949,11 +950,14 @@ final class IDEJavaSupport {
             guard !generated.isEmpty else { return }
             for target in generated { try? FileManager.default.removeItem(at: target.shardURL) }
             for await _ in await scheduler.index(generated) {}
+            let sources = await Task.detached(priority: .userInitiated) {
+                all.compactMap { target -> JavaIndex.Source? in
+                    guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
+                    return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
+                }
+            }.value
             guard isCurrent(generation) else { return }
-            projectSources = all.compactMap { target in
-                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-                return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
-            }
+            projectSources = sources
             await publishSources()
         }
     }

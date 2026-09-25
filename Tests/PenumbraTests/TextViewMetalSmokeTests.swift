@@ -63,6 +63,121 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertEqual(textView.text.hasPrefix("let Xvalue0"), true)
     }
 
+    /// Plain text never counts as paint-stable (its highlighter cannot highlight), so the layout
+    /// fast path only runs for a tree-sitter language. These tests need that path.
+    private func makeHighlightedMetalTextView(text: String, wraps: Bool = true) -> TextView {
+        let textView = makeFocusedTextView(text: "")
+        textView.isLineWrappingEnabled = wraps
+        textView.setState(TextViewState(text: text, theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+        return textView
+    }
+
+    /// Lines in the layout padding band are extracted against the old cull rect, so they have no
+    /// glyphs until a pass re-upserts them. Scrolling must do that, not skip them as "unchanged".
+    func testScrollingInSmallStepsPaintsEveryVisibleLine() throws {
+        try skipUnlessMetalActivatable()
+        let body = (0 ..< 400).map { "let line\($0) = \($0) + trailing;" }.joined(separator: "\n")
+        let textView = makeHighlightedMetalTextView(text: body)
+        XCTAssertTrue(textView.isMetalRenderingActive)
+
+        var offsetY: CGFloat = 0
+        for _ in 0 ..< 30 {
+            offsetY += 23
+            textView.contentOffset = CGPoint(x: 0, y: offsetY)
+            textView.layoutIfNeeded()
+            for probeY: CGFloat in [20, 150, 270] {
+                let location = try XCTUnwrap(textView.characterIndex(at: CGPoint(x: 80, y: probeY)))
+                XCTAssertFalse(
+                    textView.metalDebugGlyphOrigins(atLocation: location).isEmpty,
+                    "line at y=\(probeY) after scrolling to \(offsetY) has no Metal glyphs"
+                )
+            }
+        }
+    }
+
+    /// Return keeps the edited line's height, but every line below moves down one row. Their
+    /// Metal frames must move too, not stay where the fast path last painted them.
+    func testReturnMidViewportMovesEveryFollowingLine() throws {
+        try skipUnlessMetalActivatable()
+        let source = (0 ..< 40).map { "let value\($0) = \($0);" }.joined(separator: "\n")
+        let textView = makeHighlightedMetalTextView(text: source)
+        let nsSource = source as NSString
+        let probe = nsSource.range(of: "let value9 ").location
+        let beforeY = try XCTUnwrap(textView.metalDebugGlyphOrigins(atLocation: probe).map(\.y).min())
+
+        let endOfLine3 = nsSource.range(of: "let value3 = 3;").upperBound
+        textView.selectedRange = NSRange(location: endOfLine3, length: 0)
+        textView.insertText("\n")
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+
+        let afterY = try XCTUnwrap(textView.metalDebugGlyphOrigins(atLocation: probe + 1).map(\.y).min())
+        XCTAssertGreaterThan(afterY, beforeY, "a line below the Return must move down")
+    }
+
+    /// Glyphs are culled to the canvas horizontally too. A long line that stays visible while
+    /// scrolling sideways must be re-extracted for the new cull rect.
+    func testHorizontalScrollReextractsLongLine() throws {
+        try skipUnlessMetalActivatable()
+        let longLine = "let x = [" + (0 ..< 60).map { "word\($0)" }.joined(separator: ", ") + "];"
+        let textView = makeHighlightedMetalTextView(text: longLine + "\nlet y = 1;", wraps: false)
+        let before = textView.metalDebugGlyphOrigins(atLocation: 0)
+        XCTAssertFalse(before.isEmpty)
+
+        textView.contentOffset = CGPoint(x: 600, y: 0)
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.05)
+
+        let after = textView.metalDebugGlyphOrigins(atLocation: 0)
+        XCTAssertFalse(after.isEmpty)
+        XCTAssertGreaterThan(
+            after.map(\.x).max() ?? 0,
+            before.map(\.x).max() ?? 0,
+            "glyphs past the old right edge must be extracted after scrolling right"
+        )
+    }
+
+    /// Typing inside an identifier leaves the tree's structure alone, so the tree diff reports no
+    /// rows. The line still has to end up with the colors a fresh open of the same text shows.
+    func testColorsAfterTypingMatchAFreshlyOpenedDocument() throws {
+        try skipUnlessMetalActivatable()
+        let original = "let value = 42\nconst other = value + 1;\n"
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(TextViewState(text: original, theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        textView.layoutIfNeeded()
+
+        textView.selectedRange = NSRange(location: 9, length: 0)
+        for character in ["X", "Y", "Z"] {
+            textView.insertText(character)
+            textView.layoutIfNeeded()
+        }
+        pumpMainRunLoop(for: 0.4)
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        textView.layoutIfNeeded()
+
+        let fresh = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        fresh.setState(TextViewState(text: textView.text, theme: DefaultTheme(), language: .javaScript, parsePolicy: .eager))
+        fresh.isMetalRenderingEnabled = true
+        fresh.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        fresh.layoutIfNeeded()
+
+        XCTAssertEqual(
+            textView.metalDebugGlyphColors(atLocation: 0).map(ColorKey.init),
+            fresh.metalDebugGlyphColors(atLocation: 0).map(ColorKey.init),
+            "the edited line kept its color-shifted guess instead of the parsed colors"
+        )
+    }
+
     func testTypingUnderMetalKeepsBackendActiveAndTextCorrect() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "hello\nworld")

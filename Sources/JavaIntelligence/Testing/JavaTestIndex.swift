@@ -34,7 +34,7 @@ public actor JavaTestIndex {
                 try? await Task.sleep(nanoseconds: debounceNanoseconds)
             }
             guard !Task.isCancelled else { return }
-            await self.rescan(file: key, source: source)
+            self.rescan(file: key, source: source)
         }
     }
 

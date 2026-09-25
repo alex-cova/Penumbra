@@ -68,8 +68,7 @@ public actor JavaCallHierarchyProvider {
 
     /// The method at `utf16Offset` in `source`, or `nil` when the caret is not on a method.
     public func rootMethod(source: String, fileURL: URL?, utf16Offset: Int) async -> JavaCallHierarchyNode? {
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
-        let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
+        guard JavaSyntaxParser().parse(source) != nil else { return nil }
         let environment = makeEnvironment()
         guard let id = await JavaSymbolIdentity.symbolID(at: utf16Offset, in: source, url: fileURL, environment: environment),
               case .method = id else { return nil }
@@ -108,7 +107,7 @@ public actor JavaCallHierarchyProvider {
         let environment = makeEnvironment()
         return await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
             guard let stub = await index.classStub(qualifiedName: declaringClass),
-                  let method = stub.methods.first(where: { $0.name == name && JavaTypeKeys.keys(of: $0) == parameterKeys }) else { return [] }
+                  stub.methods.contains(where: { $0.name == name && JavaTypeKeys.keys(of: $0) == parameterKeys }) else { return [] }
             let source = await Self.source(
                 for: declaringClass, preferred: file, index: index, jdkHome: jdkHome,
                 cacheRoot: indexPaths.root, openBuffer: openBuffer

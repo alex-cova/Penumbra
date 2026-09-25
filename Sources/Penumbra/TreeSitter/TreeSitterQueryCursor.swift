@@ -59,7 +59,8 @@ final class TreeSitterQueryCursor {
                     index: capture.index,
                     name: captureName,
                     mappedPredicates: mappedPredicates,
-                    nameComponentCount: query.nameComponentCount(forId: capture.index)
+                    nameComponentCount: query.nameComponentCount(forId: capture.index),
+                    patternIndex: UInt32(match.pattern_index)
                 )
             }
             if mappedPredicates.textPredicates.isEmpty {

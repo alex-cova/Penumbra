@@ -58,6 +58,10 @@ final class LineController: @unchecked Sendable {
             && _lineHeight != nil
     }
 
+    /// `line.yPosition` when the layout pass last upserted this line's fragments. A line whose Y
+    /// moved (Return or a fold above it) must be re-upserted even if its own height did not change.
+    var lastLaidOutYPosition: CGFloat?
+
     var lineFragmentIDs: [LineFragmentID] {
         lineFragmentControllers.values.map { $0.lineFragment.id }
     }
@@ -233,8 +237,9 @@ final class LineController: @unchecked Sendable {
         isSyntaxHighlightingInvalid = true
     }
 
-    func lineFragmentControllers(in rect: CGRect) -> [LineFragmentController] {
-        let lineYPosition = line.yPosition
+    /// Pass `lineYPosition` when the caller already has it; reading `line.yPosition` walks the line index.
+    func lineFragmentControllers(in rect: CGRect, lineYPosition: CGFloat? = nil) -> [LineFragmentController] {
+        let lineYPosition = lineYPosition ?? line.yPosition
         let localMinY = rect.minY - lineYPosition
         let localMaxY = rect.maxY - lineYPosition
         let query = LineFragmentFrameQuery(range: localMinY ... localMaxY)
@@ -395,17 +400,39 @@ private extension LineController {
         }
         let forceAsync = input.byteRange.length.utf16Length > TreeSitterPerformanceConstants.maxSyncQueryLength
         if async || forceAsync {
+            if syntaxHighlighter.syntaxHighlightFromCache(input) {
+                // An older async pass for this line re-checks cancellation on main before applying.
+                syntaxHighlighter.cancel()
+                colorsStale = false
+                isSyntaxHighlightingInvalid = false
+                isTypesetterInvalid = true
+                return
+            }
             if syntaxHighlighter.isHighlighting {
                 return
             }
             syntaxHighlighter.syntaxHighlight(input) { [weak self] result in
-                Task { @MainActor in
+                // Highlighters deliver on the main queue. A `Task` hop here queued every visible
+                // line's completion behind the next runloop turn (~100 ms under a scroll).
+                MainActor.assumeIsolated {
+                    if case .failure(TreeSitterSyntaxHighlighterError.syntaxTreeNotReady) = result, let self {
+                        // The parse that made the tree unavailable may already have run its
+                        // layout, which skipped this line while the query was in flight.
+                        if self.syntaxHighlighter?.canHighlight == true {
+                            self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
+                        }
+                        return
+                    }
                     if case .success = result, let self = self {
                         let oldWidth = self.lineWidth
                         self.colorsStale = false
                         self.isSyntaxHighlightingInvalid = false
                         let colorsChanged = (self.syntaxHighlighter as? TreeSitterSyntaxHighlighter)?.lastHighlightChangedAttributes ?? true
                         guard colorsChanged else {
+                            // The CTLine is still right, but Metal may hold this line's glyphs
+                            // from a pending-highlight extract (index-shifted colour samples).
+                            // Re-upsert so it re-extracts as highlighted; unchanged fragments no-op.
+                            self.delegate?.lineControllerDidRefreshDisplayedLineFragments(self)
                             return
                         }
                         self.isTypesetterInvalid = true
@@ -420,6 +447,10 @@ private extension LineController {
         } else {
             syntaxHighlighter.cancel()
             syntaxHighlighter.syntaxHighlight(input)
+            guard syntaxHighlighter.lastSyncHighlightWasComplete else {
+                // Stay pending; the next layout (or the parse's recolour) retries.
+                return
+            }
             colorsStale = false
             isSyntaxHighlightingInvalid = false
             isTypesetterInvalid = true

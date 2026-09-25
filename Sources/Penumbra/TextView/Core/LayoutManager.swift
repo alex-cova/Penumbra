@@ -172,6 +172,8 @@ final class LayoutManager {
     /// `true` when `paintBackend` is the Metal renderer. Flipped by `setMetalRenderingActive(_:)`.
     private(set) var isMetalRenderingActive = false
     private var metalRasterRetryCount = 0
+    /// Viewport origin at the last Metal present, so a scroll presents in the same frame as the gutter.
+    private var lastPresentedViewportOrigin: CGPoint?
     private static let maxMetalRasterRetries = 40
     /// Lines touched by the latest edit; layout highlights these synchronously so keystrokes
     /// keep syntax colours instead of flashing default `theme.textColor` until async work lands.
@@ -404,6 +406,17 @@ final class LayoutManager {
         for lineID in visibleLineIDs {
             lineControllerStorage[lineID]?.invalidateSyntaxColorsOnly()
         }
+    }
+
+    /// Rows of visible lines whose colours are still the keystroke's shifted guess.
+    func visibleStaleColorRows() -> Set<Int> {
+        var rows = Set<Int>()
+        for lineID in visibleLineIDs {
+            if let lineController = lineControllerStorage[lineID], lineController.colorsStale {
+                rows.insert(lineController.line.index)
+            }
+        }
+        return rows
     }
 
     func invalidateSyntaxColors(onRows rows: Set<Int>, lineManager: LineManager) {
@@ -652,7 +665,10 @@ extension LayoutManager {
                 // `CATransaction.commit`; disableActions swallows that contents update, which is
                 // the blank-editor symptom (offscreen encode still has glyphs, the on-screen
                 // `CAMetalLayer` stays clear).
-                metalCanvasView.withCoalescedPresent(performLayout)
+                // A scroll must land in the same frame as the gutter's line numbers.
+                let viewportMoved = viewport.origin != lastPresentedViewportOrigin
+                lastPresentedViewportOrigin = viewport.origin
+                metalCanvasView.withCoalescedPresent(immediately: viewportMoved, performLayout)
             } else {
                 performLayout()
             }
@@ -842,10 +858,11 @@ extension LayoutManager {
         var appearedLineFragmentIDs: Set<LineFragmentID> = []
         var maxY = layoutBounds.minY
         var contentOffsetAdjustmentY: CGFloat = 0
-        // A character on one line must not re-extract every other visible line. Once a line above
-        // changes height, lines below have new Y positions and cannot take this path.
-        var geometryShifted = false
+        // A character on one line must not re-extract every other visible line. A line may skip
+        // its upsert only when nothing its paint spec depends on moved: its Y, the cull rect
+        // (scrolling), highlighted ranges, focus dimming, and marked text.
         let focusDimmed = (focusModeController?.effectiveUnfocusedAlpha ?? 1) < 0.999
+        let hasHighlightedRanges = !highlightService.highlightedRanges.isEmpty
         while let line = nextLine, maxY < layoutBounds.maxY, constrainingLineWidth > 0 {
             // A folded-away line contributes zero height and no views; skip it entirely rather
             // than typesetting it, and move on to the next row without advancing maxY. (The
@@ -858,25 +875,33 @@ extension LayoutManager {
                 continue
             }
             appearedLineIDs.insert(line.id)
+            // A row lookup in `PackedLineIndex` is a tree walk plus a leaf-slot sum; it was ~10%
+            // of main-thread time when read several times per line. Y only depends on rows above.
+            let lineYPosition = line.yPosition
+            let lineLocation = line.location
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let nextInlayHints = InlayHintIndex.localHints(
-                in: inlayHints, lineLocation: line.location, lineLength: line.data.length
+                in: inlayHints, lineLocation: lineLocation, lineLength: line.data.length
             )
             let widthUnchanged = abs(lineController.constrainingWidth - constrainingLineWidth) < 0.5
             let fragmentIDs = lineController.lineFragmentIDs
             let fragmentsAlreadyPainted = !fragmentIDs.isEmpty
                 && fragmentIDs.allSatisfy { oldVisibleLineFragmentIDs.contains($0) }
-            if !geometryShifted,
-               !focusDimmed,
+            if !focusDimmed,
+               !hasHighlightedRanges,
                markedRange == nil,
                widthUnchanged,
                oldVisibleLineIDs.contains(line.id),
                !recentlyEditedLineIDs.contains(line.id),
+               lineController.lastLaidOutYPosition == lineYPosition,
                lineController.isPaintStable,
                fragmentsAlreadyPainted,
-               lineController.inlayHints == nextInlayHints {
+               lineController.inlayHints == nextInlayHints,
+               paintBackend.isPaintCurrent(for: fragmentIDs) {
                 appearedLineFragmentIDs.formUnion(fragmentIDs)
-                maxY = max(maxY, textContainerInset.top + line.yPosition + lineController.lineHeight)
+                // The label is cheap and its number changes when a line above is inserted.
+                layoutLineNumberView(for: line, lineYPosition: lineYPosition)
+                maxY = max(maxY, textContainerInset.top + lineYPosition + lineController.lineHeight)
                 if line.index < lineManager.lineCount - 1 && maxY < layoutBounds.maxY {
                     nextLine = lineManager.line(atRow: line.index + 1)
                 } else {
@@ -892,12 +917,11 @@ extension LayoutManager {
             lineController.inlayHints = nextInlayHints
             let highlightAsynchronously = !recentlyEditedLineIDs.contains(line.id)
             lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: highlightAsynchronously)
-            layoutLineNumberView(for: line)
+            layoutLineNumberView(for: line, lineYPosition: lineYPosition)
             // Layout line fragments ("sublines") in the line until we have filled the viewport.
-            let lineYPosition = line.yPosition
-            let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds)
+            let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds, lineYPosition: lineYPosition)
             let collapsedFold = foldingController?.collapsedFold(withHeaderLineID: line.id)
-            let lineRange = NSRange(location: line.location, length: line.data.length)
+            let lineRange = NSRange(location: lineLocation, length: line.data.length)
             let focusedLineRanges = focusModeController?.focusedRanges(forLineWithID: line.id, lineRange: lineRange) ?? []
             // Apply marked text before upsert so `LineFragmentPaintSpec.decorations` is current.
             if let markedRange = markedRange {
@@ -926,7 +950,7 @@ extension LayoutManager {
                 layoutLineFragmentView(
                     for: lineFragmentController,
                     lineID: line.id,
-                    lineLocation: line.location,
+                    lineLocation: lineLocation,
                     lineYPosition: lineYPosition,
                     isLastLineFragment: lineFragmentIndex == lineFragmentControllers.count - 1,
                     lineEndsWithLineBreak: line.data.delimiterLength > 0,
@@ -939,14 +963,12 @@ extension LayoutManager {
                 // occupies estimated line height. Advance maxY so the viewport walk continues;
                 // stopping here used to treat every following line as scrolled-out and Metal
                 // dropped their glyphs until a resize.
-                maxY = max(maxY, textContainerInset.top + line.yPosition + lineController.lineHeight)
+                maxY = max(maxY, textContainerInset.top + lineYPosition + lineController.lineHeight)
             }
             let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
             contentSizeService.setSize(of: lineController.line, to: lineSize)
-            if abs(lineController.lineHeight - oldLineHeight) > .ulpOfOne {
-                geometryShifted = true
-            }
-            let isSizingLineAboveTopEdge = line.yPosition < insetViewport.minY + textContainerInset.top
+            lineController.lastLaidOutYPosition = lineYPosition
+            let isSizingLineAboveTopEdge = lineYPosition < insetViewport.minY + textContainerInset.top
             if isSizingLineAboveTopEdge && lineController.isFinishedTypesetting {
                 contentOffsetAdjustmentY += lineController.lineHeight - oldLineHeight
             }
@@ -993,7 +1015,7 @@ extension LayoutManager {
         metalCanvasView?.presentIfDirty()
     }
 
-    private func layoutLineNumberView(for line: DocumentLineNode) {
+    private func layoutLineNumberView(for line: DocumentLineNode, lineYPosition: CGFloat? = nil) {
         let lineNumberView = lineNumberLabelReuseQueue.dequeueView(forKey: line.id)
         if lineNumberView.superview == nil {
             lineNumbersContainerView.addSubview(lineNumberView)
@@ -1002,7 +1024,7 @@ extension LayoutManager {
         let fontLineHeight = theme.lineNumberFont.lineHeight
         let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
         let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
-        var yPosition = textContainerInset.top + line.yPosition
+        var yPosition = textContainerInset.top + (lineYPosition ?? line.yPosition)
         if lineController.numberOfLineFragments > 1 {
             // There are more than one line fragments, so we align the line number at the top.
             yPosition += (fontLineHeight * lineHeightMultiplier - fontLineHeight) / 2

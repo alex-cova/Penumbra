@@ -174,8 +174,12 @@ final class MetalTextCanvasView: UIView {
     /// is enabled. AppKit does not reliably call `draw(_:)` on a view whose backing layer is
     /// `CAMetalLayer` (especially under a layer-backed SwiftUI host), so layout invokes this
     /// *after* its disableActions transaction.
-    func presentIfDirty() {
-        if usesDeferredPresent {
+    ///
+    /// `immediately` bypasses deferred present. A scroll moves the line-number views and the
+    /// scroller in the current CA transaction; a display-link present would show the text a frame
+    /// (or, with a busy main thread, several) behind them.
+    func presentIfDirty(immediately: Bool = false) {
+        if usesDeferredPresent, !immediately {
             armDisplayLink()
         } else {
             presentIfDirtyNow()
@@ -271,12 +275,12 @@ final class MetalTextCanvasView: UIView {
     /// Runs `body`, suppressing any deferred present it triggers via `setNeedsDisplay` until it
     /// returns, then presents once with the pass's final state. Reentrant (a depth counter, not a
     /// `Bool`) since a layout pass can itself invoke another paint-affecting call.
-    func withCoalescedPresent(_ body: () -> Void) {
+    func withCoalescedPresent(immediately: Bool = false, _ body: () -> Void) {
         presentCoalescingDepth += 1
         body()
         presentCoalescingDepth -= 1
         if presentCoalescingDepth == 0 {
-            presentIfDirty()
+            presentIfDirty(immediately: immediately)
         }
     }
 

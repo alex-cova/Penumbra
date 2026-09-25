@@ -69,7 +69,7 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
                     while active > 0 {
                         guard let (progress, key, reader) = await group.next() else { break }
                         active -= 1
-                        if let reader { await self.install(reader, forKey: key) }
+                        if let reader { self.install(reader, forKey: key) }
                         continuation.yield(progress)
                         addNext()
                     }

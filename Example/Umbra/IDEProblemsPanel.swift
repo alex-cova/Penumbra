@@ -115,11 +115,20 @@ private struct IDEProblemRowView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .accessibilityLabel("\(row.diagnostic.severity) at line \(row.diagnostic.range.start.line + 1): \(row.diagnostic.message)")
+        .accessibilityLabel("\(IDEProblemStyle.label(for: row.diagnostic.severity)) at line \(row.diagnostic.range.start.line + 1): \(row.diagnostic.message)")
     }
 }
 
 enum IDEProblemStyle {
+    static func label(for severity: DiagnosticSeverity) -> String {
+        switch severity {
+        case .error: "Error"
+        case .warning: "Warning"
+        case .information: "Information"
+        case .hint: "Hint"
+        }
+    }
+
     static func symbol(for severity: DiagnosticSeverity) -> String {
         switch severity {
         case .error: "xmark.octagon.fill"

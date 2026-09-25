@@ -4,6 +4,7 @@ import Foundation
 enum TreeSitterSyntaxHighlighterError: LocalizedError {
     case cancelled
     case operationDeallocated
+    case syntaxTreeNotReady
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ enum TreeSitterSyntaxHighlighterError: LocalizedError {
             return "Operation was cancelled"
         case .operationDeallocated:
             return "The operation was deallocated"
+        case .syntaxTreeNotReady:
+            return "The syntax tree was being reparsed"
         }
     }
 }
@@ -40,6 +43,7 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     private var currentOperation: Operation?
     /// Set by the latest highlight pass. Callers skip a re-typeset when the colours did not change.
     private(set) var lastHighlightChangedAttributes = true
+    private(set) var lastSyncHighlightWasComplete = true
 
     init(stringView: StringView, languageMode: TreeSitterInternalLanguageMode, operationQueue: OperationQueue) {
         self.stringView = stringView
@@ -48,11 +52,28 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput) {
-        let captures = languageMode.captures(in: input.byteRange)
+        guard let captures = languageMode.capturesIfReady(in: input.byteRange) else {
+            lastSyncHighlightWasComplete = false
+            lastHighlightChangedAttributes = false
+            return
+        }
+        lastSyncHighlightWasComplete = true
+        apply(captures, to: input)
+    }
+
+    private func apply(_ captures: [TreeSitterCapture], to input: LineSyntaxHighlighterInput) {
         let tokens = self.tokens(for: captures, localTo: input.byteRange)
         let colorsChanged = setAttributes(for: tokens, on: input.attributedString)
         let semanticChanged = applySemanticHighlights(to: input)
         lastHighlightChangedAttributes = colorsChanged || semanticChanged
+    }
+
+    func syntaxHighlightFromCache(_ input: LineSyntaxHighlighterInput) -> Bool {
+        guard let captures = languageMode.cachedCapturesIfReady(in: input.byteRange) else {
+            return false
+        }
+        apply(captures, to: input)
+        return true
     }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback) {
@@ -70,7 +91,13 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
                 }
                 return
             }
-            let captures = self.languageMode.captures(in: input.byteRange)
+            guard let captures = self.languageMode.capturesIfReady(in: input.byteRange) else {
+                // Succeeding here would leave the line in `theme.textColor`, marked highlighted.
+                DispatchQueue.main.async {
+                    completion(.failure(TreeSitterSyntaxHighlighterError.syntaxTreeNotReady))
+                }
+                return
+            }
             let tokens = self.tokens(for: captures, localTo: input.byteRange)
             if !operation.isCancelled {
                 DispatchQueue.main.async {

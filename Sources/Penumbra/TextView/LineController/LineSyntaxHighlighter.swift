@@ -30,12 +30,20 @@ protocol LineSyntaxHighlighter: AnyObject {
     /// plain text). Used by `LineController.isSyntaxHighlightPending` so Metal can tell "still
     /// waiting on a highlight" apart from "there is nothing to highlight".
     var canEventuallyHighlight: Bool { get }
+    /// `false` when the last synchronous ``syntaxHighlight(_:)`` found no syntax tree to query
+    /// (a parse started after `canHighlight` was checked), so the line must stay pending.
+    var lastSyncHighlightWasComplete: Bool { get }
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput)
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback)
     func cancel()
+    /// Highlights `input` synchronously when that needs no parse or query (the captures are
+    /// already cached). Returns `false`, touching nothing, otherwise.
+    func syntaxHighlightFromCache(_ input: LineSyntaxHighlighterInput) -> Bool
 }
 
 extension LineSyntaxHighlighter {
     var isHighlighting: Bool { false }
     var canEventuallyHighlight: Bool { true }
+    var lastSyncHighlightWasComplete: Bool { true }
+    func syntaxHighlightFromCache(_ input: LineSyntaxHighlighterInput) -> Bool { false }
 }

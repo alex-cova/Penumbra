@@ -260,7 +260,7 @@ enum JavaEncapsulateField {
 
     private static func privatizeEntry(for field: FieldContext) -> WorkspaceEditPlanEntry? {
         let declaration = field.fieldDeclaration
-        if let modifiers = declaration.namedChildren.first { $0.type == "modifiers" } {
+        if let modifiers = declaration.namedChildren.first(where: { $0.type == "modifiers" }) {
             let text = modifiers.text
             if text.contains("private") { return nil }
             var newText = text

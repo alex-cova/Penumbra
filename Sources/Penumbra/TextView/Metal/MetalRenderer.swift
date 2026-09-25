@@ -402,6 +402,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     func upsertFragment(_ spec: LineFragmentPaintSpec) {
         let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
+        let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: spec.frame, scale: scale)
         if let existing = fragments[spec.id],
            existing.frame == spec.frame,
            existing.cacheKey != nil,
@@ -409,7 +410,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
            !GlyphExtractCacheKey.shouldRebuild(
                previous: existing.cacheKey,
                revision: spec.lineRevision,
-               emitRect: emitRect,
+               emitRect: keyEmitRect,
                isPending: spec.isSyntaxHighlightPending
            ),
            existing.decorationKey == DecorationBuildKey(
@@ -447,7 +448,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         let shouldExtract = GlyphExtractCacheKey.shouldRebuild(
             previous: fragment.cacheKey,
             revision: spec.lineRevision,
-            emitRect: emitRect,
+            emitRect: keyEmitRect,
             isPending: spec.isSyntaxHighlightPending
         ) || (spec.isSyntaxHighlightPending && previousFrame != spec.frame)
         if shouldExtract {
@@ -479,7 +480,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             } else {
                 fragment.cacheKey = GlyphExtractCacheKey(
                     revision: spec.lineRevision,
-                    emitRect: emitRect,
+                    emitRect: keyEmitRect,
                     isPending: spec.isSyntaxHighlightPending
                 )
             }
@@ -553,6 +554,19 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         fragments[spec.id] = fragment
         if glyphPageContributionChanged || decorationsChanged {
             updatePageContributions(for: spec.id, fragment: fragment)
+        }
+    }
+
+    func isPaintCurrent(for ids: [LineFragmentID]) -> Bool {
+        let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
+        return ids.allSatisfy { id in
+            guard let fragment = fragments[id], let cacheKey = fragment.cacheKey else {
+                return false
+            }
+            let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: fragment.frame, scale: scale)
+            return cacheKey.emitRect == keyEmitRect
+                && !cacheKey.isPending
+                && !fragment.decorationNeedsRetry
         }
     }
 

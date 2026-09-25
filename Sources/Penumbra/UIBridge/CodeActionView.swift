@@ -85,11 +85,18 @@ public final class CodeActionView: NSView {
         tableView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tableView)
 
+        // The panel is frame-positioned and starts at zero size (autoresizing-mask width == 0),
+        // so required 4 pt insets on both sides conflict until it is sized. Trailing and bottom
+        // give way below required; once the frame is set they hold as before.
+        let trailing = tableView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
+        trailing.priority = .init(999)
+        let bottom = tableView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+        bottom.priority = .init(999)
         NSLayoutConstraint.activate([
             tableView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            tableView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            trailing,
             tableView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            tableView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+            bottom
         ])
     }
 }

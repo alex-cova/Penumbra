@@ -243,7 +243,7 @@ final class JavaDebugSession {
     private func send(_ body: [String: Any]) async throws -> [String: Any] {
         try await withCheckedThrowingContinuation { continuation in
             do {
-                try sendSync(body, continuation: continuation)
+                _ = try sendSync(body, continuation: continuation)
             } catch {
                 continuation.resume(throwing: error)
             }

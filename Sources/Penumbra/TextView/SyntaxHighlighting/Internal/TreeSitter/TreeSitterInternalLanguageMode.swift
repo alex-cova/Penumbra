@@ -228,7 +228,8 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             hasCompletedInitialParse = rootLanguageLayer.tree != nil
             parsedUTF16Range = publish()
             captureWindows.removeAll()
-            if let previousTree, let newTree = rootLanguageLayer.tree {
+            // Injected layers (CSS in HTML, …) are not in the root diff; recolor what is on screen.
+            if let previousTree, let newTree = rootLanguageLayer.tree, !rootLanguageLayer.hasChildLayers {
                 pendingSyntaxRows = Self.changedRowRanges(from: previousTree, to: newTree)
             } else {
                 pendingSyntaxRows = nil
@@ -317,10 +318,18 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     }
 
     func captures(in range: ByteRange) -> [TreeSitterCapture] {
+        capturesIfReady(in: range) ?? []
+    }
+
+    /// `nil` when no usable tree exists (a parse is in flight or never finished), as opposed to
+    /// `[]` for a range with no captures. A line highlighted from `nil` would be painted in
+    /// `theme.textColor` and marked done, and the post-parse refresh only recolours changed rows,
+    /// so it would stay white until edited.
+    func capturesIfReady(in range: ByteRange) -> [TreeSitterCapture]? {
         parseLock.lock()
         if parseInFlight || !hasCompletedInitialParse {
             parseLock.unlock()
-            return []
+            return nil
         }
         if let cached = cachedCaptures(containing: range) {
             parseLock.unlock()
@@ -336,7 +345,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         parseLock.unlock()
 
         guard let snapshot else {
-            return []
+            return nil
         }
         let captures = PenumbraSignposts.interval("TreeSitterInternalLanguageMode.captures") {
             if Thread.isMainThread, EditorPerformanceTrace.shared.isEnabled {
@@ -345,14 +354,31 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             return snapshot.captures(in: queryRange, stringView: stringView)
         }
         parseLock.lock()
-        if epoch == parseEpoch {
+        // An edit during the query shifted bytes under the snapshot; its captures are off.
+        let isCurrent = epoch == parseEpoch
+        if isCurrent {
             storeCaptureWindow(CaptureWindow(range: queryRange, captures: captures))
         }
         parseLock.unlock()
+        guard isCurrent else {
+            return nil
+        }
         if queryRange == range {
             return captures
         }
         return captures.filter { $0.byteRange.overlaps(range) }
+    }
+
+    /// Captures for `range` only if an already-queried window covers it; never runs a query.
+    /// Lets layout colour a line synchronously during a scroll instead of typesetting it in
+    /// `theme.textColor` and again when the async pass lands.
+    func cachedCapturesIfReady(in range: ByteRange) -> [TreeSitterCapture]? {
+        parseLock.withLock {
+            guard !parseInFlight, hasCompletedInitialParse else {
+                return nil
+            }
+            return cachedCaptures(containing: range)
+        }
     }
 
     /// Must be called while holding `parseLock`. Moves a hit to the most-recently-used end so a

@@ -52,7 +52,7 @@ struct JavaParseEdit {
         var newBytes = oldBytes
         newBytes.replaceSubrange(start..<oldEnd, with: replacement)
         let newEnd = start + replacement.count
-        var raw = TSInputEdit(
+        let raw = TSInputEdit(
             start_byte: UInt32(start),
             old_end_byte: UInt32(oldEnd),
             new_end_byte: UInt32(newEnd),
