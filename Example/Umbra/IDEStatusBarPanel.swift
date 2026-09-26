@@ -30,9 +30,6 @@ struct IDEStatusBarPanel: View {
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: IDEAppearance.Spacing.statusBarHeight)
         .background(IDEAppearance.ColorToken.statusBar)
-        .overlay(alignment: .top) {
-            IDEToolWindowFrameBorder()
-        }
         .focusable(false)
     }
 

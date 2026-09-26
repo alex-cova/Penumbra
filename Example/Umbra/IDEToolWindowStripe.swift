@@ -14,21 +14,11 @@ struct IDEToolWindowStripe: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        Group {
-            if #available(macOS 26.0, *) {
-                IDEToolWindowStripeLiquidGlass(
-                    edge: edge,
-                    topItems: topItems,
-                    bottomItems: bottomItems
-                )
-            } else {
-                IDEToolWindowStripeLegacy(
-                    edge: edge,
-                    topItems: topItems,
-                    bottomItems: bottomItems
-                )
-            }
-        }
+        IDEToolWindowStripeLegacy(
+            edge: edge,
+            topItems: topItems,
+            bottomItems: bottomItems
+        )
     }
 
     /// True when the stripe has any button; the right stripe is left out otherwise.
@@ -120,100 +110,12 @@ struct IDEToolWindowStripe: View {
     }
 }
 
-/// The hairline between the window frame (toolbar, stripes, status bar) and the content. It
-/// stops at the stripes so the frame reads as one piece.
-struct IDEToolWindowFrameBorder: View {
-    @Environment(IDEWorkspace.self) private var workspace
-
-    var body: some View {
-        Rectangle()
-            .fill(IDEAppearance.ColorToken.border)
-            .frame(height: 1)
-            .padding(
-                .leading,
-                IDEToolWindowStripe.hasItems(edge: .leading, workspace: workspace)
-                    ? IDEAppearance.Spacing.toolWindowStripeWidth
-                    : 0
-            )
-            .padding(
-                .trailing,
-                IDEToolWindowStripe.hasItems(edge: .trailing, workspace: workspace)
-                    ? IDEAppearance.Spacing.toolWindowStripeWidth
-                    : 0
-            )
-    }
-}
-
 struct IDEToolWindowStripeItem: Identifiable {
     let id: String
     let systemImage: String
     let title: String
     let isOpen: Bool
     let action: () -> Void
-}
-
-@available(macOS 26.0, *)
-private struct IDEToolWindowStripeLiquidGlass: View {
-    let edge: IDEToolWindowStripe.Edge
-    let topItems: [IDEToolWindowStripeItem]
-    let bottomItems: [IDEToolWindowStripeItem]
-
-    @Namespace private var glassNamespace
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if !topItems.isEmpty {
-                toolGroup(topItems)
-            }
-            Spacer(minLength: IDEAppearance.Spacing.sm)
-            if !bottomItems.isEmpty {
-                toolGroup(bottomItems)
-            }
-        }
-        .padding(.vertical, IDEAppearance.Spacing.sm)
-        .padding(.horizontal, IDEAppearance.Spacing.xs)
-        .frame(width: IDEAppearance.Spacing.toolWindowStripeWidth)
-        .frame(maxHeight: .infinity)
-        .focusable(false)
-    }
-
-    private func toolGroup(_ items: [IDEToolWindowStripeItem]) -> some View {
-        GlassEffectContainer(spacing: IDEAppearance.Spacing.xs) {
-            VStack(spacing: IDEAppearance.Spacing.xs) {
-                ForEach(items) { item in
-                    IDEToolWindowStripeGlassButton(item: item)
-                        .glassEffectID(item.id, in: glassNamespace)
-                }
-            }
-            .padding(IDEAppearance.Spacing.xs)
-        }
-        .glassEffect(.regular, in: .rect(cornerRadius: IDEAppearance.Radius.card + 6, style: .continuous))
-    }
-}
-
-@available(macOS 26.0, *)
-private struct IDEToolWindowStripeGlassButton: View {
-    let item: IDEToolWindowStripeItem
-
-    var body: some View {
-        Group {
-            if item.isOpen {
-                Button(action: item.action) {
-                    IDEToolWindowStripeButtonLabel(item: item)
-                }
-                .buttonStyle(.glassProminent)
-            } else {
-                Button(action: item.action) {
-                    IDEToolWindowStripeButtonLabel(item: item)
-                }
-                .buttonStyle(.glass)
-            }
-        }
-        .help(item.isOpen ? "Hide \(item.title)" : item.title)
-        .accessibilityLabel(item.title)
-        .accessibilityAddTraits(item.isOpen ? [.isButton, .isSelected] : .isButton)
-        .focusable(false)
-    }
 }
 
 private struct IDEToolWindowStripeLegacy: View {
@@ -230,9 +132,7 @@ private struct IDEToolWindowStripeLegacy: View {
         .padding(.vertical, IDEAppearance.Spacing.sm)
         .frame(width: IDEAppearance.Spacing.toolWindowStripeWidth)
         .frame(maxHeight: .infinity)
-        .background {
-            IDEChromeGlassBackground(innerEdge: edge == .leading ? .trailing : .leading)
-        }
+        .background(IDEAppearance.ColorToken.frame)
         .focusable(false)
     }
 }

@@ -11,10 +11,6 @@ struct IDEJavaStructurePanel: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-
             if let root = store.root {
                 tree(store, root: root)
             } else {

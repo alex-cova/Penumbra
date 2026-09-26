@@ -47,9 +47,6 @@ struct IDEToolbarPanel: View {
         .frame(height: IDEAppearance.Spacing.toolbarHeight)
         .frame(maxWidth: .infinity)
         .background(IDEAppearance.ColorToken.toolbar)
-        .overlay(alignment: .bottom) {
-            IDEToolWindowFrameBorder()
-        }
         .focusable(false)
     }
 }

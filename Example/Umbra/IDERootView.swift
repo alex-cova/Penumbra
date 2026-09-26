@@ -24,10 +24,13 @@ public struct IDERootView: View {
                     IDEToolWindowStripe(edge: .leading)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                } else {
+                    IDEAppearance.ColorToken.frame.frame(width: IDEAppearance.Spacing.islandGap)
                 }
 
                 if workspace.showsSidebar {
                     IDESidebarPanel()
+                        .ideIsland()
                         .frame(width: sidebarWidth)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -38,6 +41,7 @@ public struct IDERootView: View {
 
                 if workspace.showsStructureSidebar {
                     IDEJavaStructurePanel()
+                        .ideIsland()
                         .frame(width: structureSidebarWidth)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -47,30 +51,33 @@ public struct IDERootView: View {
                 }
 
                 VStack(spacing: 0) {
-                    if workspace.isFindInFilesVisible {
-                        FindInFilesPanel()
-                            .opacity(workspace.chromeOpacity)
-                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                    }
-
-                    if workspace.javaSupport.gradleBuildFilesChanged {
-                        IDEGradleReloadBanner()
-                            .opacity(workspace.chromeOpacity)
-                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                    }
-
-                    ZStack {
-                        // A folder alone is not a document. The workbench always has an empty
-                        // pane, so showing it here paints a text editor with no tab and no text.
-                        if workspace.hasOpenDocuments {
-                            IDEEditorLayoutNode(layout: workspace.editorLayout)
-                                .id("editor-layout")
-                        } else {
-                            IDEWelcomeView()
+                    VStack(spacing: 0) {
+                        if workspace.isFindInFilesVisible {
+                            FindInFilesPanel()
+                                .opacity(workspace.chromeOpacity)
+                                .allowsHitTesting(workspace.chromeOpacity > 0.05)
                         }
+
+                        if workspace.javaSupport.gradleBuildFilesChanged {
+                            IDEGradleReloadBanner()
+                                .opacity(workspace.chromeOpacity)
+                                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                        }
+
+                        ZStack {
+                            // A folder alone is not a document. The workbench always has an empty
+                            // pane, so showing it here paints a text editor with no tab and no text.
+                            if workspace.hasOpenDocuments {
+                                IDEEditorLayoutNode(layout: workspace.editorLayout)
+                                    .id("editor-layout")
+                            } else {
+                                IDEWelcomeView()
+                            }
+                        }
+                        .frame(maxHeight: .infinity)
+                        .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
                     }
-                    .frame(maxHeight: .infinity)
-                    .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
+                    .ideIsland()
 
                     if workspace.isTerminalVisible {
                         IDETerminalResizeHandle(height: Binding(
@@ -82,6 +89,7 @@ public struct IDERootView: View {
 
                     if workspace.isTerminalVisible {
                         IDETerminalPanel()
+                            .ideIsland()
                             .frame(height: workspace.terminalHeight)
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -93,6 +101,7 @@ public struct IDERootView: View {
                         .opacity(workspace.chromeOpacity)
 
                     IDEGradleSidebarPanel()
+                        .ideIsland()
                         .frame(width: gradleSidebarWidth)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -102,14 +111,17 @@ public struct IDERootView: View {
                     IDEToolWindowStripe(edge: .trailing)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                } else {
+                    IDEAppearance.ColorToken.frame.frame(width: IDEAppearance.Spacing.islandGap)
                 }
             }
+            .padding(.bottom, IDEAppearance.Spacing.islandGap)
 
             IDEStatusBarPanel()
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
         }
-        .background(IDEAppearance.ColorToken.workbench)
+        .background(IDEAppearance.ColorToken.frame)
         .background(IDEWindowConfigurator(title: workspace.windowTitle, workspace: workspace))
         .overlay {
             IDEPaletteOverlayHost(workspace: workspace)
@@ -212,11 +224,6 @@ struct IDEGradleReloadBanner: View {
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.sm)
         .background(IDEAppearance.ColorToken.tabActive)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -226,12 +233,7 @@ private struct IDETerminalResizeHandle: View {
     @State private var lastTranslation: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            Color.clear.frame(height: 6)
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-        }
+        Color.clear.frame(height: IDEAppearance.Spacing.islandGap)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .gesture(
@@ -268,12 +270,7 @@ private struct IDESidebarResizeHandle: View {
     @State private var lastTranslation: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            Color.clear.frame(width: 6)
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(width: 1)
-        }
+        Color.clear.frame(width: IDEAppearance.Spacing.islandGap)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 1)

@@ -436,11 +436,6 @@ struct IDETerminalPanel: View {
             .clipped()
         }
         .background(IDEAppearance.ColorToken.sidebar)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-        }
         .onExitCommand { workspace.hideTerminal() }
     }
 }

@@ -59,11 +59,6 @@ struct FindInFilesPanel: View {
         }
         .frame(height: 220)
         .background(IDEAppearance.ColorToken.sidebar)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-        }
         .task { queryFocused = true }
         .onExitCommand { workspace.hideFindInFiles() }
     }

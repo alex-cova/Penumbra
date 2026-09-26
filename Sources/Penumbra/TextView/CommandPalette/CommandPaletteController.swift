@@ -76,7 +76,8 @@ public final class CommandPaletteController {
     }
 
     private weak var textView: TextView?
-    private let paletteView = CommandPaletteView()
+    private weak var overlayContainer: NSView?
+    let paletteView = CommandPaletteView()
     private let backdrop = PaletteBackdropView()
     private let boundTextViews = NSHashTable<TextView>.weakObjects()
     private var currentSections: [PaletteSection] = []
@@ -116,6 +117,7 @@ public final class CommandPaletteController {
         paletteModel.selectedIndex = 0
         paletteView.placeholder = tab.placeholder
         paletteView.selectedTab = tab
+        paletteView.syncChromeLayout()
         runQuery(paletteModel.query)
     }
 
@@ -123,7 +125,9 @@ public final class CommandPaletteController {
         self.textView = textView
         commandRegistry.registerBuiltInActions(for: textView)
         wirePaletteView()
-        installOverlay(in: overlayContainer ?? textView)
+        let container = overlayContainer ?? textView
+        self.overlayContainer = container
+        installOverlay(in: container)
         if bindActions {
             self.bindActions(to: textView)
         }
@@ -157,6 +161,7 @@ public final class CommandPaletteController {
     /// Moves the dimmed backdrop + palette onto `container` (full bounds). No-op when the
     /// overlay is already installed there.
     public func installOverlay(in container: NSView) {
+        overlayContainer = container
         if backdrop.superview === container { return }
         backdrop.removeFromSuperview()
         backdrop.translatesAutoresizingMaskIntoConstraints = false
@@ -175,6 +180,8 @@ public final class CommandPaletteController {
         ])
         if paletteModel.isPresented {
             layoutPalette(in: container)
+            paletteView.syncChromeLayout()
+            paletteView.layoutSubtreeIfNeeded()
             paletteView.focusQueryField()
         }
     }
@@ -250,6 +257,7 @@ public final class CommandPaletteController {
     public func dismiss() {
         guard paletteModel.isPresented else { return }
         engine.cancel()
+        paletteView.isSearching = false
         isStaticList = false
         currentSections = []
         paletteModel.hide()
@@ -301,8 +309,8 @@ public final class CommandPaletteController {
         runQuery(seed)
     }
 
-    /// Shows the tab strip for the tabbed modes and hides it for go-to-line, recent files, go to
-    /// file, and fixed lists.
+    /// Shows the tab strip for the tabbed modes and hides it for go-to-line, recent files, and
+    /// fixed lists. Go to File keeps the IntelliJ-style tab strip (All / Classes / Files / …).
     private func configureTabs() {
         switch paletteModel.mode {
         case .recentFiles:
@@ -312,18 +320,18 @@ public final class CommandPaletteController {
                 hint: ""
             )
         case .quickOpen:
-            configureNavigationChrome(
-                title: "Go to File",
-                showsEditedOnly: false,
-                hint: "> actions   @ symbols   / files   # text   : line"
-            )
+            paletteView.showsNavigationChrome = false
+            paletteView.tabs = availableTabs
+            paletteView.selectedTab = currentTab
+            paletteView.hint = "> actions   @ symbols   / files   # text   : line"
+            paletteView.showsNonProjectToggle = showsNonProjectToggle
         default:
             if let tab = currentTab {
+                paletteView.showsNavigationChrome = false
                 paletteView.tabs = availableTabs
                 paletteView.selectedTab = tab
                 paletteView.hint = "> actions   @ symbols   : line"
                 paletteView.showsNonProjectToggle = showsNonProjectToggle
-                paletteView.showsNavigationChrome = false
             } else {
                 paletteView.tabs = []
                 paletteView.selectedTab = nil
@@ -332,6 +340,7 @@ public final class CommandPaletteController {
                 paletteView.showsNavigationChrome = false
             }
         }
+        paletteView.syncChromeLayout()
     }
 
     private func configureNavigationChrome(title: String, showsEditedOnly: Bool, hint: String) {
@@ -351,14 +360,19 @@ public final class CommandPaletteController {
     }
 
     private var usesNavigationChrome: Bool {
-        paletteModel.mode == .recentFiles || paletteModel.mode == .quickOpen
+        paletteModel.mode == .recentFiles
     }
 
     private func showOverlay() {
+        if backdrop.superview == nil, let container = overlayContainer {
+            installOverlay(in: container)
+        }
         guard let container = backdrop.superview else { return }
         layoutPalette(in: container)
         backdrop.isHidden = false
         backdrop.superview?.addSubview(backdrop, positioned: .above, relativeTo: nil)
+        paletteView.syncChromeLayout()
+        paletteView.layoutSubtreeIfNeeded()
         paletteView.focusQueryField()
     }
 
@@ -517,15 +531,31 @@ public final class CommandPaletteController {
         // Index-backed sources are cheap enough to answer almost per keystroke; disk-wide text
         // search keeps a longer debounce so it isn't restarted for every character.
         let debounce: UInt64? = isDiskSearch ? 150 : (fileIndex != nil ? 10 : nil)
+        let delay = debounce ?? engine.debounceMilliseconds
+        paletteView.emptyStateMessage = emptyStateMessage(for: rawQuery)
+        paletteView.isSearching = delay >= PaletteChromeMetrics.searchingIndicatorMinimumDebounce
         engine.search(
             effectiveQuery,
             debounceMilliseconds: debounce,
             limit: isSingleSource ? max(singleSourceLimit, perSectionLimit) : nil
         ) { [weak self] sections in
             guard let self else { return }
+            self.paletteView.isSearching = false
+            self.paletteView.emptyStateMessage = self.emptyStateMessage(for: rawQuery)
             self.currentSections = sections
             self.paletteModel.clampSelection(count: self.flatItems.count)
             self.paletteView.update(sections: sections, selectedItemIndex: self.paletteModel.selectedIndex)
+        }
+    }
+
+    private func emptyStateMessage(for rawQuery: String) -> String {
+        let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return "No results" }
+        switch paletteModel.mode {
+        case .recentFiles: return "No recent files"
+        case .goToLine: return "Type a line number"
+        case .findInFiles: return "Type to search"
+        default: return "No results"
         }
     }
 
@@ -712,5 +742,9 @@ private final class PaletteBackdropView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         onClickOutsidePalette?()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // Consume wheel events on the dimmed area so they don't reach the editor underneath.
     }
 }

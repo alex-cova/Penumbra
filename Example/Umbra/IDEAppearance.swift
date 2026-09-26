@@ -34,11 +34,14 @@ enum IDEAppearance {
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
         static let dirtyDotSize = 5.0
+        /// Frame-coloured gap between islands; also the width of the resize handles that sit in it.
+        static let islandGap = 6.0
     }
 
     enum Radius {
         static let control = 6.0
         static let card = 8.0
+        static let island = 10.0
     }
 
     enum IconSize {
@@ -60,15 +63,18 @@ enum IDEAppearance {
 
     enum ColorToken {
         static let workbench = Color(hex: 0x101012)
-        static let sidebar = Color(hex: 0x18181B)
+        /// The window frame behind the islands: toolbar, tool-window stripes, status bar and the
+        /// gaps between panels. Regions are told apart by fill, not by hairlines.
+        static let frame = Color(hex: 0x1D1D22)
+        static let sidebar = Color(hex: 0x151518)
         static let editor = Color(hex: 0x101012)
-        static let toolbar = Color(hex: 0x1B1B1F)
+        static let toolbar = frame
         static let tabBar = Color(hex: 0x18181B)
         static let tabActive = Color(hex: 0x2A2A30)
         static let tabInactive = Color.clear
         static let tabHover = Color(hex: 0x1C1C20)
         static let controlHover = Color.white.opacity(0.06)
-        static let statusBar = Color(hex: 0x1B1B1F)
+        static let statusBar = frame
         static let border = Color.white.opacity(0.08)
         static let accent = Color(hex: 0x74ADE8)
         static let run = Color(hex: 0x3DDC84)
@@ -89,7 +95,7 @@ enum IDEAppearance {
     enum NSToken {
         static let workbench = ns(0x101012)
         static let editor = ns(0x101012)
-        static let sidebar = ns(0x18181B)
+        static let sidebar = ns(0x151518)
         static let border = NSColor.white.withAlphaComponent(0.08)
         static let accent = ns(0x74ADE8)
         static let foreground = ns(0xECEDEE)
@@ -117,67 +123,26 @@ extension Color {
     }
 }
 
-/// AppKit-backed vibrancy for shell chrome. Falls back to a solid fill when Reduce Transparency is on.
-struct IDEVisualEffectBackground: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .sidebar
-    var blendingMode: NSVisualEffectView.BlendingMode = .withinWindow
+/// The frame-coloured area outside a rounded rectangle, filled even-odd.
+struct IDEIslandCornerMask: Shape {
+    var radius: CGFloat
 
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        path.addRoundedRect(in: rect, cornerSize: CGSize(width: radius, height: radius), style: .continuous)
+        return path
     }
 }
 
-/// Pre–macOS 26 frosted shell background: blurs adjacent content, keeps the dark IDE tint, and draws
-/// a hairline on the inner edge when used for a tool-window stripe. On macOS 26+, tool-window
-/// stripes use Liquid Glass (`GlassEffectContainer` / `.glassEffect`) instead.
-struct IDEChromeGlassBackground: View {
-    enum InnerEdge {
-        case leading, trailing
-    }
-
-    var innerEdge: InnerEdge?
-
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    var body: some View {
-        if reduceTransparency {
-            IDEAppearance.ColorToken.toolbar
-                .overlay { innerEdgeHairline }
-        } else {
-            ZStack {
-                IDEVisualEffectBackground(material: .sidebar, blendingMode: .withinWindow)
-                IDEAppearance.ColorToken.toolbar.opacity(0.32)
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.05),
-                        Color.clear,
-                        Color.black.opacity(0.06),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .overlay { innerEdgeHairline }
-        }
-    }
-
-    @ViewBuilder
-    private var innerEdgeHairline: some View {
-        if let innerEdge {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(width: 1)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: innerEdge == .leading ? .leading : .trailing)
+extension View {
+    /// Rounds a content region into an island on the window frame (IntelliJ's Islands look).
+    /// The corners are painted over in the frame colour rather than clipped, because hosted
+    /// AppKit views (the text view, the terminal) ignore SwiftUI clip shapes.
+    func ideIsland() -> some View {
+        overlay {
+            IDEIslandCornerMask(radius: IDEAppearance.Radius.island)
+                .fill(IDEAppearance.ColorToken.frame, style: FillStyle(eoFill: true))
+                .allowsHitTesting(false)
         }
     }
 }

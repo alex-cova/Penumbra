@@ -30,10 +30,12 @@ public final class CommandPaletteView: NSView {
     private enum Row {
         case header(String)
         case item(PaletteItem)
+        case empty(String)
     }
 
     private let queryField = PaletteQueryField()
     private let searchIcon = NSImageView()
+    private let searchProgress = NSProgressIndicator()
     private let hintLabel = NSTextField(labelWithString: "")
     private let materialView = NSVisualEffectView()
     private let scrollView = NSScrollView()
@@ -55,6 +57,7 @@ public final class CommandPaletteView: NSView {
     private var filesLeadingToEdge: NSLayoutConstraint?
     private var queryTopToTabs: NSLayoutConstraint?
     private var queryTopToRecentHeader: NSLayoutConstraint?
+    private var navigationHeaderHeight: NSLayoutConstraint?
     private var tabButtons: [(tab: PaletteTab, button: PaletteTabButton)] = []
 
     private var rows: [Row] = []
@@ -74,13 +77,12 @@ public final class CommandPaletteView: NSView {
         didSet { navigationTitle.stringValue = navigationChromeTitle }
     }
 
-    public var showsEditedOnlyInChrome = false {
-        didSet { applyNavigationChrome() }
-    }
+    public var showsEditedOnlyInChrome = false
 
     public var navigationDestinations: [RecentFilesDestination] = [] {
         didSet {
             destinationTableView.reloadData()
+            refreshSidebarWidth()
             refreshNavigationChrome()
         }
     }
@@ -95,6 +97,14 @@ public final class CommandPaletteView: NSView {
 
     public var editedOnly = false {
         didSet { editedOnlyToggle.state = editedOnly ? .on : .off }
+    }
+
+    /// Shown as a single non-selectable row when every section is empty.
+    public var emptyStateMessage = "No results"
+
+    /// Indeterminate spinner in the query row while a debounced search is in flight.
+    public var isSearching = false {
+        didSet { refreshSearchActivity() }
     }
 
     public override init(frame frameRect: NSRect) {
@@ -162,10 +172,15 @@ public final class CommandPaletteView: NSView {
                 newRows.append(.item(item))
             }
         }
+        if itemRows.isEmpty {
+            newRows.append(.empty(emptyStateMessage))
+            rowItems.append(-1)
+        }
         rows = newRows
         itemRowIndices = itemRows
         rowItemIndices = rowItems
         tableView.reloadData()
+        resizeTableToFitRows()
         applySelection(itemIndex: selectedItemIndex)
     }
 
@@ -234,24 +249,47 @@ public final class CommandPaletteView: NSView {
         refreshTabSelection()
     }
 
+    public override func layout() {
+        super.layout()
+        resizeTableToFitRows()
+    }
+
+    public override func scrollWheel(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        let scrollViews: [NSScrollView] = showsNavigationChrome
+            ? [destinationScrollView, scrollView]
+            : [scrollView]
+        for scrollView in scrollViews where !scrollView.isHidden && scrollView.frame.contains(location) {
+            scrollView.scrollWheel(with: event)
+            return
+        }
+        // Query field, tabs, footer, etc. — and scroll views at their scroll limit.
+    }
+
+    /// Re-applies sidebar / query-field constraints. Call after changing tabs or chrome mode
+    /// even when `showsNavigationChrome` did not change (its `didSet` would otherwise skip).
+    func syncChromeLayout() {
+        applyNavigationChrome()
+    }
+
     // MARK: - Layout
 
     private func configure() {
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = PaletteChromeMetrics.panelCornerRadius
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = false
         layer?.borderWidth = 1
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.45
-        layer?.shadowRadius = 24
+        layer?.shadowOpacity = PaletteChromeMetrics.shadowOpacity
+        layer?.shadowRadius = PaletteChromeMetrics.shadowRadius
         layer?.shadowOffset = .zero
 
         materialView.material = .hudWindow
         materialView.blendingMode = .withinWindow
         materialView.state = .active
         materialView.wantsLayer = true
-        materialView.layer?.cornerRadius = 12
+        materialView.layer?.cornerRadius = PaletteChromeMetrics.panelCornerRadius
         materialView.layer?.cornerCurve = .continuous
         materialView.layer?.masksToBounds = true
         materialView.translatesAutoresizingMaskIntoConstraints = false
@@ -272,7 +310,7 @@ public final class CommandPaletteView: NSView {
         tabContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tabContainer)
         tabStack.orientation = .horizontal
-        tabStack.spacing = 4
+        tabStack.spacing = PaletteChromeMetrics.tabStackSpacing
         tabStack.translatesAutoresizingMaskIntoConstraints = false
         tabContainer.addSubview(tabStack)
         nonProjectToggle.controlSize = .small
@@ -286,12 +324,15 @@ public final class CommandPaletteView: NSView {
         navigationHeader.translatesAutoresizingMaskIntoConstraints = false
         navigationHeader.isHidden = true
         addSubview(navigationHeader)
-        navigationTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        navigationTitle.font = .systemFont(
+            ofSize: PaletteChromeMetrics.navigationTitleFontSize,
+            weight: .semibold
+        )
         navigationTitle.textColor = .labelColor
         navigationTitle.translatesAutoresizingMaskIntoConstraints = false
         navigationHeader.addSubview(navigationTitle)
         editedOnlyToggle.controlSize = .small
-        editedOnlyToggle.font = .systemFont(ofSize: 12)
+        editedOnlyToggle.font = .systemFont(ofSize: PaletteChromeMetrics.hintFontSize)
         editedOnlyToggle.target = self
         editedOnlyToggle.action = #selector(editedOnlyToggled)
         editedOnlyToggle.translatesAutoresizingMaskIntoConstraints = false
@@ -300,11 +341,20 @@ public final class CommandPaletteView: NSView {
         // Query row.
         searchIcon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
         searchIcon.contentTintColor = .tertiaryLabelColor
+        searchIcon.setAccessibilityHidden(true)
         searchIcon.translatesAutoresizingMaskIntoConstraints = false
         addSubview(searchIcon)
 
+        searchProgress.style = .spinning
+        searchProgress.controlSize = .small
+        searchProgress.isIndeterminate = true
+        searchProgress.isDisplayedWhenStopped = false
+        searchProgress.isHidden = true
+        searchProgress.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(searchProgress)
+
         queryField.translatesAutoresizingMaskIntoConstraints = false
-        queryField.font = .systemFont(ofSize: 17, weight: .regular)
+        queryField.font = .systemFont(ofSize: PaletteChromeMetrics.queryFontSize, weight: .regular)
         queryField.isBezeled = false
         queryField.drawsBackground = false
         queryField.focusRingType = .none
@@ -319,7 +369,7 @@ public final class CommandPaletteView: NSView {
         queryField.onToggleEditedOnly = { [weak self] in self?.onToggleEditedOnly?() }
         addSubview(queryField)
 
-        hintLabel.font = .systemFont(ofSize: 12)
+        hintLabel.font = .systemFont(ofSize: PaletteChromeMetrics.hintFontSize)
         hintLabel.textColor = .tertiaryLabelColor
         hintLabel.alignment = .right
         hintLabel.lineBreakMode = .byTruncatingHead
@@ -349,8 +399,11 @@ public final class CommandPaletteView: NSView {
         destinationColumn.resizingMask = .autoresizingMask
         destinationTableView.addTableColumn(destinationColumn)
         destinationTableView.headerView = nil
-        destinationTableView.rowHeight = 26
-        destinationTableView.intercellSpacing = NSSize(width: 0, height: 1)
+        destinationTableView.rowHeight = PaletteChromeMetrics.destinationRowHeight
+        destinationTableView.intercellSpacing = NSSize(
+            width: 0,
+            height: PaletteChromeMetrics.rowIntercellSpacing
+        )
         destinationTableView.delegate = self
         destinationTableView.dataSource = self
         destinationTableView.style = .plain
@@ -372,8 +425,8 @@ public final class CommandPaletteView: NSView {
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 24
-        tableView.intercellSpacing = NSSize(width: 0, height: 1)
+        tableView.rowHeight = PaletteChromeMetrics.itemRowHeight
+        tableView.intercellSpacing = NSSize(width: 0, height: PaletteChromeMetrics.rowIntercellSpacing)
         tableView.delegate = self
         tableView.dataSource = self
         tableView.style = .plain
@@ -392,7 +445,7 @@ public final class CommandPaletteView: NSView {
         footerSeparator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(footerSeparator)
 
-        footerLabel.font = .systemFont(ofSize: 11)
+        footerLabel.font = .systemFont(ofSize: PaletteChromeMetrics.footerFontSize)
         footerLabel.textColor = .secondaryLabelColor
         footerLabel.lineBreakMode = .byTruncatingMiddle
         footerLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -400,7 +453,7 @@ public final class CommandPaletteView: NSView {
         addSubview(footerLabel)
 
         splitButton.isBordered = false
-        splitButton.font = .systemFont(ofSize: 11)
+        splitButton.font = .systemFont(ofSize: PaletteChromeMetrics.footerFontSize)
         splitButton.contentTintColor = .controlAccentColor
         splitButton.target = self
         splitButton.action = #selector(splitButtonClicked)
@@ -430,33 +483,36 @@ public final class CommandPaletteView: NSView {
             materialView.topAnchor.constraint(equalTo: topAnchor),
             materialView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            tabContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            tabContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            tabContainer.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            tabContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.tabStripInset),
+            tabContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.tabStripInset),
+            tabContainer.topAnchor.constraint(equalTo: topAnchor, constant: PaletteChromeMetrics.tabStripTop),
             tabHeight,
             tabStack.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
             tabStack.centerYAnchor.constraint(equalTo: tabContainer.centerYAnchor),
             nonProjectToggle.trailingAnchor.constraint(equalTo: tabContainer.trailingAnchor),
             nonProjectToggle.centerYAnchor.constraint(equalTo: tabContainer.centerYAnchor),
 
-            navigationHeader.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            navigationHeader.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            navigationHeader.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
+            navigationHeader.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
             navigationHeader.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 8),
-            navigationHeader.heightAnchor.constraint(equalToConstant: 24),
             navigationTitle.leadingAnchor.constraint(equalTo: navigationHeader.leadingAnchor),
             navigationTitle.centerYAnchor.constraint(equalTo: navigationHeader.centerYAnchor),
             editedOnlyToggle.trailingAnchor.constraint(equalTo: navigationHeader.trailingAnchor),
             editedOnlyToggle.centerYAnchor.constraint(equalTo: navigationHeader.centerYAnchor),
 
-            searchIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            searchIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
             searchIcon.centerYAnchor.constraint(equalTo: queryField.centerYAnchor),
-            searchIcon.widthAnchor.constraint(equalToConstant: 16),
+            searchIcon.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.searchIconSize),
+            searchIcon.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.searchIconSize),
+
+            searchProgress.centerXAnchor.constraint(equalTo: searchIcon.centerXAnchor),
+            searchProgress.centerYAnchor.constraint(equalTo: searchIcon.centerYAnchor),
 
             queryField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 8),
             queryField.trailingAnchor.constraint(equalTo: hintLabel.leadingAnchor, constant: -8),
-            queryField.heightAnchor.constraint(equalToConstant: 28),
+            queryField.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.queryFieldHeight),
 
-            hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
             hintLabel.centerYAnchor.constraint(equalTo: queryField.centerYAnchor),
             hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
 
@@ -482,13 +538,15 @@ public final class CommandPaletteView: NSView {
             footerSeparator.trailingAnchor.constraint(equalTo: trailingAnchor),
             footerSeparator.bottomAnchor.constraint(equalTo: footerLabel.topAnchor, constant: -6),
 
-            footerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            footerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
             footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: splitButton.leadingAnchor, constant: -12),
             footerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
-            splitButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            splitButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
             splitButton.centerYAnchor.constraint(equalTo: footerLabel.centerYAnchor)
         ])
+        navigationHeaderHeight = navigationHeader.heightAnchor.constraint(equalToConstant: 0)
+        navigationHeaderHeight?.isActive = true
         queryTopToTabs = queryField.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 10)
         queryTopToRecentHeader = queryField.topAnchor.constraint(equalTo: navigationHeader.bottomAnchor, constant: 8)
         queryTopToTabs?.isActive = true
@@ -500,7 +558,8 @@ public final class CommandPaletteView: NSView {
         sidebarSeparator.isHidden = !showsNavigationChrome
         editedOnlyToggle.isHidden = !showsNavigationChrome || !showsEditedOnlyInChrome
         hintLabel.isHidden = showsNavigationChrome && showsEditedOnlyInChrome
-        sidebarWidth?.constant = showsNavigationChrome ? 168 : 0
+        navigationHeaderHeight?.constant = showsNavigationChrome ? PaletteChromeMetrics.navigationHeaderHeight : 0
+        refreshSidebarWidth()
         if showsNavigationChrome {
             filesLeadingToEdge?.isActive = false
             filesLeadingToSidebar?.isActive = true
@@ -515,6 +574,27 @@ public final class CommandPaletteView: NSView {
         }
         destinationTableView.reloadData()
         refreshNavigationChrome()
+        resizeTableToFitRows()
+    }
+
+    /// `NSTableView` is the scroll view's `documentView` and sizes itself with frames, not
+    /// constraints — without this the row area can collapse to zero height after chrome changes.
+    private func resizeTableToFitRows() {
+        let width = scrollView.bounds.width
+        guard width > 100 else { return }
+        guard !rows.isEmpty else {
+            if tableView.frame.size != NSSize(width: width, height: 0) {
+                tableView.frame = NSRect(x: 0, y: 0, width: width, height: 0)
+            }
+            return
+        }
+        let rowStride = tableView.rowHeight + tableView.intercellSpacing.height
+        let contentHeight = CGFloat(rows.count) * rowStride + 4
+        let height = max(contentHeight, scrollView.bounds.height)
+        let frame = NSRect(x: 0, y: 0, width: width, height: height)
+        if tableView.frame != frame {
+            tableView.frame = frame
+        }
     }
 
     private func applyChromeColors() {
@@ -522,19 +602,59 @@ public final class CommandPaletteView: NSView {
         materialView.isHidden = reduceTransparency
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         if reduceTransparency {
-            if isDark {
-                layer?.backgroundColor = NSColor(srgbRed: 0.118, green: 0.118, blue: 0.133, alpha: 1).cgColor
-            } else {
-                layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-            }
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
         }
         if isDark {
-            layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(PaletteChromeMetrics.darkBorderAlpha).cgColor
         } else {
             layer?.borderColor = NSColor.separatorColor.cgColor
         }
+    }
+
+    private func refreshSearchActivity() {
+        searchIcon.isHidden = isSearching
+        searchProgress.isHidden = !isSearching
+        if isSearching {
+            searchProgress.startAnimation(nil)
+        } else {
+            searchProgress.stopAnimation(nil)
+        }
+    }
+
+    private func refreshSidebarWidth() {
+        guard showsNavigationChrome else {
+            sidebarWidth?.constant = 0
+            return
+        }
+        let titleFont = NSFont.systemFont(ofSize: PaletteChromeMetrics.destinationFontSize)
+        let shortcutFont = NSFont.monospacedSystemFont(
+            ofSize: PaletteChromeMetrics.shortcutFontSize,
+            weight: .regular
+        )
+        var width = PaletteChromeMetrics.sidebarMinWidth
+        for destination in navigationDestinations {
+            let titleWidth = (destination.title as NSString).size(withAttributes: [.font: titleFont]).width
+            let shortcutWidth: CGFloat
+            if let shortcut = destination.shortcut {
+                shortcutWidth = (shortcut as NSString).size(withAttributes: [.font: shortcutFont]).width
+            } else {
+                shortcutWidth = 0
+            }
+            let rowWidth = PaletteChromeMetrics.sidebarLeadingPadding
+                + PaletteChromeMetrics.destinationIconSize
+                + 8
+                + titleWidth
+                + 8
+                + shortcutWidth
+                + PaletteChromeMetrics.sidebarTrailingPadding
+            width = max(width, rowWidth)
+        }
+        sidebarWidth?.constant = min(
+            max(width, PaletteChromeMetrics.sidebarMinWidth),
+            PaletteChromeMetrics.sidebarMaxWidth
+        )
     }
 
     // MARK: - Tabs
@@ -552,7 +672,7 @@ public final class CommandPaletteView: NSView {
             return (tab, button)
         }
         tabContainer.isHidden = tabs.isEmpty
-        tabHeight?.constant = tabs.isEmpty ? 0 : 28
+        tabHeight?.constant = tabs.isEmpty ? 0 : PaletteChromeMetrics.tabHeight
         refreshTabSelection()
     }
 
@@ -607,8 +727,8 @@ public final class CommandPaletteView: NSView {
 
     // MARK: - Row content
 
-    private static let titleFont = NSFont.systemFont(ofSize: 13)
-    private static let boldTitleFont = NSFont.boldSystemFont(ofSize: 13)
+    private static let titleFont = NSFont.systemFont(ofSize: PaletteChromeMetrics.titleFontSize)
+    private static let boldTitleFont = NSFont.boldSystemFont(ofSize: PaletteChromeMetrics.titleFontSize)
 
     private func attributedTitle(for item: PaletteItem) -> NSAttributedString {
         let result = NSMutableAttributedString(
@@ -658,6 +778,12 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
         return false
     }
 
+    public func tableView(_ tableView: NSTableView, selectionHighlightStyleForRow row: Int) -> NSTableView.SelectionHighlightStyle {
+        if tableView === destinationTableView { return .regular }
+        if case .empty = rows[row] { return .none }
+        return .regular
+    }
+
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         if tableView === destinationTableView {
             let id = NSUserInterfaceItemIdentifier("destinationRow")
@@ -700,7 +826,16 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
             let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
             cell.textField?.stringValue = title
             cell.textField?.textColor = .tertiaryLabelColor
-            cell.textField?.font = .systemFont(ofSize: 11, weight: .semibold)
+            cell.textField?.font = .systemFont(ofSize: PaletteChromeMetrics.headerFontSize, weight: .semibold)
+            return cell
+        case .empty(let message):
+            let id = NSUserInterfaceItemIdentifier("emptyCell")
+            let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
+            cell.textField?.stringValue = message
+            cell.textField?.textColor = .secondaryLabelColor
+            cell.textField?.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
+            cell.setAccessibilityElement(true)
+            cell.setAccessibilityLabel(message)
             return cell
         case .item(let item):
             let id = NSUserInterfaceItemIdentifier("itemCell")
@@ -797,9 +932,24 @@ private final class PaletteQueryField: NSTextField {
 
 private final class PaletteRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        let rect = bounds.insetBy(dx: 6, dy: 0)
-        NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+        let insetX = PaletteChromeMetrics.selectionInsetX
+        let verticalInset = PaletteChromeMetrics.selectionVerticalInset
+        let barRect = NSRect(
+            x: bounds.minX + insetX,
+            y: bounds.minY + verticalInset,
+            width: PaletteChromeMetrics.selectionAccentBarWidth,
+            height: bounds.height - (verticalInset * 2)
+        )
+        NSColor.controlAccentColor.setFill()
+        barRect.fill()
+
+        let rect = bounds.insetBy(dx: insetX, dy: 0)
+        NSColor.controlAccentColor.withAlphaComponent(PaletteChromeMetrics.selectionFillAlpha).setFill()
+        NSBezierPath(
+            roundedRect: rect,
+            xRadius: PaletteChromeMetrics.innerCornerRadius,
+            yRadius: PaletteChromeMetrics.innerCornerRadius
+        ).fill()
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
@@ -819,9 +969,9 @@ private final class PaletteTabButton: NSButton {
         self.title = title
         isBordered = false
         setButtonType(.momentaryChange)
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = .systemFont(ofSize: PaletteChromeMetrics.tabFontSize, weight: .medium)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = PaletteChromeMetrics.innerCornerRadius
         layer?.cornerCurve = .continuous
         refusesFirstResponder = true
         applyStyle()
@@ -835,7 +985,7 @@ private final class PaletteTabButton: NSButton {
     override var intrinsicContentSize: NSSize {
         var size = super.intrinsicContentSize
         size.width += 16
-        size.height = 24
+        size.height = PaletteChromeMetrics.tabButtonHeight
         return size
     }
 
@@ -848,13 +998,16 @@ private final class PaletteTabButton: NSButton {
         let color: NSColor = isSelectedTab ? .labelColor : .secondaryLabelColor
         attributedTitle = NSAttributedString(
             string: title,
-            attributes: [.foregroundColor: color, .font: font ?? NSFont.systemFont(ofSize: 12)]
+            attributes: [
+                .foregroundColor: color,
+                .font: font ?? NSFont.systemFont(ofSize: PaletteChromeMetrics.tabFontSize)
+            ]
         )
         layer?.backgroundColor = isSelectedTab
-            ? NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+            ? NSColor.controlAccentColor.withAlphaComponent(PaletteChromeMetrics.tabFillAlpha).cgColor
             : NSColor.clear.cgColor
         layer?.borderWidth = isSelectedTab ? 1 : 0
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor
+        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(PaletteChromeMetrics.tabBorderAlpha).cgColor
         setAccessibilityLabel(title)
         setAccessibilitySelected(isSelectedTab)
     }
@@ -879,23 +1032,23 @@ private final class PaletteDestinationCell: NSTableCellView {
         self.textField = textField
 
         shortcutField.translatesAutoresizingMaskIntoConstraints = false
-        shortcutField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        shortcutField.font = .monospacedSystemFont(ofSize: PaletteChromeMetrics.shortcutFontSize, weight: .regular)
         shortcutField.textColor = .tertiaryLabelColor
         shortcutField.alignment = .right
         shortcutField.setContentHuggingPriority(.required, for: .horizontal)
         addSubview(shortcutField)
 
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.sidebarLeadingPadding),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
+            iconView.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.destinationIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.destinationIconSize),
 
             textField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
             textField.centerYAnchor.constraint(equalTo: centerYAnchor),
             textField.trailingAnchor.constraint(lessThanOrEqualTo: shortcutField.leadingAnchor, constant: -8),
 
-            shortcutField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            shortcutField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.sidebarTrailingPadding),
             shortcutField.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
@@ -907,18 +1060,28 @@ private final class PaletteDestinationCell: NSTableCellView {
 
     func apply(destination: RecentFilesDestination) {
         textField?.stringValue = destination.title
-        textField?.font = .systemFont(ofSize: 13)
+        textField?.font = .systemFont(ofSize: PaletteChromeMetrics.destinationFontSize)
         textField?.textColor = .labelColor
         if let icon = destination.icon,
            let image = NSImage(systemSymbolName: icon.systemName, accessibilityDescription: nil) {
             iconView.image = image
             iconView.contentTintColor = paletteIconColor(for: icon.tint)
             iconView.isHidden = false
+            iconView.setAccessibilityHidden(true)
         } else {
             iconView.isHidden = true
         }
         shortcutField.stringValue = destination.shortcut ?? ""
         shortcutField.isHidden = destination.shortcut == nil
+        shortcutField.setAccessibilityHidden(true)
+        textField?.setAccessibilityHidden(true)
+
+        var label = destination.title
+        if let shortcut = destination.shortcut, !shortcut.isEmpty {
+            label += ", \(shortcut)"
+        }
+        setAccessibilityElement(true)
+        setAccessibilityLabel(label)
     }
 }
 
@@ -946,7 +1109,7 @@ private final class PaletteItemCell: NSTableCellView {
         self.textField = textField
 
         locationField.translatesAutoresizingMaskIntoConstraints = false
-        locationField.font = .systemFont(ofSize: 12)
+        locationField.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
         locationField.textColor = .secondaryLabelColor
         locationField.lineBreakMode = .byTruncatingTail
         locationField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -964,8 +1127,8 @@ private final class PaletteItemCell: NSTableCellView {
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 16),
-            iconView.heightAnchor.constraint(equalToConstant: 16),
+            iconView.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.itemIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.itemIconSize),
 
             titleLeading,
             textField.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1007,14 +1170,29 @@ private final class PaletteItemCell: NSTableCellView {
         if let trailing, !trailing.isEmpty {
             trailingField.stringValue = trailing
             trailingField.font = trailingIsShortcut
-                ? .monospacedSystemFont(ofSize: 11, weight: .regular)
-                : .systemFont(ofSize: 12)
+                ? .monospacedSystemFont(ofSize: PaletteChromeMetrics.shortcutFontSize, weight: .regular)
+                : .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
             trailingField.textColor = trailingIsShortcut ? .tertiaryLabelColor : .secondaryLabelColor
             trailingField.isHidden = false
         } else {
             trailingField.stringValue = ""
             trailingField.isHidden = true
         }
+
+        iconView.setAccessibilityHidden(true)
+        textField?.setAccessibilityHidden(true)
+        locationField.setAccessibilityHidden(true)
+        trailingField.setAccessibilityHidden(true)
+
+        var label = title.string
+        if let location, !location.isEmpty {
+            label += ", \(location)"
+        }
+        if let trailing, !trailing.isEmpty {
+            label += ", \(trailing)"
+        }
+        setAccessibilityElement(true)
+        setAccessibilityLabel(label)
     }
 
     private static func symbol(named name: String) -> NSImage? {

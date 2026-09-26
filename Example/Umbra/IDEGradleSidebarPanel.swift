@@ -58,10 +58,6 @@ struct IDEGradleSidebarPanel: View {
                 .padding(.bottom, IDEAppearance.Spacing.sm)
             }
 
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-
             if java.gradleSync.isSyncing, java.gradleModel != nil {
                 ProgressView()
                     .progressViewStyle(.linear)

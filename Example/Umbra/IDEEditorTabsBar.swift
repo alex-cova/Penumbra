@@ -29,11 +29,6 @@ struct IDEEditorTabsBar: View {
         .frame(height: IDEAppearance.Spacing.tabHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(IDEAppearance.ColorToken.tabBar)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-        }
         .focusable(false)
     }
 }

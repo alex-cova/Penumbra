@@ -267,19 +267,11 @@ private struct IDESplitHandle: View {
     @State private var lastTranslation: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            Color.clear
-                .frame(
-                    width: axis == .horizontal ? Self.thickness : nil,
-                    height: axis == .vertical ? Self.thickness : nil
-                )
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(
-                    width: axis == .horizontal ? 1 : nil,
-                    height: axis == .vertical ? 1 : nil
-                )
-        }
+        IDEAppearance.ColorToken.frame
+            .frame(
+                width: axis == .horizontal ? Self.thickness : nil,
+                height: axis == .vertical ? Self.thickness : nil
+            )
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 1)

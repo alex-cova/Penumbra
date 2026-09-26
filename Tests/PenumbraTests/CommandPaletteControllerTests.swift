@@ -143,6 +143,62 @@ final class CommandPaletteControllerTests: XCTestCase {
         )
     }
 
+    func testQuickOpenShowsTabStripNotRecentFilesNavigationChrome() {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+        controller.fileIndex = makeFileIndex(["Main.swift"])
+        controller.navigationDestinationsProvider = {
+            [RecentFilesDestination(id: "project", title: "Project", action: {})]
+        }
+
+        XCTAssertTrue(textView.perform(.quickOpenFile))
+        XCTAssertTrue(controller.isPresented)
+        XCTAssertEqual(controller.paletteModel.mode, .quickOpen)
+        XCTAssertEqual(controller.currentTab, .files)
+        XCTAssertFalse(controller.paletteView.tabs.isEmpty)
+        XCTAssertFalse(controller.paletteView.showsNavigationChrome)
+    }
+
+    func testQuickOpenListsFilesAfterRecentFilesNavigationChrome() async {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+        controller.fileIndex = makeFileIndex(["Main.swift", "Other.swift"])
+
+        controller.presentRecentFiles()
+        controller.dismiss()
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+
+        XCTAssertGreaterThanOrEqual(controller.flatItems.count, 2)
+        controller.paletteView.layoutSubtreeIfNeeded()
+        let table = controller.paletteView.subviews
+            .compactMap { $0 as? NSScrollView }
+            .first(where: { ($0.documentView as? NSTableView) != nil })?
+            .documentView as? NSTableView
+        XCTAssertNotNil(table)
+        XCTAssertGreaterThan(table?.frame.height ?? 0, 0)
+    }
+
+    func testQuickOpenReinstallsOverlayAfterBackdropDetaches() {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+        controller.fileIndex = makeFileIndex(["Main.swift"])
+
+        controller.presentQuickOpen()
+        XCTAssertFalse(container.subviews.isEmpty)
+
+        container.subviews.forEach { $0.removeFromSuperview() }
+        controller.presentQuickOpen()
+
+        XCTAssertTrue(
+            container.subviews.contains { !$0.isHidden },
+            "Go to File should reinstall the backdrop when the overlay host was rebuilt"
+        )
+    }
+
     func testBindActionsOnASecondTextViewPresentsTheSharedPalette() {
         let first = makeFocusedTextView(text: "one")
         let second = makeFocusedTextView(text: "two")
@@ -272,5 +328,40 @@ final class CommandPaletteControllerTests: XCTestCase {
         let cold = await FilesPaletteProvider(index: { index }, onOpen: { _ in }).items(matching: "ApiKeyS", limit: 10)
         XCTAssertEqual(narrowed.map(\.id), cold.map(\.id))
         XCTAssertEqual(narrowed.map(\.title), ["ApiKeyService.java"])
+    }
+
+    func testPresentedPaletteBlocksScrollWheelFromReachingEditor() {
+        let text = (1...80).map { "line \($0)" }.joined(separator: "\n")
+        let textView = makeFocusedTextView(text: text)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+
+        textView.contentOffset = CGPoint(x: 0, y: 120)
+        let offsetBefore = textView.contentOffset
+
+        controller.presentRecentFiles()
+        container.layoutSubtreeIfNeeded()
+        controller.paletteView.layoutSubtreeIfNeeded()
+
+        let backdrop = container.subviews.first { !$0.isHidden }
+        XCTAssertNotNil(backdrop)
+        backdrop?.scrollWheel(with: makeScrollWheelEvent(deltaY: 3))
+
+        XCTAssertEqual(textView.contentOffset, offsetBefore, "Backdrop should swallow wheel events")
+
+        controller.paletteView.scrollWheel(with: makeScrollWheelEvent(deltaY: 3))
+        XCTAssertEqual(textView.contentOffset, offsetBefore, "Palette chrome should not forward wheel events to the editor")
+    }
+
+    private func makeScrollWheelEvent(deltaY: Int32) -> NSEvent {
+        let cgEvent = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 1,
+            wheel1: deltaY,
+            wheel2: 0,
+            wheel3: 0
+        )!
+        return NSEvent(cgEvent: cgEvent)!
     }
 }

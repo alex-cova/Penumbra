@@ -64,10 +64,6 @@ struct IDESidebarPanel: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(height: 1)
-
             IDEFileTreeView(
                 project: workspace.project,
                 onOpenFile: { url in
