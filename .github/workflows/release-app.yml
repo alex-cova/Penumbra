@@ -2,11 +2,18 @@ name: Release Umbra
 
 on:
   push:
+    branches:
+      - main
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
+
+# A newer push to main supersedes an in-flight nightly; version tags always finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
   release:
@@ -42,6 +49,7 @@ jobs:
           ./Scripts/build-app.sh
 
       - name: Create GitHub Release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -51,3 +59,22 @@ jobs:
             --title "Umbra $VERSION" \
             --notes "macOS editor release. Download \`Umbra-${VERSION}-macOS.zip\`, unzip, and open Umbra.app." \
             "dist/Umbra-${VERSION}-macOS.zip"
+
+      - name: Publish nightly
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          NIGHTLY_ZIP="dist/Umbra-nightly-${SHORT_SHA}-macOS.zip"
+          cp "dist/Umbra-${VERSION}-macOS.zip" "$NIGHTLY_ZIP"
+          # One rolling `nightly` prerelease: replace the previous one and move its tag to this commit.
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Umbra Nightly (${SHORT_SHA})" \
+            --notes "Unreleased build of \`main\` at ${GITHUB_SHA} (based on ${VERSION}). Download \`$(basename "$NIGHTLY_ZIP")\`, unzip, and open Umbra.app." \
+            "$NIGHTLY_ZIP"
