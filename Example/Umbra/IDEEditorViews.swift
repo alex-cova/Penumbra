@@ -26,6 +26,9 @@ final class IDEEditorPaneHost: NSView {
     /// on that reload so one pane's edits don't yank the other pane's viewport around.
     var lastSelectedRange: NSRange?
     var lastScrollOffset: CGPoint?
+    /// A navigation target for a document whose text is still loading: once it is applied, the
+    /// range is selected and centered instead of restoring the document's last scroll position.
+    var pendingReveal: (documentID: UUID, range: NSRange)?
     var onActivated: (() -> Void)?
 
     init(pane: EditorPane, preferences: IDEPreferences) {

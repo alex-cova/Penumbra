@@ -164,6 +164,38 @@ enum EnterSessionProfile {
         measureEnter("walked_middle", row: middle)
         measureEnter("walked_end", row: end)
 
+        // Gutter line markers, as Umbra's Java gutter icons: one on every method and class line.
+        // Enter must not pay per marker; replacing the set is what a background refresh does.
+        let documentLines = (textView.text as String).components(separatedBy: "\n")
+        var markers: [GutterLineMarker] = []
+        for (index, line) in documentLines.enumerated() where line.contains("public ") {
+            let icon: GutterLineMarkerIcon = line.contains("class ") ? .overridden : .implementing
+            markers.append(GutterLineMarker(id: markers.count, line: index + 1, icon: icon, tooltip: "Implements Base.compute"))
+        }
+        var setTimes: [Double] = []
+        for _ in 0 ..< samples {
+            autoreleasepool {
+                let start = CFAbsoluteTimeGetCurrent()
+                textView.setLineMarkers(markers)
+                textView.layoutIfNeeded()
+                textView.displayIfNeeded()
+                setTimes.append(CFAbsoluteTimeGetCurrent() - start)
+                // Alternate so every sample replaces a different set.
+                textView.setLineMarkers(Array(markers.dropLast()))
+                textView.layoutIfNeeded()
+            }
+        }
+        textView.setLineMarkers(markers)
+        pump(textView)
+        let setMedian = Measurement.percentile(setTimes, 0.5)
+        warn(String(format: "  Set %d line markers               median=%7.3f ms", markers.count, setMedian * 1000))
+        ResultLog.row("set_line_markers", file: file, sizeBytes: sizeBytes, seconds: setMedian, extra: "markers=\(markers.count)")
+        measureEnter("markers_top", row: top)
+        measureEnter("markers_middle", row: middle)
+        if textView.lineMarkers.count != markers.count {
+            warn("  WARNING: \(textView.lineMarkers.count) of \(markers.count) markers survived Enter/Backspace")
+        }
+
         // Keep the process (and text view) alive for `heap <pid>` / `vmmap` inspection.
         if holdSeconds > 0 {
             warn("  holding for \(holdSeconds)s: pid \(ProcessInfo.processInfo.processIdentifier)")

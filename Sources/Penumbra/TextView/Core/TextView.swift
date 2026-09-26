@@ -1309,6 +1309,8 @@ public struct DocumentTextExport: Sendable {
     // https://steveshepard.com/blog/adventures-with-uitextinteraction/
     private var textRangeAdjustmentGestureRecognizers: Set<UIGestureRecognizer> = []
     private var previousSelectedRangeDuringGestureHandling: NSRange?
+    /// A ``scrollRangeToCenter(_:)`` request made before the view had a height.
+    private var pendingCenteredRange: NSRange?
     private var preferredContentSize: CGSize {
         let horizontalOverscrollLength = max(frame.width * horizontalOverscrollFactor, 0)
         var verticalOverscrollLength = max(frame.height * verticalOverscrollFactor, 0)
@@ -1487,6 +1489,10 @@ public struct DocumentTextExport: Sendable {
                                                      height: panelHeight)
         if shouldReanchorAfterLayout {
             reanchorTypewriterCaretIfNeeded()
+        }
+        if let pendingCenteredRange, frame.height > 0 {
+            self.pendingCenteredRange = nil
+            scrollRangeToCenter(pendingCenteredRange)
         }
     }
 
@@ -2336,6 +2342,25 @@ extension TextView {
         }
         justScrollRangeToVisible(range)
     }
+
+    /// Scrolls so the line holding the start of `range` sits in the vertical center of the
+    /// viewport, as navigation does (Go to Definition, gutter markers), and reveals the range
+    /// horizontally. The offset is clamped, so a line near either end of the document stays
+    /// where scrolling can put it. Before the view has a height the request waits for layout.
+    public func scrollRangeToCenter(_ range: NSRange) {
+        guard frame.height > 0 else {
+            pendingCenteredRange = range
+            return
+        }
+        pendingCenteredRange = nil
+        syncContentSizeIfNeeded()
+        textInputView.prepareLineForDisplay(atLocation: range.lowerBound)
+        guard let offset = contentOffsetForTypewriterAnchor(at: range.lowerBound, fraction: 0.5) else {
+            scrollRangeToVisible(range)
+            return
+        }
+        contentOffset = offset
+    }
 }
 
 private extension TextView {
@@ -2598,7 +2623,7 @@ private extension TextView {
         }
     }
 
-    private func contentOffsetForTypewriterAnchor(at location: Int) -> CGPoint? {
+    private func contentOffsetForTypewriterAnchor(at location: Int, fraction: CGFloat? = nil) -> CGPoint? {
         textInputView.prepareLineForDisplay(atLocation: location)
         guard let anchorY = textInputView.lineAnchorY(at: location) else {
             return nil
@@ -2607,7 +2632,7 @@ private extension TextView {
         let viewport = scrollViewport(at: contentOffset)
         var newContentOffset = contentOffset
         applyHorizontalScrollReveal(for: caretRect, viewport: viewport, into: &newContentOffset)
-        newContentOffset.y = anchorY - adjustedContentInset.top - viewport.height * typewriterAnchorFraction
+        newContentOffset.y = anchorY - adjustedContentInset.top - viewport.height * (fraction ?? typewriterAnchorFraction)
         let cappedXOffset = min(max(newContentOffset.x, minimumContentOffset.x), maximumContentOffset.x)
         let cappedYOffset = min(max(newContentOffset.y, minimumContentOffset.y), maximumContentOffset.y)
         return CGPoint(x: cappedXOffset, y: cappedYOffset)

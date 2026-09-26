@@ -22,7 +22,12 @@ final class GutterContainerView: UIView {
         if let interactiveRect, let superview {
             let localPoint = convert(point, from: superview)
             if interactiveRect.contains(localPoint) {
-                return super.hitTest(point)
+                // Not `super.hitTest`: the disabled base `UIView` answers `nil` before AppKit
+                // recurses, which swallowed every ribbon, decoration and marker click.
+                for subview in subviews.reversed() where !subview.isHidden {
+                    if let hit = subview.hitTest(localPoint) { return hit }
+                }
+                return nil
             }
         }
         return isUserInteractionEnabled ? super.hitTest(point) : nil

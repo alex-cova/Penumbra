@@ -1693,22 +1693,16 @@ public final class IDEWorkspace {
            url.standardizedFileURL.path != current.textView.documentURL?.standardizedFileURL.path {
             if let (pane, document) = paneAndDocument(matching: url) {
                 document.selectedRange = nsRange
-                workbench.activatePane(pane.id)
-                pane.selectDocument(document.id)
-                let destination = host(for: pane.id)
-                showDocument(in: pane, host: destination)
-                if destination.loadedDocumentID == document.id {
-                    destination.textView.selectedRange = nsRange
-                    destination.textView.scrollRangeToVisible(nsRange)
-                    _ = destination.textView.focusTextInput()
-                }
+                // Through `selectTab`, so the tab strip and the active pane follow the jump.
+                selectTab(document.id, in: pane.id)
+                reveal(nsRange, of: document.id, in: host(for: pane.id))
                 return true
             }
             Task { await openDocument(from: url, selecting: nsRange) }
             return true
         }
         current.textView.selectedRange = nsRange
-        current.textView.scrollRangeToVisible(nsRange)
+        current.textView.scrollRangeToCenter(nsRange)
         _ = current.textView.focusTextInput()
         return true
     }
@@ -1777,9 +1771,24 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Selects and centers `range` in `document` once `host` shows it: now when it is loaded,
+    /// otherwise when its text is applied.
+    private func reveal(_ range: NSRange, of documentID: UUID, in host: IDEEditorPaneHost) {
+        guard host.loadedDocumentID == documentID else {
+            host.pendingReveal = (documentID, range)
+            return
+        }
+        host.pendingReveal = nil
+        host.textView.selectedRange = range
+        host.textView.scrollRangeToCenter(range)
+        _ = host.textView.focusTextInput()
+    }
+
+    /// The tab showing `url`, in the active pane first so a jump stays in the pane it started from.
     private func paneAndDocument(matching url: URL) -> (EditorPane, WorkbenchDocument)? {
         let path = url.standardizedFileURL.path
-        for pane in workbench.panes {
+        let panes = workbench.panes.sorted { lhs, _ in lhs.id == workbench.activePaneID }
+        for pane in panes {
             if let document = pane.documents.first(where: { $0.url?.standardizedFileURL.path == path }) {
                 return (pane, document)
             }
@@ -2446,13 +2455,8 @@ public final class IDEWorkspace {
             showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)
-            if let range, document.contentKind == .text {
-                let host = host(for: workbench.activePaneID)
-                if host.loadedDocumentID == workbench.activePane.selectedDocumentID {
-                    host.textView.selectedRange = range
-                    host.textView.scrollRangeToVisible(range)
-                    _ = host.textView.focusTextInput()
-                }
+            if let range, document.contentKind == .text, let selectedID = workbench.activePane.selectedDocumentID {
+                reveal(range, of: selectedID, in: host(for: workbench.activePaneID))
             }
             if document.contentKind == .text {
                 await workspaceBridge.syncWorkbench(workbench)
@@ -3486,7 +3490,7 @@ public final class IDEWorkspace {
         textView.recordNavigationCheckpoint()
         let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
         textView.selectedRanges = [nsRange]
-        textView.scrollRangeToVisible(nsRange)
+        textView.scrollRangeToCenter(nsRange)
         _ = textView.focusTextInput()
     }
 
@@ -3833,6 +3837,11 @@ public final class IDEWorkspace {
         host.loadedGeneration = document.contentGeneration
         host.loadedBufferGeneration = host.textView.contentGeneration
         host.textView.layoutSubtreeIfNeeded()
+        if let pending = host.pendingReveal, pending.documentID == document.id {
+            host.pendingReveal = nil
+            host.textView.selectedRange = pending.range
+            host.textView.scrollRangeToCenter(pending.range)
+        }
         // `setState` above does not route through `textViewDidChange`, so a preview left open
         // from the previous document in this pane would otherwise keep showing stale content
         // until the next keystroke.

@@ -4,9 +4,10 @@ import Foundation
 /// The line-marker column: up to ``maximumSlots`` ``GutterLineMarker`` icons per line, a tooltip
 /// on hover and a callback on click.
 ///
-/// Like `FoldRibbonView` it spans the content height and scrolls with the document. `draw(_:)`
-/// only visits the markers inside the dirty rect's rows (a binary search into markers sorted by
-/// line) and reads positions without line handles, so its cost is bounded by the visible rows.
+/// Like IntelliJ's gutter it only ever covers the viewport: its frame is the visible part of the
+/// gutter column (in document coordinates, so `frame.minY` is the document y of its top), and a
+/// redraw — after scrolling, an edit or new markers — paints the visible rows' markers, found by a
+/// binary search into the ``GutterLineMarkerStore``, without line handles.
 final class GutterLineMarkerView: UIView {
     nonisolated static let maximumSlots = 2
     static let slotWidth: CGFloat = 14
@@ -16,20 +17,22 @@ final class GutterLineMarkerView: UIView {
     var textContainerInsetTop: CGFloat = 0
     /// Height of one line fragment; icons are centred in a line's first fragment.
     var rowHeight: CGFloat = 17
-    var markers: [GutterLineMarker] = [] {
-        didSet {
-            guard markers != oldValue else { return }
-            sortedMarkers = markers.sorted { $0.line == $1.line ? $0.id < $1.id : $0.line < $1.line }
-            hoveredMarkerID = nil
-            toolTip = nil
-            needsDisplay = true
-            window?.invalidateCursorRects(for: self)
+    /// Shared with the layout manager, which moves the markers through edits.
+    var store = GutterLineMarkerStore()
+    /// Replaces the store's markers (tests and hosts without a layout manager).
+    var markers: [GutterLineMarker] {
+        get { store.markers }
+        set {
+            store.replace(with: newValue)
+            markersDidChange()
         }
     }
     /// The clicked marker and its icon's rect in this view's coordinates.
     var onMarkerClicked: ((GutterLineMarker, CGRect) -> Void)?
 
-    private var sortedMarkers: [GutterLineMarker] = []
+    private var sortedMarkers: [GutterLineMarker] {
+        store.markers
+    }
     private var hoveredMarkerID: Int?
     private var trackingArea: NSTrackingArea?
 
@@ -41,6 +44,14 @@ final class GutterLineMarkerView: UIView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// The markers were replaced or moved: repaint the visible rows and drop the hover state.
+    func markersDidChange() {
+        hoveredMarkerID = nil
+        toolTip = nil
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
     }
 
     override func updateTrackingAreas() {
@@ -134,24 +145,17 @@ final class GutterLineMarkerView: UIView {
         guard lineHeight > 0 else { return nil }
         let fragmentHeight = min(rowHeight, lineHeight)
         let size = Self.iconSize
-        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + (fragmentHeight - size) / 2
+        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + (fragmentHeight - size) / 2 - frame.minY
         let x = CGFloat(slot) * Self.slotWidth + (Self.slotWidth - size) / 2
         return CGRect(x: x, y: y, width: size, height: size)
     }
 
     private func row(atLocalY localY: CGFloat) -> Int? {
         guard let lineManager else { return nil }
-        return lineManager.row(containingYOffset: max(localY - textContainerInsetTop, 0))
+        return lineManager.row(containingYOffset: max(localY + frame.minY - textContainerInsetTop, 0))
     }
 
-    /// Index of the first marker whose line is at least `line`.
-    static func firstIndex(in markers: [GutterLineMarker], atOrAfterLine line: Int) -> Int {
-        var low = 0
-        var high = markers.count
-        while low < high {
-            let mid = (low + high) / 2
-            if markers[mid].line < line { low = mid + 1 } else { high = mid }
-        }
-        return low
+    private static func firstIndex(in markers: [GutterLineMarker], atOrAfterLine line: Int) -> Int {
+        GutterLineMarkerStore.firstIndex(in: markers, atOrAfterLine: line)
     }
 }

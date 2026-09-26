@@ -1,6 +1,6 @@
 # Penumbra
 
-**Repository:** [github.com/alex-cova/Penumbra](https://github.com/alex-cova/Penumbra)
+**Repository:** [github.com/alex-cova/Penumbra](https://github.com/alex-cova/Penumbra) · **Website:** [alex-cova.github.io/Penumbra](https://alex-cova.github.io/Penumbra)
 
 **v1.6.0** — A high-performance, feature-rich plain text and code editor framework for **macOS** with integrated IDE intelligence services, Language Server Protocol (LSP) support, and a multi-pane workbench layout system.
 

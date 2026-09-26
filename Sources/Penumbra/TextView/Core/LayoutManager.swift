@@ -34,6 +34,11 @@ final class LayoutManager {
                 // without this the y positions go nil and no hairline is ever produced.
                 methodSeparatorView.lineManager = lineManager
                 methodSeparatorView.needsDisplay = true
+                // Same for the gutter columns: a stale weak reference draws no icons at all.
+                gutterDecorationView.lineManager = lineManager
+                gutterDecorationView.needsDisplay = true
+                lineMarkerView.lineManager = lineManager
+                lineMarkerView.needsDisplay = true
                 setNeedsLayout()
             }
         }
@@ -54,7 +59,7 @@ final class LayoutManager {
     var theme: Theme = DefaultTheme() {
         didSet {
             if theme !== oldValue {
-                gutterBackgroundView.backgroundColor = theme.gutterBackgroundColor
+                syncGutterBackgroundWithEditor()
                 gutterBackgroundView.hairlineColor = theme.gutterHairlineColor
                 gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
                 invisibleCharacterConfiguration.font = theme.font
@@ -219,15 +224,34 @@ final class LayoutManager {
         didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
     }
     private let lineMarkerView = GutterLineMarkerView()
-    var lineMarkers: [GutterLineMarker] = [] {
-        didSet {
-            guard lineMarkers != oldValue else { return }
-            lineMarkerView.markers = lineMarkers
-            let slots = GutterLineMarkerIndex.slotCount(of: lineMarkers)
-            gutterWidthService.lineMarkerColumnWidth = CGFloat(slots) * GutterLineMarkerView.slotWidth
-            lineMarkerView.isHidden = lineMarkers.isEmpty
-            setNeedsLayout()
+    private var lineMarkerContentHeight: CGFloat = 0
+    private var lineMarkerStore: GutterLineMarkerStore {
+        lineMarkerView.store
+    }
+    var lineMarkers: [GutterLineMarker] {
+        get { lineMarkerStore.markers }
+        set {
+            guard !(newValue.isEmpty && lineMarkerStore.isEmpty) else { return }
+            lineMarkerStore.replace(with: newValue)
+            lineMarkersDidChange()
         }
+    }
+    var hasLineMarkers: Bool {
+        !lineMarkerStore.isEmpty
+    }
+
+    /// Moves the line markers through an edit; see ``GutterLineMarkerStore/applyEdit(_:)``.
+    func applyLineMarkerEdit(_ edit: GutterLineMarkerEdit) {
+        if lineMarkerStore.applyEdit(edit) {
+            lineMarkersDidChange()
+        }
+    }
+
+    private func lineMarkersDidChange() {
+        lineMarkerView.markersDidChange()
+        gutterWidthService.lineMarkerColumnWidth = CGFloat(lineMarkerStore.slotCount) * GutterLineMarkerView.slotWidth
+        lineMarkerView.isHidden = lineMarkerStore.isEmpty
+        setNeedsLayout()
     }
     var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
         didSet {
@@ -345,7 +369,7 @@ final class LayoutManager {
         self.methodSeparatorView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
-        gutterBackgroundView.backgroundColor = theme.gutterBackgroundColor
+        syncGutterBackgroundWithEditor()
         gutterBackgroundView.hairlineColor = theme.gutterHairlineColor
         gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
         gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
@@ -806,6 +830,7 @@ extension LayoutManager {
     }
 
     private func layoutGutter() {
+        syncGutterBackgroundWithEditor()
         let contentSize = contentSizeService.contentSize
         gutterContainerView.frame = CGRect(x: viewport.minX, y: 0, width: totalGutterWidth, height: contentSize.height)
         gutterBackgroundView.frame = CGRect(x: 0, y: viewport.minY, width: totalGutterWidth, height: viewport.height)
@@ -819,10 +844,14 @@ extension LayoutManager {
         let markerWidth = gutterWidthService.lineMarkerColumnWidth
         if markerWidth > 0 {
             let ribbonWidth = showFoldingRibbon ? gutterWidthService.foldingRibbonWidth : 0
-            let markerFrame = CGRect(x: totalGutterWidth - ribbonWidth - markerWidth, y: 0, width: markerWidth, height: contentSize.height)
-            if lineMarkerView.frame != markerFrame {
-                // Folding, wrapping and added lines all change the content height and move rows.
+            // Only the visible part of the column: a redraw (scrolling, edits, folding) then
+            // paints the visible rows, never the whole document's.
+            let markerFrame = CGRect(x: totalGutterWidth - ribbonWidth - markerWidth, y: viewport.minY,
+                                     width: markerWidth, height: viewport.height)
+            // Folding, wrapping and added lines change the content height and move rows.
+            if lineMarkerView.frame != markerFrame || lineMarkerContentHeight != contentSize.height {
                 lineMarkerView.frame = markerFrame
+                lineMarkerContentHeight = contentSize.height
                 lineMarkerView.needsDisplay = true
             }
             lineMarkerView.textContainerInsetTop = textContainerInset.top
@@ -1394,7 +1423,7 @@ extension LayoutManager {
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
         gutterDecorationView.isHidden = gutterDecorations.isEmpty
-        lineMarkerView.isHidden = lineMarkers.isEmpty
+        lineMarkerView.isHidden = !hasLineMarkers
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing
@@ -1405,6 +1434,13 @@ extension LayoutManager {
         foldRibbonView.markerColor = theme.lineNumberColor
         foldRibbonView.collapsedMarkerColor = theme.selectedLinesGutterBackgroundColor.withAlphaComponent(1)
         foldRibbonView.chevronColor = theme.textColor
+    }
+
+    /// The line-number gutter uses the editor fill, not ``Theme/gutterBackgroundColor``, so it
+    /// never reads as a separate slab beside the text (see ``updateMetalCanvasPaintSpec``).
+    private func syncGutterBackgroundWithEditor() {
+        let background = textInputView?.backgroundColor ?? .textBackgroundColor
+        gutterBackgroundView.backgroundColor = background
     }
 }
 

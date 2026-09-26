@@ -111,7 +111,7 @@ public final class JumpToDefinitionController {
         textView.recordNavigationCheckpoint()
         let range = TextEditApplicator.nsRange(for: location.range, in: textView)
         textView.selectedRanges = [range]
-        textView.scrollRangeToVisible(range)
+        textView.scrollRangeToCenter(range)
     }
 
     /// The adapter's document snapshot lags the live buffer (content refresh is debounced), and a

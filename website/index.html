@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Penumbra - macOS code editor framework</title>
+    <meta
+      name="description"
+      content="Penumbra is a high-performance plain text and code editor framework for macOS with IDE intelligence, LSP support, and a multi-pane workbench."
+    />
+    <meta property="og:title" content="Penumbra - macOS code editor framework" />
+    <meta
+      property="og:description"
+      content="High-performance AppKit text engine with tree-sitter highlighting, multi-cursor editing, and a decoupled IDE intelligence layer."
+    />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-editing.png"
+    />
+    <meta name="theme-color" content="#090b10" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="main.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 14L10 4L16 14H4Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+              <path d="M7 11H13" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </span>
+          <span>Penumbra</span>
+        </a>
+
+        <button
+          class="nav-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="nav-menu"
+          aria-label="Open menu"
+        >
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+        </button>
+
+        <div class="nav-links" id="nav-menu">
+          <a href="#features">Features</a>
+          <a href="#screenshots">Screenshots</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/alex-cova/Penumbra">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-copy">
+          <h1>A fast code editor engine for macOS.</h1>
+          <p>
+            High-performance AppKit text engine with tree-sitter highlighting, multi-cursor editing,
+            and a decoupled IDE intelligence layer.
+          </p>
+          <div class="cta-row">
+            <a class="button button-primary" href="https://github.com/alex-cova/Penumbra">View on GitHub</a>
+            <a class="button button-secondary" href="#install">Add to your app</a>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <figure class="hero-shot">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-editing.png"
+              alt="Umbra editing a Markdown file with syntax highlighting, line numbers, and minimap"
+              width="1280"
+              height="800"
+              fetchpriority="high"
+            />
+          </figure>
+        </div>
+      </section>
+
+      <section class="stack-strip" aria-label="Built with">
+        <p class="stack-label">Built with</p>
+        <ul class="stack-logos">
+          <li>
+            <img
+              src="https://cdn.simpleicons.org/swift/9aa3b2"
+              alt="Swift"
+              width="28"
+              height="28"
+              loading="lazy"
+            />
+          </li>
+          <li>
+            <img
+              src="https://cdn.simpleicons.org/apple/9aa3b2"
+              alt="Apple"
+              width="28"
+              height="28"
+              loading="lazy"
+            />
+          </li>
+          <li>
+            <img
+              src="https://cdn.simpleicons.org/github/9aa3b2"
+              alt="GitHub"
+              width="28"
+              height="28"
+              loading="lazy"
+            />
+          </li>
+        </ul>
+      </section>
+
+      <section class="section bento-section" id="features">
+        <div class="section-head">
+          <h2>Built for real editors</h2>
+          <p>
+            Forked from Runestone and extended for macOS. Ships as a Swift Package with a decoupled
+            intelligence layer and Umbra, a reference editor app.
+          </p>
+        </div>
+
+        <div class="bento">
+          <article class="bento-cell bento-engine reveal">
+            <h3>Text engine</h3>
+            <p>AppKit-native editing with optional Metal rendering and piece-tree storage for large files.</p>
+            <ul class="tag-list">
+              <li>Multi-cursor</li>
+              <li>Tree-sitter</li>
+              <li>Minimap</li>
+              <li>Folding</li>
+            </ul>
+          </article>
+
+          <article class="bento-cell bento-intel reveal">
+            <h3>Editor Intelligence</h3>
+            <p>Completion, hover, diagnostics, navigation, and rename through a provider-based platform.</p>
+            <ul class="tag-list">
+              <li>LSP</li>
+              <li>Indexing</li>
+              <li>Command palette</li>
+            </ul>
+          </article>
+
+          <article class="bento-cell bento-workbench reveal">
+            <h3>Workbench</h3>
+            <p>Split panes, tab groups, session restore, and native AppKit bridge views for IDE chrome.</p>
+          </article>
+
+          <article class="bento-cell bento-languages reveal">
+            <h3>Languages in Umbra</h3>
+            <p>Bundled Tree-sitter packs plus Java intelligence: Gradle sync, completion, diagnostics, and run configs.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section showcase-section" id="screenshots">
+        <div class="showcase-layout">
+          <div class="showcase-copy reveal">
+            <h2>Umbra in action</h2>
+            <p>
+              Umbra is the Sublime Text-style editor in this repo: fast folder editing, Markdown preview,
+              and Mermaid diagram rendering.
+            </p>
+          </div>
+
+          <figure class="showcase-primary reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-mermaid-diagrams.png"
+              alt="Umbra Markdown preview rendering Mermaid sequence and class diagrams"
+              width="1280"
+              height="800"
+              loading="lazy"
+            />
+            <figcaption>Mermaid diagrams in Markdown preview</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section install-section" id="install">
+        <div class="install-layout">
+          <div class="install-copy reveal">
+            <h2>Get started</h2>
+            <p>Add Penumbra to your Swift package, link the products you need, and drop a <code>TextView</code> into your app.</p>
+
+            <dl class="spec-list">
+              <div>
+                <dt>Platform</dt>
+                <dd>macOS 14+, Swift 6, Xcode 16+</dd>
+              </div>
+              <div>
+                <dt>Tests</dt>
+                <dd>1,050+ in <code>swift test</code></dd>
+              </div>
+              <div>
+                <dt>Demo app</dt>
+                <dd><code>swift run Umbra</code></dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="code-panels reveal">
+            <div class="code-panel">
+              <div class="code-panel-head">
+                <span>Package.swift</span>
+                <button class="copy-btn" type="button" data-copy-target="install-code">Copy</button>
+              </div>
+              <pre class="code-block" id="install-code"><code>dependencies: [
+    .package(url: "https://github.com/alex-cova/Penumbra.git", branch: "main")
+]
+
+.target(
+    name: "YourAppTarget",
+    dependencies: [
+        .product(name: "Penumbra", package: "Penumbra"),
+        .product(name: "EditorIntelligence", package: "Penumbra"),
+        .product(name: "EditorIntelligenceLSP", package: "Penumbra"),
+        .product(name: "PenumbraLanguages", package: "Penumbra")
+    ]
+)</code></pre>
+            </div>
+
+            <div class="code-panel">
+              <div class="code-panel-head">
+                <span>AppKit</span>
+                <button class="copy-btn" type="button" data-copy-target="quickstart-code">Copy</button>
+              </div>
+              <pre class="code-block" id="quickstart-code"><code>import AppKit
+import Penumbra
+
+let textView = TextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+textView.theme = DefaultTheme()
+textView.showLineNumbers = true
+textView.isLineWrappingEnabled = true
+textView.showMinimap = true
+textView.isLineFoldingEnabled = true
+textView.isMetalRenderingEnabled = true
+textView.text = "// Welcome to Penumbra on macOS!"</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Penumbra</p>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://github.com/alex-cova/Penumbra">GitHub</a>
+        <a href="https://github.com/alex-cova/Penumbra/blob/main/LICENSE">License</a>
+        <a href="https://github.com/alex-cova/Penumbra/blob/main/THIRD_PARTY_NOTICES.md">Third-party notices</a>
+      </nav>
+    </footer>
+  </body>
+</html>

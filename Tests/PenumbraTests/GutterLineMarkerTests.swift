@@ -10,52 +10,85 @@ final class GutterLineMarkerTests: XCTestCase {
 
     // MARK: - Model
 
-    /// The row of an offset in `text`: a stand-in for the line manager in the model tests.
-    private func rows(_ text: String) -> (Int) -> Int {
-        let ns = text as NSString
-        return { offset in
-            var row = 0
-            for index in 0..<min(offset, ns.length) where ns.character(at: index) == 10 { row += 1 }
-            return row
-        }
+    private func store(_ markers: [GutterLineMarker]) -> GutterLineMarkerStore {
+        let store = GutterLineMarkerStore()
+        store.replace(with: markers)
+        return store
+    }
+
+    private func edit(startRow: Int, removedRows: Int = 0, lineDelta: Int, startsAtLineStart: Bool = false,
+                      endsAtLineStart: Bool = false, isInsertion: Bool = false) -> GutterLineMarkerEdit {
+        GutterLineMarkerEdit(startRow: startRow, removedRows: removedRows, lineDelta: lineDelta,
+                             startsAtLineStart: startsAtLineStart, endsAtLineStart: endsAtLineStart,
+                             isInsertion: isInsertion)
     }
 
     func testTypingAtALineStartKeepsItsMarkerWhileABreakMovesIt() {
-        // "one\ntwo\n": line 2 starts at 4.
-        let markers = [marker(0, line: 1), marker(1, line: 2)]
-        let typed = GutterLineMarkerIndex.applyingEdit(
-            to: markers, lineStarts: [0, 4], range: NSRange(location: 4, length: 0), deletedText: "",
-            replacementLength: 1, row: rows("one\nXtwo\n")
-        )
-        XCTAssertEqual(typed.map(\.line), [1, 2])
-        let broken = GutterLineMarkerIndex.applyingEdit(
-            to: markers, lineStarts: [0, 4], range: NSRange(location: 4, length: 0), deletedText: "",
-            replacementLength: 1, row: rows("one\n\ntwo\n")
-        )
-        XCTAssertEqual(broken.map(\.line), [1, 3])
+        // "one\ntwo\n": typing "X" at the start of line 2 keeps its marker there.
+        let typed = store([marker(0, line: 1), marker(1, line: 2)])
+        typed.applyEdit(edit(startRow: 1, lineDelta: 0, startsAtLineStart: true, isInsertion: true))
+        XCTAssertEqual(typed.markers.map(\.line), [1, 2])
+        // A line break there pushes line 2 (and its marker) down.
+        let broken = store([marker(0, line: 1), marker(1, line: 2)])
+        XCTAssertTrue(broken.applyEdit(edit(startRow: 1, lineDelta: 1, startsAtLineStart: true, isInsertion: true)))
+        XCTAssertEqual(broken.markers.map(\.line), [1, 3])
     }
 
     func testDeletingAWholeLineDropsItsMarkerAndIndentDeletionDoesNot() {
-        // "one\n  two\nthree": lines start at 0, 4, 10.
-        let markers = [marker(0, line: 2), marker(1, line: 3)]
-        let wholeLine = GutterLineMarkerIndex.applyingEdit(
-            to: markers, lineStarts: [4, 10], range: NSRange(location: 4, length: 6), deletedText: "  two\n",
-            replacementLength: 0, row: rows("one\nthree")
-        )
-        XCTAssertEqual(wholeLine.map(\.id), [1])
-        XCTAssertEqual(wholeLine.map(\.line), [2])
-        let indent = GutterLineMarkerIndex.applyingEdit(
-            to: markers, lineStarts: [4, 10], range: NSRange(location: 4, length: 2), deletedText: "  ",
-            replacementLength: 0, row: rows("one\ntwo\nthree")
-        )
-        XCTAssertEqual(indent.map(\.line), [2, 3])
+        // "one\n  two\nthree": delete "  two\n" (row 1 through the start of row 2).
+        let wholeLine = store([marker(0, line: 2), marker(1, line: 3)])
+        wholeLine.applyEdit(edit(startRow: 1, removedRows: 1, lineDelta: -1, startsAtLineStart: true, endsAtLineStart: true))
+        XCTAssertEqual(wholeLine.markers.map(\.id), [1])
+        XCTAssertEqual(wholeLine.markers.map(\.line), [2])
+        // Deleting the indent "  " never reaches this model (no line break), and changes nothing.
+        let indent = store([marker(0, line: 2), marker(1, line: 3)])
+        XCTAssertFalse(indent.applyEdit(edit(startRow: 1, lineDelta: 0, startsAtLineStart: true)))
+        XCTAssertEqual(indent.markers.map(\.line), [2, 3])
+    }
+
+    func testJoiningLinesMergesTheMarkersOntoOneLineAndWidensTheColumn() {
+        // Backspace at the start of line 3 joins it onto line 2.
+        let markers = store([marker(0, line: 2), marker(1, line: 3), marker(2, line: 9)])
+        XCTAssertEqual(markers.slotCount, 1)
+        markers.applyEdit(edit(startRow: 1, removedRows: 1, lineDelta: -1, endsAtLineStart: true))
+        XCTAssertEqual(markers.markers.map(\.line), [2, 2, 8])
+        XCTAssertEqual(markers.markers.map(\.id), [0, 1, 2])
+        XCTAssertEqual(markers.slotCount, 2)
+    }
+
+    func testMultiLineDeletionDropsInnerLinesAndShiftsTheRest() {
+        // Select from the middle of row 1 to the middle of row 4 and delete it.
+        let markers = store([marker(0, line: 1), marker(1, line: 2), marker(2, line: 3), marker(3, line: 4),
+                             marker(4, line: 5), marker(5, line: 7)])
+        markers.applyEdit(edit(startRow: 1, removedRows: 3, lineDelta: -3))
+        XCTAssertEqual(markers.markers.map(\.id), [0, 1, 4, 5])
+        XCTAssertEqual(markers.markers.map(\.line), [1, 2, 2, 4])
+    }
+
+    func testReplacingABlockWithMoreLinesKeepsTheLastLineOnItsText() {
+        // Replace "a\n" + "b\n" (rows 2-3, ending at row 4's start) with three lines.
+        let markers = store([marker(0, line: 3), marker(1, line: 5), marker(2, line: 6)])
+        markers.applyEdit(edit(startRow: 2, removedRows: 2, lineDelta: 1, startsAtLineStart: true, endsAtLineStart: true))
+        XCTAssertEqual(markers.markers.map(\.id), [1, 2])
+        XCTAssertEqual(markers.markers.map(\.line), [6, 7])
+    }
+
+    func testEditBelowEveryMarkerChangesNothing() {
+        let markers = store([marker(0, line: 1), marker(1, line: 2)])
+        XCTAssertFalse(markers.applyEdit(edit(startRow: 5, lineDelta: 1)))
+    }
+
+    func testReplaceSortsOnlyUnorderedMarkers() {
+        let markers = store([marker(2, line: 5), marker(0, line: 1), marker(1, line: 5)])
+        XCTAssertEqual(markers.markers.map(\.id), [0, 1, 2])
+        XCTAssertEqual(markers.slotCount, 2)
     }
 
     func testSlotCountFollowsTheBusiestLineAndIsCapped() {
-        XCTAssertEqual(GutterLineMarkerIndex.slotCount(of: []), 0)
-        XCTAssertEqual(GutterLineMarkerIndex.slotCount(of: [marker(0, line: 1), marker(1, line: 2)]), 1)
+        XCTAssertEqual(GutterLineMarkerStore.slotCount(ofSorted: []), 0)
+        XCTAssertEqual(GutterLineMarkerStore.slotCount(ofSorted: [marker(0, line: 1), marker(1, line: 2)]), 1)
         let crowded = [marker(0, line: 3), marker(1, line: 3), marker(2, line: 3)]
-        XCTAssertEqual(GutterLineMarkerIndex.slotCount(of: crowded), GutterLineMarkerView.maximumSlots)
+        XCTAssertEqual(GutterLineMarkerStore.slotCount(ofSorted: crowded), GutterLineMarkerView.maximumSlots)
     }
 
     // MARK: - View
@@ -115,5 +148,81 @@ final class GutterLineMarkerTests: XCTestCase {
         textView.replace(one, withText: "")
         XCTAssertEqual(textView.lineMarkers.map(\.id), [1])
         XCTAssertEqual(textView.lineMarkers.map(\.line), [2])
+    }
+
+    /// The column only covers the viewport, so a redraw never paints the whole document; hit
+    /// testing still finds a marker far down after scrolling.
+    func testMarkerViewCoversOnlyTheViewport() throws {
+        let text = (1 ... 400).map { "line \($0)" }.joined(separator: "\n")
+        let textView = makeTextView(text)
+        textView.setLineMarkers([marker(0, line: 300)])
+        textView.layoutIfNeeded()
+        let view = try XCTUnwrap(firstSubview(of: GutterLineMarkerView.self, in: textView))
+        let lineManager = try XCTUnwrap(view.lineManager)
+        let rowY = view.textContainerInsetTop + lineManager.yPosition(ofRow: 299)
+        textView.contentOffset = CGPoint(x: 0, y: rowY - 100)
+        textView.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(view.frame.height, textView.bounds.height + 1)
+        XCTAssertEqual(view.frame.minY, textView.contentOffset.y, accuracy: 1)
+        let local = CGPoint(x: GutterLineMarkerView.slotWidth / 2, y: rowY - view.frame.minY + view.rowHeight / 2)
+        XCTAssertEqual(view.marker(at: local)?.marker.id, 0)
+    }
+
+    func testThousandsOfMarkersFollowAnEnterNearTheTop() {
+        let text = (1 ... 5000).map { "line \($0)" }.joined(separator: "\n")
+        let textView = makeTextView(text)
+        textView.setLineMarkers((1 ... 5000).map { marker($0, line: $0) })
+        let second = (textView.text as NSString).range(of: "line 2\n")
+        textView.replace(NSRange(location: second.location, length: 0), withText: "\n")
+        XCTAssertEqual(textView.lineMarkers.count, 5000)
+        XCTAssertEqual(textView.lineMarkers[0].line, 1)
+        XCTAssertEqual(textView.lineMarkers[1].line, 3)
+        XCTAssertEqual(textView.lineMarkers.last?.line, 5001)
+    }
+
+    private func firstSubview<T: NSView>(of type: T.Type, in view: NSView) -> T? {
+        for subview in view.subviews {
+            if let match = subview as? T ?? firstSubview(of: type, in: subview) { return match }
+        }
+        return nil
+    }
+
+    /// `setState` swaps the line manager; the marker view holds it weakly, so it must follow or
+    /// it has no rows to draw (the markers were set but no icon ever appeared).
+    func testMarkerViewFollowsTheLineManagerAcrossSetState() throws {
+        let textView = makeTextView("")
+        textView.setState(TextViewState(text: "one\ntwo\nthree", theme: DefaultTheme()))
+        textView.setLineMarkers([marker(0, line: 2)])
+        textView.layoutIfNeeded()
+        let view = try XCTUnwrap(firstSubview(of: GutterLineMarkerView.self, in: textView))
+        XCTAssertFalse(view.isHidden)
+        let y = view.textContainerInsetTop + (view.lineManager?.yPosition(ofRow: 1) ?? -100) + view.rowHeight / 2
+        XCTAssertEqual(view.marker(at: CGPoint(x: GutterLineMarkerView.slotWidth / 2, y: y))?.marker.id, 0)
+    }
+
+    /// The gutter container ignores the mouse except inside its interactive columns; a click on
+    /// an icon there must reach the marker view rather than fall through to the text.
+    func testClickOnAnIconReachesTheHandler() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        let textView = makeTextView("one\ntwo\nthree")
+        window.contentView = textView
+        var clicked: [Int] = []
+        textView.lineMarkerHandler = { marker, _ in clicked.append(marker.id) }
+        textView.setLineMarkers([marker(4, line: 2)])
+        textView.layoutSubtreeIfNeeded()
+        let view = try XCTUnwrap(firstSubview(of: GutterLineMarkerView.self, in: textView))
+        let lineManager = try XCTUnwrap(view.lineManager)
+        let local = CGPoint(x: GutterLineMarkerView.slotWidth / 2,
+                            y: view.textContainerInsetTop + lineManager.yPosition(ofRow: 1) + view.rowHeight / 2)
+        let inWindow = view.convert(local, to: nil)
+        let frameView = try XCTUnwrap(window.contentView?.superview)
+        let hit = frameView.hitTest(frameView.convert(inWindow, from: nil))
+        XCTAssertTrue(hit === view, "hit \(String(describing: hit))")
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        hit?.mouseDown(with: event)
+        XCTAssertEqual(clicked, [4])
     }
 }

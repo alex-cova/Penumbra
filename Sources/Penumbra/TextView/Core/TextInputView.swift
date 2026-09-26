@@ -1402,7 +1402,7 @@ final class TextInputView: UIView, UITextInput {
 
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
         if !inlayHints.isEmpty { inlayHints = [] }
-        if !lineMarkers.isEmpty { lineMarkers = [] }
+        if layoutManager.hasLineMarkers { lineMarkers = [] }
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
         syntaxParsePolicy = state.parsePolicy
@@ -2888,10 +2888,23 @@ extension TextInputView {
                 }
             }
         }
-        // Only an edit that adds or removes a line break can move markers to other lines.
-        let markerLineStarts: [Int]? = lineMarkers.isEmpty || !(Self.containsLineBreak(newString) || Self.containsLineBreak(currentText))
-            ? nil
-            : lineMarkers.map { lineManager.location(ofRow: min(max($0.line - 1, 0), max(lineManager.lineCount - 1, 0))) }
+        // Only an edit that adds or removes a line break can move markers to other lines. The
+        // edit is described in rows up front: a few lookups, however many markers there are.
+        var markerEdit: GutterLineMarkerEdit?
+        let lineCountBeforeEdit = lineManager.lineCount
+        if layoutManager.hasLineMarkers, Self.containsLineBreak(newString) || Self.containsLineBreak(currentText) {
+            let lastRow = max(lineCountBeforeEdit - 1, 0)
+            let startRow = lineManager.row(containingCharacterAt: range.location) ?? lastRow
+            let endRow = max(lineManager.row(containingCharacterAt: range.upperBound) ?? lastRow, startRow)
+            markerEdit = GutterLineMarkerEdit(
+                startRow: startRow,
+                removedRows: endRow - startRow,
+                lineDelta: 0,
+                startsAtLineStart: lineManager.location(ofRow: startRow) == range.location,
+                endsAtLineStart: endRow > startRow && lineManager.location(ofRow: endRow) == range.upperBound,
+                isInsertion: range.length == 0
+            )
+        }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let textEditResult = EditorPerformanceTrace.shared.measure(.textMutation) {
             textEditHelper.replaceText(in: range, with: newString)
@@ -2901,13 +2914,9 @@ extension TextInputView {
         }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
-        if let markerLineStarts {
-            let lineManager = lineManager
-            lineMarkers = GutterLineMarkerIndex.applyingEdit(
-                to: lineMarkers, lineStarts: markerLineStarts, range: range, deletedText: currentText,
-                replacementLength: nsNewString.length,
-                row: { lineManager.row(containingCharacterAt: $0) ?? max(lineManager.lineCount - 1, 0) }
-            )
+        if var markerEdit {
+            markerEdit.lineDelta = lineManager.lineCount - lineCountBeforeEdit
+            layoutManager.applyLineMarkerEdit(markerEdit)
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
         let languageModeLineChangeSet = EditorPerformanceTrace.shared.measure(.incrementalParse) {

@@ -703,7 +703,7 @@ public final class EditorIntelligenceController {
         textView.recordNavigationCheckpoint()
         let range = TextEditApplicator.nsRange(for: location.range, in: textView)
         textView.selectedRanges = [range]
-        textView.scrollRangeToVisible(range)
+        textView.scrollRangeToCenter(range)
     }
 
     deinit {
