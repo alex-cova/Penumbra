@@ -246,26 +246,28 @@ public final class MarkdownPreviewController: NSObject {
             languageResolver: codeBlockLanguageResolver.map(UncheckedLanguageResolver.init),
             languageProvider: UncheckedLanguageProvider(value: codeBlockLanguageProvider)
         )
-        mermaidTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let result = await MarkdownPreviewRasterWorker.perform(work)
-            await MainActor.run {
-                guard let self, self.mermaidGeneration == rasterGen, self.parseGeneration == generation else { return }
-                self.rasterImages = result.images
-                self.highlightedCode = result.highlightedCode
-                self.previewView.rasterImages = result.images
-                self.previewView.rasterNaturalSizes = result.naturalSizes
-                self.previewView.highlightedCode = result.highlightedCode
-                if !result.errors.isEmpty {
-                    var blocks = document.blocks
-                    for (index, message) in result.errors {
-                        if case .mermaid(let source) = blocks[index].kind {
-                            blocks[index].kind = .mermaidError(source: source, message: message)
-                        }
+        // The raster work runs detached; this main-actor task only awaits it, so `self` never
+        // crosses into nonisolated code (Swift 6 `SendingRisksDataRace`).
+        mermaidTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                await MarkdownPreviewRasterWorker.perform(work)
+            }.value
+            guard let self, self.mermaidGeneration == rasterGen, self.parseGeneration == generation else { return }
+            self.rasterImages = result.images
+            self.highlightedCode = result.highlightedCode
+            self.previewView.rasterImages = result.images
+            self.previewView.rasterNaturalSizes = result.naturalSizes
+            self.previewView.highlightedCode = result.highlightedCode
+            if !result.errors.isEmpty {
+                var blocks = document.blocks
+                for (index, message) in result.errors {
+                    if case .mermaid(let source) = blocks[index].kind {
+                        blocks[index].kind = .mermaidError(source: source, message: message)
                     }
-                    self.previewView.document = MarkdownPreviewDocument(blocks: blocks)
                 }
-                self.previewView.needsLayout = true
+                self.previewView.document = MarkdownPreviewDocument(blocks: blocks)
             }
+            self.previewView.needsLayout = true
         }
     }
 }
