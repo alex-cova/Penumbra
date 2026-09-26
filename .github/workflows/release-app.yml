@@ -38,12 +38,14 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
+      # build-app.sh notarizes only when the APPLE_* variables are set, so nightlies
+      # (pushes to main) are signed but not notarized; version tags are both.
       - name: Build, sign, and notarize
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_NOTARIZATION_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_ID || '' }}
+          APPLE_NOTARIZATION_PASSWORD: ${{ github.ref_type == 'tag' && secrets.APPLE_NOTARIZATION_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           chmod +x Scripts/build-app.sh
           ./Scripts/build-app.sh
@@ -76,5 +78,5 @@ jobs:
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "Umbra Nightly (${SHORT_SHA})" \
-            --notes "Unreleased build of \`main\` at ${GITHUB_SHA} (based on ${VERSION}). Download \`$(basename "$NIGHTLY_ZIP")\`, unzip, and open Umbra.app." \
+            --notes "Unreleased build of \`main\` at ${GITHUB_SHA} (based on ${VERSION}). Download \`$(basename "$NIGHTLY_ZIP")\` and unzip it. Nightlies are signed but not notarized: if macOS blocks the first launch, allow it under System Settings › Privacy & Security › Open Anyway (or run \`xattr -dr com.apple.quarantine Umbra.app\`)." \
             "$NIGHTLY_ZIP"
