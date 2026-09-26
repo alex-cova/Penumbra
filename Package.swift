@@ -119,6 +119,8 @@ let package = Package(
             ],
             path: "Example/Umbra",
             exclude: [
+                "SplitView/LICENSE",
+                "SplitView/README.md",
                 "Tools/JavaDebugAdapter/build.sh",
                 "Tools/JavaDebugAdapter/build/classes",
                 "Tools/JavaDebugAdapter/build/test-classes",

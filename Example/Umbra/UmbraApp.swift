@@ -93,6 +93,7 @@ struct UmbraApp: App {
                     .keyboardShortcut("r")
                 Button("Go to Line…", action: workspace.showGoToLine)
                     .keyboardShortcut("l")
+                Button("Recent Locations…", action: workspace.showRecentLocations)
                 Button("Command Palette…", action: workspace.showCommandPalette)
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }

@@ -191,23 +191,28 @@ struct IDESourceControlPanel: View {
         .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
-    /// Fixed-width list beside the detail view. Deliberately not `HSplitView`: its AppKit-backed
-    /// split view reports a minimum size that pushed the whole window layout when hosted in the
-    /// bottom panel.
+    /// List beside the diff. `SplitPanes`, not `HSplitView`: the AppKit-backed split view reports
+    /// a minimum size that pushed the whole window layout when hosted in the bottom panel, while
+    /// `SplitPanes` only ever takes the space it is given.
     private func splitContent(list: some View, text: String, listWidth: CGFloat = 280) -> some View {
-        HStack(spacing: 0) {
+        SplitPanes(
+            minPrimary: 180,
+            maxPrimary: 560,
+            idealPrimary: listWidth,
+            minSecondary: 240,
+            storageKey: "umbra.sourceControl.listSplit"
+        ) {
             list
-                .frame(width: listWidth)
                 .frame(maxHeight: .infinity)
-            Rectangle()
-                .fill(IDEAppearance.ColorToken.border)
-                .frame(width: 1)
+        } secondary: {
             IDESourceControlDiffView(
                 text: text,
                 fontName: workspace.preferences.fontName,
                 fontSize: workspace.preferences.fontSize
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } divider: {
+            Splitter.rule()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

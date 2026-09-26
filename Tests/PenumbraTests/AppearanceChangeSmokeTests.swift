@@ -104,4 +104,11 @@ final class AppearanceChangeSmokeTests: XCTestCase {
     func testBreadcrumbBarViewRebakesBackgroundWithoutCrashing() {
         exerciseAppearanceChange(on: BreadcrumbBarView(frame: .zero))
     }
+
+    func testCommandPaletteViewRebakesChromeWithoutCrashing() {
+        let view = CommandPaletteView(frame: CGRect(x: 0, y: 0, width: 480, height: 320))
+        view.tabs = [.all, .files]
+        view.selectedTab = .all
+        exerciseAppearanceChange(on: view)
+    }
 }

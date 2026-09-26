@@ -25,6 +25,9 @@ public final class CommandPaletteView: NSView {
     public var onNavigatePane: ((Int) -> Bool)?
     /// ⌘E while Recent Files is open toggles the edited-only filter.
     public var onToggleEditedOnly: (() -> Void)?
+    /// ⌫ / ⌦ with an empty query: remove the selected row. Returns whether it handled the key;
+    /// otherwise the field keeps its default (no-op) delete.
+    public var onDeleteSelection: (() -> Bool)?
     public var onEditedOnlyChanged: ((Bool) -> Void)?
 
     private enum Row {
@@ -34,6 +37,9 @@ public final class CommandPaletteView: NSView {
     }
 
     private let queryField = PaletteQueryField()
+    /// IntelliJ's bordered search box around the icon, field and hint.
+    private let queryBox = NSView()
+    private let resultsTop = NSLayoutGuide()
     private let searchIcon = NSImageView()
     private let searchProgress = NSProgressIndicator()
     private let hintLabel = NSTextField(labelWithString: "")
@@ -50,7 +56,7 @@ public final class CommandPaletteView: NSView {
     private let destinationTableView = NSTableView()
     private let sidebarSeparator = NSBox()
     private let footerLabel = NSTextField(labelWithString: "")
-    private let splitButton = NSButton(title: "Open In Right Split", target: nil, action: nil)
+    private let footerShortcutBar = PaletteFooterShortcutBar()
     private var tabHeight: NSLayoutConstraint?
     private var sidebarWidth: NSLayoutConstraint?
     private var filesLeadingToSidebar: NSLayoutConstraint?
@@ -59,6 +65,12 @@ public final class CommandPaletteView: NSView {
     private var queryTopToRecentHeader: NSLayoutConstraint?
     private var navigationHeaderHeight: NSLayoutConstraint?
     private var tabButtons: [(tab: PaletteTab, button: PaletteTabButton)] = []
+    private var isQueryFocused = false {
+        didSet {
+            guard isQueryFocused != oldValue else { return }
+            applyQueryBoxChrome()
+        }
+    }
 
     private var rows: [Row] = []
     /// Table row index for each item index.
@@ -70,7 +82,11 @@ public final class CommandPaletteView: NSView {
     private var selectedItemIndex = 0
 
     public var showsNavigationChrome = false {
-        didSet { applyNavigationChrome() }
+        didSet {
+            applyNavigationChrome()
+            // Recent Files shows whole paths, where the file name at the end matters most.
+            footerLabel.lineBreakMode = showsNavigationChrome ? .byTruncatingHead : .byTruncatingMiddle
+        }
     }
 
     public var navigationChromeTitle = "" {
@@ -149,9 +165,24 @@ public final class CommandPaletteView: NSView {
         set { nonProjectToggle.state = newValue ? .on : .off }
     }
 
+    /// `(keys, title)` pairs shown in the footer shortcut legend — for tests and host introspection.
+    var footerShortcutLegend: [(keys: String, title: String)] {
+        footerShortcutBar.entries
+    }
+
     /// Makes the query field first responder — call after the view is in a window.
     public func focusQueryField() {
-        window?.makeFirstResponder(queryField)
+        // Defer so a menu shortcut or host handler that runs after presenting cannot steal focus.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.queryField)
+            self.isQueryFocused = true
+        }
+    }
+
+    /// Selects the whole query so the next keystroke replaces a restored search.
+    public func selectAllQueryText() {
+        queryField.currentEditor()?.selectAll(nil)
     }
 
     /// - Parameters:
@@ -161,8 +192,10 @@ public final class CommandPaletteView: NSView {
         var newRows: [Row] = []
         var itemRows: [Int] = []
         var rowItems: [Int] = []
+        // A single source (a tab other than All) needs no heading, as in IntelliJ.
+        let showsHeaders = !showsNavigationChrome && sections.count > 1
         for section in sections {
-            if !section.title.isEmpty, !showsNavigationChrome {
+            if !section.title.isEmpty, showsHeaders {
                 newRows.append(.header(section.title))
                 rowItems.append(-1)
             }
@@ -226,8 +259,7 @@ public final class CommandPaletteView: NSView {
                 byExtendingSelection: false
             )
             destinationTableView.scrollRowToVisible(selectedDestinationIndex)
-            footerLabel.stringValue = navigationDestinations[selectedDestinationIndex].title
-            splitButton.isHidden = true
+            refreshFooter()
         case .files:
             destinationTableView.deselectAll(nil)
             applySelection(itemIndex: selectedItemIndex)
@@ -235,18 +267,71 @@ public final class CommandPaletteView: NSView {
     }
 
     private func refreshFooter() {
+        if showsNavigationChrome, navigationPane == .destinations {
+            if navigationDestinations.indices.contains(selectedDestinationIndex) {
+                footerLabel.stringValue = navigationDestinations[selectedDestinationIndex].title
+            } else {
+                footerLabel.stringValue = ""
+            }
+            footerShortcutBar.apply(shortcuts: Self.navigationFooterShortcuts(showsEditedOnly: showsEditedOnlyInChrome))
+            return
+        }
+
         var item: PaletteItem?
         if let selectedTableRow, rows.indices.contains(selectedTableRow), case .item(let selected) = rows[selectedTableRow] {
             item = selected
         }
         footerLabel.stringValue = item?.footer ?? ""
-        splitButton.isHidden = item?.alternateAction == nil
+        footerShortcutBar.apply(shortcuts: Self.resultsFooterShortcuts(
+            showsSplit: item?.alternateAction != nil,
+            showsTabs: tabs.count > 1,
+            showsNavigation: showsNavigationChrome,
+            showsEditedOnly: showsEditedOnlyInChrome
+        ))
+    }
+
+    private static func resultsFooterShortcuts(
+        showsSplit: Bool,
+        showsTabs: Bool,
+        showsNavigation: Bool,
+        showsEditedOnly: Bool
+    ) -> [PaletteFooterShortcut] {
+        var shortcuts: [PaletteFooterShortcut] = [
+            PaletteFooterShortcut(keys: "↩", title: "Open"),
+            PaletteFooterShortcut(keys: "Esc", title: "Close")
+        ]
+        if showsSplit {
+            shortcuts.insert(PaletteFooterShortcut(keys: "⇧↩", title: "Open in Split"), at: 1)
+        }
+        if showsTabs {
+            shortcuts.append(PaletteFooterShortcut(keys: "Tab", title: "Next tab"))
+        }
+        if showsNavigation {
+            shortcuts.append(PaletteFooterShortcut(keys: "← →", title: "Navigate"))
+        }
+        if showsEditedOnly {
+            shortcuts.append(PaletteFooterShortcut(keys: "⌘E", title: "Edited only"))
+        }
+        return shortcuts
+    }
+
+    private static func navigationFooterShortcuts(showsEditedOnly: Bool) -> [PaletteFooterShortcut] {
+        var shortcuts: [PaletteFooterShortcut] = [
+            PaletteFooterShortcut(keys: "↩", title: "Open"),
+            PaletteFooterShortcut(keys: "← →", title: "Navigate"),
+            PaletteFooterShortcut(keys: "Esc", title: "Close")
+        ]
+        if showsEditedOnly {
+            shortcuts.append(PaletteFooterShortcut(keys: "⌘E", title: "Edited only"))
+        }
+        return shortcuts
     }
 
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyChromeColors()
         refreshTabSelection()
+        refreshPanelShadow()
     }
 
     public override func layout() {
@@ -281,8 +366,7 @@ public final class CommandPaletteView: NSView {
         layer?.masksToBounds = false
         layer?.borderWidth = 1
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = PaletteChromeMetrics.shadowOpacity
-        layer?.shadowRadius = PaletteChromeMetrics.shadowRadius
+        refreshPanelShadow()
         layer?.shadowOffset = .zero
 
         materialView.material = .hudWindow
@@ -339,6 +423,14 @@ public final class CommandPaletteView: NSView {
         navigationHeader.addSubview(editedOnlyToggle)
 
         // Query row.
+        queryBox.wantsLayer = true
+        queryBox.layer?.cornerRadius = PaletteChromeMetrics.innerCornerRadius
+        queryBox.layer?.cornerCurve = .continuous
+        queryBox.layer?.borderWidth = PaletteChromeMetrics.queryBoxBorderWidth
+        queryBox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(queryBox)
+        applyChromeColors()
+
         searchIcon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
         searchIcon.contentTintColor = .tertiaryLabelColor
         searchIcon.setAccessibilityHidden(true)
@@ -367,6 +459,8 @@ public final class CommandPaletteView: NSView {
         queryField.onCycleTab = { [weak self] delta in self?.cycleTab(by: delta) ?? false }
         queryField.onNavigatePane = { [weak self] delta in self?.onNavigatePane?(delta) ?? false }
         queryField.onToggleEditedOnly = { [weak self] in self?.onToggleEditedOnly?() }
+        queryField.onDeleteSelection = { [weak self] in self?.onDeleteSelection?() ?? false }
+        queryField.onFocusChange = { [weak self] focused in self?.isQueryFocused = focused }
         addSubview(queryField)
 
         hintLabel.font = .systemFont(ofSize: PaletteChromeMetrics.hintFontSize)
@@ -378,10 +472,7 @@ public final class CommandPaletteView: NSView {
         hintLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(hintLabel)
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(separator)
+        addLayoutGuide(resultsTop)
 
         destinationScrollView.translatesAutoresizingMaskIntoConstraints = false
         destinationScrollView.hasVerticalScroller = true
@@ -452,17 +543,10 @@ public final class CommandPaletteView: NSView {
         footerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(footerLabel)
 
-        splitButton.isBordered = false
-        splitButton.font = .systemFont(ofSize: PaletteChromeMetrics.footerFontSize)
-        splitButton.contentTintColor = .controlAccentColor
-        splitButton.target = self
-        splitButton.action = #selector(splitButtonClicked)
-        splitButton.toolTip = "⇧↩"
-        splitButton.isHidden = true
-        splitButton.translatesAutoresizingMaskIntoConstraints = false
-        splitButton.setContentHuggingPriority(.required, for: .horizontal)
-        splitButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        addSubview(splitButton)
+        footerShortcutBar.translatesAutoresizingMaskIntoConstraints = false
+        footerShortcutBar.setContentHuggingPriority(.required, for: .horizontal)
+        footerShortcutBar.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(footerShortcutBar)
 
         let tabHeight = tabContainer.heightAnchor.constraint(equalToConstant: 0)
         self.tabHeight = tabHeight
@@ -500,7 +584,13 @@ public final class CommandPaletteView: NSView {
             editedOnlyToggle.trailingAnchor.constraint(equalTo: navigationHeader.trailingAnchor),
             editedOnlyToggle.centerYAnchor.constraint(equalTo: navigationHeader.centerYAnchor),
 
-            searchIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
+            queryBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.tabStripInset),
+            queryBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.tabStripInset),
+            queryBox.heightAnchor.constraint(
+                equalToConstant: PaletteChromeMetrics.queryFieldHeight + 2 * PaletteChromeMetrics.queryBoxVerticalPadding
+            ),
+
+            searchIcon.leadingAnchor.constraint(equalTo: queryBox.leadingAnchor, constant: 10),
             searchIcon.centerYAnchor.constraint(equalTo: queryField.centerYAnchor),
             searchIcon.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.searchIconSize),
             searchIcon.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.searchIconSize),
@@ -510,28 +600,28 @@ public final class CommandPaletteView: NSView {
 
             queryField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 8),
             queryField.trailingAnchor.constraint(equalTo: hintLabel.leadingAnchor, constant: -8),
-            queryField.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.queryFieldHeight),
+            // Intrinsic height, centred: a taller single-line field draws its text at the top.
+            queryField.centerYAnchor.constraint(equalTo: queryBox.centerYAnchor),
 
-            hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
+            hintLabel.trailingAnchor.constraint(equalTo: queryBox.trailingAnchor, constant: -10),
             hintLabel.centerYAnchor.constraint(equalTo: queryField.centerYAnchor),
             hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
 
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.topAnchor.constraint(equalTo: queryField.bottomAnchor, constant: 10),
+            resultsTop.topAnchor.constraint(equalTo: queryBox.bottomAnchor, constant: 4),
+            resultsTop.heightAnchor.constraint(equalToConstant: 0),
 
             destinationScrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             sidebarWidth,
-            destinationScrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            destinationScrollView.topAnchor.constraint(equalTo: resultsTop.bottomAnchor, constant: 6),
             destinationScrollView.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
 
             sidebarSeparator.leadingAnchor.constraint(equalTo: destinationScrollView.trailingAnchor, constant: 2),
-            sidebarSeparator.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            sidebarSeparator.topAnchor.constraint(equalTo: resultsTop.bottomAnchor, constant: 6),
             sidebarSeparator.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
             sidebarSeparator.widthAnchor.constraint(equalToConstant: 1),
 
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            scrollView.topAnchor.constraint(equalTo: resultsTop.bottomAnchor, constant: 6),
             scrollView.bottomAnchor.constraint(equalTo: footerSeparator.topAnchor, constant: -4),
 
             footerSeparator.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -539,16 +629,16 @@ public final class CommandPaletteView: NSView {
             footerSeparator.bottomAnchor.constraint(equalTo: footerLabel.topAnchor, constant: -6),
 
             footerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
-            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: splitButton.leadingAnchor, constant: -12),
+            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: footerShortcutBar.leadingAnchor, constant: -12),
             footerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
-            splitButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
-            splitButton.centerYAnchor.constraint(equalTo: footerLabel.centerYAnchor)
+            footerShortcutBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
+            footerShortcutBar.centerYAnchor.constraint(equalTo: footerLabel.centerYAnchor)
         ])
         navigationHeaderHeight = navigationHeader.heightAnchor.constraint(equalToConstant: 0)
         navigationHeaderHeight?.isActive = true
-        queryTopToTabs = queryField.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 10)
-        queryTopToRecentHeader = queryField.topAnchor.constraint(equalTo: navigationHeader.bottomAnchor, constant: 8)
+        queryTopToTabs = queryBox.topAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: 10)
+        queryTopToRecentHeader = queryBox.topAnchor.constraint(equalTo: navigationHeader.bottomAnchor, constant: 8)
         queryTopToTabs?.isActive = true
     }
 
@@ -588,8 +678,10 @@ public final class CommandPaletteView: NSView {
             }
             return
         }
-        let rowStride = tableView.rowHeight + tableView.intercellSpacing.height
-        let contentHeight = CGFloat(rows.count) * rowStride + 4
+        var contentHeight: CGFloat = 4
+        for row in 0..<rows.count {
+            contentHeight += tableView(tableView, heightOfRow: row) + tableView.intercellSpacing.height
+        }
         let height = max(contentHeight, scrollView.bounds.height)
         let frame = NSRect(x: 0, y: 0, width: width, height: height)
         if tableView.frame != frame {
@@ -611,6 +703,35 @@ public final class CommandPaletteView: NSView {
         } else {
             layer?.borderColor = NSColor.separatorColor.cgColor
         }
+        applyQueryBoxChrome(reduceTransparency: reduceTransparency)
+    }
+
+    private func applyQueryBoxChrome(reduceTransparency: Bool? = nil) {
+        let reduceTransparency = reduceTransparency ?? NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            if isQueryFocused {
+                queryBox.layer?.borderColor = NSColor.controlAccentColor.cgColor
+                queryBox.layer?.borderWidth = PaletteChromeMetrics.queryBoxFocusedBorderWidth
+            } else {
+                queryBox.layer?.borderColor = NSColor.separatorColor
+                    .withAlphaComponent(PaletteChromeMetrics.queryBoxUnfocusedBorderAlpha).cgColor
+                queryBox.layer?.borderWidth = PaletteChromeMetrics.queryBoxBorderWidth
+            }
+            if reduceTransparency {
+                queryBox.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+            } else {
+                queryBox.layer?.backgroundColor = NSColor.textBackgroundColor
+                    .withAlphaComponent(PaletteChromeMetrics.queryBoxFillAlpha).cgColor
+            }
+        }
+    }
+
+    private func refreshPanelShadow() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.shadowOpacity = isDark
+            ? PaletteChromeMetrics.shadowOpacityDark
+            : PaletteChromeMetrics.shadowOpacityLight
+        layer?.shadowRadius = PaletteChromeMetrics.shadowRadius
     }
 
     private func refreshSearchActivity() {
@@ -674,6 +795,7 @@ public final class CommandPaletteView: NSView {
         tabContainer.isHidden = tabs.isEmpty
         tabHeight?.constant = tabs.isEmpty ? 0 : PaletteChromeMetrics.tabHeight
         refreshTabSelection()
+        refreshFooter()
     }
 
     private func refreshTabSelection() {
@@ -714,10 +836,6 @@ public final class CommandPaletteView: NSView {
         onConfirm?()
     }
 
-    @objc private func splitButtonClicked() {
-        onConfirmAlternate?()
-    }
-
     @objc private func tableViewClicked() {
         let clickedRow = tableView.clickedRow
         guard rowItemIndices.indices.contains(clickedRow), rowItemIndices[clickedRow] >= 0 else { return }
@@ -731,9 +849,10 @@ public final class CommandPaletteView: NSView {
     private static let boldTitleFont = NSFont.boldSystemFont(ofSize: PaletteChromeMetrics.titleFontSize)
 
     private func attributedTitle(for item: PaletteItem) -> NSAttributedString {
+        let baseColor = item.fileStatus.map(paletteFileStatusColor(for:)) ?? .labelColor
         let result = NSMutableAttributedString(
             string: item.title,
-            attributes: [.foregroundColor: NSColor.labelColor, .font: Self.titleFont]
+            attributes: [.foregroundColor: baseColor, .font: Self.titleFont]
         )
         guard !item.matchedIndices.isEmpty else { return result }
         let matched = Set(item.matchedIndices)
@@ -764,6 +883,20 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
     public func numberOfRows(in tableView: NSTableView) -> Int {
         if tableView === destinationTableView { return navigationDestinations.count }
         return rows.count
+    }
+
+    public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if tableView === destinationTableView {
+            return PaletteChromeMetrics.destinationRowHeight
+        }
+        switch rows[row] {
+        case .empty:
+            return PaletteChromeMetrics.emptyStateRowHeight
+        case .header:
+            return PaletteChromeMetrics.itemRowHeight + 4
+        case .item:
+            return PaletteChromeMetrics.itemRowHeight
+        }
     }
 
     public func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
@@ -804,11 +937,17 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
             return view
         }
         let id = NSUserInterfaceItemIdentifier("itemRow")
-        return tableView.makeView(withIdentifier: id, owner: self) as? PaletteRowView ?? {
+        let rowView = tableView.makeView(withIdentifier: id, owner: self) as? PaletteRowView ?? {
             let created = PaletteRowView()
             created.identifier = id
             return created
         }()
+        if case .item(let item) = rows[row] {
+            rowView.isTestRow = item.sourceRoot?.isTest == true
+        } else {
+            rowView.isTestRow = false
+        }
+        return rowView
     }
 
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -824,18 +963,20 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
         case .header(let title):
             let id = NSUserInterfaceItemIdentifier("headerCell")
             let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
-            cell.textField?.stringValue = title
-            cell.textField?.textColor = .tertiaryLabelColor
-            cell.textField?.font = .systemFont(ofSize: PaletteChromeMetrics.headerFontSize, weight: .semibold)
+            cell.textField?.attributedStringValue = NSAttributedString(
+                string: title.uppercased(),
+                attributes: [
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .font: NSFont.systemFont(ofSize: PaletteChromeMetrics.headerFontSize, weight: .semibold),
+                    .kern: PaletteChromeMetrics.headerTracking
+                ]
+            )
             return cell
         case .empty(let message):
             let id = NSUserInterfaceItemIdentifier("emptyCell")
-            let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeLabelCell(id: id)
-            cell.textField?.stringValue = message
-            cell.textField?.textColor = .secondaryLabelColor
-            cell.textField?.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
-            cell.setAccessibilityElement(true)
-            cell.setAccessibilityLabel(message)
+            let cell = tableView.makeView(withIdentifier: id, owner: self) as? PaletteEmptyStateCell
+                ?? PaletteEmptyStateCell(id: id)
+            cell.apply(message: message)
             return cell
         case .item(let item):
             let id = NSUserInterfaceItemIdentifier("itemCell")
@@ -847,7 +988,8 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
                 icon: item.icon,
                 location: location,
                 trailing: item.trailing ?? shortcut,
-                trailingIsShortcut: item.trailing == nil && shortcut != nil
+                trailingIsShortcut: item.trailing == nil && shortcut != nil,
+                sourceRoot: item.sourceRoot
             )
             return cell
         }
@@ -874,6 +1016,17 @@ extension CommandPaletteView: NSTextFieldDelegate {
     public func controlTextDidChange(_ obj: Notification) {
         onQueryChange?(queryField.stringValue)
     }
+
+    public func controlTextDidEndEditing(_ obj: Notification) {
+        isQueryFocused = false
+    }
+
+    /// While the field editor is first responder, navigation keys are delivered here — not through
+    /// ``PaletteQueryField/doCommand(by:)``. Route them into the palette list (IntelliJ SE-style).
+    public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === queryField else { return false }
+        return queryField.handleCommand(by: commandSelector)
+    }
 }
 
 /// Query field that routes ↑/↓/Return/⇧Return/Tab/Page keys/Esc to the palette instead of the
@@ -887,6 +1040,20 @@ private final class PaletteQueryField: NSTextField {
     var onCycleTab: ((Int) -> Bool)?
     var onNavigatePane: ((Int) -> Bool)?
     var onToggleEditedOnly: (() -> Void)?
+    var onDeleteSelection: (() -> Bool)?
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocusChange?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocusChange?(false) }
+        return resigned
+    }
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command),
@@ -899,51 +1066,115 @@ private final class PaletteQueryField: NSTextField {
     }
 
     override func doCommand(by selector: Selector) {
+        if !handleCommand(by: selector) {
+            super.doCommand(by: selector)
+        }
+    }
+
+    /// Handles list navigation keys for both the text field and its field editor.
+    @discardableResult
+    func handleCommand(by selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.moveLeft(_:)):
-            if onNavigatePane?(-1) != true { super.doCommand(by: selector) }
+            return onNavigatePane?(-1) == true
         case #selector(NSResponder.moveRight(_:)):
-            if onNavigatePane?(1) != true { super.doCommand(by: selector) }
+            return onNavigatePane?(1) == true
         case #selector(NSResponder.moveUp(_:)):
             onMoveSelection?(-1)
+            return true
         case #selector(NSResponder.moveDown(_:)):
             onMoveSelection?(1)
+            return true
         case #selector(NSResponder.pageUp(_:)):
             onMoveSelection?(-10)
+            return true
         case #selector(NSResponder.pageDown(_:)):
             onMoveSelection?(10)
+            return true
         case #selector(NSResponder.insertNewline(_:)):
             if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                 onConfirmAlternate?()
             } else {
                 onConfirm?()
             }
+            return true
         case #selector(NSResponder.insertTab(_:)):
-            if onCycleTab?(1) != true { super.doCommand(by: selector) }
+            return onCycleTab?(1) == true
         case #selector(NSResponder.insertBacktab(_:)):
-            if onCycleTab?(-1) != true { super.doCommand(by: selector) }
+            return onCycleTab?(-1) == true
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel?()
+            return true
+        case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
+            // With text in the field, delete edits the query (IntelliJ's speed search).
+            guard stringValue.isEmpty else { return false }
+            return onDeleteSelection?() == true
         default:
-            super.doCommand(by: selector)
+            return false
         }
     }
 }
 
-private final class PaletteRowView: NSTableRowView {
-    override func drawSelection(in dirtyRect: NSRect) {
-        let insetX = PaletteChromeMetrics.selectionInsetX
-        let verticalInset = PaletteChromeMetrics.selectionVerticalInset
-        let barRect = NSRect(
-            x: bounds.minX + insetX,
-            y: bounds.minY + verticalInset,
-            width: PaletteChromeMetrics.selectionAccentBarWidth,
-            height: bounds.height - (verticalInset * 2)
-        )
-        NSColor.controlAccentColor.setFill()
-        barRect.fill()
+private final class PaletteEmptyStateCell: NSTableCellView {
+    private let iconView = NSImageView()
+    private let messageField = NSTextField(labelWithString: "")
 
-        let rect = bounds.insetBy(dx: insetX, dy: 0)
+    init(id: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        identifier = id
+
+        iconView.image = NSImage(
+            systemSymbolName: "magnifyingglass",
+            accessibilityDescription: nil
+        )
+        iconView.contentTintColor = .tertiaryLabelColor
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.setAccessibilityHidden(true)
+        addSubview(iconView)
+
+        messageField.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
+        messageField.textColor = .secondaryLabelColor
+        messageField.alignment = .center
+        messageField.lineBreakMode = .byTruncatingTail
+        messageField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(messageField)
+
+        NSLayoutConstraint.activate([
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            iconView.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.emptyStateIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.emptyStateIconSize),
+
+            messageField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            messageField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            messageField.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 4),
+            messageField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(message: String) {
+        messageField.stringValue = message
+        setAccessibilityElement(true)
+        setAccessibilityLabel(message)
+    }
+}
+
+private final class PaletteRowView: NSTableRowView {
+    /// Test-source rows get IntelliJ's faint green file-colour band.
+    var isTestRow = false {
+        didSet {
+            if isTestRow != oldValue { needsDisplay = true }
+        }
+    }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: PaletteChromeMetrics.selectionInsetX, dy: 0)
         NSColor.controlAccentColor.withAlphaComponent(PaletteChromeMetrics.selectionFillAlpha).setFill()
         NSBezierPath(
             roundedRect: rect,
@@ -953,8 +1184,9 @@ private final class PaletteRowView: NSTableRowView {
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
-        NSColor.clear.setFill()
-        bounds.fill()
+        guard isTestRow else { return }
+        NSColor.systemGreen.withAlphaComponent(PaletteChromeMetrics.testRowTintAlpha).setFill()
+        bounds.insetBy(dx: PaletteChromeMetrics.selectionInsetX, dy: 0).fill()
     }
 }
 
@@ -1089,9 +1321,16 @@ private final class PaletteItemCell: NSTableCellView {
     private let iconView = NSImageView()
     private let locationField = NSTextField(labelWithString: "")
     private let trailingField = NSTextField(labelWithString: "")
+    private let sourceRootView = NSImageView()
     private var titleLeading: NSLayoutConstraint?
+    private var trailingToEdge: NSLayoutConstraint?
+    private var trailingToSourceRoot: NSLayoutConstraint?
+    /// The un-elided location; ``layout()`` fits it to the width left between title and module.
+    private var fullLocation = ""
+    private var elidedForWidth: CGFloat = -1
 
     private static var symbolCache: [String: NSImage] = [:]
+    private static let locationFont = NSFont.systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
 
     init(id: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -1109,7 +1348,7 @@ private final class PaletteItemCell: NSTableCellView {
         self.textField = textField
 
         locationField.translatesAutoresizingMaskIntoConstraints = false
-        locationField.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
+        locationField.font = Self.locationFont
         locationField.textColor = .secondaryLabelColor
         locationField.lineBreakMode = .byTruncatingTail
         locationField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1117,13 +1356,21 @@ private final class PaletteItemCell: NSTableCellView {
 
         trailingField.translatesAutoresizingMaskIntoConstraints = false
         trailingField.alignment = .right
-        trailingField.lineBreakMode = .byTruncatingHead
+        trailingField.lineBreakMode = .byTruncatingTail
         trailingField.setContentHuggingPriority(.required, for: .horizontal)
         trailingField.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         addSubview(trailingField)
 
+        sourceRootView.translatesAutoresizingMaskIntoConstraints = false
+        sourceRootView.imageScaling = .scaleProportionallyDown
+        sourceRootView.isHidden = true
+        addSubview(sourceRootView)
+
         let titleLeading = textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
         self.titleLeading = titleLeading
+        let trailingToEdge = trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        self.trailingToEdge = trailingToEdge
+        trailingToSourceRoot = trailingField.trailingAnchor.constraint(equalTo: sourceRootView.leadingAnchor, constant: -8)
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1137,8 +1384,18 @@ private final class PaletteItemCell: NSTableCellView {
             locationField.centerYAnchor.constraint(equalTo: centerYAnchor),
             locationField.trailingAnchor.constraint(lessThanOrEqualTo: trailingField.leadingAnchor, constant: -10),
 
-            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            trailingField.centerYAnchor.constraint(equalTo: centerYAnchor)
+            trailingToEdge,
+            trailingField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // The module column gives way to the path, as IntelliJ clips `sxb-concili…`.
+            trailingField.widthAnchor.constraint(
+                lessThanOrEqualTo: widthAnchor,
+                multiplier: PaletteChromeMetrics.trailingColumnMaxFraction
+            ),
+
+            sourceRootView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            sourceRootView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            sourceRootView.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.itemIconSize),
+            sourceRootView.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.itemIconSize)
         ])
     }
 
@@ -1147,12 +1404,19 @@ private final class PaletteItemCell: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func layout() {
+        super.layout()
+        fitLocation()
+    }
+
+    // swiftlint:disable:next function_parameter_count
     func apply(
         title: NSAttributedString,
         icon: PaletteIcon?,
         location: String?,
         trailing: String?,
-        trailingIsShortcut: Bool
+        trailingIsShortcut: Bool,
+        sourceRoot: PaletteSourceRoot?
     ) {
         textField?.attributedStringValue = title
         if let icon, let image = Self.symbol(named: icon.systemName) {
@@ -1165,8 +1429,10 @@ private final class PaletteItemCell: NSTableCellView {
             iconView.isHidden = true
             titleLeading?.constant = 10
         }
-        locationField.stringValue = location ?? ""
-        locationField.isHidden = (location ?? "").isEmpty
+        fullLocation = location ?? ""
+        elidedForWidth = -1
+        locationField.stringValue = fullLocation
+        locationField.isHidden = fullLocation.isEmpty
         if let trailing, !trailing.isEmpty {
             trailingField.stringValue = trailing
             trailingField.font = trailingIsShortcut
@@ -1178,11 +1444,14 @@ private final class PaletteItemCell: NSTableCellView {
             trailingField.stringValue = ""
             trailingField.isHidden = true
         }
+        applySourceRoot(sourceRoot)
+        needsLayout = true
 
         iconView.setAccessibilityHidden(true)
         textField?.setAccessibilityHidden(true)
         locationField.setAccessibilityHidden(true)
         trailingField.setAccessibilityHidden(true)
+        sourceRootView.setAccessibilityHidden(true)
 
         var label = title.string
         if let location, !location.isEmpty {
@@ -1191,8 +1460,76 @@ private final class PaletteItemCell: NSTableCellView {
         if let trailing, !trailing.isEmpty {
             label += ", \(trailing)"
         }
+        if let sourceRoot {
+            label += ", \(Self.description(of: sourceRoot))"
+        }
         setAccessibilityElement(true)
         setAccessibilityLabel(label)
+    }
+
+    private func applySourceRoot(_ sourceRoot: PaletteSourceRoot?) {
+        guard let sourceRoot, let image = Self.symbol(named: Self.symbolName(for: sourceRoot)) else {
+            sourceRootView.image = nil
+            sourceRootView.isHidden = true
+            sourceRootView.toolTip = nil
+            trailingToSourceRoot?.isActive = false
+            trailingToEdge?.isActive = true
+            return
+        }
+        sourceRootView.image = image
+        sourceRootView.contentTintColor = Self.tint(for: sourceRoot)
+        sourceRootView.toolTip = Self.description(of: sourceRoot)
+        sourceRootView.isHidden = false
+        trailingToEdge?.isActive = false
+        trailingToSourceRoot?.isActive = true
+    }
+
+    /// Drops middle path components (`src/test/kotlin/…/conciliator/yuri`) until the location
+    /// fits the room left of the module column.
+    private func fitLocation() {
+        guard !fullLocation.isEmpty else { return }
+        let rightLimit: CGFloat
+        if !trailingField.isHidden {
+            rightLimit = trailingField.frame.minX - 10
+        } else if !sourceRootView.isHidden {
+            rightLimit = sourceRootView.frame.minX - 10
+        } else {
+            rightLimit = bounds.maxX - 12
+        }
+        let available = (rightLimit - locationField.frame.minX).rounded(.down)
+        guard available != elidedForWidth else { return }
+        elidedForWidth = available
+        let fitted = PalettePathElision.elide(fullLocation, toWidth: available, font: Self.locationFont)
+        if locationField.stringValue != fitted {
+            locationField.stringValue = fitted
+        }
+    }
+
+    private static func symbolName(for sourceRoot: PaletteSourceRoot) -> String {
+        switch sourceRoot {
+        case .sources, .tests: "folder"
+        case .resources, .testResources: "folder.badge.gearshape"
+        case .generated: "folder.badge.questionmark"
+        }
+    }
+
+    private static func tint(for sourceRoot: PaletteSourceRoot) -> NSColor {
+        switch sourceRoot {
+        case .sources: .systemBlue
+        case .tests, .testResources: .systemGreen
+        case .resources: .systemOrange
+        case .generated: .secondaryLabelColor
+        }
+    }
+
+    private static func description(of sourceRoot: PaletteSourceRoot) -> String {
+        switch sourceRoot {
+        case .sources: "Sources root"
+        case .tests: "Test sources root"
+        case .resources: "Resources root"
+        case .testResources: "Test resources root"
+        case .generated: "Generated sources root"
+        }
     }
 
     private static func symbol(named name: String) -> NSImage? {
@@ -1209,6 +1546,157 @@ private final class PaletteItemCell: NSTableCellView {
     }
 }
 
+/// IntelliJ-style path shortening for the palette's location column: keeps a few leading
+/// components and as many trailing ones as fit, replacing the middle with `…`.
+enum PalettePathElision {
+    static let ellipsis = "…"
+    /// Leading components kept before the ellipsis when there is room (`src/test/kotlin/…`).
+    static let maxHeadComponents = 3
+
+    static func elide(_ path: String, toWidth width: CGFloat, font: NSFont) -> String {
+        elide(path) { candidate in
+            (candidate as NSString).size(withAttributes: [.font: font]).width <= width
+        }
+    }
+
+    /// `fits` decides whether a candidate string fits. Removes as few middle components as
+    /// possible, keeping up to ``maxHeadComponents`` in front, then falls back to the last
+    /// component alone (which the field truncates if it still doesn't fit).
+    static func elide(_ path: String, fits: (String) -> Bool) -> String {
+        if fits(path) { return path }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.count > 2 else { return path }
+        let count = components.count
+        for removed in 1...(count - 2) {
+            let maxHead = min(maxHeadComponents, count - 1 - removed)
+            for headCount in stride(from: maxHead, through: 1, by: -1) {
+                let tailCount = count - headCount - removed
+                let candidate = (components.prefix(headCount) + [ellipsis] + components.suffix(tailCount))
+                    .joined(separator: "/")
+                if fits(candidate) { return candidate }
+            }
+        }
+        let lastOnly = ellipsis + "/" + components[count - 1]
+        return lastOnly
+    }
+}
+
+private struct PaletteFooterShortcut {
+    let keys: String
+    let title: String
+}
+
+/// Right-aligned footer legend — IntelliJ's `↩ Open` · `⇧↩ Split` · `Tab` chips.
+private final class PaletteFooterShortcutBar: NSView {
+    private let stack = NSStackView()
+
+    var entries: [(keys: String, title: String)] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = PaletteChromeMetrics.footerShortcutSpacing
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(shortcuts: [PaletteFooterShortcut]) {
+        entries = shortcuts.map { ($0.keys, $0.title) }
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for shortcut in shortcuts {
+            stack.addArrangedSubview(PaletteFooterShortcutChip(shortcut: shortcut))
+        }
+    }
+}
+
+private final class PaletteFooterShortcutChip: NSView {
+    private let keysBox = NSView()
+    private let keysField = NSTextField(labelWithString: "")
+    private let titleField = NSTextField(labelWithString: "")
+
+    init(shortcut: PaletteFooterShortcut) {
+        super.init(frame: .zero)
+
+        keysBox.wantsLayer = true
+        keysBox.translatesAutoresizingMaskIntoConstraints = false
+
+        keysField.stringValue = shortcut.keys
+        keysField.font = .monospacedSystemFont(
+            ofSize: PaletteChromeMetrics.footerShortcutKeyFontSize,
+            weight: .medium
+        )
+        keysField.textColor = .secondaryLabelColor
+        keysField.alignment = .center
+        keysField.translatesAutoresizingMaskIntoConstraints = false
+        keysField.setAccessibilityHidden(true)
+
+        titleField.stringValue = shortcut.title
+        titleField.font = .systemFont(ofSize: PaletteChromeMetrics.footerShortcutTitleFontSize)
+        titleField.textColor = .secondaryLabelColor
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.setAccessibilityHidden(true)
+
+        keysBox.addSubview(keysField)
+        addSubview(keysBox)
+        addSubview(titleField)
+
+        let paddingX = PaletteChromeMetrics.footerShortcutKeyPaddingX
+        let paddingY = PaletteChromeMetrics.footerShortcutKeyPaddingY
+        NSLayoutConstraint.activate([
+            keysBox.leadingAnchor.constraint(equalTo: leadingAnchor),
+            keysBox.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            keysField.leadingAnchor.constraint(equalTo: keysBox.leadingAnchor, constant: paddingX),
+            keysField.trailingAnchor.constraint(equalTo: keysBox.trailingAnchor, constant: -paddingX),
+            keysField.topAnchor.constraint(equalTo: keysBox.topAnchor, constant: paddingY),
+            keysField.bottomAnchor.constraint(equalTo: keysBox.bottomAnchor, constant: -paddingY),
+
+            titleField.leadingAnchor.constraint(equalTo: keysBox.trailingAnchor, constant: 5),
+            titleField.trailingAnchor.constraint(equalTo: trailingAnchor),
+            titleField.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+
+        setAccessibilityElement(true)
+        setAccessibilityLabel("\(shortcut.keys) \(shortcut.title)")
+        updateKeyCapFill()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateKeyCapFill()
+    }
+
+    private func updateKeyCapFill() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            keysBox.layer?.cornerRadius = PaletteChromeMetrics.footerShortcutKeyCornerRadius
+            keysBox.layer?.cornerCurve = .continuous
+            keysBox.layer?.backgroundColor = NSColor.labelColor
+                .withAlphaComponent(PaletteChromeMetrics.footerShortcutKeyFillAlpha)
+                .cgColor
+        }
+    }
+}
+
 private func paletteIconColor(for tint: PaletteIcon.Tint) -> NSColor {
     switch tint {
     case .accent: .controlAccentColor
@@ -1218,5 +1706,27 @@ private func paletteIconColor(for tint: PaletteIcon.Tint) -> NSColor {
     case .purple: .systemPurple
     case .red: .systemRed
     case .secondary: .secondaryLabelColor
+    }
+}
+
+/// Version-control title colors, matching Umbra's explorer in dark appearance and darkened for
+/// contrast in light appearance.
+func paletteFileStatusColor(for status: PaletteFileStatus) -> NSColor {
+    let (dark, light): (UInt32, UInt32)
+    switch status {
+    case .modified: (dark, light) = (0xE2C08D, 0x9A6700)
+    case .added, .untracked: (dark, light) = (0x73C991, 0x1A7F37)
+    case .conflicted: (dark, light) = (0xE5484D, 0xCF222E)
+    case .ignored: return .tertiaryLabelColor
+    }
+    return NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let hex = isDark ? dark : light
+        return NSColor(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }

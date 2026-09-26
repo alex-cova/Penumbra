@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a command palette is currently browsing.
-public enum EditorPaletteMode: Equatable {
+public enum EditorPaletteMode: Hashable {
     case commands
     case quickOpen
     case symbols
@@ -12,6 +12,8 @@ public enum EditorPaletteMode: Equatable {
     case searchEverywhere
     /// Most-recently-used documents (⌘E).
     case recentFiles
+    /// Recently visited caret positions (⌘⇧E).
+    case recentLocations
     /// A list of jump targets, e.g. the results of "Go to Definition" when there is more than
     /// one, or the surround-with templates.
     case locations

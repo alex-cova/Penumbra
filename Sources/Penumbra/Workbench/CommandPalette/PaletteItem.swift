@@ -17,6 +17,27 @@ public struct PaletteIcon: Sendable, Hashable {
     }
 }
 
+/// The kind of source root a file lives in, as IntelliJ marks it: a trailing folder badge and,
+/// for test code, a tinted row.
+public enum PaletteSourceRoot: Sendable, Hashable {
+    case sources
+    case tests
+    case resources
+    case testResources
+    case generated
+
+    public var isTest: Bool { self == .tests || self == .testResources }
+}
+
+/// A file's version-control state, which colors its name the way the project explorer does.
+public enum PaletteFileStatus: Sendable, Hashable {
+    case modified
+    case added
+    case untracked
+    case conflicted
+    case ignored
+}
+
 /// A single row in a "Search Everywhere" / "Find Action" style palette.
 ///
 /// Sources produce `PaletteItem`s (a file, a symbol, a command, a surround template, …); the
@@ -46,6 +67,14 @@ public struct PaletteItem: Identifiable, Sendable {
     public let footer: String?
     /// Secondary way to open the row (⇧↩ — "Open In Right Split"). `nil` when unsupported.
     public let alternateAction: (@MainActor @Sendable () -> Void)?
+    /// Source root the row's file belongs to: a trailing badge, and a tinted row for test code.
+    public let sourceRoot: PaletteSourceRoot?
+    /// The file the row stands for, when it is one (Recent Files uses it to skip the active editor).
+    public let fileURL: URL?
+    /// Colors the title by version-control state.
+    public let fileStatus: PaletteFileStatus?
+    /// Removes the row's entry from its source (⌫ in Recent Files). `nil` when unsupported.
+    public let removeAction: (@MainActor @Sendable () -> Void)?
 
     public init(
         id: String,
@@ -59,7 +88,11 @@ public struct PaletteItem: Identifiable, Sendable {
         location: String? = nil,
         trailing: String? = nil,
         footer: String? = nil,
-        alternateAction: (@MainActor @Sendable () -> Void)? = nil
+        alternateAction: (@MainActor @Sendable () -> Void)? = nil,
+        sourceRoot: PaletteSourceRoot? = nil,
+        fileURL: URL? = nil,
+        fileStatus: PaletteFileStatus? = nil,
+        removeAction: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.id = id
         self.title = title
@@ -73,6 +106,10 @@ public struct PaletteItem: Identifiable, Sendable {
         self.trailing = trailing
         self.footer = footer
         self.alternateAction = alternateAction
+        self.sourceRoot = sourceRoot
+        self.fileURL = fileURL
+        self.fileStatus = fileStatus
+        self.removeAction = removeAction
     }
 }
 

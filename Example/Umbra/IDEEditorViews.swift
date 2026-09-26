@@ -129,13 +129,9 @@ struct IDEEditorLayoutNode: View {
             // HStack. Switch on `data.axis` rather than the enum case so a case/axis mismatch
             // (the two are always constructed together, but round-trip independently through
             // `EditorRestorationState`) can't silently invert the split again.
-            IDESplitStack(axis: data.axis == .horizontal ? .horizontal : .vertical, childCount: data.children.count) { index in
-                IDEEditorLayoutNode(layout: data.children[index])
-            }
+            IDEEditorSplitChain(axis: data.axis == .horizontal ? .horizontal : .vertical, children: data.children)
         case .vertical(let data):
-            IDESplitStack(axis: data.axis == .horizontal ? .horizontal : .vertical, childCount: data.children.count) { index in
-                IDEEditorLayoutNode(layout: data.children[index])
-            }
+            IDEEditorSplitChain(axis: data.axis == .horizontal ? .horizontal : .vertical, children: data.children)
         }
     }
 }
@@ -163,145 +159,52 @@ struct IDEEditorPaneView: View {
 
 // MARK: - Splitter
 
-struct IDESplitStack<Content: View>: View {
-    let axis: Axis
-    let childCount: Int
-    @ViewBuilder var content: (Int) -> Content
-
-    @State private var fractions: [CGFloat] = []
+/// One split container's children, laid out as a chain of two-pane `SplitPanes`: the first child
+/// against a chain of the rest. `SplitPanes` only splits in two, and `EditorSplitData` holds any
+/// number of children (splitting a pane inserts its sibling beside it).
+///
+/// Each link opens at `1 / remaining`, so every pane starts with an equal share, and re-spreads
+/// evenly when a pane is added or closed (`SplitPanes` follows a changing `defaultFraction`).
+/// Dragging a divider moves one pane against all the panes after it, not just its neighbour.
+struct IDEEditorSplitChain: View {
+    let axis: SplitLayout
+    let children: [EditorLayout]
+    var start = 0
 
     var body: some View {
-        Group {
-            if childCount <= 0 {
-                Color.clear
-            } else if childCount == 1 {
-                content(0)
-            } else {
-                GeometryReader { geometry in
-                    let sizes = splitSizes(in: geometry.size)
-                    stack {
-                        ForEach(0..<childCount, id: \.self) { index in
-                            content(index)
-                                .frame(
-                                    width: axis == .horizontal ? sizes[index] : nil,
-                                    height: axis == .vertical ? sizes[index] : nil
-                                )
-                            if index < childCount - 1 {
-                                IDESplitHandle(axis: axis) { delta in
-                                    resize(index: index, delta: delta, total: axisLength(geometry.size))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear(perform: resetFractions)
-        .onChange(of: childCount) {
-            resetFractions()
-        }
-    }
-
-    @ViewBuilder
-    private func stack<Stacked: View>(@ViewBuilder content: () -> Stacked) -> some View {
-        if axis == .horizontal {
-            HStack(spacing: 0, content: content)
+        let remaining = children.count - start
+        if remaining <= 0 {
+            Color.clear
+        } else if remaining == 1 {
+            IDEEditorLayoutNode(layout: children[start])
         } else {
-            VStack(spacing: 0, content: content)
-        }
-    }
-
-    private func axisLength(_ size: CGSize) -> CGFloat {
-        axis == .horizontal ? size.width : size.height
-    }
-
-    private func splitSizes(in size: CGSize) -> [CGFloat] {
-        let handleCount = CGFloat(max(childCount - 1, 0))
-        let available = axisLength(size) - handleCount * IDESplitHandle.thickness
-        let values = normalizedFractions()
-        var result = values.map { ($0 * available).rounded() }
-        if let last = result.indices.last {
-            result[last] = max(0, available - result.dropLast().reduce(0, +))
-        }
-        return result
-    }
-
-    private func normalizedFractions() -> [CGFloat] {
-        if fractions.count == childCount {
-            return fractions
-        }
-        let share = 1 / CGFloat(max(childCount, 1))
-        return Array(repeating: share, count: childCount)
-    }
-
-    private func resetFractions() {
-        let share = 1 / CGFloat(max(childCount, 1))
-        fractions = Array(repeating: share, count: max(childCount, 1))
-    }
-
-    private func resize(index: Int, delta: CGFloat, total: CGFloat) {
-        guard fractions.indices.contains(index), fractions.indices.contains(index + 1), total > 0 else {
-            return
-        }
-        let minimum: CGFloat = 0.12
-        var next = fractions
-        let change = delta / total
-        next[index] += change
-        next[index + 1] -= change
-        if next[index] < minimum || next[index + 1] < minimum {
-            return
-        }
-        fractions = next
-    }
-}
-
-private struct IDESplitHandle: View {
-    /// Total space this handle occupies along the split axis. `splitSizes(in:)` must subtract
-    /// this per divider, not an arbitrary smaller amount, or panes are over-allocated and the
-    /// last one overflows the stack.
-    static let thickness: CGFloat = 6
-
-    let axis: Axis
-    let onDrag: (CGFloat) -> Void
-
-    @State private var lastTranslation: CGFloat = 0
-
-    var body: some View {
-        IDEAppearance.ColorToken.frame
-            .frame(
-                width: axis == .horizontal ? Self.thickness : nil,
-                height: axis == .vertical ? Self.thickness : nil
-            )
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    let current = axis == .horizontal ? value.translation.width : value.translation.height
-                    onDrag(current - lastTranslation)
-                    lastTranslation = current
-                }
-                .onEnded { _ in
-                    lastTranslation = 0
-                }
-        )
-        .onHover { hovering in
-            if hovering {
-                (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-            } else {
-                NSCursor.pop()
+            SplitPanes(
+                axis: axis,
+                minPrimary: IDEAppearance.Spacing.editorPaneMinLength,
+                minSecondary: IDEAppearance.Spacing.editorPaneMinLength * CGFloat(remaining - 1),
+                defaultFraction: 1 / CGFloat(remaining),
+                // Panes scale together with the window rather than one keeping its size.
+                priority: nil
+            ) {
+                IDEEditorLayoutNode(layout: children[start])
+            } secondary: {
+                IDEEditorSplitChain(axis: axis, children: children, start: start + 1)
             }
         }
     }
 }
 
-#Preview("Split Stack") {
-    IDESplitStack(axis: .horizontal, childCount: 3) { index in
-        Color(hue: Double(index) / 3, saturation: 0.4, brightness: 0.6)
-            .overlay {
-                Text("Pane \(index)")
-                    .foregroundStyle(.white)
-            }
+#Preview("Split Panes") {
+    SplitPanes(minPrimary: 120, idealPrimary: 220, minSecondary: 240) {
+        Color(hue: 0.6, saturation: 0.4, brightness: 0.5)
+    } secondary: {
+        SplitPanes(axis: .vertical, minPrimary: 80, minSecondary: 80, priority: nil) {
+            Color(hue: 0.3, saturation: 0.4, brightness: 0.5)
+        } secondary: {
+            Color(hue: 0.1, saturation: 0.4, brightness: 0.5)
+        }
     }
     .frame(width: 640, height: 360)
+    .background(IDEAppearance.ColorToken.frame)
     .preferredColorScheme(.dark)
 }

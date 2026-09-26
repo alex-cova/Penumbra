@@ -96,6 +96,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("a", [.command, .shift])), to: .findAction)
         map.bind(KeyStroke(KeyChord("o", [.command, .shift])), to: .quickOpenFile)
         map.bind(KeyStroke(KeyChord("e", .command)), to: .recentFiles)
+        map.bind(KeyStroke(KeyChord("e", [.command, .shift])), to: .recentLocations)
 
         // Navigation
         map.unbindAll(.selectLines)

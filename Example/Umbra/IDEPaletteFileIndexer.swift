@@ -217,8 +217,23 @@ final class IDEPaletteFileIndexer {
             relativePath: relativePath,
             location: location,
             module: context?.name,
-            icon: IDEFileIcon.paletteIcon(forFilename: name)
+            icon: IDEFileIcon.paletteIcon(forFilename: name),
+            sourceRoot: context?.sourceRoot ?? conventionalSourceRoot(relativeDirectory: relativeDirectory)
         )
+    }
+
+    nonisolated private static let sourceLanguageDirectories: Set<String> = ["java", "kotlin", "groovy", "scala"]
+
+    /// The Maven / Gradle layout (`src/<set>/java`, `src/<set>/resources`) read from the path
+    /// alone, so plain folders and unsynced projects still get IntelliJ's source-root badges.
+    nonisolated static func conventionalSourceRoot(relativeDirectory: String) -> PaletteSourceRoot? {
+        let components = relativeDirectory.split(separator: "/")
+        guard let src = components.lastIndex(of: "src"), src + 2 < components.count else { return nil }
+        let isTest = components[src + 1].lowercased().contains("test")
+        let kind = String(components[src + 2])
+        if kind == "resources" { return isTest ? .testResources : .resources }
+        if sourceLanguageDirectories.contains(kind) { return isTest ? .tests : .sources }
+        return nil
     }
 
     // MARK: - Modules
@@ -232,6 +247,8 @@ final class IDEPaletteFileIndexer {
             let name: String
             /// Module directory in the walk's path space; the location column is relative to it.
             let moduleDirectory: String
+            /// Set when the directory is inside one of the model's Java source directories.
+            var sourceRoot: PaletteSourceRoot?
         }
 
         private struct Module: Sendable {
@@ -274,10 +291,12 @@ final class IDEPaletteFileIndexer {
                 return nil
             }
             var sourceSet: String?
+            var sourceRoot: PaletteSourceRoot?
             var bestLength = -1
             for source in module.sourceDirectories
             where (path == source.path || path.hasPrefix(source.path + "/")) && source.path.count > bestLength {
                 sourceSet = source.sourceSet
+                sourceRoot = source.sourceSet.lowercased().contains("test") ? .tests : .sources
                 bestLength = source.path.count
             }
             if sourceSet == nil {
@@ -289,7 +308,8 @@ final class IDEPaletteFileIndexer {
             }
             return Context(
                 name: sourceSet.map { module.name + "." + $0 } ?? module.name,
-                moduleDirectory: module.directory
+                moduleDirectory: module.directory,
+                sourceRoot: sourceRoot
             )
         }
     }

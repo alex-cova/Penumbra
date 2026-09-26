@@ -175,33 +175,40 @@ final class FindPanelBarView: NSView {
         var x = padding
         modeControl.frame = CGRect(x: x, y: topRowY + 1, width: 108, height: rowHeight - 2)
         x = modeControl.frame.maxX + spacing
-        findFieldContainer.frame = CGRect(x: x, y: topRowY, width: 220, height: rowHeight)
-        x = findFieldContainer.frame.maxX + spacing
-        matchLabel.frame = CGRect(x: x, y: topRowY + 4, width: 50, height: 16)
-        x = matchLabel.frame.maxX + spacing
-        previousButton.frame = CGRect(x: x, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
-        x = previousButton.frame.maxX + 4
-        nextButton.frame = CGRect(x: x, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
 
-        // Trailing cluster (toggle pills + close) is right-aligned so it stays put as the find
-        // field's row grows or shrinks.
+        // Trailing cluster (toggle pills + close) is right-aligned so the find field can grow
+        // between the mode control and the nav buttons.
         let toggleWidth: CGFloat = 32
         let toggleSpacing: CGFloat = 4
         let trailingClusterWidth = toggleWidth * 3 + toggleSpacing * 2 + spacing + (rowHeight - 2)
-        var trailingX = bounds.width - padding - trailingClusterWidth
-        matchCaseButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
-        trailingX = matchCaseButton.frame.maxX + toggleSpacing
-        regexButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
-        trailingX = regexButton.frame.maxX + toggleSpacing
-        wrapAroundButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
-        trailingX = wrapAroundButton.frame.maxX + spacing
-        closeButton.frame = CGRect(x: trailingX, y: topRowY + 1, width: rowHeight - 2, height: rowHeight - 2)
+        let trailingX = bounds.width - padding - trailingClusterWidth
+        let navButtonWidth = rowHeight - 2
+        let navClusterWidth = 50 + spacing + navButtonWidth + 4 + navButtonWidth
+        let findFieldWidth = max(280, trailingX - spacing - navClusterWidth - x)
+        findFieldContainer.frame = CGRect(x: x, y: topRowY, width: findFieldWidth, height: rowHeight)
+        x = findFieldContainer.frame.maxX + spacing
+        matchLabel.frame = CGRect(x: x, y: topRowY + 4, width: 50, height: 16)
+        x = matchLabel.frame.maxX + spacing
+        previousButton.frame = CGRect(x: x, y: topRowY + 1, width: navButtonWidth, height: navButtonWidth)
+        x = previousButton.frame.maxX + 4
+        nextButton.frame = CGRect(x: x, y: topRowY + 1, width: navButtonWidth, height: navButtonWidth)
+
+        var trailingClusterX = trailingX
+        matchCaseButton.frame = CGRect(x: trailingClusterX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingClusterX = matchCaseButton.frame.maxX + toggleSpacing
+        regexButton.frame = CGRect(x: trailingClusterX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingClusterX = regexButton.frame.maxX + toggleSpacing
+        wrapAroundButton.frame = CGRect(x: trailingClusterX, y: topRowY + 1, width: toggleWidth, height: rowHeight - 2)
+        trailingClusterX = wrapAroundButton.frame.maxX + spacing
+        closeButton.frame = CGRect(x: trailingClusterX, y: topRowY + 1, width: navButtonWidth, height: navButtonWidth)
 
         if mode == .replace {
             let secondRowY = topRowY - spacing - rowHeight
-            replaceFieldContainer.frame = CGRect(x: modeControl.frame.minX + modeControl.frame.width + spacing,
+            let replaceFieldX = modeControl.frame.minX + modeControl.frame.width + spacing
+            let replaceFieldWidth = max(280, bounds.width - padding - replaceFieldX)
+            replaceFieldContainer.frame = CGRect(x: replaceFieldX,
                                                  y: secondRowY,
-                                                 width: 220,
+                                                 width: replaceFieldWidth,
                                                  height: rowHeight)
             var replaceX = replaceFieldContainer.frame.maxX + spacing
             replaceButton.frame = CGRect(x: replaceX, y: secondRowY, width: 70, height: rowHeight)
@@ -211,12 +218,21 @@ final class FindPanelBarView: NSView {
     }
 
     func focusFindField(selecting selection: String? = nil) {
-        window?.makeFirstResponder(findField)
         if let selection, !selection.isEmpty {
             findField.stringValue = selection
-            findField.currentEditor()?.selectedRange = NSRange(location: 0, length: selection.utf16.count)
         }
         onFindTextChanged?(findField.stringValue)
+        // Defer first-responder so a host/menu handler that runs after opening the panel
+        // (or the key event that triggered it) cannot steal focus back to the editor.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.findField)
+            if let selection, !selection.isEmpty {
+                self.findField.currentEditor()?.selectedRange = NSRange(location: 0, length: selection.utf16.count)
+            } else if !self.findField.stringValue.isEmpty {
+                self.findField.currentEditor()?.selectAll(nil)
+            }
+        }
     }
 
     func setMode(_ mode: FindPanelMode) {

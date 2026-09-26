@@ -22,13 +22,23 @@ public final class PaletteFileIndex: Sendable {
         /// Right-aligned column (e.g. `sxb-gateway.main`).
         public let module: String?
         public let icon: PaletteIcon
+        /// Source root the file sits in, when the host knows (a Gradle source set).
+        public let sourceRoot: PaletteSourceRoot?
 
-        public init(url: URL, relativePath: String, location: String?, module: String?, icon: PaletteIcon) {
+        public init(
+            url: URL,
+            relativePath: String,
+            location: String?,
+            module: String?,
+            icon: PaletteIcon,
+            sourceRoot: PaletteSourceRoot? = nil
+        ) {
             self.url = url
             self.relativePath = relativePath
             self.location = location
             self.module = module
             self.icon = icon
+            self.sourceRoot = sourceRoot
         }
     }
 

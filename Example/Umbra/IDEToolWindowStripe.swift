@@ -31,82 +31,19 @@ struct IDEToolWindowStripe: View {
     private var bottomItems: [IDEToolWindowStripeItem] { items(workspace).bottom }
 
     private func items(_ workspace: IDEWorkspace) -> (top: [IDEToolWindowStripeItem], bottom: [IDEToolWindowStripeItem]) {
-        switch edge {
-        case .leading:
-            // The whole leading stripe stays hidden until a folder or a file is open.
-            let hasContent = workspace.hasOpenProject || workspace.hasOpenDocuments
-            guard hasContent else { return ([], []) }
-
-            var top: [IDEToolWindowStripeItem] = [
-                IDEToolWindowStripeItem(
-                    id: "explorer", systemImage: "folder", title: "Explorer",
-                    isOpen: workspace.showsSidebar, action: workspace.toggleSidebar
-                ),
-                IDEToolWindowStripeItem(
-                    id: "find", systemImage: "magnifyingglass", title: "Find in Files",
-                    isOpen: workspace.isFindInFilesVisible, action: workspace.toggleFindInFiles
-                ),
-            ]
-            if workspace.showsJavaStructureButton {
-                top.append(IDEToolWindowStripeItem(
-                    id: "structure", systemImage: "list.bullet.indent", title: "Structure",
-                    isOpen: workspace.showsStructureSidebar, action: workspace.toggleStructureSidebar
-                ))
-            }
-            if workspace.showsSourceControlTab {
-                top.append(bottomItem(.sourceControl, "arrow.triangle.branch", "Source Control", workspace))
-            }
-
-            var bottom: [IDEToolWindowStripeItem] = []
-            if workspace.showsDebugTab {
-                bottom.append(bottomItem(.debug, "ladybug", "Debug", workspace))
-            }
-            if workspace.showsTestResultsTab {
-                bottom.append(bottomItem(.testResults, "flask", "Test Results", workspace))
-            }
-            if workspace.showsUsagesTab {
-                bottom.append(bottomItem(.usages, "text.magnifyingglass", "Usages", workspace))
-            }
-            if workspace.showsTypeHierarchyTab {
-                bottom.append(bottomItem(.typeHierarchy, "list.bullet.indent", "Hierarchy", workspace))
-            }
-            if workspace.showsCallHierarchyTab {
-                bottom.append(bottomItem(.callHierarchy, "phone.arrow.down.left", "Call Hierarchy", workspace))
-            }
-            bottom.append(bottomItem(.problems, "exclamationmark.triangle", "Problems", workspace))
-            bottom.append(bottomItem(.terminal, "terminal", "Terminal", workspace))
-            return (top, bottom)
-
-        case .trailing:
-            var top: [IDEToolWindowStripeItem] = []
-            if workspace.javaSupport.isGradleProject {
-                top.append(IDEToolWindowStripeItem(
-                    id: "gradle", systemImage: "square.stack.3d.up", title: "Gradle",
-                    isOpen: workspace.showsGradleSidebar, action: workspace.toggleGradleSidebar
-                ))
-            }
-            var bottom: [IDEToolWindowStripeItem] = []
-            if workspace.showsGradleConsoleTab {
-                bottom.append(bottomItem(.gradle, "text.alignleft", "Gradle Console", workspace))
-            }
-            if workspace.showsHTTPTab {
-                bottom.append(bottomItem(.http, "network", "HTTP Response", workspace))
-            }
-            return (top, bottom)
+        let (topPlacement, bottomPlacement): (IDEToolWindow.Placement, IDEToolWindow.Placement) = switch edge {
+        case .leading: (.leadingTop, .leadingBottom)
+        case .trailing: (.trailingTop, .trailingBottom)
         }
-    }
-
-    private func bottomItem(
-        _ tab: IDEBottomPanelTab,
-        _ systemImage: String,
-        _ title: String,
-        _ workspace: IDEWorkspace
-    ) -> IDEToolWindowStripeItem {
-        IDEToolWindowStripeItem(
-            id: "\(tab)", systemImage: systemImage, title: title,
-            isOpen: workspace.isBottomToolWindowOpen(tab),
-            action: { workspace.toggleBottomToolWindow(tab) }
-        )
+        let windows = workspace.toolWindows
+        func stripeItems(_ placement: IDEToolWindow.Placement) -> [IDEToolWindowStripeItem] {
+            windows.filter { $0.placement == placement }.map {
+                IDEToolWindowStripeItem(
+                    id: $0.id, systemImage: $0.systemImage, title: $0.title, isOpen: $0.isOpen, action: $0.toggle
+                )
+            }
+        }
+        return (stripeItems(topPlacement), stripeItems(bottomPlacement))
     }
 }
 

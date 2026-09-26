@@ -6,13 +6,17 @@ public struct PaletteFileEntry: Sendable, Hashable {
     public let url: URL
     /// Optional display name override (defaults to the last path component).
     public let displayName: String?
-    /// Whether the file has unsaved edits in an open editor (`⌘E` "edited only" filter).
+    /// Whether the file was edited recently (the `⌘E` "edited only" filter): unsaved changes, or
+    /// whatever the host counts as recently edited.
     public let isEdited: Bool
+    /// Version-control state, shown as the row's title color.
+    public let status: PaletteFileStatus?
 
-    public init(url: URL, displayName: String? = nil, isEdited: Bool = false) {
+    public init(url: URL, displayName: String? = nil, isEdited: Bool = false, status: PaletteFileStatus? = nil) {
         self.url = url
         self.displayName = displayName
         self.isEdited = isEdited
+        self.status = status
     }
 }
 
@@ -57,6 +61,7 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
     private let indexProvider: (@MainActor @Sendable () -> PaletteFileIndex?)?
     private let boostsProvider: @MainActor @Sendable () -> [URL]
     private let onOpenInSplit: (@MainActor @Sendable (URL) -> Void)?
+    private let onOpenAtLine: (@MainActor @Sendable (URL, PaletteLineTarget) -> Void)?
     private let narrowing = NarrowingCache()
 
     public init(
@@ -70,15 +75,19 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
         self.indexProvider = nil
         self.boostsProvider = { [] }
         self.onOpenInSplit = nil
+        self.onOpenAtLine = nil
     }
 
     /// Index-backed provider. `index` and `boosts` are read on the main actor per query, so the
-    /// same provider instance keeps serving as the host swaps in a fresh index.
+    /// same provider instance keeps serving as the host swaps in a fresh index. With
+    /// `onOpenAtLine`, a `Name:line[:column]` query (IntelliJ's Go to File suffix) opens the
+    /// chosen file at that position.
     public init(
         index: @escaping @MainActor @Sendable () -> PaletteFileIndex?,
         boosts: @escaping @MainActor @Sendable () -> [URL] = { [] },
         onOpen: @escaping @MainActor @Sendable (URL) -> Void,
-        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil
+        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil,
+        onOpenAtLine: (@MainActor @Sendable (URL, PaletteLineTarget) -> Void)? = nil
     ) {
         self.files = nil
         self.root = { nil }
@@ -86,6 +95,7 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
         self.indexProvider = index
         self.boostsProvider = boosts
         self.onOpenInSplit = onOpenInSplit
+        self.onOpenAtLine = onOpenAtLine
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
@@ -116,6 +126,12 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
         limit: Int,
         indexProvider: @MainActor @Sendable () -> PaletteFileIndex?
     ) async -> [PaletteItem] {
+        var lineTarget: PaletteLineTarget?
+        var query = query
+        if onOpenAtLine != nil, let split = PaletteLineTarget.split(query) {
+            query = split.query
+            lineTarget = split.target
+        }
         let boostsProvider = self.boostsProvider
         let (indexOrNil, boosts) = await MainActor.run { (indexProvider(), boostsProvider()) }
         guard let index = indexOrNil else { return [] }
@@ -126,6 +142,7 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
 
         let onOpen = self.onOpen
         let onOpenInSplit = self.onOpenInSplit
+        let onOpenAtLine = self.onOpenAtLine
         var items: [PaletteItem] = []
         items.reserveCapacity(result.hits.count)
         for hit in result.hits {
@@ -135,18 +152,25 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
             if let onOpenInSplit {
                 alternate = { onOpenInSplit(url) }
             }
+            var action: @MainActor @Sendable () -> Void = { onOpen(url) }
+            var footer = entry.relativePath
+            if let lineTarget, let onOpenAtLine {
+                action = { onOpenAtLine(url, lineTarget) }
+                footer += ":\(lineTarget.line)" + (lineTarget.column.map { ":\($0)" } ?? "")
+            }
             items.append(PaletteItem(
                 id: "file:\(url.path)",
                 title: url.lastPathComponent,
                 sectionTitle: sectionTitle,
                 matchedIndices: index.highlightOffsets(forEntryAt: hit.index, query: query),
                 score: hit.score,
-                action: { onOpen(url) },
+                action: action,
                 icon: entry.icon,
                 location: entry.location,
                 trailing: entry.module,
-                footer: entry.relativePath,
-                alternateAction: alternate
+                footer: footer,
+                alternateAction: alternate,
+                sourceRoot: entry.sourceRoot
             ))
         }
         return items
@@ -194,6 +218,34 @@ public final class FilesPaletteProvider: SearchEverywhereProvider {
     }
 }
 
+/// A 1-based line (and optional column) typed after a file name in Go to File: `Foo.java:42`.
+public struct PaletteLineTarget: Sendable, Equatable {
+    public let line: Int
+    public let column: Int?
+
+    public init(line: Int, column: Int? = nil) {
+        self.line = line
+        self.column = column
+    }
+
+    /// Splits `Name:line[:column]` into the name query and the target. A trailing `:` with no
+    /// digits yet (`Foo:`) strips the colon and leaves no target, so results don't flicker while
+    /// the number is typed. Returns `nil` when the query has no such suffix.
+    public static func split(_ query: String) -> (query: String, target: PaletteLineTarget?)? {
+        let parts = query.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2, !parts[0].trimmingCharacters(in: .whitespaces).isEmpty,
+              parts.dropFirst().allSatisfy({ $0.allSatisfy(\.isASCIIDigitCharacter) }) else { return nil }
+        let name = String(parts[0])
+        guard let line = Int(parts[1]), line > 0 else { return (name, nil) }
+        let column = parts.count > 2 ? Int(parts[2]).flatMap { $0 > 0 ? $0 : nil } : nil
+        return (name, PaletteLineTarget(line: line, column: column))
+    }
+}
+
+private extension Character {
+    var isASCIIDigitCharacter: Bool { isASCII && isNumber }
+}
+
 /// Most-recently-used documents.
 public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
     public let sectionTitle = "Recent Files"
@@ -204,6 +256,7 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
     private let editedOnly: @MainActor @Sendable () -> Bool
     private let onOpen: @MainActor @Sendable (URL) -> Void
     private let onOpenInSplit: (@MainActor @Sendable (URL) -> Void)?
+    private let onRemove: (@MainActor @Sendable (URL) -> Void)?
 
     public init(
         entries: @escaping @MainActor @Sendable () -> [PaletteFileEntry],
@@ -211,7 +264,8 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
         index: (@MainActor @Sendable () -> PaletteFileIndex?)? = nil,
         editedOnly: @escaping @MainActor @Sendable () -> Bool = { false },
         onOpen: @escaping @MainActor @Sendable (URL) -> Void,
-        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil
+        onOpenInSplit: (@MainActor @Sendable (URL) -> Void)? = nil,
+        onRemove: (@MainActor @Sendable (URL) -> Void)? = nil
     ) {
         self.entries = entries
         self.root = root
@@ -219,6 +273,7 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
         self.editedOnly = editedOnly
         self.onOpen = onOpen
         self.onOpenInSplit = onOpenInSplit
+        self.onRemove = onRemove
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
@@ -246,6 +301,10 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
             if let onOpenInSplit {
                 alternate = { onOpenInSplit(url) }
             }
+            var remove: (@MainActor @Sendable () -> Void)?
+            if let onRemove = self.onRemove {
+                remove = { onRemove(url) }
+            }
             return PaletteItem(
                 id: "recent:\(url.path)",
                 title: entry.item.displayName ?? url.lastPathComponent,
@@ -258,7 +317,11 @@ public final class RecentFilesPaletteProvider: SearchEverywhereProvider {
                 location: indexed?.location,
                 trailing: indexed?.module,
                 footer: Self.displayPath(url),
-                alternateAction: alternate
+                alternateAction: alternate,
+                sourceRoot: indexed?.sourceRoot,
+                fileURL: url,
+                fileStatus: entry.item.status,
+                removeAction: remove
             )
         }
     }
@@ -445,6 +508,85 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
                 matchedIndices: entry.match.matchedIndices,
                 score: limit - rank,
                 action: { onSelect(symbol) }
+            )
+        }
+    }
+}
+
+/// A remembered caret position for Recent Locations (⌘⇧E).
+public struct PaletteLocationEntry: Sendable, Hashable {
+    public let url: URL
+    /// 1-based line.
+    public let line: Int
+    /// 1-based column, when known.
+    public let column: Int?
+    /// The line's text, shown trimmed after the title. `nil` when the host can't read it cheaply.
+    public let lineText: String?
+
+    public init(url: URL, line: Int, column: Int? = nil, lineText: String? = nil) {
+        self.url = url
+        self.line = line
+        self.column = column
+        self.lineText = lineText
+    }
+}
+
+/// Recently visited caret positions (IntelliJ's Recent Locations): newest first, one row per
+/// file and line.
+public final class RecentLocationsPaletteProvider: SearchEverywhereProvider {
+    public let sectionTitle = "Recent Locations"
+    public let sectionOrder = 5
+    private let entries: @MainActor @Sendable () -> [PaletteLocationEntry]
+    private let root: @MainActor @Sendable () -> URL?
+    private let onOpen: @MainActor @Sendable (URL, PaletteLineTarget) -> Void
+
+    public init(
+        entries: @escaping @MainActor @Sendable () -> [PaletteLocationEntry],
+        root: @escaping @MainActor @Sendable () -> URL? = { nil },
+        onOpen: @escaping @MainActor @Sendable (URL, PaletteLineTarget) -> Void
+    ) {
+        self.entries = entries
+        self.root = root
+        self.onOpen = onOpen
+    }
+
+    /// Drops repeats of a file and line, keeping the first (newest) one.
+    static func deduplicated(_ entries: [PaletteLocationEntry]) -> [PaletteLocationEntry] {
+        var seen = Set<String>()
+        return entries.filter { seen.insert("\($0.url.path):\($0.line)").inserted }
+    }
+
+    static func title(for entry: PaletteLocationEntry) -> String {
+        "\(entry.url.lastPathComponent):\(entry.line)"
+    }
+
+    public func items(matching query: String, limit: Int) async -> [PaletteItem] {
+        let entriesProvider = self.entries
+        let rootProvider = self.root
+        let (all, rootURL) = await MainActor.run { (Self.deduplicated(entriesProvider()), rootProvider()) }
+        let ranked = FuzzyMatcher.rankedWithMatches(
+            query: query,
+            items: all,
+            key: { Self.title(for: $0) },
+            limit: limit
+        )
+        let onOpen = self.onOpen
+        return ranked.enumerated().map { rank, match in
+            let entry = match.item
+            let url = entry.url
+            let target = PaletteLineTarget(line: entry.line, column: entry.column)
+            let text = entry.lineText?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PaletteItem(
+                id: "location:\(url.path):\(entry.line)",
+                title: Self.title(for: entry),
+                subtitle: FilesPaletteProvider.relativeDirectory(of: url, root: rootURL),
+                sectionTitle: sectionTitle,
+                matchedIndices: match.match.matchedIndices,
+                score: limit - rank,
+                action: { onOpen(url, target) },
+                location: text?.isEmpty == false ? text : nil,
+                footer: RecentFilesPaletteProvider.displayPath(url),
+                fileURL: url
             )
         }
     }

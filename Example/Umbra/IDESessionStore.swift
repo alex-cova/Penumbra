@@ -5,6 +5,8 @@ struct AppSession: Codable {
     var restoration: EditorRestorationState?
     var projectRootBookmark: Data?
     var recentFiles: [URL]
+    /// Files edited in the editor, most recent first (⌘E "Show edited only").
+    var recentlyEditedFiles: [URL]
     var recentProjects: [URL]
     var preferences: IDEPreferencesSnapshot
     var sidebarWidth: Double
@@ -22,6 +24,7 @@ struct AppSession: Codable {
         restoration: nil,
         projectRootBookmark: nil,
         recentFiles: [],
+        recentlyEditedFiles: [],
         recentProjects: [],
         preferences: IDEPreferencesSnapshot(
             fontSize: 13,
@@ -51,6 +54,7 @@ struct AppSession: Codable {
         restoration: EditorRestorationState?,
         projectRootBookmark: Data?,
         recentFiles: [URL],
+        recentlyEditedFiles: [URL] = [],
         recentProjects: [URL] = [],
         preferences: IDEPreferencesSnapshot,
         sidebarWidth: Double,
@@ -67,6 +71,7 @@ struct AppSession: Codable {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
         self.recentFiles = recentFiles
+        self.recentlyEditedFiles = recentlyEditedFiles
         self.recentProjects = recentProjects
         self.preferences = preferences
         self.sidebarWidth = sidebarWidth
@@ -86,6 +91,7 @@ struct AppSession: Codable {
         restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
         projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
         recentFiles = try container.decode([URL].self, forKey: .recentFiles)
+        recentlyEditedFiles = try container.decodeIfPresent([URL].self, forKey: .recentlyEditedFiles) ?? []
         recentProjects = try container.decodeIfPresent([URL].self, forKey: .recentProjects) ?? []
         preferences = try container.decode(IDEPreferencesSnapshot.self, forKey: .preferences)
         sidebarWidth = try container.decode(Double.self, forKey: .sidebarWidth)

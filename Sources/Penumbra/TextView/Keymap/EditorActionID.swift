@@ -85,6 +85,7 @@ public extension EditorActionID {
     static let findAction = EditorActionID("findAction")
     static let quickOpenFile = EditorActionID("quickOpenFile")
     static let recentFiles = EditorActionID("recentFiles")
+    static let recentLocations = EditorActionID("recentLocations")
     static let goToSymbol = EditorActionID("goToSymbol")
     static let goToLine = EditorActionID("goToLine")
     static let toggleMarkdownPreview = EditorActionID("toggleMarkdownPreview")
@@ -172,6 +173,7 @@ public extension EditorActionID {
         .findAction: "Find Action…",
         .quickOpenFile: "Go to File…",
         .recentFiles: "Recent Files",
+        .recentLocations: "Recent Locations",
         .goToSymbol: "Go to Symbol…",
         .goToLine: "Go to Line…",
         .toggleMarkdownPreview: "Markdown Preview",

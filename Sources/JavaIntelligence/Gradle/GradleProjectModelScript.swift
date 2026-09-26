@@ -121,18 +121,29 @@ enum GradleProjectModelScript {
         return described
     }
 
+    // Enumerate by registered name and realize one task at a time. A blanket `tasks.matching { }`
+    // collect forces every matching task to be created; version-control plugins (e.g. `storeVersion`
+    // from grgit/axion) can fail there when Git isn't configured, which would abort the whole sync.
     def umbraDescribeTasks = { p ->
         def skip = ['umbraProjectModelFragment', 'umbraProjectModel'] as Set
-        return p.tasks.matching { t ->
-            t.enabled && t.group != null && !t.group.isEmpty() && !skip.contains(t.name)
-        }.collect { t ->
-            [
-                path: t.path,
-                name: t.name,
-                group: t.group,
-                description: t.description ?: ''
-            ]
-        }.sort { a, b ->
+        def result = []
+        p.tasks.names.each { name ->
+            if (skip.contains(name)) {
+                return
+            }
+            try {
+                def t = p.tasks.named(name).get()
+                if (t.enabled && t.group != null && !t.group.isEmpty()) {
+                    result.add([
+                        path: t.path,
+                        name: t.name,
+                        group: t.group,
+                        description: t.description ?: ''
+                    ])
+                }
+            } catch (Exception ignored) {}
+        }
+        return result.sort { a, b ->
             def ga = a.group <=> b.group
             ga != 0 ? ga : a.path <=> b.path
         }

@@ -20,6 +20,13 @@ when distributing combined works.
 Textual, ConcurrencyExtras, and SwiftUIMath are also vendored under `Vendor/` for future use;
 only BeautifulMermaid and ElkSwift are wired into the build today.
 
+## Umbra split views
+
+Umbra's split panes (`Example/Umbra/SplitView/`) are vendored from
+[stevengharris/SplitView](https://github.com/stevengharris/SplitView), MIT (see
+`Example/Umbra/SplitView/LICENSE`), by way of the Hextech app. They are compiled into the Umbra
+app only, not into `Penumbra`.
+
 ## Bundled Tree-sitter grammars
 
 The `PenumbraLanguages`, `PenumbraGraphQLLanguage`, and `PenumbraMarkdownLanguage`

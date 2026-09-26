@@ -27,7 +27,7 @@ public enum PaletteQueryScope: Equatable {
         case .goToLine: return .line(query)
         // "Search Everywhere" and the fixed-list modes have no single scope; treat a
         // prefix-less query as free text routed to whatever the palette is showing.
-        case .searchEverywhere, .locations, .findInFiles: return .textActions(query)
+        case .searchEverywhere, .locations, .recentLocations, .findInFiles: return .textActions(query)
         }
     }
 

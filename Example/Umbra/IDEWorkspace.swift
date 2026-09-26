@@ -80,6 +80,10 @@ public final class IDEWorkspace {
     private var hostedPaneIDs: Set<UUID> = []
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
+    /// Files edited in the editor, most recent first: the ⌘E "Show edited only" list (IntelliJ's
+    /// recently edited files, not git's). Ignored by observation: it changes while typing.
+    @ObservationIgnored
+    private var recentlyEditedFiles: [URL] = []
     private var recentProjects: [URL] = []
 
     public let preferences = IDEPreferences.shared
@@ -510,6 +514,81 @@ public final class IDEWorkspace {
         saveSession()
     }
 
+    public func removeRecentFile(_ url: URL) {
+        recentFiles.removeAll { $0 == url }
+        recentlyEditedFiles.removeAll { $0 == url }
+        saveSession()
+    }
+
+    /// ⌫ in Recent Files: forgets the file and closes its tabs. A tab with unsaved changes stays
+    /// open, since closing one discards the edits without asking.
+    private func forgetRecentFile(_ url: URL) {
+        removeRecentFile(url)
+        let path = url.standardizedFileURL.path
+        for pane in workbench.panes {
+            for document in pane.documents where document.url?.standardizedFileURL.path == path && !document.isDirty {
+                closeTab(document.id, in: pane.id)
+            }
+        }
+    }
+
+    /// Moves the active document to the front of the recently edited list. Runs per keystroke,
+    /// so it returns early when the file already leads the list.
+    private func recordRecentlyEdited() {
+        guard let url = workbench.activePane.selectedDocument?.url, recentlyEditedFiles.first != url else { return }
+        recentlyEditedFiles.removeAll { $0 == url }
+        recentlyEditedFiles.insert(url, at: 0)
+        if recentlyEditedFiles.count > 30 {
+            recentlyEditedFiles.removeLast(recentlyEditedFiles.count - 30)
+        }
+    }
+
+    private func paletteStatus(for url: URL) -> PaletteFileStatus? {
+        switch gitStatus.status(for: url, isDirectory: false) {
+        case .modified: .modified
+        case .added: .added
+        case .untracked: .untracked
+        case .conflicted: .conflicted
+        case .ignored: .ignored
+        case nil: nil
+        }
+    }
+
+    public func showRecentLocations() {
+        sharedPalette(for: host(for: workbench.activePaneID)).presentRecentLocations()
+    }
+
+    /// Back-stack caret positions (⌘[ history), newest first. Line text comes from an editor
+    /// currently showing the file; other rows go without it.
+    private func recentLocationEntries() -> [PaletteLocationEntry] {
+        var textViews: [URL: TextView] = [:]
+        for pane in workbench.panes {
+            guard let url = pane.selectedDocument?.url, let host = hostCache.peek(pane.id) else { continue }
+            textViews[url.standardizedFileURL] = host.textView
+        }
+        return workbench.navigationHistory.backEntries.reversed().compactMap { entry in
+            guard let url = entry.url else { return nil }
+            let line = entry.location.lineNumber
+            let text = textViews[url.standardizedFileURL].flatMap { Self.lineText(line, in: $0) }
+            return PaletteLocationEntry(url: url, line: line + 1, column: entry.location.column + 1, lineText: text)
+        }
+    }
+
+    /// The text of zero-based `line`, capped so a minified file's line stays cheap to read.
+    private static func lineText(_ line: Int, in textView: TextView) -> String? {
+        guard let start = textView.location(at: TextLocation(lineNumber: line, column: 0)),
+              let next = textView.location(at: TextLocation(lineNumber: line + 1, column: 0)) else { return nil }
+        let length = min(max(next - start, 0), 240)
+        return textView.text(in: NSRange(location: start, length: length))?
+            .trimmingCharacters(in: .newlines)
+    }
+
+    public func removeRecentProject(_ url: URL) {
+        let standardized = url.standardizedFileURL
+        recentProjects.removeAll { $0.standardizedFileURL == standardized }
+        saveSession()
+    }
+
     /// Returns whether the main window may close. Asks when open editors have unsaved changes.
     func confirmCloseWindow() -> Bool {
         confirmDiscardingUnsavedChanges(
@@ -739,12 +818,10 @@ public final class IDEWorkspace {
 
     public func showFind() {
         adapter.textView?.perform(.toggleFindPanel)
-        focusActiveEditor()
     }
 
     public func showReplace() {
         adapter.textView?.perform(.toggleReplacePanel)
-        focusActiveEditor()
     }
 
     public func showFindInFiles() {
@@ -2111,6 +2188,7 @@ public final class IDEWorkspace {
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             recentFiles: recentFiles,
+            recentlyEditedFiles: recentlyEditedFiles,
             recentProjects: recentProjects,
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
@@ -2159,6 +2237,7 @@ public final class IDEWorkspace {
         let session = IDESessionStore.load()
         preferences.restore(from: session.preferences)
         recentFiles = session.recentFiles
+        recentlyEditedFiles = session.recentlyEditedFiles
         recentProjects = session.recentProjects
         // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
@@ -2386,6 +2465,26 @@ public final class IDEWorkspace {
         let location = String(decoding: data.prefix(range.lowerBound), as: UTF8.self).utf16.count
         let length = String(decoding: data[range], as: UTF8.self).utf16.count
         return NSRange(location: location, length: length)
+    }
+
+    /// An empty range at a 1-based line and column, clamped to the file's last line and to the
+    /// line's end; `nil` when the file can't be read as text.
+    nonisolated static func utf16Range(ofLine line: Int, column: Int, in url: URL) -> NSRange? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let text = String(decoding: data, as: UTF8.self) as NSString
+        var lineStart = 0
+        var currentLine = 1
+        while currentLine < line {
+            let lineRange = text.lineRange(for: NSRange(location: lineStart, length: 0))
+            let next = NSMaxRange(lineRange)
+            guard next < text.length, next > lineStart else { break }
+            lineStart = next
+            currentLine += 1
+        }
+        var contentEnd = 0
+        text.getLineStart(nil, end: nil, contentsEnd: &contentEnd, for: NSRange(location: lineStart, length: 0))
+        let location = min(lineStart + max(column - 1, 0), contentEnd)
+        return NSRange(location: location, length: 0)
     }
 
     private func recordRecentFile(_ url: URL) {
@@ -2690,67 +2789,59 @@ public final class IDEWorkspace {
         palette.recentFileEntriesProvider = { [weak self] in
             guard let self else { return [] }
             var seen = Set<URL>()
+            let edited = Set(self.recentlyEditedFiles)
             let open = self.workbench.recentDocuments(limit: 30).compactMap { document -> PaletteFileEntry? in
                 guard let url = document.url else { return nil }
                 seen.insert(url)
                 return PaletteFileEntry(
                     url: url,
                     displayName: url.lastPathComponent,
-                    isEdited: document.isDirty
+                    isEdited: document.isDirty || edited.contains(url),
+                    status: self.paletteStatus(for: url)
                 )
             }
             let closed = self.recentFiles.compactMap { url -> PaletteFileEntry? in
                 guard seen.insert(url).inserted else { return nil }
-                return PaletteFileEntry(url: url, displayName: url.lastPathComponent)
+                return PaletteFileEntry(
+                    url: url,
+                    displayName: url.lastPathComponent,
+                    isEdited: edited.contains(url),
+                    status: self.paletteStatus(for: url)
+                )
             }
             return open + closed
         }
+        palette.activeDocumentURLProvider = { [weak self] in
+            self?.workbench.activePane.selectedDocument?.url
+        }
+        palette.onRemoveRecentFile = { [weak self] url in
+            self?.forgetRecentFile(url)
+        }
+        palette.recentLocationsProvider = { [weak self] in
+            self?.recentLocationEntries() ?? []
+        }
         palette.navigationDestinationsProvider = { [weak self] in
             guard let self else { return [] }
-            var destinations: [RecentFilesDestination] = [
-                RecentFilesDestination(
-                    id: "project",
-                    title: "Project",
-                    shortcut: "⌘0",
-                    icon: PaletteIcon(systemName: "folder", tint: .blue),
-                    action: { [weak self] in self?.toggleSidebar() }
-                ),
-                RecentFilesDestination(
-                    id: "terminal",
-                    title: "Terminal",
-                    shortcut: "⌃`",
-                    icon: PaletteIcon(systemName: "terminal", tint: .secondary),
-                    action: { [weak self] in self?.toggleTerminal() }
-                ),
-                RecentFilesDestination(
-                    id: "problems",
-                    title: "Problems",
-                    shortcut: "⌘⇧M",
-                    icon: PaletteIcon(systemName: "exclamationmark.triangle", tint: .orange),
-                    action: { [weak self] in self?.toggleProblems() }
-                )
-            ]
-            if self.showsSourceControlTab {
-                destinations.append(
-                    RecentFilesDestination(
-                        id: "sourceControl",
-                        title: "Source Control",
-                        shortcut: "⌘⌃G",
-                        icon: PaletteIcon(systemName: "arrow.triangle.branch", tint: .green),
-                        action: { [weak self] in self?.toggleSourceControl() }
-                    )
+            var destinations = self.toolWindows.map { window in
+                let id = window.id
+                return RecentFilesDestination(
+                    id: id,
+                    title: window.title,
+                    shortcut: window.shortcut,
+                    icon: PaletteIcon(systemName: window.systemImage, tint: window.tint),
+                    action: { [weak self] in self?.setToolWindow(id, open: true) },
+                    close: { [weak self] in self?.setToolWindow(id, open: false) }
                 )
             }
-            if self.javaSupport.isGradleProject {
-                destinations.append(
-                    RecentFilesDestination(
-                        id: "gradle",
-                        title: "Gradle",
-                        icon: PaletteIcon(systemName: "hammer", tint: .purple),
-                        action: { [weak self] in self?.toggleGradleSidebar() }
-                    )
+            destinations.append(
+                RecentFilesDestination(
+                    id: "recentLocations",
+                    title: "Recent Locations",
+                    shortcut: self.preferences.keymap.stroke(for: .recentLocations)?.displayString,
+                    icon: PaletteIcon(systemName: "clock.arrow.circlepath", tint: .secondary),
+                    action: { [weak self] in self?.showRecentLocations() }
                 )
-            }
+            )
             destinations.append(
                 RecentFilesDestination(
                     id: "goToFile",
@@ -2781,6 +2872,15 @@ public final class IDEWorkspace {
         palette.onOpenFileInSplit = { [weak self] url in
             guard let self else { return }
             Task { await self.openDocument(from: url, inRightSplit: true) }
+        }
+        palette.onOpenFileAtLine = { [weak self] url, target in
+            guard let self else { return }
+            Task {
+                let range = await Task.detached {
+                    Self.utf16Range(ofLine: target.line, column: target.column ?? 1, in: url)
+                }.value
+                await self.openDocument(from: url, selecting: range)
+            }
         }
         palette.classesProvider = IDEJavaClassesPaletteProvider(
             javaIndex: intelligenceServices.javaSupport.javaIndex,
@@ -3153,6 +3253,7 @@ public final class IDEWorkspace {
         retargetOpenDocuments(from: url, to: result)
         project.didMove(from: url.path, to: result.path)
         recentFiles = recentFiles.map { retargeted($0, from: url, to: result) }
+        recentlyEditedFiles = recentlyEditedFiles.map { retargeted($0, from: url, to: result) }
     }
 
     func cancelExplorerRename() {
@@ -3807,6 +3908,7 @@ extension IDEWorkspace: TextViewDelegate {
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
         refreshJavaStructure()
+        recordRecentlyEdited()
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.
         noteActiveDocumentEdited()

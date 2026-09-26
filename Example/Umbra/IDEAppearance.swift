@@ -24,6 +24,12 @@ enum IDEAppearance {
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
         static let terminalMaxHeight = 600.0
+        /// Narrowest the editor column may get when the side panels are dragged against it.
+        static let editorMinLength = 240.0
+        /// Shortest the editor island may get when the terminal is dragged up against it.
+        static let editorMinHeight = 120.0
+        /// Smallest width or height of one editor pane in a split.
+        static let editorPaneMinLength = 120.0
         static let welcomeMaxWidth = 520.0
         static let firstRunGuideWidth = 640.0
         static let firstRunGuideHeight = 428.0
@@ -34,7 +40,8 @@ enum IDEAppearance {
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
         static let dirtyDotSize = 5.0
-        /// Frame-coloured gap between islands; also the width of the resize handles that sit in it.
+        /// Frame-coloured gap between islands; also the thickness of the `SplitPanes` dividers
+        /// (`HandleSplitter`) that sit in it.
         static let islandGap = 6.0
     }
 
@@ -180,8 +187,8 @@ enum IDEFileIcon {
     nonisolated static func paletteIcon(forFilename filename: String) -> PaletteIcon {
         if gradleFilenames.contains(filename) { return PaletteIcon(systemName: "hammer", tint: .green) }
         switch (filename as NSString).pathExtension.lowercased() {
-        case "java": return PaletteIcon(systemName: "c.circle.fill", tint: .blue)
-        case "kt", "kts": return PaletteIcon(systemName: "k.circle.fill", tint: .purple)
+        case "java": return PaletteIcon(systemName: "c.circle", tint: .blue)
+        case "kt", "kts": return PaletteIcon(systemName: "k.circle", tint: .purple)
         case "class": return PaletteIcon(systemName: "c.circle", tint: .secondary)
         case "swift": return PaletteIcon(systemName: "swift", tint: .orange)
         case "http", "rest": return PaletteIcon(systemName: "globe", tint: .blue)

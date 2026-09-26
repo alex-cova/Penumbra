@@ -18,13 +18,15 @@ struct IDEWelcomeView: View {
                 if !workspace.recentProjectURLs.isEmpty {
                     IDEWelcomeRecentProjectsSection(
                         urls: Array(workspace.recentProjectURLs.prefix(8)),
-                        onOpen: workspace.openRecentProject
+                        onOpen: workspace.openRecentProject,
+                        onRemove: workspace.removeRecentProject
                     )
                 }
                 if !workspace.recentFileURLs.isEmpty {
                     IDEWelcomeRecentFilesSection(
                         urls: Array(workspace.recentFileURLs.prefix(8)),
-                        onOpen: workspace.openRecentFile
+                        onOpen: workspace.openRecentFile,
+                        onRemove: workspace.removeRecentFile
                     )
                 }
                 IDEWelcomeShortcutsGrid()
@@ -114,6 +116,7 @@ private struct IDEWelcomeActionRow: View {
 private struct IDEWelcomeRecentProjectsSection: View {
     let urls: [URL]
     let onOpen: (URL) -> Void
+    let onRemove: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
@@ -124,9 +127,13 @@ private struct IDEWelcomeRecentProjectsSection: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(urls, id: \.path) { url in
-                    Button(url.lastPathComponent, systemImage: "folder", action: { onOpen(url) })
-                        .buttonStyle(IDEWelcomeLinkButtonStyle())
-                        .help(url.path)
+                    IDEWelcomeRecentRow(
+                        title: url.lastPathComponent,
+                        systemImage: "folder",
+                        path: url.path,
+                        onOpen: { onOpen(url) },
+                        onRemove: { onRemove(url) }
+                    )
                 }
             }
         }
@@ -136,6 +143,7 @@ private struct IDEWelcomeRecentProjectsSection: View {
 private struct IDEWelcomeRecentFilesSection: View {
     let urls: [URL]
     let onOpen: (URL) -> Void
+    let onRemove: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
@@ -146,12 +154,53 @@ private struct IDEWelcomeRecentFilesSection: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(urls, id: \.path) { url in
-                    Button(url.lastPathComponent, systemImage: "doc.text", action: { onOpen(url) })
-                        .buttonStyle(IDEWelcomeLinkButtonStyle())
-                        .help(url.path)
+                    IDEWelcomeRecentRow(
+                        title: url.lastPathComponent,
+                        systemImage: "doc.text",
+                        path: url.path,
+                        onOpen: { onOpen(url) },
+                        onRemove: { onRemove(url) }
+                    )
                 }
             }
         }
+    }
+}
+
+private struct IDEWelcomeRecentRow: View {
+    let title: String
+    let systemImage: String
+    let path: String
+    let onOpen: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovering = false
+
+    private let removeButtonSide: CGFloat = 14
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Button(action: onOpen) {
+                Label(title, systemImage: systemImage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(IDEWelcomeLinkButtonStyle())
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(
+                        isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted
+                    )
+                    .frame(width: removeButtonSide, height: removeButtonSide)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovering ? 1 : 0)
+            .accessibilityLabel("Remove from recents")
+        }
+        .onHover { isHovering = $0 }
+        .help(path)
     }
 }
 

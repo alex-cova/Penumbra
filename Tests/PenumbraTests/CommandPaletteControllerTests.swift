@@ -181,6 +181,129 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertGreaterThan(table?.frame.height ?? 0, 0)
     }
 
+    func testQuickOpenArrowKeysMoveSelectionThroughFieldEditor() async {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+        controller.fileIndex = makeFileIndex(["Main.swift", "Other.swift", "Third.swift"])
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        XCTAssertGreaterThanOrEqual(controller.flatItems.count, 3)
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 0)
+
+        container.layoutSubtreeIfNeeded()
+        controller.paletteView.layoutSubtreeIfNeeded()
+        controller.paletteView.focusQueryField()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        guard let field = queryField(in: controller.paletteView),
+              let editor = window.fieldEditor(true, for: field) as? NSTextView else {
+            return XCTFail("Expected an editable query field with a field editor")
+        }
+
+        XCTAssertTrue(
+            controller.paletteView.control(
+                field,
+                textView: editor,
+                doCommandBy: #selector(NSResponder.moveDown(_:))
+            )
+        )
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 1)
+
+        XCTAssertTrue(
+            controller.paletteView.control(
+                field,
+                textView: editor,
+                doCommandBy: #selector(NSResponder.moveUp(_:))
+            )
+        )
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 0)
+    }
+
+    func testQuickOpenTabCyclesCategoryTabs() async {
+        let textView = makeFocusedTextView(text: "x")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let controller = CommandPaletteController(textView: textView, overlayContainer: container)
+        controller.fileIndex = makeFileIndex(["Main.swift"])
+        controller.symbolIndex = SymbolIndex()
+
+        controller.presentQuickOpen()
+        XCTAssertEqual(controller.currentTab, .files)
+        let tabs = controller.paletteView.tabs
+        guard tabs.count > 1, let filesIndex = tabs.firstIndex(of: .files) else {
+            return XCTFail("Expected multiple tabs including Files")
+        }
+        let nextTab = tabs[(filesIndex + 1) % tabs.count]
+
+        guard let field = queryField(in: controller.paletteView) else {
+            return XCTFail("Expected query field")
+        }
+        let editor = NSWindow().fieldEditor(true, for: field) as! NSTextView
+        XCTAssertTrue(
+            controller.paletteView.control(
+                field,
+                textView: editor,
+                doCommandBy: #selector(NSResponder.insertTab(_:))
+            )
+        )
+        XCTAssertEqual(controller.currentTab, nextTab)
+    }
+
+    private func queryField(in paletteView: CommandPaletteView) -> NSTextField? {
+        paletteView.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable }
+    }
+
+    func testQuickOpenFooterShowsShortcutLegend() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Main.swift", "Other.swift"])
+        controller.symbolIndex = SymbolIndex()
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+
+        let legend = controller.paletteView.footerShortcutLegend.map(\.title)
+        XCTAssertTrue(legend.contains("Open"))
+        XCTAssertTrue(legend.contains("Close"))
+        XCTAssertTrue(legend.contains("Next tab"))
+    }
+
+    func testQuickOpenFooterShowsSplitHintWhenAvailable() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Main.swift"])
+        controller.onOpenFileInSplit = { _ in }
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+
+        let legend = controller.paletteView.footerShortcutLegend
+        XCTAssertTrue(legend.contains { $0.keys == "⇧↩" && $0.title == "Open in Split" })
+    }
+
+    func testRecentFilesFooterShowsNavigationHints() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.navigationDestinationsProvider = {
+            [RecentFilesDestination(id: "project", title: "Project", action: {})]
+        }
+
+        controller.presentRecentFiles()
+
+        let legend = controller.paletteView.footerShortcutLegend.map(\.title)
+        XCTAssertTrue(legend.contains("Navigate"))
+        XCTAssertTrue(legend.contains("Edited only"))
+    }
+
     func testQuickOpenReinstallsOverlayAfterBackdropDetaches() {
         let textView = makeFocusedTextView(text: "x")
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
@@ -318,6 +441,59 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertNil(controller.flatItems.first?.alternateAction)
         controller.activateSelection(alternate: true)
         XCTAssertTrue(controller.isPresented, "⇧↩ on a row without a secondary action does nothing")
+    }
+
+    func testLineSuffixOpensTheFileAtThatLine() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["src/ApiKeyController.java", "src/Other.java"])
+        var openedAt: [(String, PaletteLineTarget)] = []
+        controller.onOpenFileAtLine = { openedAt.append(($0.lastPathComponent, $1)) }
+
+        controller.presentQuickOpen()
+        controller.paletteModel.query = "AKC:42:7"
+        controller.selectTab(.files)
+        await waitForRows(controller)
+
+        XCTAssertEqual(controller.flatItems.first?.title, "ApiKeyController.java")
+        XCTAssertEqual(controller.flatItems.first?.footer, "src/ApiKeyController.java:42:7")
+        controller.activateSelection()
+        XCTAssertEqual(openedAt.first?.0, "ApiKeyController.java")
+        XCTAssertEqual(openedAt.first?.1, PaletteLineTarget(line: 42, column: 7))
+    }
+
+    func testReopeningGoToFileRestoresTheLastQuery() {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Main.swift"])
+
+        controller.presentQuickOpen()
+        controller.paletteModel.query = "Mai"
+        controller.dismiss()
+        controller.presentQuickOpen()
+        XCTAssertEqual(controller.paletteModel.query, "Mai")
+        XCTAssertEqual(controller.paletteView.query, "Mai")
+
+        controller.dismiss()
+        controller.restoresLastQuery = false
+        controller.presentQuickOpen()
+        XCTAssertEqual(controller.paletteModel.query, "")
+    }
+
+    func testIndexedFileRowsCarryTheirSourceRoot() async {
+        let index = PaletteFileIndex(entries: [
+            PaletteFileIndex.Entry(
+                url: URL(fileURLWithPath: "/proj/src/test/java/FooTest.java"),
+                relativePath: "src/test/java/FooTest.java",
+                location: "src/test/java",
+                module: "proj.test",
+                icon: PaletteIcon(systemName: "doc"),
+                sourceRoot: .tests
+            )
+        ])
+        let items = await FilesPaletteProvider(index: { index }, onOpen: { _ in }).items(matching: "Foo", limit: 5)
+        XCTAssertEqual(items.first?.sourceRoot, .tests)
+        XCTAssertEqual(items.first?.sourceRoot?.isTest, true)
     }
 
     func testFilesProviderNarrowingMatchesAColdSearch() async {

@@ -28,6 +28,16 @@ public final class CommandPaletteController {
     public var recentFileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
     /// Tool-window shortcuts for the Recent Files / Go to File sidebar (Project, Terminal, …).
     public var navigationDestinationsProvider: (@MainActor @Sendable () -> [RecentFilesDestination])?
+    /// The file in the focused editor. When it leads Recent Files, ⌘E selects the second row so
+    /// ⌘E ↩ flips between the last two files, as in IntelliJ.
+    public var activeDocumentURLProvider: (@MainActor @Sendable () -> URL?)?
+    /// Removes a file from the recent list (⌫ on a Recent Files row); the host also closes its
+    /// editor. Rows are only removable when this is set.
+    public var onRemoveRecentFile: ((URL) -> Void)? {
+        didSet { recentFilesProvider = nil }
+    }
+    /// Supplies Recent Locations (⌘⇧E), newest first. Rows open through ``onOpenFileAtLine``.
+    public var recentLocationsProvider: (@MainActor @Sendable () -> [PaletteLocationEntry])?
     /// A prebuilt, host-maintained file index. When set it replaces ``fileEntriesProvider`` for the
     /// Files section: nothing is enumerated per keystroke, rows get icons / module / path columns,
     /// and the Text tab reuses its file list instead of walking the disk.
@@ -44,6 +54,14 @@ public final class CommandPaletteController {
             recentFilesProvider = nil
         }
     }
+    /// Opens a file at a 1-based line (and column) typed after its name: `Foo.java:42`
+    /// (IntelliJ's Go to File suffix). Without it the suffix is matched as part of the name.
+    public var onOpenFileAtLine: ((URL, PaletteLineTarget) -> Void)? {
+        didSet { indexedFilesProvider = nil }
+    }
+    /// Reopening a tabbed mode shows its previous query, selected so typing replaces it — as
+    /// IntelliJ's Search Everywhere does.
+    public var restoresLastQuery = true
     /// Whether ⌘⇧F (`.findInFiles`) opens the palette's Text tab. A host with its own Find in Files
     /// panel sets this to `false`; the Text tab stays reachable from the tab strip.
     public var handlesFindInFilesAction = true
@@ -87,6 +105,11 @@ public final class CommandPaletteController {
     private var recentFilesProvider: RecentFilesPaletteProvider?
     private var recentFilesEditedOnly = false
     private var selectedDestinationIndex = 0
+    /// Every sidebar destination; the view shows the ones matching the query.
+    private var allNavigationDestinations: [RecentFilesDestination] = []
+    /// Set by ⌘E until the first results arrive or the user moves, types or filters.
+    private var pendingInitialRecentSelection = false
+    private var lastQueries: [EditorPaletteMode: String] = [:]
 
     var flatItems: [PaletteItem] { currentSections.flatMap(\.items) }
 
@@ -199,7 +222,17 @@ public final class CommandPaletteController {
     public func presentRecentFiles() {
         selectedDestinationIndex = 0
         recentFilesEditedOnly = false
+        pendingInitialRecentSelection = true
         present(mode: .recentFiles, placeholder: "Search recent files")
+    }
+
+    /// Presents Recent Locations. Returns `false` without presenting when no
+    /// ``recentLocationsProvider`` / ``onOpenFileAtLine`` is wired.
+    @discardableResult
+    public func presentRecentLocations() -> Bool {
+        guard recentLocationsProvider != nil, onOpenFileAtLine != nil else { return false }
+        present(mode: .recentLocations, placeholder: "Search recent locations")
+        return true
     }
 
     public func presentQuickOpen() {
@@ -256,6 +289,9 @@ public final class CommandPaletteController {
 
     public func dismiss() {
         guard paletteModel.isPresented else { return }
+        if !isStaticList, currentTab != nil {
+            lastQueries[paletteModel.mode] = paletteModel.query
+        }
         engine.cancel()
         paletteView.isSearching = false
         isStaticList = false
@@ -272,6 +308,7 @@ public final class CommandPaletteController {
         case .searchEverywhere: presentSearchEverywhere()
         case .findAction: presentFindAction()
         case .recentFiles: presentRecentFiles()
+        case .recentLocations: return presentRecentLocations()
         case .quickOpenFile: presentQuickOpen()
         case .goToSymbol: presentSymbols()
         case .surroundWith: presentSurroundWith()
@@ -297,6 +334,13 @@ public final class CommandPaletteController {
 
     private func present(mode: EditorPaletteMode, placeholder: String, seed: String = "") {
         isStaticList = false
+        var seed = seed
+        var restored = false
+        if seed.isEmpty, restoresLastQuery, PaletteTab(mode: mode) != nil,
+           let last = lastQueries[mode], !last.isEmpty {
+            seed = last
+            restored = true
+        }
         engine.setProviders(providers(for: mode))
         paletteModel.mode = mode
         paletteModel.query = seed
@@ -306,6 +350,9 @@ public final class CommandPaletteController {
         paletteView.query = seed
         configureTabs()
         showOverlay()
+        if restored {
+            paletteView.selectAllQueryText()
+        }
         runQuery(seed)
     }
 
@@ -351,7 +398,8 @@ public final class CommandPaletteController {
         paletteView.navigationChromeTitle = title
         paletteView.showsEditedOnlyInChrome = showsEditedOnly
         paletteView.showsNavigationChrome = true
-        paletteView.navigationDestinations = navigationDestinationsProvider?() ?? []
+        allNavigationDestinations = navigationDestinationsProvider?() ?? []
+        paletteView.navigationDestinations = filteredDestinations(for: paletteModel.query)
         if showsEditedOnly {
             paletteView.editedOnly = recentFilesEditedOnly
         }
@@ -392,7 +440,17 @@ public final class CommandPaletteController {
             if onOpenFileInSplit != nil {
                 openInSplit = { [weak self] url in self?.onOpenFileInSplit?(url) }
             }
-            let provider = FilesPaletteProvider(index: index, boosts: boosts, onOpen: open, onOpenInSplit: openInSplit)
+            var openAtLine: (@MainActor @Sendable (URL, PaletteLineTarget) -> Void)?
+            if onOpenFileAtLine != nil {
+                openAtLine = { [weak self] url, target in self?.onOpenFileAtLine?(url, target) }
+            }
+            let provider = FilesPaletteProvider(
+                index: index,
+                boosts: boosts,
+                onOpen: open,
+                onOpenInSplit: openInSplit,
+                onOpenAtLine: openAtLine
+            )
             indexedFilesProvider = provider
             return provider
         }
@@ -413,16 +471,29 @@ public final class CommandPaletteController {
         if onOpenFileInSplit != nil {
             openInSplit = { [weak self] url in self?.onOpenFileInSplit?(url) }
         }
+        var remove: (@MainActor @Sendable (URL) -> Void)?
+        if onRemoveRecentFile != nil {
+            remove = { [weak self] url in self?.onRemoveRecentFile?(url) }
+        }
         let provider = RecentFilesPaletteProvider(
             entries: entries,
             root: { root },
             index: index,
             editedOnly: editedOnly,
             onOpen: { [weak self] url in self?.onOpenFile?(url) },
-            onOpenInSplit: openInSplit
+            onOpenInSplit: openInSplit,
+            onRemove: remove
         )
         recentFilesProvider = provider
         return provider
+    }
+
+    private func makeRecentLocationsProvider() -> RecentLocationsPaletteProvider? {
+        guard let entries = recentLocationsProvider else { return nil }
+        let root = workspaceRoot
+        return RecentLocationsPaletteProvider(entries: entries, root: { root }) { [weak self] url, target in
+            self?.onOpenFileAtLine?(url, target)
+        }
     }
 
     private func makeSymbolsProvider() -> SymbolsPaletteProvider? {
@@ -482,6 +553,8 @@ public final class CommandPaletteController {
             return [makeClassesProvider()].compactMap { $0 }
         case .recentFiles:
             return [makeRecentProvider()].compactMap { $0 }
+        case .recentLocations:
+            return [makeRecentLocationsProvider()].compactMap { $0 }
         case .searchEverywhere:
             return ([makeClassesProvider(), makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
                 .compactMap { $0 } + [makeCommandsProvider()] + extraProviders
@@ -543,9 +616,70 @@ public final class CommandPaletteController {
             self.paletteView.isSearching = false
             self.paletteView.emptyStateMessage = self.emptyStateMessage(for: rawQuery)
             self.currentSections = sections
+            self.applyInitialRecentSelection(query: rawQuery)
             self.paletteModel.clampSelection(count: self.flatItems.count)
             self.paletteView.update(sections: sections, selectedItemIndex: self.paletteModel.selectedIndex)
+            self.focusDestinationsIfNoFiles()
         }
+    }
+
+    /// ⌘E skips the file already in the focused editor, so ⌘E ↩ returns to the previous one.
+    private func applyInitialRecentSelection(query: String) {
+        guard pendingInitialRecentSelection, paletteModel.mode == .recentFiles else { return }
+        pendingInitialRecentSelection = false
+        let items = flatItems
+        guard query.isEmpty, items.count > 1,
+              let first = items[0].fileURL,
+              let active = activeDocumentURLProvider?(),
+              first.standardizedFileURL == active.standardizedFileURL else { return }
+        paletteModel.selectedIndex = 1
+    }
+
+    /// With no file left to show, the arrow keys and ↩ act on the matching tool windows.
+    private func focusDestinationsIfNoFiles() {
+        guard usesNavigationChrome, flatItems.isEmpty,
+              !paletteView.navigationDestinations.isEmpty,
+              paletteView.navigationPane == .files else { return }
+        selectedDestinationIndex = 0
+        paletteView.selectedDestinationIndex = 0
+        paletteView.navigationPane = .destinations
+    }
+
+    private func filteredDestinations(for query: String) -> [RecentFilesDestination] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return allNavigationDestinations }
+        return FuzzyMatcher.rankedWithMatches(
+            query: trimmed,
+            items: allNavigationDestinations,
+            key: \.title,
+            limit: allNavigationDestinations.count
+        ).map(\.item)
+    }
+
+    /// ⌫ on an empty query: forgets the selected recent file (the host closes its editor), or
+    /// hides the selected tool window. The row goes away in place, keeping the selection index.
+    func removeSelection() {
+        guard usesNavigationChrome else { return }
+        if paletteView.navigationPane == .destinations {
+            let destinations = paletteView.navigationDestinations
+            guard destinations.indices.contains(selectedDestinationIndex),
+                  let close = destinations[selectedDestinationIndex].close else { return }
+            close()
+            return
+        }
+        let items = flatItems
+        guard items.indices.contains(paletteModel.selectedIndex),
+              let remove = items[paletteModel.selectedIndex].removeAction else { return }
+        let removedID = items[paletteModel.selectedIndex].id
+        pendingInitialRecentSelection = false
+        remove()
+        currentSections = currentSections.compactMap { section in
+            let kept = section.items.filter { $0.id != removedID }
+            return kept.isEmpty ? nil : PaletteSection(title: section.title, items: kept)
+        }
+        paletteModel.clampSelection(count: flatItems.count)
+        paletteView.update(sections: currentSections, selectedItemIndex: paletteModel.selectedIndex)
+        focusDestinationsIfNoFiles()
     }
 
     private func emptyStateMessage(for rawQuery: String) -> String {
@@ -553,6 +687,7 @@ public final class CommandPaletteController {
         if !trimmed.isEmpty { return "No results" }
         switch paletteModel.mode {
         case .recentFiles: return "No recent files"
+        case .recentLocations: return "No recent locations"
         case .goToLine: return "Type a line number"
         case .findInFiles: return "Type to search"
         default: return "No results"
@@ -577,6 +712,14 @@ public final class CommandPaletteController {
         }
         let items = flatItems
         guard items.indices.contains(paletteModel.selectedIndex) else {
+            // Nothing recent matches: carry the query over to Go to File, as IntelliJ does.
+            let query = paletteModel.query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !alternate, paletteModel.mode == .recentFiles, !query.isEmpty,
+               fileIndex != nil || fileEntriesProvider != nil {
+                selectedDestinationIndex = 0
+                present(mode: .quickOpen, placeholder: "Search by filename", seed: query)
+                return
+            }
             if !alternate { dismiss() }
             return
         }
@@ -628,7 +771,11 @@ public final class CommandPaletteController {
         paletteView.onQueryChange = { [weak self] query in
             guard let self else { return }
             self.paletteModel.query = query
+            self.pendingInitialRecentSelection = false
             if self.usesNavigationChrome {
+                self.selectedDestinationIndex = 0
+                self.paletteView.selectedDestinationIndex = 0
+                self.paletteView.navigationDestinations = self.filteredDestinations(for: query)
                 self.paletteView.navigationPane = .files
                 self.paletteView.refreshNavigationChrome()
             }
@@ -636,6 +783,7 @@ public final class CommandPaletteController {
         }
         paletteView.onMoveSelection = { [weak self] delta in
             guard let self else { return }
+            self.pendingInitialRecentSelection = false
             if self.usesNavigationChrome, self.paletteView.navigationPane == .destinations {
                 self.moveDestinationSelection(by: delta)
                 return
@@ -650,16 +798,23 @@ public final class CommandPaletteController {
             guard let self, self.paletteModel.mode == .recentFiles else { return }
             self.recentFilesEditedOnly.toggle()
             self.paletteView.editedOnly = self.recentFilesEditedOnly
+            self.pendingInitialRecentSelection = false
             self.paletteModel.selectedIndex = 0
             self.runQuery(self.paletteModel.query)
         }
         paletteView.onEditedOnlyChanged = { [weak self] isOn in
             guard let self, self.paletteModel.mode == .recentFiles else { return }
             self.recentFilesEditedOnly = isOn
+            self.pendingInitialRecentSelection = false
             self.paletteModel.selectedIndex = 0
             self.runQuery(self.paletteModel.query)
         }
         paletteView.onConfirm = { [weak self] in self?.activateSelection() }
+        paletteView.onDeleteSelection = { [weak self] in
+            guard let self, self.usesNavigationChrome else { return false }
+            self.removeSelection()
+            return true
+        }
         paletteView.onConfirmAlternate = { [weak self] in self?.activateSelection(alternate: true) }
         paletteView.onSelectTab = { [weak self] tab in self?.selectTab(tab) }
         paletteView.onToggleNonProjectItems = { [weak self] isOn in

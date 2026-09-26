@@ -8,11 +8,12 @@ struct IDEDebugPanel: View {
         VStack(spacing: 0) {
             toolbar(session)
             Divider()
-            HSplitView {
+            SplitPanes(minPrimary: 220, minSecondary: 220, storageKey: "umbra.debug.stackSplit") {
                 stackList(session)
-                    .frame(minWidth: 220)
+            } secondary: {
                 variablesList(session)
-                    .frame(minWidth: 220)
+            } divider: {
+                Splitter.rule()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
