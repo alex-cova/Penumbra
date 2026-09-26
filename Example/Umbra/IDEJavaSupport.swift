@@ -67,6 +67,8 @@ final class IDEJavaSupport {
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
     let inlayHintProvider: JavaInlayHintProvider
+    /// Override, implementation and recursion icons in the gutter (the Gutter Icons preferences).
+    let lineMarkerProvider: JavaLineMarkerProvider
     /// Rename for classes, interfaces, enums, records, annotations, locals and parameters.
     let renameProvider: JavaRenameProvider
     /// Selection-based refactorings (extract variable, …).
@@ -151,6 +153,9 @@ final class IDEJavaSupport {
     @ObservationIgnored var onInspectionDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
     /// Called once the compiler is (re)configured, so the host can check the files already open.
     @ObservationIgnored var onCompilerConfigured: (@MainActor () -> Void)?
+    /// Called after the index's sources change (project indexed, sync finished, files re-indexed
+    /// after changing on disk), so results that depend on other files can be refreshed.
+    @ObservationIgnored var onIndexSourcesPublished: (@MainActor () -> Void)?
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
     /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
     /// tab in the bottom panel. Reset at the start of every sync.
@@ -193,6 +198,7 @@ final class IDEJavaSupport {
         inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
+        lineMarkerProvider = JavaLineMarkerProvider(index: javaIndex, indexPaths: paths)
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
@@ -867,6 +873,7 @@ final class IDEJavaSupport {
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await callHierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await lineMarkerProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inspectionService.setSourceSetClasspath(model, indexPaths: paths)
         reindexTests(model: model)
         refreshCompilerDiagnostics()
@@ -1140,6 +1147,7 @@ final class IDEJavaSupport {
             await renameProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await refactoringProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
         }
+        onIndexSourcesPublished?()
     }
 
     private func clearSourceSetClasspath() {
@@ -1152,6 +1160,7 @@ final class IDEJavaSupport {
             await hierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await callHierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await inlayHintProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await lineMarkerProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await inspectionService.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }

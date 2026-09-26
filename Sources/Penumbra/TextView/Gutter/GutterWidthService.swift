@@ -45,6 +45,14 @@ final class GutterWidthService {
             }
         }
     }
+    /// Width of the line-marker column between the line numbers and the folding ribbon; 0 hides it.
+    var lineMarkerColumnWidth: CGFloat = 0 {
+        didSet {
+            if lineMarkerColumnWidth != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
     var foldingRibbonWidth: CGFloat = 9 {
         didSet {
             if foldingRibbonWidth != oldValue {
@@ -62,6 +70,7 @@ final class GutterWidthService {
         if showGutterDecorations {
             width += gutterDecorationColumnWidth
         }
+        width += lineMarkerColumnWidth
         if showFoldingRibbon {
             width += foldingRibbonWidth
         }

@@ -142,6 +142,10 @@ public final class IDEWorkspace {
     private var javaRunFileURL: URL?
     private var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// The Java markers shown in each text view, with the buffer generation they were computed
+    /// for; a click maps the engine marker's `id` back to its index here.
+    @ObservationIgnored private var javaLineMarkers: [ObjectIdentifier: (generation: UInt64, markers: [JavaLineMarker])] = [:]
     @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
     @ObservationIgnored private var javaStructureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
@@ -338,6 +342,9 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
             self?.compilerDidReconfigure()
         }
+        intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
+            self?.javaGutterIconsPreferenceChanged()
+        }
         loadSession()
         wireAdapter()
         rebuildLayoutHosts()
@@ -381,6 +388,11 @@ public final class IDEWorkspace {
                 }
             }
             await intelligenceServices.javaSupport.inlayHintProvider.setOpenBufferLookup { [navigationBuffers] url in
+                await MainActor.run {
+                    navigationBuffers.workspace?.openBufferText(for: url)
+                }
+            }
+            await intelligenceServices.javaSupport.lineMarkerProvider.setOpenBufferLookup { [navigationBuffers] url in
                 await MainActor.run {
                     navigationBuffers.workspace?.openBufferText(for: url)
                 }
@@ -2685,6 +2697,84 @@ public final class IDEWorkspace {
         }
     }
 
+    // MARK: - Java gutter icons
+
+    /// Recomputes every pane's markers: after a preference change, or when the index changed so
+    /// other files' subtypes and overrides may have too.
+    func javaGutterIconsPreferenceChanged() {
+        for pane in workbench.panes {
+            scheduleJavaLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
+        }
+    }
+
+    /// Refreshes a pane's Java gutter icons once typing pauses, off the main actor. Like semantic
+    /// highlighting, a newer request replaces the pending one and a result for text that changed
+    /// meanwhile is dropped; the engine keeps the shown markers on their lines in between.
+    private func scheduleJavaLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 400_000_000) {
+        let key = ObjectIdentifier(host.textView)
+        lineMarkerTasks[key]?.cancel()
+        let kinds = preferences.enabledJavaGutterIcons
+        guard languageIdentifier == "java", !kinds.isEmpty else {
+            lineMarkerTasks[key] = nil
+            javaLineMarkers[key] = nil
+            host.textView.setLineMarkers([])
+            host.textView.lineMarkerHandler = nil
+            return
+        }
+        let provider = javaSupport.lineMarkerProvider
+        lineMarkerTasks[key] = Task { [weak self, weak host] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard !Task.isCancelled, let textView = host?.textView else { return }
+            let generation = textView.contentGeneration
+            let url = textView.documentURL
+            let export = textView.exportDocumentText()
+            let work = Task.detached(priority: .utility) {
+                await provider.markers(source: export.materializeUTF16Text(), fileURL: url, kinds: kinds)
+            }
+            let markers = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled, let self, let markers, textView.contentGeneration == generation else { return }
+            self.javaLineMarkers[key] = (generation, markers)
+            textView.setLineMarkers(markers.enumerated().map { index, marker in
+                GutterLineMarker(id: index, line: marker.line, icon: marker.kind.gutterIcon, tooltip: marker.tooltip)
+            })
+            textView.lineMarkerHandler = { [weak self, weak host] marker, _ in
+                guard let self, let host else { return }
+                self.javaLineMarkerClicked(marker, host: host)
+            }
+        }
+    }
+
+    /// ↑ goes to the super method, ↓ lists the implementations, and a sibling marker lists the
+    /// interface methods it implements. A click on markers older than the buffer is ignored: its
+    /// anchor offsets are stale, and fresh markers are already on the way.
+    private func javaLineMarkerClicked(_ marker: GutterLineMarker, host: IDEEditorPaneHost) {
+        let textView = host.textView
+        guard let entry = javaLineMarkers[ObjectIdentifier(textView)], entry.generation == textView.contentGeneration,
+              entry.markers.indices.contains(marker.id) else { return }
+        let javaMarker = entry.markers[marker.id]
+        switch javaMarker.kind {
+        case .implementing, .overriding:
+            host.intelligenceController?.navigate(kind: .superMethod, atUTF16Offset: javaMarker.anchorUTF16Offset)
+        case .implemented, .overridden:
+            host.intelligenceController?.navigate(kind: .implementation, atUTF16Offset: javaMarker.anchorUTF16Offset)
+        case .siblingInherited:
+            let provider = javaSupport.lineMarkerProvider
+            let source = textView.text
+            let url = textView.documentURL
+            Task { [weak self] in
+                let locations = await provider.siblingTargets(of: javaMarker, source: source, fileURL: url, documentID: DocumentID())
+                guard let self else { return }
+                if locations.count == 1 {
+                    _ = self.openNavigationLocation(locations[0])
+                } else if !locations.isEmpty {
+                    self.presentNavigationChoices(locations, kind: .superMethod)
+                }
+            }
+        case .recursiveCall:
+            break
+        }
+    }
+
     /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
     /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
     private func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
@@ -2704,6 +2794,7 @@ public final class IDEWorkspace {
             let paneHost = host(for: pane.id)
             if paneHost.textView === textView {
                 scheduleSemanticHighlighting(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
+                scheduleJavaLineMarkers(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
             }
         }
     }
@@ -3747,6 +3838,7 @@ public final class IDEWorkspace {
         // until the next keystroke.
         host.markdownPreviewController.refresh()
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier)
+        scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()

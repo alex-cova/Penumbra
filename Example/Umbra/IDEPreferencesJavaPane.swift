@@ -1,3 +1,5 @@
+import JavaIntelligence
+import Penumbra
 import SwiftUI
 
 struct IDEPreferencesJavaPane: View {
@@ -45,6 +47,22 @@ struct IDEPreferencesJavaPane: View {
             }
 
             Section {
+                ForEach(JavaLineMarkerKind.allCases.sorted { $0.preferenceTitle < $1.preferenceTitle }, id: \.self) { kind in
+                    Toggle(isOn: gutterIconBinding(kind)) {
+                        Label {
+                            Text(kind.preferenceTitle)
+                        } icon: {
+                            Image(nsImage: GutterLineMarkerGlyphs.image(for: kind.gutterIcon, pointSize: 14))
+                        }
+                    }
+                }
+            } header: {
+                Text("Gutter Icons")
+            } footer: {
+                Text("Icons beside the line numbers for methods that implement or override another, types and methods that project subclasses implement or override, and recursive calls. Click an arrow to jump to the related declarations.")
+            }
+
+            Section {
                 Toggle("Optimize Imports on Save", isOn: $preferences.javaOptimizeImportsOnSave)
             } header: {
                 Text("Editing")
@@ -53,5 +71,18 @@ struct IDEPreferencesJavaPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func gutterIconBinding(_ kind: JavaLineMarkerKind) -> Binding<Bool> {
+        Binding {
+            !preferences.javaDisabledGutterIcons.contains(kind)
+        } set: { isOn in
+            if isOn {
+                preferences.javaDisabledGutterIcons.remove(kind)
+            } else {
+                preferences.javaDisabledGutterIcons.insert(kind)
+            }
+            workspace.javaGutterIconsPreferenceChanged()
+        }
     }
 }

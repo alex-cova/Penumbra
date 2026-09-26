@@ -20,6 +20,8 @@ public struct EditorIntelligenceServices {
     public var breadcrumbProvider: (any BreadcrumbProviding)?
     /// Parameter-name hints drawn inline at call sites (see ``TextView/inlayHints``).
     public var inlayHintProvider: (any InlayHintProviding)?
+    /// Optional host override for code folding descriptors.
+    public var foldingProvider: (any FoldingProviding)?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
     /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
@@ -35,6 +37,7 @@ public struct EditorIntelligenceServices {
         refactoringProvider: (any RefactoringProviding)? = nil,
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         inlayHintProvider: (any InlayHintProviding)? = nil,
+        foldingProvider: (any FoldingProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
         projectSearchEngine: ProjectSearchEngine? = nil
@@ -46,6 +49,7 @@ public struct EditorIntelligenceServices {
         self.refactoringProvider = refactoringProvider
         self.breadcrumbProvider = breadcrumbProvider
         self.inlayHintProvider = inlayHintProvider
+        self.foldingProvider = foldingProvider
         self.symbolIndex = symbolIndex
         self.workspace = workspace
         self.projectSearchEngine = projectSearchEngine
@@ -636,14 +640,15 @@ public final class EditorIntelligenceController {
         }
     }
 
-    /// Runs the navigation engine for `kind` at the current cursor and focuses the result.
+    /// Runs the navigation engine for `kind` at `utf16Offset` (the caret when `nil`) and focuses
+    /// the result. Resolving at an offset leaves the caret where it is, as a gutter marker click should.
     @discardableResult
-    public func navigate(kind: NavigationKind) -> Bool {
+    public func navigate(kind: NavigationKind, atUTF16Offset utf16Offset: Int? = nil) -> Bool {
         guard let navigationEngine, let textView, let base = adapter.currentDocument else {
             return false
         }
         // The adapter snapshot lags the live buffer, and the caret to resolve is the one on screen.
-        let utf16 = textView.selectedRange.location
+        let utf16 = utf16Offset ?? textView.selectedRange.location
         let position = TextPosition(line: 0, column: utf16, utf16Offset: utf16)
         let cursor = Cursor(position: position)
         let document = Document(
@@ -2084,9 +2089,14 @@ public final class EditorIntelligenceController {
         case 0x74 where modifiers.isEmpty: // Page Up
             moveCompletionSelection(delta: -(CompletionPanelView.maxVisibleRows - 1), wrapping: false)
             return true
-        case 0x24, 0x4C:
+        case 0x24 where modifiers.isEmpty, 0x4C where modifiers.isEmpty:
             acceptSelectedCompletion(replacingIdentifier: false)
             return true
+        case 0x24 where modifiers == .shift, 0x4C where modifiers == .shift:
+            // IntelliJ's Start New Line in the lookup: keep what was typed, close the popup and
+            // let the keymap run ⇧⏎ (Start New Line, or a plain line break in other keymaps).
+            dismissCompletion()
+            return false
         case 0x30 where !modifiers.contains(.shift): // Tab
             acceptSelectedCompletion(replacingIdentifier: true)
             return true

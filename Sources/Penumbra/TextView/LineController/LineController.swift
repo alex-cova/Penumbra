@@ -568,6 +568,20 @@ private extension LineController {
     }
 }
 
+// MARK: - Fold placeholder
+extension LineController {
+    /// Placeholder chip rect in line-local coordinates (last visual fragment).
+    func foldPlaceholderRect() -> CGRect? {
+        guard let lastFragment = typesetter.lineFragments.last else {
+            return nil
+        }
+        guard let localRect = lineFragmentController(for: lastFragment).foldPlaceholderRect() else {
+            return nil
+        }
+        return localRect.offsetBy(dx: 0, dy: lastFragment.yPosition)
+    }
+}
+
 // MARK: - UITextInput
 extension LineController {
     func caretRect(atIndex lineLocalLocation: Int) -> CGRect {

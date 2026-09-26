@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import JavaIntelligence
 import Observation
 import Penumbra
 import SwiftUI
@@ -39,6 +40,7 @@ public final class IDEPreferences {
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
+        static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
@@ -173,6 +175,16 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
     }
 
+    /// Java gutter icons the user turned off (every kind is on by default). Machine-local: not
+    /// part of `IDEPreferencesSnapshot`.
+    var javaDisabledGutterIcons: Set<JavaLineMarkerKind> {
+        didSet { UserDefaults.standard.set(javaDisabledGutterIcons.map(\.rawValue).sorted(), forKey: Keys.javaDisabledGutterIcons) }
+    }
+
+    var enabledJavaGutterIcons: Set<JavaLineMarkerKind> {
+        Set(JavaLineMarkerKind.allCases).subtracting(javaDisabledGutterIcons)
+    }
+
     /// Colour Java identifiers by what they are (types by kind, methods, fields, parameters, locals)
     /// on top of the syntax highlighting. Machine-local: not part of `IDEPreferencesSnapshot`.
     var semanticHighlighting: Bool {
@@ -232,6 +244,7 @@ public final class IDEPreferences {
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
+        javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
@@ -489,6 +502,32 @@ enum KeymapPreset: String, Codable, CaseIterable, Identifiable {
         case .sublime: .sublime
         case .default_: .default_
         case .intelliJ: .intelliJ
+        }
+    }
+}
+
+extension JavaLineMarkerKind {
+    /// The engine glyph drawn for this kind.
+    var gutterIcon: GutterLineMarkerIcon {
+        switch self {
+        case .implementing: return .implementing
+        case .overriding: return .overriding
+        case .implemented: return .implemented
+        case .overridden: return .overridden
+        case .siblingInherited: return .siblingInherited
+        case .recursiveCall: return .recursiveCall
+        }
+    }
+
+    /// The label in Settings › Java › Gutter Icons.
+    var preferenceTitle: String {
+        switch self {
+        case .implementing: return "Implementing method"
+        case .overriding: return "Overriding method"
+        case .implemented: return "Implemented method"
+        case .overridden: return "Overridden method"
+        case .siblingInherited: return "Sibling inherited method"
+        case .recursiveCall: return "Recursive call"
         }
     }
 }

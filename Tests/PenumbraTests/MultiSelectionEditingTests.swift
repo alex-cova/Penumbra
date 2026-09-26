@@ -117,13 +117,12 @@ final class MultiSelectionEditingTests: XCTestCase {
         ]
         textView.insertText("\n")
         XCTAssertEqual(textView.text as String, "a\nb a\nb a\nb")
-        // Sites are applied highest-location-first (1, then 4, then 7 -- the original offsets),
-        // so each caret lands one past where its own "\n" was inserted, unaffected by the edits
-        // still to come further left.
+        // Every caret lands at the start of its own new line, shifted by the line breaks
+        // inserted above it.
         XCTAssertEqual(textView.selectedRanges, [
             NSRange(location: 2, length: 0),
-            NSRange(location: 5, length: 0),
-            NSRange(location: 8, length: 0)
+            NSRange(location: 6, length: 0),
+            NSRange(location: 10, length: 0)
         ])
         XCTAssertTrue(textView.isMultiCursorActive)
     }

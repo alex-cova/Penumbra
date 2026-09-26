@@ -471,6 +471,7 @@ public struct DocumentTextExport: Sendable {
                 return
             }
             textInputView.viewport = CGRect(origin: newValue, size: frame.size)
+            textInputView.dismissFoldPreview()
             // Scroll-wheel updates contentOffset without going through AppKit's
             // layout pass — force line layout for the new viewport now or the
             // clip view reveals empty document space ("text disappears").
@@ -557,10 +558,51 @@ public struct DocumentTextExport: Sendable {
         gutterDecorations = decorations
     }
 
+    /// Icons in the line-marker column, between the line numbers and the folding ribbon (for
+    /// example "overrides a method"). The column is only shown while there are markers. Markers
+    /// follow line insertions and removals until the host replaces them, and are cleared by
+    /// ``setState(_:addUndoAction:)``.
+    public var lineMarkers: [GutterLineMarker] {
+        get { textInputView.lineMarkers }
+        set { textInputView.lineMarkers = newValue }
+    }
+
+    /// Called when the user clicks a line marker, with the icon's rect in window coordinates.
+    public var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
+        get { textInputView.lineMarkerHandler }
+        set { textInputView.lineMarkerHandler = newValue }
+    }
+
+    public func setLineMarkers(_ markers: [GutterLineMarker]) {
+        lineMarkers = markers
+    }
+
     /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
     /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
     /// simply take up zero height, so scrolling and hit-testing already skip them for free — with
     /// the header line of a collapsed region showing a "⋯" placeholder. Off by default.
+    /// Whether ⌘←/→ and Home/End use IntelliJ's Smart Home: the caret goes to the first
+    /// non-whitespace character before column 0 (pressing again toggles), and to the end of the
+    /// code before any trailing whitespace. When off they go straight to the row boundary.
+    /// On by default.
+    public var isSmartHomeEnabled: Bool {
+        get {
+            textInputView.isSmartHomeEnabled
+        }
+        set {
+            textInputView.isSmartHomeEnabled = newValue
+        }
+    }
+    /// Whether ⌥←/→, ⌥⇧←/→ and ⌥⌫/⌦ also stop at camel-case humps (`get|HTTP|Response`)
+    /// and underscores. Off by default, like IntelliJ's "Honor CamelHumps words" setting.
+    public var isCamelHumpsNavigationEnabled: Bool {
+        get {
+            textInputView.isCamelHumpsNavigationEnabled
+        }
+        set {
+            textInputView.isCamelHumpsNavigationEnabled = newValue
+        }
+    }
     public var isLineFoldingEnabled: Bool {
         get {
             textInputView.isLineFoldingEnabled
@@ -1488,7 +1530,9 @@ public struct DocumentTextExport: Sendable {
 
     override open func mouseMoved(with event: NSEvent) {
         distractionFreeController.mouseDidMove()
-        scrollerOverlay.mouseMoved(to: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        scrollerOverlay.mouseMoved(to: point)
+        textInputView.updateFoldPreview(at: point)
         onHoverEvent?(event)
         super.mouseMoved(with: event)
     }

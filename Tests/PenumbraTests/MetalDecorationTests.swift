@@ -167,6 +167,24 @@ final class MetalDecorationTests: XCTestCase {
 
     // MARK: - Fold placeholder
 
+    func testFoldPlaceholderChipUsesVariableWidthText() throws {
+        let atlas = try makeAtlas()
+        let line = makeLine("collapsed")
+        var decorations = decorations()
+        decorations.foldPlaceholder = "{...}"
+        let spec = makeSpec(
+            line: line,
+            frame: CGRect(x: 0, y: 0, width: 400, height: 60),
+            decorations: decorations
+        )
+        var budget = GlyphRasterBudget()
+        let geometry = MetalDecorationBuilder.build(spec: spec, atlas: atlas, scale: 2, budget: &budget)
+        let endOfLineX = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        let chip = try XCTUnwrap(geometry.overlaySolids.first)
+        XCTAssertGreaterThan(Double(chip.size.x), 20, "block placeholder should be wider than a single glyph")
+        XCTAssertGreaterThanOrEqual(Double(chip.origin.x), Double(endOfLineX))
+    }
+
     func testFoldPlaceholderChipUsesSystem11MediumNotThemeFont() throws {
         let atlas = try makeAtlas()
         let line = makeLine("collapsed")

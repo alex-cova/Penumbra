@@ -11,7 +11,7 @@ import Foundation
 /// by the number of folds overlapping the visible region rather than the total fold count.
 final class FoldRibbonView: UIView {
     weak var lineManager: LineManager?
-    weak var foldingController: FoldingController?
+    weak var foldingModel: FoldingModel?
     var textContainerInsetTop: CGFloat = 0
     var markerColor: UIColor = .lightGray {
         didSet { needsDisplay = true }
@@ -73,16 +73,16 @@ final class FoldRibbonView: UIView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let row = row(atLocalY: point.y), let fold = foldingController?.deepestFold(atRow: row) else {
+        guard let row = row(atLocalY: point.y), let fold = foldingModel?.deepestFold(atRow: row) else {
             super.mouseDown(with: event)
             return
         }
-        foldingController?.toggleCollapse(fold)
+        foldingModel?.toggleCollapse(fold)
     }
 
     override func draw(_ dirtyRect: CGRect) {
         super.draw(dirtyRect)
-        guard let context = NSGraphicsContext.current?.cgContext, let lineManager, let foldingController else {
+        guard let context = NSGraphicsContext.current?.cgContext, let lineManager, let foldingModel else {
             return
         }
         let minRow = row(atLocalY: dirtyRect.minY) ?? 0
@@ -91,7 +91,7 @@ final class FoldRibbonView: UIView {
             return
         }
         let visibleRows = minRow ... maxRow
-        for fold in foldingController.folds where fold.lineRange.overlaps(visibleRows) {
+        for fold in foldingModel.regions where fold.lineRange.overlaps(visibleRows) {
             draw(fold, in: context, lineManager: lineManager)
         }
     }
@@ -106,7 +106,7 @@ private extension FoldRibbonView {
         return lineManager.line(containingYOffset: contentY)?.index
     }
 
-    private func draw(_ fold: FoldRange, in context: CGContext, lineManager: LineManager) {
+    private func draw(_ fold: FoldRegion, in context: CGContext, lineManager: LineManager) {
         guard fold.lineRange.lowerBound < lineManager.lineCount else {
             return
         }

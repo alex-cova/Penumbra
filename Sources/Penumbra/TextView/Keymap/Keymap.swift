@@ -128,6 +128,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("8", [.command, .shift])), to: .toggleColumnSelectionMode)
 
         // Editing
+        map.bind(KeyStroke(KeyChord(code: 0x24, .shift)), to: .startNewLine)
         map.bind(KeyStroke(KeyChord("j", [.control, .shift])), to: .joinLines)
         map.bind(KeyStroke(KeyChord("t", [.command, .option])), to: .surroundWith)
         map.bind(KeyStroke(KeyChord("l", [.command, .option])), to: .reformatCode)
@@ -143,6 +144,14 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("n", [.command, .option])), to: .inlineVariable)
         map.bind(KeyStroke(KeyChord("e", [.command, .option])), to: .encapsulateField)
         map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .control)), to: .changeSignature)
+
+        // Code folding
+        map.bind(KeyStroke(KeyChord("-", .command)), to: .collapseRegion)
+        map.bind(KeyStroke(KeyChord("=", .command)), to: .expandRegion)
+        map.bind(KeyStroke(KeyChord("-", [.command, .shift])), to: .collapseAllRegions)
+        map.bind(KeyStroke(KeyChord("=", [.command, .shift])), to: .expandAllRegions)
+        map.bind(KeyStroke(KeyChord("-", [.command, .option])), to: .collapseRegionRecursively)
+        map.bind(KeyStroke(KeyChord("=", [.command, .option])), to: .expandRegionRecursively)
 
         return map
     }()

@@ -4,7 +4,7 @@ import Foundation
 final class TextInputStringTokenizer: UITextInputStringTokenizer {
     var lineManager: LineManager
     var stringView: StringView
-    weak var foldingController: FoldingController?
+    weak var foldingModel: FoldingModel?
     // Used to ensure we can workaround bug where multi-stage input, like when entering Korean text
     // does not work properly. If we do not treat navigation between word boundies as a special case then
     // navigating with Shift + Option + Arrow Keys followed by Shift + Arrow Keys will not work correctly.
@@ -244,13 +244,13 @@ private extension TextInputStringTokenizer {
 
 private extension TextInputStringTokenizer {
     private func adjustedLocation(forNavigation location: Int, direction: UITextDirection) -> Int {
-        guard let foldingController else {
+        guard let foldingModel else {
             return location
         }
         if direction.isForward {
-            return foldingController.visibleLocationForForwardNavigation(from: location)
+            return foldingModel.visibleLocationForForwardNavigation(from: location)
         } else {
-            return foldingController.visibleLocationForBackwardNavigation(from: location)
+            return foldingModel.visibleLocationForBackwardNavigation(from: location)
         }
     }
 
@@ -265,9 +265,9 @@ private extension TextInputStringTokenizer {
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
             return nil
         }
-        if let foldingController, foldingController.isLineHidden(line.id) {
-            return foldingController.lastVisibleLine(atOrBeforeRow: line.index)
-                ?? foldingController.firstVisibleLine(atOrAfterRow: line.index)
+        if let foldingModel, foldingModel.isLineHidden(line.id) {
+            return foldingModel.lastVisibleLine(atOrBeforeRow: line.index)
+                ?? foldingModel.firstVisibleLine(atOrAfterRow: line.index)
         }
         return line
     }

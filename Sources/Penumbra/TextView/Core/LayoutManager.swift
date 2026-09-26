@@ -110,11 +110,12 @@ final class LayoutManager {
             }
         }
     }
-    weak var foldingController: FoldingController? {
+    weak var foldingModel: FoldingModel? {
         didSet {
-            foldRibbonView.foldingController = foldingController
+            foldRibbonView.foldingModel = foldingModel
         }
     }
+    weak var codeFoldingManager: CodeFoldingManager?
     weak var focusModeController: FocusModeController?
     var lineSelectionDisplayType: LineSelectionDisplayType = .disabled {
         didSet {
@@ -217,6 +218,28 @@ final class LayoutManager {
     var gutterDecorationHandler: ((Int) -> Void)? {
         didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
     }
+    private let lineMarkerView = GutterLineMarkerView()
+    var lineMarkers: [GutterLineMarker] = [] {
+        didSet {
+            guard lineMarkers != oldValue else { return }
+            lineMarkerView.markers = lineMarkers
+            let slots = GutterLineMarkerIndex.slotCount(of: lineMarkers)
+            gutterWidthService.lineMarkerColumnWidth = CGFloat(slots) * GutterLineMarkerView.slotWidth
+            lineMarkerView.isHidden = lineMarkers.isEmpty
+            setNeedsLayout()
+        }
+    }
+    var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
+        didSet {
+            guard let lineMarkerHandler else {
+                lineMarkerView.onMarkerClicked = nil
+                return
+            }
+            lineMarkerView.onMarkerClicked = { [weak lineMarkerView] marker, rect in
+                lineMarkerHandler(marker, lineMarkerView?.convert(rect, to: nil) ?? rect)
+            }
+        }
+    }
     let methodSeparatorView = MethodSeparatorView()
     /// Measured width of ``pageGuideColumn`` characters; used to cap method separators at the margin.
     var pageGuideColumnOffset: CGFloat = 0
@@ -318,6 +341,7 @@ final class LayoutManager {
         self.lineSelectionBackgroundView.isUserInteractionEnabled = false
         self.foldRibbonView.lineManager = lineManager
         self.gutterDecorationView.lineManager = lineManager
+        self.lineMarkerView.lineManager = lineManager
         self.methodSeparatorView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
@@ -611,6 +635,32 @@ extension LayoutManager {
         }
     }
 
+    func foldPlaceholderHitTest(at point: CGPoint) -> (CGRect, FoldRegion)? {
+        guard let foldingModel, foldingModel.isEnabled else {
+            return nil
+        }
+        let adjustedY = point.y - textContainerInset.top
+        guard let line = lineManager.line(containingYOffset: adjustedY),
+              let region = foldingModel.collapsedFold(withHeaderLineID: line.id),
+              region.isCollapsed else {
+            return nil
+        }
+        let lineController = typesetLineController(for: line)
+        guard let localRect = lineController.foldPlaceholderRect() else {
+            return nil
+        }
+        let viewRect = CGRect(
+            x: localRect.minX + leadingLineSpacing + textContainerInset.left + gutterWidthService.gutterWidth,
+            y: localRect.minY + line.yPosition + textContainerInset.top,
+            width: localRect.width,
+            height: localRect.height
+        )
+        guard viewRect.contains(point) else {
+            return nil
+        }
+        return (viewRect, region)
+    }
+
     /// The controller for `line`, typeset in full. Controllers far from the viewport are evicted
     /// (`evictDistantLineControllers`) and lines outside the laid-out band were never typeset, so
     /// a point or caret on such a line (keyboard movement from an off-screen caret) lays it out
@@ -675,7 +725,7 @@ extension LayoutManager {
         if needsLayout {
             PenumbraSignposts.event("LayoutManager.layoutStarted")
             needsLayout = false
-            foldingController?.recomputeIfNeeded()
+            codeFoldingManager?.updateIfNeeded()
             let performLayout = { [self] in
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
@@ -766,12 +816,25 @@ extension LayoutManager {
             gutterDecorationView.textContainerInsetTop = textContainerInset.top
         }
         var interactive: CGRect?
+        let markerWidth = gutterWidthService.lineMarkerColumnWidth
+        if markerWidth > 0 {
+            let ribbonWidth = showFoldingRibbon ? gutterWidthService.foldingRibbonWidth : 0
+            let markerFrame = CGRect(x: totalGutterWidth - ribbonWidth - markerWidth, y: 0, width: markerWidth, height: contentSize.height)
+            if lineMarkerView.frame != markerFrame {
+                // Folding, wrapping and added lines all change the content height and move rows.
+                lineMarkerView.frame = markerFrame
+                lineMarkerView.needsDisplay = true
+            }
+            lineMarkerView.textContainerInsetTop = textContainerInset.top
+            lineMarkerView.rowHeight = theme.font.lineHeight * lineHeightMultiplier
+            interactive = markerFrame
+        }
         if showFoldingRibbon {
             let ribbonWidth = gutterWidthService.foldingRibbonWidth
             let ribbonFrame = CGRect(x: totalGutterWidth - ribbonWidth, y: 0, width: ribbonWidth, height: contentSize.height)
             foldRibbonView.frame = ribbonFrame
             foldRibbonView.textContainerInsetTop = textContainerInset.top
-            interactive = ribbonFrame
+            interactive = interactive.map { $0.union(ribbonFrame) } ?? ribbonFrame
         }
         if gutterWidthService.showGutterDecorations {
             let decorationFrame = CGRect(x: 0, y: 0, width: decorationWidth, height: contentSize.height)
@@ -899,7 +962,7 @@ extension LayoutManager {
             // `line(containingYOffset:)` can never land inside a zero-height range — but this
             // walk advances row-by-row from there, so hidden lines in the middle of the visible
             // range need this explicit check.)
-            if let foldingController, foldingController.isLineHidden(line.id) {
+            if let foldingModel, foldingModel.isLineHidden(line.id) {
                 nextLine = line.index < lineManager.lineCount - 1 ? lineManager.line(atRow: line.index + 1) : nil
                 continue
             }
@@ -949,7 +1012,7 @@ extension LayoutManager {
             layoutLineNumberView(for: line, lineYPosition: lineYPosition)
             // Layout line fragments ("sublines") in the line until we have filled the viewport.
             let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds, lineYPosition: lineYPosition)
-            let collapsedFold = foldingController?.collapsedFold(withHeaderLineID: line.id)
+            let collapsedFold = foldingModel?.collapsedFold(withHeaderLineID: line.id)
             let lineRange = NSRange(location: lineLocation, length: line.data.length)
             let focusedLineRanges = focusModeController?.focusedRanges(forLineWithID: line.id, lineRange: lineRange) ?? []
             // Apply marked text before upsert so `LineFragmentPaintSpec.decorations` is current.
@@ -971,7 +1034,7 @@ extension LayoutManager {
                     range.overlaps(lineFragment.range) ? range.capped(to: lineFragment.range) : nil
                 }
                 lineFragmentController.foldPlaceholderText = (collapsedFold != nil && lineFragmentIndex == lineFragmentControllers.count - 1)
-                    ? "\u{22EF}"
+                    ? collapsedFold?.placeholder
                     : nil
                 lineFragmentController.inlayHints = lineController.inlayHints.filter { hint in
                     hint.localOffset > lineFragment.range.location && hint.localOffset <= lineFragment.range.upperBound
@@ -1277,6 +1340,7 @@ extension LayoutManager {
         lineNumbersContainerView.removeFromSuperview()
         foldRibbonView.removeFromSuperview()
         gutterDecorationView.removeFromSuperview()
+        lineMarkerView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
         // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
         // views (which paint the glyphs). When Metal is active it is a viewport-sized overlay on
@@ -1299,6 +1363,7 @@ extension LayoutManager {
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
         gutterContainerView.addSubview(gutterDecorationView)
         gutterContainerView.addSubview(lineNumbersContainerView)
+        gutterContainerView.addSubview(lineMarkerView)
         gutterContainerView.addSubview(foldRibbonView)
     }
 
@@ -1329,6 +1394,7 @@ extension LayoutManager {
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
         gutterDecorationView.isHidden = gutterDecorations.isEmpty
+        lineMarkerView.isHidden = lineMarkers.isEmpty
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing

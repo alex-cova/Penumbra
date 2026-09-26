@@ -241,10 +241,10 @@ extension TextInputView {
             moveSelectionForArrowKey(direction: .up, flags: flags)
             return
         case 0x73:
-            moveSelectionToBoundary(.line, direction: .backward, extending: flags.contains(.shift))
+            moveSelectionToCaretStop(.line, direction: .backward, extending: flags.contains(.shift))
             return
         case 0x77:
-            moveSelectionToBoundary(.line, direction: .forward, extending: flags.contains(.shift))
+            moveSelectionToCaretStop(.line, direction: .forward, extending: flags.contains(.shift))
             return
         case 0x33 where isEditable:
             if flags.contains(.option) {
@@ -338,13 +338,21 @@ extension TextInputView {
         case #selector(moveWordRightAndModifySelection(_:)):
             moveSelectionForArrowKey(direction: .right, flags: [.option, .shift])
         case #selector(moveToBeginningOfLine(_:)):
-            moveSelectionToBoundary(.line, direction: .backward, extending: false)
+            moveSelectionToCaretStop(.line, direction: .backward, extending: false)
         case #selector(moveToEndOfLine(_:)):
-            moveSelectionToBoundary(.line, direction: .forward, extending: false)
+            moveSelectionToCaretStop(.line, direction: .forward, extending: false)
         case #selector(moveToBeginningOfLineAndModifySelection(_:)):
-            moveSelectionToBoundary(.line, direction: .backward, extending: true)
+            moveSelectionToCaretStop(.line, direction: .backward, extending: true)
         case #selector(moveToEndOfLineAndModifySelection(_:)):
-            moveSelectionToBoundary(.line, direction: .forward, extending: true)
+            moveSelectionToCaretStop(.line, direction: .forward, extending: true)
+        case #selector(moveToBeginningOfDocument(_:)):
+            moveSelectionToCaretStop(.document, direction: .backward, extending: false)
+        case #selector(moveToEndOfDocument(_:)):
+            moveSelectionToCaretStop(.document, direction: .forward, extending: false)
+        case #selector(moveToBeginningOfDocumentAndModifySelection(_:)):
+            moveSelectionToCaretStop(.document, direction: .backward, extending: true)
+        case #selector(moveToEndOfDocumentAndModifySelection(_:)):
+            moveSelectionToCaretStop(.document, direction: .forward, extending: true)
         case #selector(insertNewline(_:)) where isEditable, #selector(insertNewlineIgnoringFieldEditor(_:)) where isEditable:
             insertText("\n")
         case #selector(insertTab(_:)) where isEditable:
@@ -508,12 +516,27 @@ extension TextInputView {
         case .insertLineBelow:
             guard isEditable else { return true }
             insertLine(above: false)
+        case .startNewLine:
+            guard isEditable else { return true }
+            startNewLine()
         case .sortLinesAscending:
             guard isEditable else { return true }
             sortSelectedLines(descending: false)
         case .sortLinesDescending:
             guard isEditable else { return true }
             sortSelectedLines(descending: true)
+        case .collapseRegion:
+            performCollapseRegion()
+        case .expandRegion:
+            performExpandRegion()
+        case .collapseAllRegions:
+            performCollapseAllRegions()
+        case .expandAllRegions:
+            performExpandAllRegions()
+        case .collapseRegionRecursively:
+            performCollapseRegionRecursively()
+        case .expandRegionRecursively:
+            performExpandRegionRecursively()
         default:
             // Not a core action (palette, navigation, formatting, surround-with…).
             return false
@@ -538,17 +561,52 @@ extension TextInputView {
         if flags.contains(.shift), isMultiCursorActive {
             collapseMultiSelectionToPrimary()
         }
+        let textDirection = layoutDirectionToTextDirection(direction)
+        let stop = caretStop(for: direction, flags: flags)
         if !flags.contains(.shift), isMultiCursorActive {
-            moveAllSelections(in: direction)
+            if let stop {
+                moveAllSelections { caretStopLocation(stop, from: $0, direction: textDirection) }
+            } else {
+                moveAllSelections(in: direction)
+            }
             return
         }
-        if flags.contains(.command) {
-            moveSelectionToBoundary(.line, direction: layoutDirectionToTextDirection(direction), extending: flags.contains(.shift))
-        } else if flags.contains(.option) {
-            moveSelectionToBoundary(.word, direction: layoutDirectionToTextDirection(direction), extending: flags.contains(.shift))
+        if let stop {
+            moveSelectionToCaretStop(stop, direction: textDirection, extending: flags.contains(.shift))
         } else {
             moveSelectionByCharacter(in: direction, extending: flags.contains(.shift))
         }
+    }
+
+    /// Where a modified arrow key moves the caret: ⌘←/→ to the line boundary (Smart Home),
+    /// ⌘↑/↓ to the document boundary, ⌥ + arrow to the next word stop.
+    private func caretStop(for direction: UITextLayoutDirection, flags: NSEvent.ModifierFlags) -> CaretStop? {
+        if flags.contains(.command) {
+            return direction == .up || direction == .down ? .document : .line
+        }
+        if flags.contains(.option) {
+            return .word
+        }
+        return nil
+    }
+
+    private func moveSelectionToCaretStop(_ stop: CaretStop, direction: UITextDirection, extending: Bool) {
+        guard let currentRange = selection else {
+            return
+        }
+        if extending {
+            guard let ends = selectionEnds,
+                  let target = caretStopLocation(stop, from: ends.active, direction: direction) else {
+                return
+            }
+            updateSelection(anchor: ends.anchor, activeLocation: target, extending: true)
+            return
+        }
+        let referenceIndex = direction == .backward ? currentRange.location : currentRange.upperBound
+        guard let target = caretStopLocation(stop, from: referenceIndex, direction: direction) else {
+            return
+        }
+        updateSelection(anchor: target, activeLocation: target, extending: false)
     }
 
     private func layoutDirectionToTextDirection(_ direction: UITextLayoutDirection) -> UITextDirection {
@@ -606,31 +664,6 @@ extension TextInputView {
             return
         }
         updateSelection(anchor: newPosition.index, activeLocation: newPosition.index, extending: false)
-    }
-
-    private func moveSelectionToBoundary(_ granularity: UITextGranularity,
-                                       direction: UITextDirection,
-                                       extending: Bool) {
-        guard let currentRange = selection else {
-            return
-        }
-        if extending {
-            guard let ends = selectionEnds else {
-                return
-            }
-            let position = IndexedPosition(index: ends.active)
-            guard let boundary = tokenizer.position(from: position, toBoundary: granularity, inDirection: direction) as? IndexedPosition else {
-                return
-            }
-            updateSelection(anchor: ends.anchor, activeLocation: boundary.index, extending: true)
-            return
-        }
-        let referenceIndex = direction == .backward ? currentRange.location : currentRange.upperBound
-        let position = IndexedPosition(index: referenceIndex)
-        guard let boundary = tokenizer.position(from: position, toBoundary: granularity, inDirection: direction) as? IndexedPosition else {
-            return
-        }
-        updateSelection(anchor: boundary.index, activeLocation: boundary.index, extending: false)
     }
 
     private func updateSelection(anchor: Int, activeLocation: Int, extending: Bool) {

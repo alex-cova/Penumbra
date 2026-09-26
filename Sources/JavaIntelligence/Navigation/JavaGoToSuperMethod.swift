@@ -121,12 +121,12 @@ extension JavaNavigationSession {
     }
 
     /// The buffer's own declaration wins over the indexed (possibly stale) one.
-    private func liveStub(_ qualifiedName: String) async -> JavaClassStub? {
+    func liveStub(_ qualifiedName: String) async -> JavaClassStub? {
         if let current = currentClasses.first(where: { $0.qualifiedName == qualifiedName }) { return current }
         return await index.classStub(qualifiedName: qualifiedName)
     }
 
-    private func directSupertypes(of qualifiedName: String) async -> [String] {
+    func directSupertypes(of qualifiedName: String) async -> [String] {
         guard let current = currentClasses.first(where: { $0.qualifiedName == qualifiedName }) else {
             return await JavaMemberLookup.directSupertypeNames(of: qualifiedName, index: index)
         }

@@ -6,7 +6,7 @@ final class CaretRectService {
     var lineManager: LineManager
     var textContainerInset: UIEdgeInsets = .zero
     var showLineNumbers = false
-    weak var foldingController: FoldingController?
+    weak var foldingModel: FoldingModel?
 
     private let lineControllerStorage: LineControllerStorage
     private let gutterWidthService: GutterWidthService
@@ -29,7 +29,7 @@ final class CaretRectService {
     }
 
     func caretRect(at location: Int, allowMovingCaretToNextLineFragment: Bool) -> CGRect {
-        let adjustedLocation = foldingController?.visibleCaretLocation(for: location) ?? location
+        let adjustedLocation = foldingModel?.visibleCaretLocation(for: location) ?? location
         let safeLocation = min(max(adjustedLocation, 0), stringView.length)
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
             return CGRect(x: leadingLineSpacing, y: textContainerInset.top, width: 0, height: 0)

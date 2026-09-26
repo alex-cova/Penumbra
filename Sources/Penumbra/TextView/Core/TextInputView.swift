@@ -203,10 +203,15 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    /// ⌘←/→ and Home/End go to the first non-whitespace character / before trailing whitespace
+    /// first (see ``LineBoundaryNavigator``) instead of straight to the row boundary.
+    var isSmartHomeEnabled = true
+    /// ⌥←/→ and ⌥⌫/⌦ also stop at camel-case humps (see ``WordCaretStops``).
+    var isCamelHumpsNavigationEnabled = false
     var isLineFoldingEnabled = false {
         didSet {
             if isLineFoldingEnabled != oldValue {
-                foldingController.isEnabled = isLineFoldingEnabled
+                codeFoldingManager.isEnabled = isLineFoldingEnabled
                 gutterWidthService.showFoldingRibbon = isLineFoldingEnabled
                 layoutManager.showFoldingRibbon = isLineFoldingEnabled
                 layoutManager.setNeedsLayout()
@@ -859,7 +864,7 @@ final class TextInputView: UIView, UITextInput {
                 indentController.stringView = stringView
                 lineMovementController.stringView = stringView
                 customTokenizer.stringView = stringView
-                foldingController.stringView = stringView
+                foldingModel.stringView = stringView
                 focusModeController.stringView = stringView
                 occurrenceHighlightController.stringView = stringView
             }
@@ -876,8 +881,8 @@ final class TextInputView: UIView, UITextInput {
                 selectionRectService.lineManager = lineManager
                 highlightService.lineManager = lineManager
                 customTokenizer.lineManager = lineManager
-                foldingController.lineManager = lineManager
-                foldingController.setNeedsRecompute()
+                foldingModel.lineManager = lineManager
+                codeFoldingManager.scheduleUpdate(full: true)
                 focusModeController.lineManager = lineManager
             }
         }
@@ -906,13 +911,15 @@ final class TextInputView: UIView, UITextInput {
                 indentController.languageMode = languageMode
                 if let treeSitterLanguageMode = languageMode as? TreeSitterInternalLanguageMode {
                     treeSitterLanguageMode.delegate = self
-                    treeSitterFoldProvider.languageMode = treeSitterLanguageMode
-                    foldingController.foldProvider = treeSitterFoldProvider
-                    treeSitterFoldProvider.invalidate()
-                    foldingController.setNeedsRecompute()
+                    treeSitterFoldingProvider.languageMode = treeSitterLanguageMode
+                    codeFoldingManager.treeSitterFoldingProvider = treeSitterFoldingProvider
+                    codeFoldingManager.setProviders(primary: treeSitterFoldingProvider)
+                    treeSitterFoldingProvider.invalidate()
+                    codeFoldingManager.scheduleUpdate(full: true)
                     methodSeparatorController.languageMode = treeSitterLanguageMode
                 } else {
-                    foldingController.foldProvider = LineIndentationFoldProvider()
+                    codeFoldingManager.treeSitterFoldingProvider = nil
+                    codeFoldingManager.setProviders(primary: nil)
                     methodSeparatorController.languageMode = nil
                 }
                 methodSeparatorController.recompute()
@@ -994,9 +1001,11 @@ final class TextInputView: UIView, UITextInput {
     /// instead of the single range it would otherwise infer from `selection`.
     private var pendingMultiSelectionUndoRestore: (ranges: [NSRange], primaryIndex: Int)?
     private let highlightService: HighlightService
-    private let foldingController: FoldingController
+    let foldingModel: FoldingModel
+    let codeFoldingManager: CodeFoldingManager
     private let focusModeController: FocusModeController
-    private let treeSitterFoldProvider = TreeSitterLineFoldProvider()
+    private let treeSitterFoldingProvider = TreeSitterFoldingProvider()
+    private let foldPreviewController = FoldPreviewController()
     let methodSeparatorController = MethodSeparatorController()
     let occurrenceHighlightController: OccurrenceHighlightController
     /// Resolved per-language behaviour. Pushed from ``TextView`` whenever the identifier or
@@ -1095,10 +1104,12 @@ final class TextInputView: UIView, UITextInput {
                                                     contentSizeService: contentSizeService,
                                                     gutterWidthService: gutterWidthService,
                                                     caretRectService: caretRectService)
-        foldingController = FoldingController(lineManager: lineManager,
-                                              stringView: stringView,
-                                              lineControllerStorage: lineControllerStorage,
-                                              contentSizeService: contentSizeService)
+        foldingModel = FoldingModel(lineManager: lineManager,
+                                    stringView: stringView,
+                                    lineControllerStorage: lineControllerStorage,
+                                    contentSizeService: contentSizeService)
+        codeFoldingManager = CodeFoldingManager(foldingModel: foldingModel)
+        codeFoldingManager.setProviders(primary: nil)
         focusModeController = FocusModeController(lineManager: lineManager, stringView: stringView)
         layoutManager = LayoutManager(lineManager: lineManager,
                                       languageMode: languageMode,
@@ -1140,11 +1151,16 @@ final class TextInputView: UIView, UITextInput {
             self.layoutManager.setNeedsLayout()
             self.setNeedsLayout()
         }
-        layoutManager.foldingController = foldingController
+        layoutManager.foldingModel = foldingModel
+        layoutManager.codeFoldingManager = codeFoldingManager
         layoutManager.focusModeController = focusModeController
-        lineMovementController.foldingController = foldingController
-        caretRectService.foldingController = foldingController
-        customTokenizer.foldingController = foldingController
+        lineMovementController.foldingModel = foldingModel
+        caretRectService.foldingModel = foldingModel
+        customTokenizer.foldingModel = foldingModel
+        foldPreviewController.textInputView = self
+        foldPreviewController.foldingModel = foldingModel
+        foldPreviewController.lineManager = lineManager
+        foldPreviewController.stringView = stringView
         selectionOverlayController = SelectionOverlayController(textInputView: self,
                                                                 caretRectService: caretRectService,
                                                                 selectionRectService: selectionRectService)
@@ -1381,11 +1397,12 @@ final class TextInputView: UIView, UITextInput {
     /// Whether a line is currently hidden inside a collapsed fold. The minimap skips these so
     /// its rows line up with what the editor shows.
     func isLineHidden(_ lineID: DocumentLineNodeID) -> Bool {
-        foldingController.isLineHidden(lineID)
+        foldingModel.isLineHidden(lineID)
     }
 
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
         if !inlayHints.isEmpty { inlayHints = [] }
+        if !lineMarkers.isEmpty { lineMarkers = [] }
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
         syntaxParsePolicy = state.parsePolicy
@@ -1698,6 +1715,17 @@ final class TextInputView: UIView, UITextInput {
     var gutterDecorationHandler: ((Int) -> Void)? {
         get { layoutManager.gutterDecorationHandler }
         set { layoutManager.gutterDecorationHandler = newValue }
+    }
+
+    /// Kept on their lines through edits, and dropped when the document is replaced.
+    var lineMarkers: [GutterLineMarker] {
+        get { layoutManager.lineMarkers }
+        set { layoutManager.lineMarkers = newValue }
+    }
+
+    var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
+        get { layoutManager.lineMarkerHandler }
+        set { layoutManager.lineMarkerHandler = newValue }
     }
 
     override func didMoveToWindow() {
@@ -2039,21 +2067,22 @@ private extension TextInputView {
     }
 
     private func setupFoldingObserver() {
-        foldingController.didChangeFolds.sink { [weak self] in
+        foldingModel.didChangeFolds.sink { [weak self] in
             self?.adjustSelectionForFoldingIfNeeded()
+            self?.foldPreviewController.dismiss()
         }.store(in: &cancellables)
     }
 
     private func sanitizedSelection(_ range: NSRange?) -> NSRange? {
-        guard let range, foldingController.isEnabled else {
+        guard let range, foldingModel.isEnabled else {
             return range
         }
-        return foldingController.adjustedSelection(range)
+        return foldingModel.adjustedSelection(range)
     }
 
     private func adjustSelectionForFoldingIfNeeded() {
         if multiSelectionController.hasMultipleSelections {
-            let adjustedSelections = multiSelectionController.selections.map { foldingController.adjustedSelection($0) }
+            let adjustedSelections = multiSelectionController.selections.map { foldingModel.adjustedSelection($0) }
             if adjustedSelections != multiSelectionController.selections {
                 applySelectedRanges(adjustedSelections, notifyDelegate: false)
             }
@@ -2062,7 +2091,7 @@ private extension TextInputView {
         guard let currentSelection = _selectedRange else {
             return
         }
-        let adjustedSelection = foldingController.adjustedSelection(currentSelection)
+        let adjustedSelection = foldingModel.adjustedSelection(currentSelection)
         guard adjustedSelection != currentSelection else {
             return
         }
@@ -2071,6 +2100,59 @@ private extension TextInputView {
 }
 
 extension TextInputView {
+    func updateFoldPreview(at point: CGPoint) {
+        let hit = layoutManager.foldPlaceholderHitTest(at: point)
+        foldPreviewController.mouseMoved(
+            at: point,
+            placeholderRect: hit?.0,
+            region: hit?.1
+        )
+    }
+
+    func dismissFoldPreview() {
+        foldPreviewController.dismiss()
+    }
+
+    func performCollapseRegion() {
+        performFoldingAction { foldingModel.collapseRegion(atCaret: $0) }
+    }
+
+    func performExpandRegion() {
+        performFoldingAction { foldingModel.expandRegion(atCaret: $0) }
+    }
+
+    func performCollapseAllRegions() {
+        guard foldingModel.isEnabled else { return }
+        foldingModel.collapseAllRegions()
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
+    func performExpandAllRegions() {
+        guard foldingModel.isEnabled else { return }
+        foldingModel.expandAllRegions()
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
+    func performCollapseRegionRecursively() {
+        performFoldingAction { foldingModel.collapseRegionRecursively(atCaret: $0) }
+    }
+
+    func performExpandRegionRecursively() {
+        performFoldingAction { foldingModel.expandRegionRecursively(atCaret: $0) }
+    }
+
+    private func performFoldingAction(_ action: (Int) -> Void) {
+        guard foldingModel.isEnabled else {
+            return
+        }
+        let caret = _selectedRange?.location ?? 0
+        action(caret)
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
     /// Repaints syntax colours on lines touched by `utf16Ranges`, e.g. after semantic highlights changed.
     func refreshSyntaxColors(forUTF16Ranges utf16Ranges: [NSRange]) {
         var lineIDs = Set<DocumentLineNodeID>()
@@ -2631,16 +2713,15 @@ extension TextInputView {
         guard let currentRange = selection else {
             return
         }
-        let position = IndexedPosition(index: backward ? currentRange.location : currentRange.upperBound)
-        let direction: UITextDirection = backward ? .backward : .forward
-        guard let boundary = tokenizer.position(from: position, toBoundary: .word, inDirection: direction) as? IndexedPosition else {
+        let from = backward ? currentRange.location : currentRange.upperBound
+        guard let boundary = caretStopLocation(.word, from: from, direction: backward ? .backward : .forward) else {
             return
         }
         let deleteRange: NSRange
         if backward {
-            deleteRange = NSRange(location: boundary.index, length: currentRange.upperBound - boundary.index)
+            deleteRange = NSRange(location: boundary, length: currentRange.upperBound - boundary)
         } else {
-            deleteRange = NSRange(location: currentRange.location, length: boundary.index - currentRange.location)
+            deleteRange = NSRange(location: currentRange.location, length: boundary - currentRange.location)
         }
         guard deleteRange.length > 0 else {
             return
@@ -2807,6 +2888,10 @@ extension TextInputView {
                 }
             }
         }
+        // Only an edit that adds or removes a line break can move markers to other lines.
+        let markerLineStarts: [Int]? = lineMarkers.isEmpty || !(Self.containsLineBreak(newString) || Self.containsLineBreak(currentText))
+            ? nil
+            : lineMarkers.map { lineManager.location(ofRow: min(max($0.line - 1, 0), max(lineManager.lineCount - 1, 0))) }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let textEditResult = EditorPerformanceTrace.shared.measure(.textMutation) {
             textEditHelper.replaceText(in: range, with: newString)
@@ -2816,6 +2901,14 @@ extension TextInputView {
         }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
+        if let markerLineStarts {
+            let lineManager = lineManager
+            lineMarkers = GutterLineMarkerIndex.applyingEdit(
+                to: lineMarkers, lineStarts: markerLineStarts, range: range, deletedText: currentText,
+                replacementLength: nsNewString.length,
+                row: { lineManager.row(containingCharacterAt: $0) ?? max(lineManager.lineCount - 1, 0) }
+            )
+        }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
         let languageModeLineChangeSet = EditorPerformanceTrace.shared.measure(.incrementalParse) {
             languageMode.textDidChange(textChange)
@@ -2850,6 +2943,10 @@ extension TextInputView {
         if updatedTextEditResult.didAddOrRemoveLines {
             delegate?.textInputViewDidInvalidateContentSize(self)
         }
+    }
+
+    private static func containsLineBreak(_ string: String) -> Bool {
+        string.utf8.contains { $0 == 0x0A || $0 == 0x0D }
     }
 
     private func applyLineChangesToLayoutManager(_ lineChangeSet: LineChangeSet) {
@@ -2899,21 +2996,21 @@ extension TextInputView {
             layoutManager.relayoutVisibleFragmentsAfterLineStructureChange()
             selectionOverlayController.updateLayout()
         }
-        if foldingController.isEnabled {
+        if foldingModel.isEnabled {
             let previousLineCount = lineManager.lineCount - lineChangeSet.insertedLines.count + lineChangeSet.removedLines.count
             let spliceRow = lineChangeSet.spliceRow ?? 0
             let delta = lineChangeSet.insertedLines.count - lineChangeSet.removedLines.count
-            foldingController.foldProvider.invalidateForEdit(
+            codeFoldingManager.invalidateTreeSitterProviderForEdit(
                 changedRows: lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount),
                 lineCount: lineManager.lineCount,
                 previousLineCount: previousLineCount,
                 spliceRow: spliceRow
             )
-            foldingController.applyLineDelta(at: spliceRow, delta: delta)
+            codeFoldingManager.applyLineDelta(at: spliceRow, delta: delta)
             if let rows = lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount) {
-                foldingController.setNeedsRecompute(rows: rows)
+                codeFoldingManager.scheduleUpdate(dirtyRows: rows)
             } else {
-                foldingController.setNeedsRecompute()
+                codeFoldingManager.scheduleUpdate(full: true)
             }
         }
         // One existing line whose height did not change is already typeset and on the canvas.
@@ -3026,7 +3123,12 @@ extension TextInputView {
         pendingMultiSelectionUndoRestore = (selections, multiSelectionController.primaryIndex)
         var newSelections: [NSRange] = []
         for selection in selections {
+            let lengthBefore = stringView.length
             indentController.insertLineBreak(in: selection, using: lineEndings)
+            // Sites are edited bottom-up, so this edit sits above every caret recorded so far
+            // and shifts them all by the text it added.
+            let delta = stringView.length - lengthBefore
+            newSelections = newSelections.map { NSRange(location: $0.location + delta, length: $0.length) }
             newSelections.append(_selectedRange ?? NSRange(location: selection.location, length: 0))
         }
         pendingMultiSelectionUndoRestore = nil

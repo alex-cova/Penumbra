@@ -66,12 +66,21 @@ public extension EditorActionID {
     static let toggleComment = EditorActionID("toggleComment")
     static let insertLineAbove = EditorActionID("insertLineAbove")
     static let insertLineBelow = EditorActionID("insertLineBelow")
+    /// Moves every caret to the end of its line and presses Enter there, leaving the line
+    /// intact (IntelliJ's Start New Line, ⇧⏎ in the IntelliJ keymap).
+    static let startNewLine = EditorActionID("startNewLine")
     static let sortLinesAscending = EditorActionID("sortLinesAscending")
     static let sortLinesDescending = EditorActionID("sortLinesDescending")
 
     // View
     static let toggleMethodSeparators = EditorActionID("toggleMethodSeparators")
     static let toggleOccurrenceHighlighting = EditorActionID("toggleOccurrenceHighlighting")
+    static let collapseRegion = EditorActionID("collapseRegion")
+    static let expandRegion = EditorActionID("expandRegion")
+    static let collapseAllRegions = EditorActionID("collapseAllRegions")
+    static let expandAllRegions = EditorActionID("expandAllRegions")
+    static let collapseRegionRecursively = EditorActionID("collapseRegionRecursively")
+    static let expandRegionRecursively = EditorActionID("expandRegionRecursively")
 
     // Find
     static let toggleFindPanel = EditorActionID("toggleFindPanel")
@@ -162,10 +171,17 @@ public extension EditorActionID {
         .toggleComment: "Toggle Line Comment",
         .insertLineAbove: "Insert Line Above",
         .insertLineBelow: "Insert Line Below",
+        .startNewLine: "Start New Line",
         .sortLinesAscending: "Sort Lines Ascending",
         .sortLinesDescending: "Sort Lines Descending",
         .toggleMethodSeparators: "Method Separators",
         .toggleOccurrenceHighlighting: "Highlight Occurrences of Selection",
+        .collapseRegion: "Collapse",
+        .expandRegion: "Expand",
+        .collapseAllRegions: "Collapse All",
+        .expandAllRegions: "Expand All",
+        .collapseRegionRecursively: "Collapse Recursively",
+        .expandRegionRecursively: "Expand Recursively",
         .toggleFindPanel: "Find…",
         .toggleReplacePanel: "Replace…",
         .findInFiles: "Find in Files…",

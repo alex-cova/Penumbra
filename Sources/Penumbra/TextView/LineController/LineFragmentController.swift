@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 @preconcurrency import AppKit
 
@@ -136,6 +137,25 @@ final class LineFragmentController {
                 invalidateAttachedViewIfPresent()
             }
         }
+    }
+
+    func foldPlaceholderRect() -> CGRect? {
+        guard let foldPlaceholderText else {
+            return nil
+        }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: foldPlaceholderColor,
+            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
+        ]
+        let size = foldPlaceholderText.size(withAttributes: attrs)
+        let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))
+        let padding: CGFloat = 4
+        return CGRect(
+            x: endOfLineX + padding,
+            y: (lineFragment.scaledSize.height - size.height) / 2 - 1,
+            width: size.width + padding * 2,
+            height: size.height + 2
+        )
     }
 
     private let renderer: LineFragmentRenderer

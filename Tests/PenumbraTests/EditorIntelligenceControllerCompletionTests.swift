@@ -162,6 +162,30 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         XCTAssertEqual(textView.text, "helloXYZ + 1")
     }
 
+    /// ⇧⏎ in the popup is IntelliJ's Start New Line: the typed prefix stays, the popup closes and
+    /// the line is left intact. ⌘⏎ doesn't accept the item either.
+    func testModifiedReturnDoesNotAcceptCompletion() async throws {
+        let textView = makeTextView("x = hel;", caret: 7)
+        textView.keymap = .intelliJ
+        window?.makeKeyAndOrderFront(nil)
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.focusTextInput())
+        let controller = try await makeController(textView, provider: StubProvider { _ in ["hello", "help"] })
+
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        send(keyEvent(keyCode: 0x24, characters: "\r", flags: .shift), to: textView)
+        XCTAssertFalse(controller.isShowingCompletion)
+        XCTAssertEqual(textView.text, "x = hel;\n")
+
+        textView.text = "x = hel;"
+        textView.selectedRange = NSRange(location: 7, length: 0)
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        send(keyEvent(keyCode: 0x24, characters: "\r", flags: .command), to: textView)
+        XCTAssertFalse(textView.text.contains("hello") || textView.text.contains("help;"))
+    }
+
     func testLoneExplicitSuggestionIsInsertedWithCaretInsideParentheses() async throws {
         let textView = makeTextView("tak", caret: 3)
         let provider = StubProvider(items: { range in
