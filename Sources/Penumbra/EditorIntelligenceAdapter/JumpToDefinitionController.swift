@@ -18,6 +18,9 @@ public final class JumpToDefinitionController {
     /// to a picker (e.g. `CommandPaletteController.presentList`). If unset, the first location
     /// is used.
     public var onPresentChoices: ((NavigationKind, [Location]) -> Void)?
+    /// Called instead of ``onPresentChoices`` when a ⌘-click resolves to more than one location,
+    /// with the clicked identifier's range and text, so the choices can pop up next to it.
+    public var onPresentChoicesAtClick: ((NavigationKind, [Location], _ identifier: NSRange, _ name: String) -> Void)?
     /// Called when a target belongs to a different document (`Location.url` set and different
     /// from `textView.documentURL`). Return `true` if the host opened it; otherwise the target
     /// is focused in the current text view.
@@ -56,6 +59,10 @@ public final class JumpToDefinitionController {
     }
 
     public func navigate(at position: TextPosition, kind: NavigationKind) {
+        navigate(at: position, kind: kind, clickedIdentifier: nil)
+    }
+
+    private func navigate(at position: TextPosition, kind: NavigationKind, clickedIdentifier: NSRange?) {
         clearHover()
         guard let document = navigationDocument(cursor: Cursor(position: position)) else {
             return
@@ -78,7 +85,11 @@ public final class JumpToDefinitionController {
                 case .multiple(let locations) where locations.count == 1:
                     self.go(to: locations[0])
                 case .multiple(let locations):
-                    if let onPresentChoices = self.onPresentChoices {
+                    if let clickedIdentifier, let onPresentChoicesAtClick = self.onPresentChoicesAtClick,
+                       let textView = self.textView, NSMaxRange(clickedIdentifier) <= (textView.text as NSString).length {
+                        let name = (textView.text as NSString).substring(with: clickedIdentifier)
+                        onPresentChoicesAtClick(kind, locations, clickedIdentifier, name)
+                    } else if let onPresentChoices = self.onPresentChoices {
                         onPresentChoices(kind, locations)
                     } else if let first = locations.first {
                         self.go(to: first)
@@ -237,7 +248,7 @@ public final class JumpToDefinitionController {
                 line: textLocation.lineNumber,
                 column: textLocation.column,
                 utf16Offset: index
-            ), kind: .definition)
+            ), kind: .definition, clickedIdentifier: identifierRange(in: textView.text as NSString, at: index))
             return
         }
         guard let document = adapter.currentDocument else {

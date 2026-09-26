@@ -22,7 +22,17 @@ enum JavaGoToDefinition {
         guard let tree = JavaSyntaxParser().parse(source) else { return [] }
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return [] }
-        if case .declaration = reference { return [] }
+        if case .declaration = reference {
+            // A declaration is its own definition. On an abstract one, the useful target is what
+            // implements it, as with Go to Implementation.
+            guard JavaGoToImplementation.isAbstractDeclaration(in: tree, atByteOffset: byteOffset) else { return [] }
+            let session = JavaNavigationSession(
+                source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
+                index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer,
+                decompile: JavaDecompileGate(policy: .denied)
+            )
+            return await session.implementationHits(reference)
+        }
 
         let session = JavaNavigationSession(
             source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,

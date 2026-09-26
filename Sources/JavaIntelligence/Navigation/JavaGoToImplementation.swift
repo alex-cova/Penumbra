@@ -23,6 +23,29 @@ enum JavaGoToImplementation {
         )
         return await session.implementationHits(reference)
     }
+
+    /// Whether the caret is on the name of a declaration that only makes sense through its
+    /// implementations: an interface, an abstract class, an interface method that isn't `static`
+    /// or `private`, or an abstract method. ⌘-click on one of these lists its implementations.
+    static func isAbstractDeclaration(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> Bool {
+        let leaf = tree.node(atByteOffset: byteOffset)
+        guard let declaration = leaf.parent,
+              declaration.child(byFieldName: "name")?.byteRange == leaf.byteRange else { return false }
+        func hasModifier(_ keyword: String) -> Bool {
+            declaration.namedChildren.first(where: { $0.type == "modifiers" })?.children.contains { $0.type == keyword } == true
+        }
+        switch declaration.type {
+        case "interface_declaration":
+            return true
+        case "class_declaration":
+            return hasModifier("abstract")
+        case "method_declaration":
+            if hasModifier("abstract") { return true }
+            return declaration.parent?.type == "interface_body" && !hasModifier("static") && !hasModifier("private")
+        default:
+            return false
+        }
+    }
 }
 
 extension JavaNavigationSession {

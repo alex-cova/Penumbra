@@ -256,6 +256,75 @@ final class JavaGoToImplementationTests: XCTestCase {
         XCTAssertEqual(location.url?.lastPathComponent, "FakeService.java")
     }
 
+    // MARK: - Go to Definition on an abstract declaration (⌘-click)
+
+    func testDefinitionOnAnInterfaceDeclarationListsImplementors() async throws {
+        let shape = try write("Shape.java", "interface Shape { double area(); }")
+        let circle = try write("Circle.java", "class Circle implements Shape { public double area() { return 1; } }")
+        let square = try write("Square.java", "class Square implements Shape { public double area() { return 2; } }")
+        let hits = try await implementations(
+            "interface €Shape { double area(); }", url: shape.url, indexing: [shape, circle, square], kind: .definition
+        )
+        XCTAssertEqual(hits.map(\.text).sorted(), ["Circle", "Square"])
+    }
+
+    func testDefinitionOnAnAbstractClassDeclarationListsSubclasses() async throws {
+        let base = try write("Base.java", "abstract class Base { }")
+        let leaf = try write("Leaf.java", "class Leaf extends Base { }")
+        let hits = try await implementations("abstract class €Base { }", url: base.url, indexing: [base, leaf], kind: .definition)
+        XCTAssertEqual(hits.map(\.text), ["Leaf"])
+    }
+
+    func testDefinitionOnAnInterfaceMethodDeclarationListsOverrides() async throws {
+        let shape = try write("Shape.java", "interface Shape { double area(); }")
+        let circle = try write("Circle.java", "class Circle implements Shape { public double area() { return 1; } }")
+        let square = try write("Square.java", "class Square implements Shape { public double area() { return 2; } }")
+        let hits = try await implementations(
+            "interface Shape { double €area(); }", url: shape.url, indexing: [shape, circle, square], kind: .definition
+        )
+        XCTAssertEqual(hits.compactMap { $0.location.url?.lastPathComponent }.sorted(), ["Circle.java", "Square.java"])
+    }
+
+    func testDefinitionOnADefaultMethodDeclarationListsOverrides() async throws {
+        let task = try write("Task.java", "interface Task { default void run() {} }")
+        let impl = try write("Impl.java", "class Impl implements Task { public void run() {} }")
+        let hits = try await implementations(
+            "interface Task { default void €run() {} }", url: task.url, indexing: [task, impl], kind: .definition
+        )
+        XCTAssertEqual(hits.compactMap { $0.location.url?.lastPathComponent }, ["Impl.java"])
+    }
+
+    func testDefinitionOnAnAbstractMethodDeclarationListsOverrides() async throws {
+        let base = try write("Base.java", "abstract class Base { abstract void run(); }")
+        let child = try write("Child.java", "class Child extends Base { void run() {} }")
+        let hits = try await implementations(
+            "abstract class Base { abstract void €run(); }", url: base.url, indexing: [base, child], kind: .definition
+        )
+        XCTAssertEqual(hits.compactMap { $0.location.url?.lastPathComponent }, ["Child.java"])
+    }
+
+    func testDefinitionOnConcreteOrStaticDeclarationsStaysEmpty() async throws {
+        let base = try write("Base.java", "class Base { void run() {} }")
+        let child = try write("Child.java", "class Child extends Base { void run() {} }")
+        let util = try write("Util.java", "interface Util { static void help() {} }")
+        let files = [base, child, util]
+        let concreteClass = try await navigate("class €Base { void run() {} }", url: base.url, indexing: files, kind: .definition)
+        XCTAssertNil(concreteClass)
+        let concreteMethod = try await navigate("class Base { void €run() {} }", url: base.url, indexing: files, kind: .definition)
+        XCTAssertNil(concreteMethod)
+        let staticMethod = try await navigate("interface Util { static void €help() {} }", url: util.url, indexing: files, kind: .definition)
+        XCTAssertNil(staticMethod)
+        let field = try await navigate("interface Util { int €LIMIT = 1; }", url: util.url, indexing: files, kind: .definition)
+        XCTAssertNil(field)
+    }
+
+    func testDefinitionOnAnInterfaceReferenceStillOpensTheInterface() async throws {
+        let shape = try write("Shape.java", "interface Shape { double area(); }")
+        let circle = try write("Circle.java", "class Circle implements Shape { public double area() { return 1; } }")
+        let hits = try await implementations("class T { €Shape s; }", indexing: [shape, circle], kind: .definition)
+        XCTAssertEqual(hits.compactMap { $0.location.url?.lastPathComponent }, ["Shape.java"])
+    }
+
     // MARK: - Fixtures
 
     private struct Fixture {
@@ -273,6 +342,7 @@ final class JavaGoToImplementationTests: XCTestCase {
             return ns.substring(with: NSRange(location: start, length: end - start))
         }
     }
+
 
     private func write(_ name: String, _ source: String, in directory: URL? = nil) throws -> Fixture {
         let folder = directory ?? scratch!
@@ -293,17 +363,21 @@ final class JavaGoToImplementationTests: XCTestCase {
         return try JavaIndexShardReader(url: url)
     }
 
-    private func navigate(_ marked: String, url: URL? = nil, indexing files: [Fixture]) async throws -> NavigationResult? {
+    private func navigate(
+        _ marked: String, url: URL? = nil, indexing files: [Fixture], kind: NavigationKind = .implementation
+    ) async throws -> NavigationResult? {
         let index = JavaIndex()
         await index.setSources([.init(precedence: 1, reader: try writeShard(files.flatMap(stubs(of:))))])
         let provider = JavaGoToDefinitionProvider(
             index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache", isDirectory: true))
         )
-        return await provide(marked, url: url ?? scratch.appendingPathComponent("T.java"), provider: provider)
+        return await provide(marked, url: url ?? scratch.appendingPathComponent("T.java"), provider: provider, kind: kind)
     }
 
-    private func implementations(_ marked: String, url: URL? = nil, indexing files: [Fixture]) async throws -> [Hit] {
-        let result = try await navigate(marked, url: url, indexing: files)
+    private func implementations(
+        _ marked: String, url: URL? = nil, indexing files: [Fixture], kind: NavigationKind = .implementation
+    ) async throws -> [Hit] {
+        let result = try await navigate(marked, url: url, indexing: files, kind: kind)
         let locations: [Location]
         switch result {
         case .single(let location)?: locations = [location]
@@ -316,7 +390,9 @@ final class JavaGoToImplementationTests: XCTestCase {
         }
     }
 
-    private func provide(_ marked: String, url: URL, provider: JavaGoToDefinitionProvider) async -> NavigationResult? {
+    private func provide(
+        _ marked: String, url: URL, provider: JavaGoToDefinitionProvider, kind: NavigationKind = .implementation
+    ) async -> NavigationResult? {
         let marker = marked.range(of: "€")!
         let source = marked.replacingOccurrences(of: "€", with: "")
         let utf16 = marked.utf16.distance(from: marked.utf16.startIndex, to: marker.lowerBound.samePosition(in: marked.utf16)!)
@@ -330,7 +406,7 @@ final class JavaGoToImplementationTests: XCTestCase {
             languageIdentifier: "java"
         )
         return await provider.provide(context: NavigationContext(
-            document: document, cursor: Cursor(position: position), selection: document.selection, kind: .implementation
+            document: document, cursor: Cursor(position: position), selection: document.selection, kind: kind
         ))
     }
 }

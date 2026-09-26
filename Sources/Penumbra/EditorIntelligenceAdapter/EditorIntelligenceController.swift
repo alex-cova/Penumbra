@@ -72,6 +72,9 @@ public final class EditorIntelligenceController {
     public let breadcrumbBarView = BreadcrumbBarView()
     public let outlineSidebarView = OutlineSidebarView()
     public let codeActionView = CodeActionView()
+    /// Targets of a ⌘-click that resolved to more than one location, shown next to the click.
+    public let navigationChoicesView = NavigationChoicesView()
+    private var navigationChoices: [Location] = []
     public let workspaceSearchPanelView = WorkspaceSearchPanelView()
 
     private weak var textView: TextView?
@@ -229,6 +232,7 @@ public final class EditorIntelligenceController {
             self?.handleTypingEvent(event)
         }
         textView.onCaretRepositioningClick = { [weak self] in
+            self?.hideNavigationChoices()
             guard let self, self.isCompletionVisible || self.completionAnchor != nil else { return }
             self.dismissCompletion()
         }
@@ -273,6 +277,9 @@ public final class EditorIntelligenceController {
             let jump = JumpToDefinitionController(textView: textView, adapter: self.adapter, navigationEngine: navigationEngine)
             jump.onOpenInOtherDocument = { [weak self] location in
                 self?.onOpenLocationInOtherDocument?(location) ?? false
+            }
+            jump.onPresentChoicesAtClick = { [weak self] _, locations, identifier, name in
+                self?.showNavigationChoices(locations, anchor: identifier, name: name)
             }
             jump.onPresentChoices = { [weak self] kind, locations in
                 guard let self else { return }
@@ -1166,6 +1173,9 @@ public final class EditorIntelligenceController {
         codeActionView.onSelectAction = { [weak self] action in
             self?.applyCodeAction(action)
         }
+        navigationChoicesView.onChoose = { [weak self] index in
+            self?.chooseNavigationChoice(index)
+        }
         workspaceSearchPanelView.onSelectResult = { [weak self] result in
             self?.focusWorkspaceResult(result)
         }
@@ -1182,7 +1192,7 @@ public final class EditorIntelligenceController {
         overlayContainer.isHidden = true
         textView.addFixedOverlaySubview(overlayContainer)
 
-        for view in [completionPanelView, hoverWindowView, completionDocumentationView, ghostTextView, parameterHintsView, codeActionView, workspaceSearchPanelView] {
+        for view in [completionPanelView, hoverWindowView, completionDocumentationView, ghostTextView, parameterHintsView, codeActionView, navigationChoicesView, workspaceSearchPanelView] {
             view.translatesAutoresizingMaskIntoConstraints = true
             view.isHidden = true
             overlayContainer.addSubview(view)
@@ -1190,6 +1200,9 @@ public final class EditorIntelligenceController {
         textView.addScrollObserver { [weak self] in
             guard let self else { return }
             self.suppressResizeDismissal = true
+            if textView.isUserInitiatedScroll {
+                self.hideNavigationChoices()
+            }
             if textView.isUserInitiatedScroll, self.isCompletionVisible || self.completionAnchor != nil {
                 self.dismissCompletion()
             } else {
@@ -1911,6 +1924,38 @@ public final class EditorIntelligenceController {
         updateOverlayVisibility()
     }
 
+    // MARK: - Navigation Choices
+
+    private func showNavigationChoices(_ locations: [Location], anchor: NSRange, name: String) {
+        guard let textView else { return }
+        navigationChoices = locations
+        let model = NavigationChoicesModel(identifier: name, locations: locations)
+        navigationChoicesView.update(model: model)
+        positionPanel(
+            navigationChoicesView,
+            near: anchor.location,
+            in: textView,
+            size: NavigationChoicesView.preferredSize(for: model)
+        )
+        navigationChoicesView.isHidden = false
+        overlayContainer.isHidden = false
+        navigationChoicesView.selectRow(0)
+    }
+
+    private func chooseNavigationChoice(_ index: Int) {
+        guard navigationChoices.indices.contains(index) else { return }
+        let location = navigationChoices[index]
+        hideNavigationChoices()
+        focus(location)
+    }
+
+    private func hideNavigationChoices() {
+        guard !navigationChoicesView.isHidden else { return }
+        navigationChoicesView.isHidden = true
+        navigationChoices = []
+        updateOverlayVisibility()
+    }
+
     // MARK: - Workspace Search
 
     private func presentWorkspaceSearch(query: String, results: [WorkspaceSearchResult]) {
@@ -1969,6 +2014,29 @@ public final class EditorIntelligenceController {
     // MARK: - Keyboard
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if !navigationChoicesView.isHidden {
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            switch event.keyCode {
+            case 0x7D where modifiers.isEmpty:
+                navigationChoicesView.moveSelection(by: 1)
+                return true
+            case 0x7E where modifiers.isEmpty:
+                navigationChoicesView.moveSelection(by: -1)
+                return true
+            case 0x24 where modifiers.isEmpty, 0x4C where modifiers.isEmpty:
+                if let index = navigationChoicesView.selectedIndex {
+                    chooseNavigationChoice(index)
+                }
+                return true
+            case 0x35:
+                hideNavigationChoices()
+                return true
+            default:
+                // Any other key goes to the editor and closes the popup, like a menu.
+                hideNavigationChoices()
+            }
+        }
+
         if event.keyCode == 0x35 {
             hideHover()
             hideCodeActions()
@@ -2182,6 +2250,7 @@ public final class EditorIntelligenceController {
             || !ghostTextView.isHidden
             || !parameterHintsView.isHidden
             || !codeActionView.isHidden
+            || !navigationChoicesView.isHidden
             || !workspaceSearchPanelView.isHidden
         overlayContainer.isHidden = !hasVisibleChild
     }
