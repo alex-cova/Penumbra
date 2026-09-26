@@ -3,7 +3,7 @@ import Foundation
 
 /// Encapsulates a field (private + accessors + external usage rewrites) and generates getters/setters.
 enum JavaEncapsulateField {
-    struct FieldContext {
+    struct FieldContext: @unchecked Sendable {
         let symbolID: JavaSymbolID
         let declaringClass: String
         let fieldName: String
