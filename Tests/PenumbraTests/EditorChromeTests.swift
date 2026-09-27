@@ -1,7 +1,7 @@
 import XCTest
 import EditorIntelligence
 
-final class UIBridgeTests: XCTestCase {
+final class EditorChromeTests: XCTestCase {
     func testCompletionPanelModel() {
         let range = makeRange(line: 0, startColumn: 0, endColumn: 2)
         let item = CompletionItem(label: "foo", insertText: "foo", kind: .function, range: range, source: "Test")

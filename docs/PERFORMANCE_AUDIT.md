@@ -138,7 +138,7 @@ Completion/Navigation/Hover/Diagnostics/Refactoring/LSP/Indexing/Workspace/Cache
 mutated only on the main thread by convention (confirmed explicitly in the `FoldingController.swift:20-24`
 doc comment: *"`LineManager` is a plain (non-`Sendable`) class mutated only on the main thread"*), not by
 `@MainActor` enforcement. Roughly 23 files carry `@MainActor` annotations, concentrated in `TextView/Core`
-and `UIBridge`.
+and `EditorChrome`.
 
 This creates a hard boundary: every time the actor-based EIP layer needs to see the document, something
 on the main-thread side must bridge the live `NSMutableString` into an immutable `Sendable` snapshot. Three

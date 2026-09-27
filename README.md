@@ -87,7 +87,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Workspace Integration**: `PenumbraWorkbenchWorkspaceBridge` syncing open workbench documents directly into EIP `Workspace`.
 * **Command Palette**: Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), and Go to File — a debounced `SearchEverywhereEngine` fans out to concurrent providers with fuzzy-ranked results and sigil-scoped queries (`>` actions, `@` symbols, `/` + `#` files).
 
-### 🖥️ Ready-to-Use AppKit Views (`Penumbra/UIBridge`)
+### 🖥️ Ready-to-Use AppKit Views (`Penumbra/EditorChrome`)
 
 * `CompletionPanelView`: Floating code completion panel with keyboard navigation.
 * `HoverWindowView`: Rich markdown hover tooltip popover.
@@ -134,7 +134,7 @@ Penumbra/
 │   │   │   └── Keymap/             # Keymap presets, EditorActionID, chord dispatcher
 │   │   ├── Workbench/              # Multi-pane splits, tab groups, session restoration
 │   │   │   └── CommandPalette/     # Search Everywhere engine and built-in providers
-│   │   ├── UIBridge/               # AppKit accessory views (completions, hover, palette)
+│   │   ├── EditorChrome/           # AppKit accessory views (completions, hover, palette)
 │   │   ├── EditorIntelligenceAdapter/ # Adapter connecting TextView to EditorIntelligence
 │   │   ├── TreeSitter/             # Tree-sitter Swift wrapper and queries
 │   │   └── Library/                # AppKit compatibility shims and utilities

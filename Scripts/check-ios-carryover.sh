@@ -17,6 +17,7 @@ patterns=(
   'UIMenuController'
   'UIApplication\.didReceiveMemoryWarningNotification'
   'UIKitCompatibility'
+  'Penumbra/UIBridge'
   'open class UIView'
   'open class UIScrollView'
 )
