@@ -152,7 +152,7 @@ private extension FindPanelController {
         guard let emphasisManager else {
             return
         }
-        let activeColor = UIColor.systemYellow
+        let activeColor = NSColor.systemYellow
         let currentRange = session.currentRange
         // `session.highlightRanges` is a capped window (FindSearchEngine.maxHighlightedMatches)
         // around the current match, not every match in the document — deliberate, so opening the

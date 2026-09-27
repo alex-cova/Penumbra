@@ -38,7 +38,7 @@ enum MetalDecorationBuilder {
     /// System 11 pt medium — the fold-placeholder face, matching `LineFragmentRenderer`
     /// (deliberately *not* the theme font atlased).
     @MainActor
-    static var foldPlaceholderFont: UIFont {
+    static var foldPlaceholderFont: NSFont {
         .systemFont(ofSize: 11, weight: .medium)
     }
 
@@ -95,7 +95,7 @@ private extension MetalDecorationBuilder {
             originX + CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
         }
 
-        func premultiplied(_ color: UIColor) -> SIMD4<Float> {
+        func premultiplied(_ color: NSColor) -> SIMD4<Float> {
             MetalColor.premultiplied(color, appearance: appearance, colorSpace: colorSpace)
         }
     }
@@ -404,8 +404,8 @@ private extension MetalDecorationBuilder {
     @MainActor
     static func textGlyphs(
         _ string: String,
-        font: UIFont,
-        color: UIColor,
+        font: NSFont,
+        color: NSColor,
         atX x: CGFloat,
         context: Context,
         atlas: GlyphAtlas,

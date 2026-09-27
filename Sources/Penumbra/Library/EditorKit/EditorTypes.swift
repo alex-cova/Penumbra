@@ -1,9 +1,6 @@
 @preconcurrency import AppKit
 import Foundation
 
-public typealias UIColor = NSColor
-public typealias UIFont = NSFont
-public typealias UIFontDescriptor = NSFontDescriptor
 public typealias UIEdgeInsets = NSEdgeInsets
 public typealias UIRectCorner = RectCorner
 

@@ -39,7 +39,7 @@ final class LineFragmentController {
             }
         }
     }
-    var markedTextBackgroundColor: UIColor {
+    var markedTextBackgroundColor: NSColor {
         get {
             renderer.markedTextBackgroundColor
         }
@@ -116,7 +116,7 @@ final class LineFragmentController {
             }
         }
     }
-    var foldPlaceholderColor: UIColor {
+    var foldPlaceholderColor: NSColor {
         get {
             renderer.foldPlaceholderColor
         }
@@ -127,7 +127,7 @@ final class LineFragmentController {
             }
         }
     }
-    var foldPlaceholderBackgroundColor: UIColor {
+    var foldPlaceholderBackgroundColor: NSColor {
         get {
             renderer.foldPlaceholderBackgroundColor
         }
@@ -145,7 +145,7 @@ final class LineFragmentController {
         }
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: foldPlaceholderColor,
-            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium)
         ]
         let size = foldPlaceholderText.size(withAttributes: attrs)
         let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))

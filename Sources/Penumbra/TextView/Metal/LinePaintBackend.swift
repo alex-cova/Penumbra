@@ -24,17 +24,17 @@ protocol LinePaintBackend: AnyObject {
 
 struct CanvasPaintSpec {
     var frame: CGRect
-    var backgroundColor: UIColor
+    var backgroundColor: NSColor
     var lineSelectionRect: CGRect?
-    var lineSelectionColor: UIColor
+    var lineSelectionColor: NSColor
     var pageGuideFrame: CGRect?
     var pageGuideHairlineWidth: CGFloat
-    var pageGuideHairlineColor: UIColor
-    var pageGuideShadingColor: UIColor
+    var pageGuideHairlineColor: NSColor
+    var pageGuideShadingColor: NSColor
     var showsPageGuideShading: Bool
     /// Horizontal hairlines in content space, painted with the page-guide hairline.
     var methodSeparatorFrames: [CGRect]
-    var methodSeparatorColor: UIColor
+    var methodSeparatorColor: NSColor
     var appearance: NSAppearance?
     var colorSpace: NSColorSpace
 }
@@ -51,7 +51,7 @@ struct LineFragmentPaintSpec {
     /// Font used when a `CTRun` carries no `.font` attribute. `LayoutManager` supplies `theme.font`.
     var fallbackFont: CTFont
     /// Color used when a `CTRun` carries no `.foregroundColor` attribute (`theme.textColor`).
-    var fallbackColor: UIColor
+    var fallbackColor: NSColor
     /// Appearance to resolve dynamic colors against; the Metal backend needs it off the render pass.
     var appearance: NSAppearance?
     /// Output color space selected from the attached window/screen.
@@ -68,13 +68,13 @@ struct LineFragmentPaintSpec {
 struct LineFragmentDecorations {
     var highlighted: [HighlightedRangeFragment]
     var markedRange: NSRange?
-    var markedColor: UIColor
+    var markedColor: NSColor
     var markedRadius: CGFloat
     var unfocusedAlpha: CGFloat
     var focusedRanges: [NSRange]
     var foldPlaceholder: String?
-    var foldPlaceholderColor: UIColor = .secondaryLabelColor
-    var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+    var foldPlaceholderColor: NSColor = .secondaryLabelColor
+    var foldPlaceholderBackgroundColor: NSColor = .quaternaryLabelColor
     /// Inlay hints inside this fragment (line-local offsets), drawn in the room reserved before
     /// the character each precedes.
     var inlayHints: [LineInlayHint] = []
@@ -85,9 +85,9 @@ struct LineFragmentDecorations {
     /// Resolved invisible-character markers for this fragment (empty when the feature is off). The
     /// Metal backend does not read `InvisibleCharacterConfiguration`; `LayoutManager` resolves it.
     var invisibles: InvisibleCharacterLayout = .empty
-    var invisibleFont: UIFont = .systemFont(ofSize: 12)
-    var invisibleTextColor: UIColor = .label
-    var invisibleWarningColor: UIColor = .systemRed
+    var invisibleFont: NSFont = .systemFont(ofSize: 12)
+    var invisibleTextColor: NSColor = .label
+    var invisibleWarningColor: NSColor = .systemRed
 }
 
 extension InvisibleCharacterLayout: Equatable {

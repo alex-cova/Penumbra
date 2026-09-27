@@ -593,7 +593,7 @@ final class LayoutManager {
 
     /// Copies the right-margin hairline onto method separators. `color == nil` or `width <= 0`
     /// falls back to the theme's page-guide stroke at ``pageGuideHairlineOpacity``.
-    func syncMethodSeparatorHairline(color: UIColor?, width: CGFloat) {
+    func syncMethodSeparatorHairline(color: NSColor?, width: CGFloat) {
         methodSeparatorView.separatorColor = color
             ?? theme.pageGuideHairlineColor.withAlphaComponent(pageGuideHairlineOpacity)
         methodSeparatorView.separatorWidth = width > 0 ? width : theme.pageGuideHairlineWidth

@@ -3,15 +3,15 @@ import Foundation
 
 final class TreeSitterSyntaxHighlightToken {
     let range: NSRange
-    let textColor: UIColor?
+    let textColor: NSColor?
     let shadow: NSShadow?
-    let font: UIFont?
+    let font: NSFont?
     let fontTraits: FontTraits
     var isEmpty: Bool {
         range.length == 0 || (textColor == nil && font == nil && shadow == nil && fontTraits.isEmpty)
     }
 
-    init(range: NSRange, textColor: UIColor?, shadow: NSShadow?, font: UIFont?, fontTraits: FontTraits) {
+    init(range: NSRange, textColor: NSColor?, shadow: NSShadow?, font: NSFont?, fontTraits: FontTraits) {
         self.range = range
         self.textColor = textColor
         self.shadow = shadow

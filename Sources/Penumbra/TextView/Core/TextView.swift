@@ -211,93 +211,12 @@ public struct DocumentTextExport: Sendable {
             findPanelController.panelView.apply(theme: newValue)
         }
     }
-    /// The autocorrection style for the text view.
-    public var autocorrectionType: EditorTextAutocorrectionType {
-        get {
-            textInputView.autocorrectionType
-        }
-        set {
-            textInputView.autocorrectionType = newValue
-        }
-    }
-    /// The autocapitalization style for the text view.
-    public var autocapitalizationType: EditorTextAutocapitalizationType {
-        get {
-            textInputView.autocapitalizationType
-        }
-        set {
-            textInputView.autocapitalizationType = newValue
-        }
-    }
-    /// The spell-checking style for the text view.
-    public var smartQuotesType: EditorTextSmartQuotesType {
-        get {
-            textInputView.smartQuotesType
-        }
-        set {
-            textInputView.smartQuotesType = newValue
-        }
-    }
-    /// The configuration state for smart dashes.
-    public var smartDashesType: EditorTextSmartDashesType {
-        get {
-            textInputView.smartDashesType
-        }
-        set {
-            textInputView.smartDashesType = newValue
-        }
-    }
-    /// The configuration state for the smart insertion and deletion of space characters.
-    public var smartInsertDeleteType: EditorTextSmartInsertDeleteType {
-        get {
-            textInputView.smartInsertDeleteType
-        }
-        set {
-            textInputView.smartInsertDeleteType = newValue
-        }
-    }
-    /// The spell-checking style for the text object.
-    public var spellCheckingType: EditorTextSpellCheckingType {
-        get {
-            textInputView.spellCheckingType
-        }
-        set {
-            textInputView.spellCheckingType = newValue
-        }
-    }
-    /// The keyboard type for the text view.
-    public var keyboardType: EditorKeyboardType {
-        get {
-            textInputView.keyboardType
-        }
-        set {
-            textInputView.keyboardType = newValue
-        }
-    }
-    /// The appearance style of the keyboard for the text view.
-    public var keyboardAppearance: EditorKeyboardAppearance {
-        get {
-            textInputView.keyboardAppearance
-        }
-        set {
-            textInputView.keyboardAppearance = newValue
-        }
-    }
-    /// The display of the return key.
-    public var returnKeyType: EditorReturnKeyType {
-        get {
-            textInputView.returnKeyType
-        }
-        set {
-            textInputView.returnKeyType = newValue
-        }
-    }
     /// Returns the undo manager used by the text view.
     override public var undoManager: UndoManager? {
         textInputView.undoManager
     }
     /// The color of the insertion point. This can be used to control the color of the caret.
-    public var insertionPointColor: UIColor {
+    public var insertionPointColor: NSColor {
         get {
             textInputView.insertionPointColor
         }
@@ -306,7 +225,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The color of the selection bar. It is most common to set this to the same color as the color used for the insertion point.
-    public var selectionBarColor: UIColor {
+    public var selectionBarColor: NSColor {
         get {
             textInputView.selectionBarColor
         }
@@ -315,7 +234,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The color of the selection highlight. It is most common to set this to the same color as the color used for the insertion point.
-    public var selectionHighlightColor: UIColor {
+    public var selectionHighlightColor: NSColor {
         get {
             textInputView.selectionHighlightColor
         }
@@ -439,7 +358,7 @@ public struct DocumentTextExport: Sendable {
         !textInputView.isFirstResponder && isEditable
     }
     /// The text view's background color.
-    public override var backgroundColor: UIColor? {
+    public override var backgroundColor: NSColor? {
         get {
             textInputView.backgroundColor
         }

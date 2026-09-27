@@ -2,8 +2,8 @@ import Foundation
 @preconcurrency import AppKit
 
 struct DefaultStringAttributes {
-    let textColor: UIColor
-    let font: UIFont
+    let textColor: NSColor
+    let font: NSFont
     let kern: CGFloat
     let tabWidth: CGFloat
 

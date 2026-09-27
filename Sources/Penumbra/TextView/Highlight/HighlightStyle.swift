@@ -6,11 +6,11 @@ public enum HighlightStyle: Equatable {
     /// Filled background highlight.
     case standard
     /// Straight underline drawn beneath the text.
-    case underline(color: UIColor)
+    case underline(color: NSColor)
     /// Wavy squiggle drawn beneath the text (typical for diagnostics).
-    case squiggle(color: UIColor)
+    case squiggle(color: NSColor)
     /// Rounded outline around the text, optionally filled.
-    case outline(color: UIColor, fill: Bool = false)
+    case outline(color: NSColor, fill: Bool = false)
 
     var shapeRadius: CGFloat {
         switch self {

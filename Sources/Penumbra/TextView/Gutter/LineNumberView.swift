@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import AppKit
 
 final class LineNumberView: EditorView, ReusableView {
-    var textColor: UIColor {
+    var textColor: NSColor {
         get {
             titleLabel.textColor
         }
@@ -10,7 +10,7 @@ final class LineNumberView: EditorView, ReusableView {
             titleLabel.textColor = newValue
         }
     }
-    var font: UIFont {
+    var font: NSFont {
         get {
             titleLabel.font ?? .systemFont(ofSize: NSFont.systemFontSize)
         }

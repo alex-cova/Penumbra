@@ -8,16 +8,16 @@ public enum TextViewDiagnosticSeverity: Equatable, Sendable {
     case information
     case hint
 
-    var squiggleColor: UIColor {
+    var squiggleColor: NSColor {
         switch self {
         case .error:
-            return UIColor.systemRed
+            return NSColor.systemRed
         case .warning:
-            return UIColor.systemOrange
+            return NSColor.systemOrange
         case .information:
-            return UIColor.systemBlue
+            return NSColor.systemBlue
         case .hint:
-            return UIColor.secondaryLabelColor
+            return NSColor.secondaryLabelColor
         }
     }
 }

@@ -8,7 +8,7 @@ final class SelectionHandleView: EditorView {
     }
 
     let kind: Kind
-    var handleColor: UIColor = .label {
+    var handleColor: NSColor = .label {
         didSet {
             setNeedsDisplay()
         }

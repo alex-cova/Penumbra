@@ -9,7 +9,7 @@ final class GutterDecorationView: EditorView {
         didSet { needsDisplay = true }
     }
     var onLineClicked: ((Int) -> Void)?
-    var iconColor: UIColor = .systemGreen {
+    var iconColor: NSColor = .systemGreen {
         didSet { needsDisplay = true }
     }
 

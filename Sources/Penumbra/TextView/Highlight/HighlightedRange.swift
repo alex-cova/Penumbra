@@ -8,7 +8,7 @@ public final class HighlightedRange {
     /// Range in the text to highlight.
     public let range: NSRange
     /// Color to highlight the text with.
-    public let color: UIColor
+    public let color: NSColor
     /// Corner radius of the highlight.
     public let cornerRadius: CGFloat
     /// How the highlight is rendered.
@@ -26,7 +26,7 @@ public final class HighlightedRange {
     ///   - isInactive: Whether the highlight should use a dimmed appearance. Defaults to `false`.
     public init(id: String = UUID().uuidString,
                 range: NSRange,
-                color: UIColor,
+                color: NSColor,
                 cornerRadius: CGFloat = 0,
                 style: HighlightStyle = .standard,
                 isInactive: Bool = false) {
@@ -38,7 +38,7 @@ public final class HighlightedRange {
         self.isInactive = isInactive
     }
 
-    init(emphasis: Emphasis, group: String, color: UIColor) {
+    init(emphasis: Emphasis, group: String, color: NSColor) {
         self.id = "emphasis:\(group):\(UUID().uuidString)"
         self.range = emphasis.range
         self.color = color

@@ -6,12 +6,12 @@ import simd
 /// a specific `NSAppearance` and returned as premultiplied sRGB, which is what every Metal pipeline
 /// in this package blends with (`sourceRGBBlendFactor = .one`).
 enum MetalColor {
-    static func premultipliedSRGB(_ color: UIColor, appearance: NSAppearance?) -> SIMD4<Float> {
+    static func premultipliedSRGB(_ color: NSColor, appearance: NSAppearance?) -> SIMD4<Float> {
         premultiplied(color, appearance: appearance, colorSpace: .sRGB)
     }
 
     private struct CacheKey: Hashable {
-        let color: UIColor
+        let color: NSColor
         let appearanceName: NSAppearance.Name?
         let colorSpace: NSColorSpace
     }
@@ -23,7 +23,7 @@ enum MetalColor {
     /// space plus `performAsCurrentDrawingAppearance`) was ~30% of `GlyphRunExtractor.prepare`.
     /// A theme has a few dozen colours; the cache is dropped if it ever grows past that.
     static func premultiplied(
-        _ color: UIColor,
+        _ color: NSColor,
         appearance: NSAppearance?,
         colorSpace: NSColorSpace
     ) -> SIMD4<Float> {
@@ -50,11 +50,11 @@ enum MetalColor {
     }
 
     private static func convertPremultiplied(
-        _ color: UIColor,
+        _ color: NSColor,
         appearance: NSAppearance?,
         colorSpace: NSColorSpace
     ) -> SIMD4<Float> {
-        func convert(_ color: UIColor) -> SIMD4<Float> {
+        func convert(_ color: NSColor) -> SIMD4<Float> {
             guard let rgb = color.usingColorSpace(colorSpace) else {
                 return SIMD4(0, 0, 0, 1)
             }

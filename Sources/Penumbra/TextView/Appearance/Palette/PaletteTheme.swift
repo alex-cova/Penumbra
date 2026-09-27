@@ -12,18 +12,18 @@ import AppKit
 /// Nonisolated so ``TextViewState`` can be built off the main thread without hopping back for
 /// theme property reads during parse.
 public final class PaletteTheme: Theme, @unchecked Sendable {
-    private let mono: UIFont
+    private let mono: NSFont
     private let palette: ThemePalette
     /// Capture name → heading font. Built once in `init` and never mutated, so `font(for:)` (called
     /// per capture, possibly off the main thread) is a lock-free lookup that returns the *same
     /// instance* every time. That matters: the highlighter coalesces adjacent tokens by comparing
     /// fonts with `===`, so transient instances would defeat coalescing.
-    private let headingFonts: [String: UIFont]
+    private let headingFonts: [String: NSFont]
 
-    public init(size: CGFloat = 13, palette: ThemePalette, font: UIFont, markupStyle: MarkdownMarkupStyle = .default) {
+    public init(size: CGFloat = 13, palette: ThemePalette, font: NSFont, markupStyle: MarkdownMarkupStyle = .default) {
         mono = font
         self.palette = palette
-        var headingFonts: [String: UIFont] = [:]
+        var headingFonts: [String: NSFont] = [:]
         let baseSize = font.pointSize
         for (index, scale) in markupStyle.headingScales.prefix(6).enumerated() {
             let pointSize = (baseSize * max(1, scale)).rounded()
@@ -50,28 +50,28 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
         self.init(size: size, palette: palette, font: font, markupStyle: markupStyle)
     }
 
-    public var font: UIFont { mono }
-    public var lineNumberFont: UIFont { mono }
+    public var font: NSFont { mono }
+    public var lineNumberFont: NSFont { mono }
 
-    public var textColor: UIColor { NSColor(rgb: palette.text) }
+    public var textColor: NSColor { NSColor(rgb: palette.text) }
     public var backgroundColor: NSColor { NSColor(rgb: palette.background) }
     /// Match the editor chrome so the gutter never reads as a black slab.
-    public var gutterBackgroundColor: UIColor { NSColor(rgb: palette.gutterBackground) }
-    public var gutterHairlineColor: UIColor { NSColor(rgb: palette.gutterHairline) }
-    public var lineNumberColor: UIColor { NSColor(rgb: palette.lineNumber) }
-    public var selectedLineBackgroundColor: UIColor { NSColor(rgb: palette.selectedLineBackground) }
-    public var selectedLinesLineNumberColor: UIColor { NSColor(rgb: palette.selectedLinesLineNumber) }
-    public var selectedLinesGutterBackgroundColor: UIColor { NSColor(rgb: palette.selectedLinesGutterBackground) }
-    public var invisibleCharactersColor: UIColor { NSColor(rgb: palette.invisibleCharacters) }
-    public var pageGuideHairlineColor: UIColor { NSColor(rgb: palette.pageGuideHairline) }
-    public var pageGuideBackgroundColor: UIColor { NSColor(rgb: palette.pageGuideBackground) }
-    public var markedTextBackgroundColor: UIColor { NSColor(rgb: palette.markedTextBackground) }
+    public var gutterBackgroundColor: NSColor { NSColor(rgb: palette.gutterBackground) }
+    public var gutterHairlineColor: NSColor { NSColor(rgb: palette.gutterHairline) }
+    public var lineNumberColor: NSColor { NSColor(rgb: palette.lineNumber) }
+    public var selectedLineBackgroundColor: NSColor { NSColor(rgb: palette.selectedLineBackground) }
+    public var selectedLinesLineNumberColor: NSColor { NSColor(rgb: palette.selectedLinesLineNumber) }
+    public var selectedLinesGutterBackgroundColor: NSColor { NSColor(rgb: palette.selectedLinesGutterBackground) }
+    public var invisibleCharactersColor: NSColor { NSColor(rgb: palette.invisibleCharacters) }
+    public var pageGuideHairlineColor: NSColor { NSColor(rgb: palette.pageGuideHairline) }
+    public var pageGuideBackgroundColor: NSColor { NSColor(rgb: palette.pageGuideBackground) }
+    public var markedTextBackgroundColor: NSColor { NSColor(rgb: palette.markedTextBackground) }
     /// Penumbra reapplies this on every `setState` via `theme.selectionColor`.
-    public var selectionColor: UIColor {
+    public var selectionColor: NSColor {
         ThemePalette.selectionHighlightColor(isDark: palette.isDark)
     }
 
-    public func textColor(for highlightName: String) -> UIColor? {
+    public func textColor(for highlightName: String) -> NSColor? {
         // Mirror Penumbra's HighlightName peeling: "string.special.key" → "string".
         var components = highlightName.split(separator: ".")
         while !components.isEmpty {
@@ -86,7 +86,7 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
 
     /// Heading font for `markup.heading.1`…`.6` when heading scaling is on; `nil` otherwise. The bare
     /// `markup.heading` deliberately gets none, so only levelled headings change size.
-    public func font(for highlightName: String) -> UIFont? {
+    public func font(for highlightName: String) -> NSFont? {
         headingFonts[highlightName]
     }
 
@@ -105,7 +105,7 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
         return []
     }
 
-    private func highlightColor(for name: String) -> UIColor? {
+    private func highlightColor(for name: String) -> NSColor? {
         switch name {
         case "comment":
             return NSColor(rgb: palette.comment)

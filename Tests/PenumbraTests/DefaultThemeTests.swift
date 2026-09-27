@@ -124,18 +124,18 @@ final class DefaultThemeTests: XCTestCase {
 /// protocol extension supplies `methodSeparatorColor` / `methodSeparatorWidth` /
 /// `occurrenceHighlightColor` defaults.
 class MinimalThemeStub: Penumbra.Theme {
-    let font = UIFont.systemFont(ofSize: 12)
-    let textColor = UIColor.labelColor
-    let gutterBackgroundColor = UIColor.textBackgroundColor
-    let gutterHairlineColor = UIColor.separatorColor
-    let lineNumberColor = UIColor.secondaryLabelColor
-    let lineNumberFont = UIFont.systemFont(ofSize: 12)
-    let selectedLineBackgroundColor = UIColor.clear
-    let selectedLinesLineNumberColor = UIColor.labelColor
-    let selectedLinesGutterBackgroundColor = UIColor.textBackgroundColor
-    let invisibleCharactersColor = UIColor.secondaryLabelColor
-    let pageGuideHairlineColor = UIColor.separatorColor
-    let pageGuideBackgroundColor = UIColor.textBackgroundColor
-    let markedTextBackgroundColor = UIColor.clear
-    func textColor(for highlightName: String) -> UIColor? { nil }
+    let font = NSFont.systemFont(ofSize: 12)
+    let textColor = NSColor.labelColor
+    let gutterBackgroundColor = NSColor.textBackgroundColor
+    let gutterHairlineColor = NSColor.separatorColor
+    let lineNumberColor = NSColor.secondaryLabelColor
+    let lineNumberFont = NSFont.systemFont(ofSize: 12)
+    let selectedLineBackgroundColor = NSColor.clear
+    let selectedLinesLineNumberColor = NSColor.labelColor
+    let selectedLinesGutterBackgroundColor = NSColor.textBackgroundColor
+    let invisibleCharactersColor = NSColor.secondaryLabelColor
+    let pageGuideHairlineColor = NSColor.separatorColor
+    let pageGuideBackgroundColor = NSColor.textBackgroundColor
+    let markedTextBackgroundColor = NSColor.clear
+    func textColor(for highlightName: String) -> NSColor? { nil }
 }

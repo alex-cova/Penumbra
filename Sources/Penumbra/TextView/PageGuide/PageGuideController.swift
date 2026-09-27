@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 final class PageGuideController {
     let guideView = PageGuideView()
-    var font: UIFont = .systemFont(ofSize: 14) {
+    var font: NSFont = .systemFont(ofSize: 14) {
         didSet {
             if font != oldValue {
                 _columnOffset = nil

@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import AppKit
 
 final class InvisibleCharacterConfiguration {
-    var font: UIFont = .systemFont(ofSize: 12) {
+    var font: NSFont = .systemFont(ofSize: 12) {
         didSet {
             if font != oldValue {
                 _lineBreakSymbolSize = nil
@@ -10,7 +10,7 @@ final class InvisibleCharacterConfiguration {
             }
         }
     }
-    var textColor: UIColor = .label
+    var textColor: NSColor = .label
     var showTabs = false
     var showSpaces = false
     var showNonBreakingSpaces = false
@@ -48,7 +48,7 @@ final class InvisibleCharacterConfiguration {
     /// Characters that should always be surfaced with a warning border, even when their category
     /// is not otherwise set to visible (e.g. zero-width spaces, smart quotes).
     var warningCharacters: Set<Character> = []
-    var warningBorderColor: UIColor = .systemRed
+    var warningBorderColor: NSColor = .systemRed
     var lineBreakSymbolSize: CGSize {
         if let lineBreakSymbolSize = _lineBreakSymbolSize {
             return lineBreakSymbolSize

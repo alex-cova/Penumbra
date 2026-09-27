@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import AppKit
 
 enum TabWidthMeasurer {
-    static func tabWidth(tabLength: Int, font: UIFont) -> CGFloat {
+    static func tabWidth(tabLength: Int, font: NSFont) -> CGFloat {
         let str = String(repeating: " ", count: tabLength)
         let maxSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         let options: NSString.DrawingOptions = [.usesFontLeading, .usesLineFragmentOrigin]

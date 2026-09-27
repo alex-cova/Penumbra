@@ -5,7 +5,7 @@ final class HighlightedRangeFragment: Equatable {
     let range: NSRange
     let containsStart: Bool
     let containsEnd: Bool
-    let color: UIColor
+    let color: NSColor
     let cornerRadius: CGFloat
     let style: HighlightStyle
     let isInactive: Bool
@@ -24,7 +24,7 @@ final class HighlightedRangeFragment: Equatable {
     init(range: NSRange,
          containsStart: Bool,
          containsEnd: Bool,
-         color: UIColor,
+         color: NSColor,
          cornerRadius: CGFloat,
          style: HighlightStyle = .standard,
          isInactive: Bool = false) {

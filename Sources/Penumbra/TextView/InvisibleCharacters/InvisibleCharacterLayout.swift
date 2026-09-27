@@ -11,7 +11,7 @@ struct InvisibleCharacterLayout {
     struct Mark: Equatable {
         var string: String
         /// `nil` means "use `InvisibleCharacterConfiguration.textColor`".
-        var color: UIColor?
+        var color: NSColor?
         /// Fragment-local X in points (already `CTLine`-resolved).
         var x: CGFloat
         var isEndOfLine: Bool

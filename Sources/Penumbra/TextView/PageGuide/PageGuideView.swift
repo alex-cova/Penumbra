@@ -9,7 +9,7 @@ final class PageGuideView: EditorView {
             }
         }
     }
-    var hairlineColor: UIColor? {
+    var hairlineColor: NSColor? {
         get {
             hairlineView.backgroundColor
         }
@@ -17,7 +17,7 @@ final class PageGuideView: EditorView {
             hairlineView.backgroundColor = newValue
         }
     }
-    var shadingColor: UIColor? {
+    var shadingColor: NSColor? {
         get {
             shadingView.backgroundColor
         }

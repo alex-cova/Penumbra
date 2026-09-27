@@ -13,13 +13,13 @@ final class FoldRibbonView: EditorView {
     weak var lineManager: LineManager?
     weak var foldingModel: FoldingModel?
     var textContainerInsetTop: CGFloat = 0
-    var markerColor: UIColor = .lightGray {
+    var markerColor: NSColor = .lightGray {
         didSet { needsDisplay = true }
     }
-    var collapsedMarkerColor: UIColor = .darkGray {
+    var collapsedMarkerColor: NSColor = .darkGray {
         didSet { needsDisplay = true }
     }
-    var chevronColor: UIColor = .white {
+    var chevronColor: NSColor = .white {
         didSet { needsDisplay = true }
     }
 

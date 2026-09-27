@@ -722,7 +722,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             appearance: spec.appearance,
             colorSpace: spec.colorSpace
         )
-        func solid(_ rect: CGRect, _ color: UIColor) -> SolidInstance {
+        func solid(_ rect: CGRect, _ color: NSColor) -> SolidInstance {
             SolidInstance(
                 origin: SIMD2(Float(rect.minX), Float(rect.minY)),
                 size: SIMD2(Float(rect.width), Float(rect.height)),

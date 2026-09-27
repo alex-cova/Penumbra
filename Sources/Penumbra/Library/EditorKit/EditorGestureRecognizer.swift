@@ -42,10 +42,10 @@ open class EditorLabel: EditorView {
     @objc open var text: String? {
         didSet { if text != oldValue { invalidateDrawing() } }
     }
-    @objc open var textColor: UIColor = .label {
+    @objc open var textColor: NSColor = .label {
         didSet { if textColor != oldValue { invalidateDrawing() } }
     }
-    @objc open var font: UIFont? {
+    @objc open var font: NSFont? {
         didSet { if font != oldValue { invalidateDrawing() } }
     }
     @objc open var textAlignment: NSTextAlignment = .left {

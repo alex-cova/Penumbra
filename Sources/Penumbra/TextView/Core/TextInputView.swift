@@ -98,16 +98,7 @@ final class TextInputView: EditorView {
     private lazy var customTokenizer = TextInputStringTokenizer(stringView: stringView,
                                                                 lineManager: lineManager,
                                                                 lineControllerStorage: lineControllerStorage)
-    var autocorrectionType: EditorTextAutocorrectionType = .default
-    var autocapitalizationType: EditorTextAutocapitalizationType = .sentences
-    var smartQuotesType: EditorTextSmartQuotesType = .default
-    var smartDashesType: EditorTextSmartDashesType = .default
-    var smartInsertDeleteType: EditorTextSmartInsertDeleteType = .default
-    var spellCheckingType: EditorTextSpellCheckingType = .default
-    var keyboardType: EditorKeyboardType = .default
-    var keyboardAppearance: EditorKeyboardAppearance = .default
-    var returnKeyType: EditorReturnKeyType = .default
-    @objc var insertionPointColor: UIColor = .label {
+    @objc var insertionPointColor: NSColor = .label {
         didSet {
             if insertionPointColor != oldValue {
                 selectionOverlayController.updateColors()
@@ -115,14 +106,14 @@ final class TextInputView: EditorView {
             }
         }
     }
-    @objc var selectionBarColor: UIColor = .label {
+    @objc var selectionBarColor: NSColor = .label {
         didSet {
             if selectionBarColor != oldValue {
                 selectionOverlayController.updateColors()
             }
         }
     }
-    @objc var selectionHighlightColor: UIColor = UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1) {
+    @objc var selectionHighlightColor: NSColor = NSColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1) {
         didSet {
             if selectionHighlightColor != oldValue {
                 // Colors only — do not call updateLayout(). Theme is often applied
@@ -1021,7 +1012,7 @@ final class TextInputView: EditorView {
         }
     }
     private var floatingCaretView: FloatingCaretView?
-    private var insertionPointColorBeforeFloatingBegan: UIColor = .label
+    private var insertionPointColorBeforeFloatingBegan: NSColor = .label
     private var maximumLeadingCharacterPairComponentLength = 0
     private var hasPendingFullLayout = false
     private let editMenuController = EditMenuController()

@@ -11,7 +11,7 @@ final class LineFragmentRenderer: @unchecked Sendable {
     var lineFragment: LineFragment
     let invisibleCharacterConfiguration: InvisibleCharacterConfiguration
     var markedRange: NSRange?
-    var markedTextBackgroundColor: UIColor = .systemFill
+    var markedTextBackgroundColor: NSColor = .systemFill
     var markedTextBackgroundCornerRadius: CGFloat = 0
     var highlightedRangeFragments: [HighlightedRangeFragment] = []
     /// Alpha applied to glyphs outside `focusedRanges` when Focus Mode is enabled. `1` (the
@@ -23,8 +23,8 @@ final class LineFragmentRenderer: @unchecked Sendable {
     /// Text drawn right after this fragment's content, used to indicate a collapsed fold whose
     /// header line is this fragment's line. `nil` on every other line fragment.
     var foldPlaceholderText: String?
-    var foldPlaceholderColor: UIColor = .secondaryLabelColor
-    var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+    var foldPlaceholderColor: NSColor = .secondaryLabelColor
+    var foldPlaceholderBackgroundColor: NSColor = .quaternaryLabelColor
     /// Inlay hints inside this fragment, drawn in the room their line reserved after the previous
     /// character (see `LineController.inlayHints`).
     var inlayHints: [LineInlayHint] = []
@@ -287,7 +287,7 @@ private extension LineFragmentRenderer {
         context.saveGState()
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: foldPlaceholderColor,
-            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium)
         ]
         let size = foldPlaceholderText.size(withAttributes: attrs)
         let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))
@@ -357,7 +357,7 @@ private extension LineFragmentRenderer {
         context.restoreGState()
     }
 
-    private func draw(_ symbol: String, atX xPosition: CGFloat, color: UIColor? = nil) {
+    private func draw(_ symbol: String, atX xPosition: CGFloat, color: NSColor? = nil) {
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: color ?? invisibleCharacterConfiguration.textColor,
             .font: invisibleCharacterConfiguration.font

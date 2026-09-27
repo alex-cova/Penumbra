@@ -105,4 +105,13 @@ public typealias UIKey = EditorKey
 @available(*, deprecated, renamed: "EditorPressesEvent")
 public typealias UIPressesEvent = EditorPressesEvent
 
+@available(*, deprecated, renamed: "NSColor")
+public typealias UIColor = NSColor
+
+@available(*, deprecated, renamed: "NSFont")
+public typealias UIFont = NSFont
+
+@available(*, deprecated, renamed: "NSFontDescriptor")
+public typealias UIFontDescriptor = NSFontDescriptor
+
 public typealias UIResponder = NSResponder

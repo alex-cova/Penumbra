@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AppKit
 
 /// Manages grouped text emphases (search matches, bracket pairs, diagnostics) on top of
 /// ``HighlightService`` without clobbering ranges set directly through ``TextView/highlightedRanges``.
@@ -25,11 +26,11 @@ public final class EmphasisManager {
 
     public init() {}
 
-    public func addEmphasis(_ emphasis: Emphasis, for group: String, color: UIColor) {
+    public func addEmphasis(_ emphasis: Emphasis, for group: String, color: NSColor) {
         addEmphases([emphasis], for: group, color: color)
     }
 
-    public func addEmphases(_ emphases: [Emphasis], for group: String, color: UIColor) {
+    public func addEmphases(_ emphases: [Emphasis], for group: String, color: NSColor) {
         var ranges = emphasesByGroup[group, default: []]
         for emphasis in emphases {
             let highlightedRange = HighlightedRange(emphasis: emphasis, group: group, color: resolvedColor(for: emphasis, baseColor: color))
@@ -45,7 +46,7 @@ public final class EmphasisManager {
         syncHighlightedRanges()
     }
 
-    public func replaceEmphases(_ emphases: [Emphasis], for group: String, color: UIColor) {
+    public func replaceEmphases(_ emphases: [Emphasis], for group: String, color: NSColor) {
         removeEmphases(for: group)
         addEmphases(emphases, for: group, color: color)
     }
@@ -72,7 +73,7 @@ public final class EmphasisManager {
 }
 
 private extension EmphasisManager {
-    private func resolvedColor(for emphasis: Emphasis, baseColor: UIColor) -> UIColor {
+    private func resolvedColor(for emphasis: Emphasis, baseColor: NSColor) -> NSColor {
         switch emphasis.style {
         case .standard:
             return emphasis.inactive ? baseColor.withAlphaComponent(0.25) : baseColor

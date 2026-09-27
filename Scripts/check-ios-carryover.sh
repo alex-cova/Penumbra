@@ -24,16 +24,18 @@ patterns=(
   'open class UIScreen'
   'public final class UIBezierPath'
   'public enum UITextAutocorrectionType'
+  'public typealias UIColor'
+  'var font: UIColor'
+  'var keyboardType:'
 )
 
 failed=0
 for pattern in "${patterns[@]}"; do
-  if matches="$(rg -n "$pattern" Sources/Penumbra 2>/dev/null || true)"; then
-    if [[ -n "$matches" ]]; then
-      echo "error: forbidden iOS carryover pattern: $pattern"
-      echo "$matches"
-      failed=1
-    fi
+  matches=$(rg -n "$pattern" Sources/Penumbra 2>/dev/null | grep -v 'LegacyUIKitAliases.swift' | grep -v 'Documentation.docc/' || true)
+  if [[ -n "$matches" ]]; then
+    echo "error: forbidden iOS carryover pattern: $pattern"
+    echo "$matches"
+    failed=1
   fi
 done
 

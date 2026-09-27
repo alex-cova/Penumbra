@@ -9,7 +9,7 @@ final class GutterBackgroundView: EditorView {
             }
         }
     }
-    var hairlineColor: UIColor? {
+    var hairlineColor: NSColor? {
         get {
             hairlineView.backgroundColor
         }

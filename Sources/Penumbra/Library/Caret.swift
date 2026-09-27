@@ -4,7 +4,7 @@ import Foundation
 enum Caret {
     static let width: CGFloat = 2
 
-    static func defaultHeight(for font: UIFont?) -> CGFloat {
+    static func defaultHeight(for font: NSFont?) -> CGFloat {
         font?.lineHeight ?? 15
     }
 }

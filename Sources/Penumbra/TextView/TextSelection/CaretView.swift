@@ -2,7 +2,7 @@
 import Foundation
 
 final class CaretView: EditorView {
-    var caretColor: UIColor = .label {
+    var caretColor: NSColor = .label {
         didSet {
             layer?.backgroundColor = caretColor.cgColor
         }

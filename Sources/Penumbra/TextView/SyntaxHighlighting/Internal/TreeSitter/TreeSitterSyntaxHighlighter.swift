@@ -132,7 +132,7 @@ extension TreeSitterSyntaxHighlighter {
     /// inside a `# heading`) keeps the enclosing size instead of snapping back to the body font.
     /// Captures arrive outermost-first, and default attributes are reapplied before every pass, so
     /// `currentFont` is always the enclosing capture's font, never a stale one.
-    static func baseFont(tokenFont: UIFont?, currentFont: UIFont?, defaultFont: UIFont) -> UIFont {
+    static func baseFont(tokenFont: NSFont?, currentFont: NSFont?, defaultFont: NSFont) -> NSFont {
         tokenFont ?? currentFont ?? defaultFont
     }
 }
@@ -202,9 +202,9 @@ private extension TreeSitterSyntaxHighlighter {
             if let isItalic = attributedString.attribute(.isItalic, at: token.range.location, effectiveRange: nil) as? Bool, isItalic {
                 symbolicTraits.insert(.italic)
             }
-            let currentFont = attributedString.attribute(.font, at: token.range.location, effectiveRange: nil) as? UIFont
+            let currentFont = attributedString.attribute(.font, at: token.range.location, effectiveRange: nil) as? NSFont
             let baseFont = Self.baseFont(tokenFont: token.font, currentFont: currentFont, defaultFont: defaultFont)
-            let newFont: UIFont
+            let newFont: NSFont
             if !symbolicTraits.isEmpty {
                 newFont = DerivedFontCache.font(baseFont, traits: symbolicTraits)
             } else {
@@ -307,8 +307,8 @@ private extension TreeSitterSyntaxHighlighter {
     }
 }
 
-private extension UIFont {
-    func withSymbolicTraits(_ symbolicTraits: UIFontDescriptor.SymbolicTraits) -> UIFont? {
+private extension NSFont {
+    func withSymbolicTraits(_ symbolicTraits: UIFontDescriptor.SymbolicTraits) -> NSFont? {
         let newFontDescriptor = fontDescriptor.withSymbolicTraits(symbolicTraits)
         return NSFont(descriptor: newFontDescriptor, size: pointSize)
     }
@@ -318,14 +318,14 @@ private enum DerivedFontCache {
     // Keyed by the font itself, not its address: an `ObjectIdentifier` doesn't retain, so a
     // deallocated font's address could be reused by a different one and return the wrong derivation.
     private struct Key: Hashable {
-        let base: UIFont
+        let base: NSFont
         let traits: Int
     }
 
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var fonts: [Key: UIFont] = [:]
+    nonisolated(unsafe) private static var fonts: [Key: NSFont] = [:]
 
-    static func font(_ base: UIFont, traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
+    static func font(_ base: NSFont, traits: UIFontDescriptor.SymbolicTraits) -> NSFont {
         let key = Key(base: base, traits: Int(traits.rawValue))
         lock.lock()
         if let cached = fonts[key] {

@@ -33,8 +33,8 @@ final class DiffLanguageTests: XCTestCase {
         XCTAssertNotEqual(minusLocation, NSNotFound)
         XCTAssertNotEqual(plusLocation, NSNotFound)
 
-        let minusColor = highlighted.attribute(.foregroundColor, at: minusLocation, effectiveRange: nil) as? UIColor
-        let plusColor = highlighted.attribute(.foregroundColor, at: plusLocation, effectiveRange: nil) as? UIColor
+        let minusColor = highlighted.attribute(.foregroundColor, at: minusLocation, effectiveRange: nil) as? NSColor
+        let plusColor = highlighted.attribute(.foregroundColor, at: plusLocation, effectiveRange: nil) as? NSColor
         XCTAssertNotNil(minusColor)
         XCTAssertNotNil(plusColor)
         XCTAssertNotEqual(minusColor, plusColor)
@@ -49,7 +49,7 @@ final class DiffLanguageTests: XCTestCase {
         let contextLocation = text.range(of: "unchanged line").location
         XCTAssertNotEqual(contextLocation, NSNotFound)
 
-        let contextColor = highlighted.attribute(.foregroundColor, at: contextLocation, effectiveRange: nil) as? UIColor
+        let contextColor = highlighted.attribute(.foregroundColor, at: contextLocation, effectiveRange: nil) as? NSColor
         XCTAssertEqual(contextColor, theme.textColor)
     }
 }

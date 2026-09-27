@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AppKit
 
 /// Finds and emphasizes matching bracket pairs at the caret.
 final class BracketMatchingController {
@@ -75,7 +76,7 @@ private extension BracketMatchingController {
         }
     }
 
-    private func emphasisColor(for style: BracketPairEmphasis) -> UIColor {
+    private func emphasisColor(for style: BracketPairEmphasis) -> NSColor {
         switch style {
         case .flash:
             return .systemYellow

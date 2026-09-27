@@ -5,7 +5,7 @@ import XCTest
 final class PageGuideControllerTests: XCTestCase {
     func testColumnOffsetScalesLinearlyWithColumn() {
         let controller = PageGuideController()
-        controller.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        controller.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
 
         controller.column = 40
         let offset40 = controller.columnOffset
@@ -19,11 +19,11 @@ final class PageGuideControllerTests: XCTestCase {
 
     func testChangingFontInvalidatesCachedColumnOffset() {
         let controller = PageGuideController()
-        controller.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        controller.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         controller.column = 80
         let smallFontOffset = controller.columnOffset
 
-        controller.font = UIFont.monospacedSystemFont(ofSize: 20, weight: .regular)
+        controller.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
         let largeFontOffset = controller.columnOffset
 
         XCTAssertGreaterThan(largeFontOffset, smallFontOffset)
@@ -31,7 +31,7 @@ final class PageGuideControllerTests: XCTestCase {
 
     func testChangingColumnInvalidatesCachedColumnOffset() {
         let controller = PageGuideController()
-        controller.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        controller.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
 
         controller.column = 80
         let offset80 = controller.columnOffset

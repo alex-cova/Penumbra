@@ -3,7 +3,7 @@ import Foundation
 
 open class EditorView: NSView {
     open var isFirstResponder: Bool { window?.firstResponder === self }
-    open var backgroundColor: UIColor? {
+    open var backgroundColor: NSColor? {
         didSet { wantsLayer = true; layer?.backgroundColor = backgroundColor?.cgColor }
     }
 

@@ -14,11 +14,11 @@ final class BashLanguageTests: XCTestCase {
         return highlighter.syntaxHighlight(source)
     }
 
-    private func color(in highlighted: NSAttributedString, at substring: String) -> UIColor? {
+    private func color(in highlighted: NSAttributedString, at substring: String) -> NSColor? {
         let text = highlighted.string as NSString
         let location = text.range(of: substring).location
         guard location != NSNotFound else { return nil }
-        return highlighted.attribute(.foregroundColor, at: location, effectiveRange: nil) as? UIColor
+        return highlighted.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor
     }
 
     func testBuiltinCommandGetsAMoreSpecificColorThanAnOrdinaryCommand() {

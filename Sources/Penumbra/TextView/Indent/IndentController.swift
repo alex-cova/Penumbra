@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AppKit
 
 @MainActor
 protocol IndentControllerDelegate: AnyObject {
@@ -15,7 +16,7 @@ final class IndentController {
     var stringView: StringView
     var lineManager: LineManager
     var languageMode: InternalLanguageMode
-    var indentFont: UIFont {
+    var indentFont: NSFont {
         didSet {
             if indentFont != oldValue {
                 _tabWidth = nil
@@ -44,7 +45,7 @@ final class IndentController {
 
     private var _tabWidth: CGFloat?
 
-    init(stringView: StringView, lineManager: LineManager, languageMode: InternalLanguageMode, indentStrategy: IndentStrategy, indentFont: UIFont) {
+    init(stringView: StringView, lineManager: LineManager, languageMode: InternalLanguageMode, indentStrategy: IndentStrategy, indentFont: NSFont) {
         self.stringView = stringView
         self.lineManager = lineManager
         self.languageMode = languageMode

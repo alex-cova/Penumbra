@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+@preconcurrency import AppKit
 
 /// One drawn rectangle in a minimap row: a run of non-whitespace characters at a fixed color and
 /// fade step. `x`/`width` are already in minimap view coordinates (leading inset applied, column
@@ -22,13 +23,13 @@ struct MinimapRow: Equatable {
     static let empty = MinimapRow(segments: [])
 }
 
-/// Interns `UIColor`s by tree-sitter capture name so the draw loop can group fills by a small
+/// Interns `NSColor`s by tree-sitter capture name so the draw loop can group fills by a small
 /// integer instead of comparing colors. Index `0` is always the theme's base text color.
 final class MinimapPalette {
-    private(set) var colors: [UIColor]
+    private(set) var colors: [NSColor]
     private var indexByName: [String: Int] = [:]
 
-    init(baseColor: UIColor) {
+    init(baseColor: NSColor) {
         colors = [baseColor]
     }
 

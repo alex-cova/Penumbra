@@ -23,7 +23,7 @@ final class MethodSeparatorView: EditorView {
             }
         }
     }
-    var separatorColor: UIColor = .separatorColor {
+    var separatorColor: NSColor = .separatorColor {
         didSet { needsDisplay = true }
     }
     var separatorWidth: CGFloat = 1 {

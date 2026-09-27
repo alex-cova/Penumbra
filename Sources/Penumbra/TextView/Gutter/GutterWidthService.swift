@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+@preconcurrency import AppKit
 
 final class GutterWidthService {
     var lineManager: LineManager {
@@ -9,7 +10,7 @@ final class GutterWidthService {
             }
         }
     }
-    var font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular) {
+    var font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular) {
         didSet {
             if font != oldValue {
                 _lineNumberWidth = nil
@@ -104,7 +105,7 @@ final class GutterWidthService {
 
     private var _lineNumberWidth: CGFloat?
     private var previousLineCount = 0
-    private var previousFont: UIFont?
+    private var previousFont: NSFont?
     private var previouslySentGutterWidth: CGFloat?
     /// Measured widths by digit count. Every added or removed line invalidates the width, and
     /// measuring a string was a measurable part of each Return.
