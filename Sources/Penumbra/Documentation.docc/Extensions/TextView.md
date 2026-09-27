@@ -162,8 +162,6 @@
 
 ### Supporting Find and Replace
 
-- ``isFindInteractionEnabled``
-- ``findInteraction``
 - ``search(for:)``
 - ``search(for:replacingMatchesWith:)``
 - ``textPreview(containing:)``

@@ -430,19 +430,6 @@ public struct DocumentTextExport: Sendable {
             textInputView.selectedTextRange = newValue
         }
     }
-    /// The custom input accessory view to display when the receiver becomes the first responder.
-    public override var inputAccessoryView: UIView? {
-        get {
-            if isInputAccessoryViewEnabled {
-                return _inputAccessoryView
-            } else {
-                return nil
-            }
-        }
-        set {
-            _inputAccessoryView = newValue
-        }
-    }
     /// The input assistant to use when configuring the keyboard's shortcuts bar.
     public override var inputAssistantItem: UITextInputAssistantItem {
         textInputView.inputAssistantItem
@@ -1060,25 +1047,6 @@ public struct DocumentTextExport: Sendable {
     }
     /// When enabled the text view will present a menu with actions actions such as Copy and Replace after navigating to a highlighted range.
     public var showMenuAfterNavigatingToHighlightedRange = true
-    /// A boolean value that enables a text view’s built-in find interaction.
-    ///
-    /// After enabling the find interaction, use [`presentFindNavigator(showingReplace:)`](https://developer.apple.com/documentation/uikit/uifindinteraction/3975832-presentfindnavigator) on <doc:findInteraction> to present the find navigator.
-    public var isFindInteractionEnabled: Bool {
-        get {
-            textSearchingHelper.isFindInteractionEnabled
-        }
-        set {
-            textSearchingHelper.isFindInteractionEnabled = newValue
-        }
-    }
-    /// The text view’s built-in find interaction.
-    ///
-    /// Set <doc:isFindInteractionEnabled> to true to enable the text view's built-in find interaction. This method returns nil when the interaction isn't enabled.
-    ///
-    /// Call [`presentFindNavigator(showingReplace:)`](https://developer.apple.com/documentation/uikit/uifindinteraction/3975832-presentfindnavigator) on the UIFindInteraction object to invoke the find interaction and display the find panel.
-    public var findInteraction: UIFindInteraction? {
-        textSearchingHelper.findInteraction
-    }
 
     /// Whether a miniature overview of the document is shown along the trailing edge of the
     /// text view. Off by default.
@@ -1268,7 +1236,6 @@ public struct DocumentTextExport: Sendable {
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
-    private var _inputAccessoryView: UIView?
     private var delegateAllowsEditingToBegin: Bool {
         guard isEditable else {
             return false
@@ -1290,12 +1257,9 @@ public struct DocumentTextExport: Sendable {
     private var deferredInputLayoutFlushScheduled = false
     private var lastLaidOutSize: CGSize = .zero
     private var configuredTextContainerInset: UIEdgeInsets = .zero
-    private var isInputAccessoryViewEnabled = false
-    private let keyboardObserver = KeyboardObserver()
     private let highlightNavigationController = HighlightNavigationController()
     private let distractionFreeController = DistractionFreeController()
     private var distractionFreeTrackingArea: NSTrackingArea?
-    private var textSearchingHelper = UITextSearchingHelper()
     private lazy var findPanelController: FindPanelController = {
         let controller = FindPanelController(target: self)
         controller.emphasisManager = textInputView.emphasisManager
@@ -1303,12 +1267,6 @@ public struct DocumentTextExport: Sendable {
         return controller
     }()
     private var findPanelTopInset: CGFloat = 0
-    // Store a reference to instances of the private type UITextRangeAdjustmentGestureRecognizer in order to track adjustments
-    // to the selected text range and scroll the text view when the handles approach the bottom.
-    // The approach is based on the one described in Steve Shephard's blog post "Adventures with UITextInteraction".
-    // https://steveshepard.com/blog/adventures-with-uitextinteraction/
-    private var textRangeAdjustmentGestureRecognizers: Set<UIGestureRecognizer> = []
-    private var previousSelectedRangeDuringGestureHandling: NSRange?
     /// A ``scrollRangeToCenter(_:)`` request made before the view had a height.
     private var pendingCenteredRange: NSRange?
     private var preferredContentSize: CGSize {
@@ -1327,19 +1285,6 @@ public struct DocumentTextExport: Sendable {
         let height = baseContentSize.height + verticalOverscrollLength
         return CGSize(width: width, height: height)
     }
-    private var scrollPocketView: UIView? {
-        if let _scrollPocketView = _scrollPocketView {
-            return _scrollPocketView
-        } else {
-            let stringType = String("IU_".reversed()) + "Scroll" + String("tekcoP".reversed())
-            let scrollPocketView = subviews.first { view in
-                String(describing: type(of: view)) == stringType
-            } as? UIView
-            _scrollPocketView = scrollPocketView
-            return scrollPocketView
-        }
-    }
-    private var _scrollPocketView: UIView?
     private var isTypewriterScrollingSuspendedByUser = false
     private var lastTypewriterCaretMoveTime: TimeInterval = 0
 
@@ -1390,13 +1335,10 @@ public struct DocumentTextExport: Sendable {
             }
         }
         _ = findPanelController.panelView
-        tapGestureRecognizer.delegate = self
         tapGestureRecognizer.addTarget(self, action: #selector(handleTap(_:)))
         addGestureRecognizer(tapGestureRecognizer)
         installNonEditableInteraction()
-        keyboardObserver.delegate = self
         highlightNavigationController.delegate = self
-        textSearchingHelper.textView = self
         distractionFreeController.onVisibilityChange = { [weak self] isVisible, duration in
             self?.applyDistractionFreeChromeVisibility(isVisible, duration: duration)
         }
@@ -1468,9 +1410,6 @@ public struct DocumentTextExport: Sendable {
         }
         textInputView.placeSelectionChromeAboveMetalCanvas()
         bringSubviewToFront(textInputView.gutterContainerView)
-        if let scrollPocketView {
-            bringSubviewToFront(scrollPocketView)
-        }
         if showMinimap {
             minimapView.isHidden = false
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
@@ -2383,22 +2322,6 @@ private extension TextView {
         }
     }
 
-    @objc private func handleTextRangeAdjustmentPan(_ gestureRecognizer: UIPanGestureRecognizer) {
-        // This function scroll the text view when the selected range is adjusted.
-        if gestureRecognizer.state == .began {
-            previousSelectedRangeDuringGestureHandling = selectedRange
-        } else if gestureRecognizer.state == .changed, let previousSelectedRange = previousSelectedRangeDuringGestureHandling {
-            if selectedRange.lowerBound != previousSelectedRange.lowerBound {
-                // User is adjusting the lower bound (location) of the selected range.
-                scrollLocationToVisible(selectedRange.lowerBound)
-            } else if selectedRange.upperBound != previousSelectedRange.upperBound {
-                // User is adjusting the upper bound (length) of the selected range.
-                scrollLocationToVisible(selectedRange.upperBound)
-            }
-            previousSelectedRangeDuringGestureHandling = selectedRange
-        }
-    }
-
     private func insertLeadingComponent(of characterPair: CharacterPair, in range: NSRange) -> Bool {
         let shouldInsertCharacterPair = editorDelegate?.textView(self, shouldInsert: characterPair, in: range) ?? true
         guard shouldInsertCharacterPair else {
@@ -2568,12 +2491,10 @@ private extension TextView {
     }
 
     private func installEditableInteraction() {
-        isInputAccessoryViewEnabled = true
         textInputView.setSelectionOverlayEnabled(true)
     }
 
     private func installNonEditableInteraction() {
-        isInputAccessoryViewEnabled = false
         textInputView.setSelectionOverlayEnabled(false)
     }
 
@@ -2720,7 +2641,6 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidChangeSelection(_ view: TextInputView) {
-        UIMenuController.shared.hideMenu(from: self)
         if !isApplyingHistoryNavigation {
             navigationHistory.noteCursor(currentNavigationEntry())
         }
@@ -3040,31 +2960,6 @@ extension TextView: FindPanelTarget {
 extension TextView: SearchControllerDelegate {
     func searchController(_ searchController: SearchController, linePositionAt location: Int) -> LinePosition? {
         textInputView.lineManager.linePosition(at: location)
-    }
-}
-
-// MARK: - UIGestureRecognizerDelegate
-extension TextView: UIGestureRecognizerDelegate {
-    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                                  shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        if let klass = NSClassFromString("UITextRangeAdjustmentGestureRecognizer") {
-            if !textRangeAdjustmentGestureRecognizers.contains(otherGestureRecognizer) && otherGestureRecognizer.isKind(of: klass) {
-                otherGestureRecognizer.addTarget(self, action: #selector(handleTextRangeAdjustmentPan(_:)))
-                textRangeAdjustmentGestureRecognizers.insert(otherGestureRecognizer)
-            }
-        }
-        return gestureRecognizer !== panGestureRecognizer
-    }
-}
-
-// MARK: - KeyboardObserverDelegate
-extension TextView: KeyboardObserverDelegate {
-    public func keyboardObserver(_ keyboardObserver: KeyboardObserver,
-                          keyboardWillShowWithHeight keyboardHeight: CGFloat,
-                          animation: KeyboardObserver.Animation?) {
-        if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
-            scrollRangeToVisible(newRange)
-        }
     }
 }
 

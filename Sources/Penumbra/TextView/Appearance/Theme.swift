@@ -92,7 +92,7 @@ public protocol Theme: AnyObject {
     func shadow(for highlightName: String) -> NSShadow?
     /// Highlighted range for a text range matching a search query.
     ///
-    /// This function is called when highlighting a search result that was found using the standard find/replace interaction enabled using <doc:TextView/isFindInteractionEnabled>.
+    /// This function is called when highlighting a search result from the built-in find panel.
     ///
     /// Return `nil` to prevent highlighting the range.
     /// - Parameters:

@@ -93,14 +93,14 @@ public protocol TextViewDelegate: AnyObject {
     ///   - highlightedRange: The highlighted range for which the replace action will be shown.
     /// - Returns: `true` if the highlighted range can be replaced; otherwise `false`.
     ///
-    /// The text view will call this method before showing a replace action, for example in a [UIMenuController](https://developer.apple.com/documentation/uikit/uimenucontroller).
+    /// The text view will call this method before showing a replace action in the context menu.
     func textView(_ textView: TextView, canReplaceTextIn highlightedRange: HighlightedRange) -> Bool
     /// Tells the delegate to replace the text in the specified highlighted range.
     /// - Parameters:
     ///   - textView: The text view in which to replace the text.
     ///   - highlightedRange: The highlighted range in which to replace the text.
     ///
-    /// The text view will call this method when the user chooses to replace the text in the highlighted range, for example by selecting the action in a [UIMenuController](https://developer.apple.com/documentation/uikit/uimenucontroller).
+    /// The text view will call this method when the user chooses to replace the text in the highlighted range from the context menu.
     func textView(_ textView: TextView, replaceTextIn highlightedRange: HighlightedRange)
     /// Tells the host to show or hide app-owned chrome alongside distraction-free editor chrome.
     func textView(_ textView: TextView,

@@ -19,7 +19,3 @@ public final class UIScreen: @unchecked Sendable {
     public static let main = UIScreen()
     public var scale: CGFloat { NSScreen.main?.backingScaleFactor ?? 2 }
 }
-
-public enum UIApplication {
-    public static let didReceiveMemoryWarningNotification = Notification.Name("UIApplicationDidReceiveMemoryWarningNotification")
-}

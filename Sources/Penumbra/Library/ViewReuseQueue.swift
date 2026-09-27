@@ -23,15 +23,6 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
 
     init(hidesQueuedViews: Bool = false) {
         self.hidesQueuedViews = hidesQueuedViews
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(clearMemory),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil)
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
     }
 
     func enqueueViews(withKeys keys: Set<Key>) {
@@ -78,14 +69,5 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
             return true
         }
         return false
-    }
-
-    @objc private func clearMemory() {
-        if hidesQueuedViews {
-            for view in queuedViews {
-                view.removeFromSuperview()
-            }
-        }
-        queuedViews.removeAll()
     }
 }

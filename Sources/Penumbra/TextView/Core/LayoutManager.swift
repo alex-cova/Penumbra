@@ -380,8 +380,6 @@ final class LayoutManager {
         )
         applyFoldRibbonTheme()
         self.updateShownViews()
-        let memoryWarningNotificationName = UIApplication.didReceiveMemoryWarningNotification
-        NotificationCenter.default.addObserver(self, selector: #selector(clearMemory), name: memoryWarningNotificationName, object: nil)
     }
 
     func redisplayVisibleLines() {
@@ -1495,9 +1493,4 @@ private extension LayoutManager {
         }
     }
 
-    @objc private func clearMemory() {
-        lineControllerStorage.removeAllLineControllers(exceptLinesWithID: visibleLineIDs)
-        contentSizeService.removeLineWidths(exceptLinesWithID: visibleLineIDs)
-        lineManager.releaseUnreferencedHandles()
-    }
 }
