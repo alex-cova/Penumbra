@@ -94,7 +94,7 @@ struct IDEFileTreeView: View {
     /// while scrolling and the horizontal scroller would come and go. Size it from every row instead.
     private func contentWidth(of nodes: [FlatNode]) -> CGFloat {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1, weight: .semibold)
-        let chrome = 12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2
+        let chrome = CGFloat(12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2)
         return nodes.reduce(0) { widest, item in
             let name = (item.node.displayName ?? item.node.name) as NSString
             let textWidth = name.size(withAttributes: [.font: font]).width.rounded(.up)
@@ -346,7 +346,7 @@ private struct IDEFileTreeRow: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.leading, CGFloat(depth) * 14 + IDEAppearance.Spacing.sm)
+        .padding(.leading, CGFloat(depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
         .padding(.vertical, 4)
         .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)

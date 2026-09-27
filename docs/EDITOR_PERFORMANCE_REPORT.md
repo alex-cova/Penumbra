@@ -384,8 +384,9 @@ The follow-up Metal pass completed the outstanding renderer roadmap:
 - The layer follows its window/screen color space; theme and decoration colors resolve directly to
   sRGB or Display P3. At 1×, coverage glyphs use three horizontal subpixel phases; 2× remains a
   single atlas entry.
-- `.github/workflows/metal.yml` adds required-Metal focused tests plus nightly parity artifacts for
-  a self-hosted macOS runner labelled `metal`. Runner registration remains an external operation.
+- There is no Metal CI workflow: `.github/workflows/metal.yml` was removed because no self-hosted
+  runner labelled `metal` was ever registered, so its jobs only queued until cancelled. Run the
+  Metal tests locally with `PENUMBRA_REQUIRE_METAL=1 swift test --filter TextViewMetalSmokeTests`.
 
 ### Measurements
 

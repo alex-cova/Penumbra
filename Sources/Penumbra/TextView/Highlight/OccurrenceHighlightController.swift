@@ -145,13 +145,14 @@ private extension OccurrenceHighlightController {
         let options = FindSearchOptions(query: term.text, matchCase: true, wholeWord: term.wholeWord, useRegex: false)
         let cap = Self.maxMatches
         let anchor = term.currentRange.location
-        searchTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome = FindSearchEngine.search(options: options, in: source, anchorLocation: anchor, maxHighlights: cap)
-            if Task.isCancelled { return }
-            await MainActor.run {
-                guard let self, generation == self.generation else { return }
-                self.apply(matches: outcome.highlightRanges, current: term.currentRange, generation: generation)
-            }
+        // The search runs detached; this main-actor task only awaits it, so `self` never
+        // crosses into nonisolated code (Swift 6 `SendingRisksDataRace`).
+        searchTask = Task { [weak self] in
+            let matches = await Task.detached(priority: .userInitiated) {
+                FindSearchEngine.search(options: options, in: source, anchorLocation: anchor, maxHighlights: cap).highlightRanges
+            }.value
+            guard !Task.isCancelled, let self, generation == self.generation else { return }
+            self.apply(matches: matches, current: term.currentRange, generation: generation)
         }
     }
 

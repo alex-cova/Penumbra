@@ -572,7 +572,7 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
                 .accessibilityLabel("Run \(node.title)")
             }
         }
-        .padding(.leading, CGFloat(row.depth) * 14 + IDEAppearance.Spacing.sm)
+        .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
         .padding(.vertical, 4)
         .background(background)

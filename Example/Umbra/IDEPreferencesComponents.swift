@@ -126,17 +126,30 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
     @Bindable var preferences: IDEPreferences
     let workspace: IDEWorkspace
 
+    // Split into groups: one 22-modifier chain exceeds the type checker's time limit.
     func body(content: Content) -> some View {
-        content
+        modeChanges(displayChanges(editingChanges(appearanceChanges(content))))
+    }
+
+    private func appearanceChanges(_ view: some View) -> some View {
+        view
             .onChange(of: preferences.fontName) { applyLivePreferences() }
             .onChange(of: preferences.fontSize) { applyLivePreferences() }
             .onChange(of: preferences.themeID) { applyLivePreferences() }
             .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
             .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
+    }
+
+    private func editingChanges(_ view: some View) -> some View {
+        view
             .onChange(of: preferences.tabWidth) { applyLivePreferences() }
             .onChange(of: preferences.useSpacesForTab) { applyLivePreferences() }
             .onChange(of: preferences.showLineNumbers) { applyLivePreferences() }
             .onChange(of: preferences.isLineFoldingEnabled) { applyLivePreferences() }
+    }
+
+    private func displayChanges(_ view: some View) -> some View {
+        view
             .onChange(of: preferences.wrapLines) { applyLivePreferences() }
             .onChange(of: preferences.showMinimap) { applyLivePreferences() }
             .onChange(of: preferences.showScrollbars) { applyLivePreferences() }
@@ -144,6 +157,10 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.showMethodSeparators) { applyLivePreferences() }
             .onChange(of: preferences.highlightsOccurrencesOfSelection) { applyLivePreferences() }
             .onChange(of: preferences.showInvisibleCharacters) { applyLivePreferences() }
+    }
+
+    private func modeChanges(_ view: some View) -> some View {
+        view
             .onChange(of: preferences.showPageGuide) { applyLivePreferences() }
             .onChange(of: preferences.pageGuideColumn) { applyLivePreferences() }
             .onChange(of: preferences.lineHeightMultiplier) { applyLivePreferences() }
