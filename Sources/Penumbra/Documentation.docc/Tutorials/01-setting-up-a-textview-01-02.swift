@@ -1,8 +1,7 @@
 import AppKit
 
-class ViewController: NSViewController {
+final class EditorViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "TextCompanion"
     }
 }

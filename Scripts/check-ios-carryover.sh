@@ -17,6 +17,7 @@ patterns=(
   'UIMenuController'
   'UIApplication\.didReceiveMemoryWarningNotification'
   'UIKitCompatibility'
+  'LegacyUIKitAliases'
   'Penumbra/UIBridge'
   'open class UIView'
   'open class UIScrollView'
@@ -25,6 +26,9 @@ patterns=(
   'public final class UIBezierPath'
   'public enum UITextAutocorrectionType'
   'public typealias UIColor'
+  'public typealias UIView'
+  'public class UITextPosition'
+  'public protocol UITextInput'
   'var font: UIColor'
   'var keyboardType:'
   'import UIKit'
@@ -32,7 +36,7 @@ patterns=(
 
 failed=0
 for pattern in "${patterns[@]}"; do
-  matches=$(rg -n "$pattern" Sources/Penumbra 2>/dev/null | grep -v 'LegacyUIKitAliases.swift' | grep -v 'Documentation.docc/' || true)
+  matches=$(rg -n "$pattern" Sources/Penumbra 2>/dev/null | grep -v 'Documentation.docc/' || true)
   if [[ -n "$matches" ]]; then
     echo "error: forbidden iOS carryover pattern: $pattern"
     echo "$matches"

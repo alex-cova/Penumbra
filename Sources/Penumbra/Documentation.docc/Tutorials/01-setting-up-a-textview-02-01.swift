@@ -1,19 +1,20 @@
 import Penumbra
 import AppKit
 
-class ViewController: NSViewController {
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "TextCompanion"
-        let textView = TextView()
+final class EditorViewController: NSViewController {
+    private let textView = TextView()
+
+    override func loadView() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
         textView.translatesAutoresizingMaskIntoConstraints = false
-        textView.backgroundColor = .systemBackground
-        view.addSubview(textView)
+        textView.backgroundColor = .windowBackgroundColor
+        container.addSubview(textView)
         NSLayoutConstraint.activate([
-            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            textView.topAnchor.constraint(equalTo: view.topAnchor),
-            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            textView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            textView.topAnchor.constraint(equalTo: container.topAnchor),
+            textView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+        view = container
     }
 }

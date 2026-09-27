@@ -9,9 +9,9 @@ import XCTest
 @MainActor
 final class BlockSelectionTests: XCTestCase {
     /// A point in view coordinates for `row`/`column` in `textView`, computed via the same
-    /// `caretRect(for:)` the real UI uses, so tests never hardcode pixel geometry.
+    /// `caretRect(at:)` the real UI uses, so tests never hardcode pixel geometry.
     private func point(forRow row: Int, column: Int, rowLocations: [Int], in textView: TextView) -> CGPoint {
-        let rect = textView.caretRect(for: IndexedPosition(index: rowLocations[row] + column))
+        let rect = textView.caretRect(at: rowLocations[row] + column)
         return CGPoint(x: rect.minX, y: rect.midY)
     }
 

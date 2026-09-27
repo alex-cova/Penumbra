@@ -34,8 +34,8 @@ open class EditorScrollView: EditorView {
     open var onDidScroll: (() -> Void)?
 
     private var isInLayout = false
-    open var contentInset: UIEdgeInsets = .zero
-    open var adjustedContentInset: UIEdgeInsets { contentInset }
+    open var contentInset: NSEdgeInsets = .zero
+    open var adjustedContentInset: NSEdgeInsets { contentInset }
     open var isDragging = false
     open var isDecelerating = false
     open var panGestureRecognizer = EditorPanGestureRecognizer()

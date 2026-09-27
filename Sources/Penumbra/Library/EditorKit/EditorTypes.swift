@@ -1,9 +1,6 @@
 @preconcurrency import AppKit
 import Foundation
 
-public typealias UIEdgeInsets = NSEdgeInsets
-public typealias UIRectCorner = RectCorner
-
 extension NSEdgeInsets {
     public static var zero: NSEdgeInsets { NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0) }
 }

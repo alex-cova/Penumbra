@@ -4,7 +4,7 @@ import Foundation
 final class CaretRectService {
     var stringView: StringView
     var lineManager: LineManager
-    var textContainerInset: UIEdgeInsets = .zero
+    var textContainerInset: NSEdgeInsets = .zero
     var showLineNumbers = false
     weak var foldingModel: FoldingModel?
 

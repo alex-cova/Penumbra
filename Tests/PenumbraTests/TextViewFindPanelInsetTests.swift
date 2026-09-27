@@ -26,7 +26,7 @@ final class TextViewFindPanelInsetTests: XCTestCase {
 
     func testHidingFindPanelRestoresTheOriginalContentInset() {
         let textView = makeTextView()
-        textView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 0, right: 0)
+        textView.contentInset = NSEdgeInsets(top: 4, left: 0, bottom: 0, right: 0)
         XCTAssertEqual(textView.adjustedContentInset.top, 4)
 
         textView.showFindPanel()

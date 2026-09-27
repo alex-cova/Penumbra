@@ -1,12 +1,12 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class IndexedRange: UITextRange {
+final class IndexedRange: EditorTextRange {
     let range: NSRange
-    override var start: UITextPosition {
+    override var start: EditorTextPosition {
         IndexedPosition(index: range.location)
     }
-    override var end: UITextPosition {
+    override var end: EditorTextPosition {
         IndexedPosition(index: range.location + range.length)
     }
     override var isEmpty: Bool {

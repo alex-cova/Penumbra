@@ -900,13 +900,14 @@ final class TextViewMetalSmokeTests: XCTestCase {
         textView.layoutIfNeeded()
         textView.selectedRange = NSRange(location: 5, length: 0)
         textView.layoutIfNeeded()
-        let beforeCaret = textView.caretRect(for: textView.endOfDocument)
+        let endLocation = (textView.text as NSString).length
+        let beforeCaret = textView.caretRect(at: endLocation)
 
         textView.insertText("\n")
         pumpMainRunLoop()
 
         XCTAssertEqual(textView.text, "hello\n")
-        let afterCaret = textView.caretRect(for: textView.endOfDocument)
+        let afterCaret = textView.caretRect(at: (textView.text as NSString).length)
         XCTAssertGreaterThan(
             afterCaret.minY,
             beforeCaret.minY,

@@ -42,7 +42,7 @@ When a feature cannot be implemented in an App Store–safe way inside `Penumbra
 ### Penumbra text engine (`TextView`)
 
 **Editing & input**
-- Full `NSTextInputClient` / `UITextInput` compatibility for native macOS text input, IME, and accessibility.
+- Full `NSTextInputClient` compatibility for native macOS text input, IME, and accessibility.
 - Undo/redo with timed grouping (`TimedUndoManager`) so rapid typing coalesces into one undo step.
 - Character-pair auto-insertion and skip-over-trailing (`CharacterPair`, delegate hooks).
 - TextFormation integration for tab expansion, bracket pairing, and whitespace cleanup (`TextFormationController`).

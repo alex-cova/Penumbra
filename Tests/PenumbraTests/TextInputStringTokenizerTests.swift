@@ -340,11 +340,11 @@ Donec laoreet, massa sed commodo tincidunt, dui neque ullamcorper sapien, laoree
         // swiftlint:enable line_length
     }
 
-    private func makeTokenizer() -> UITextInputTokenizer {
+    private func makeTokenizer() -> EditorTextInputTokenizer {
         makeTokenizer(text: sampleText)
     }
 
-    private func makeTokenizer(text: String, constrainingWidth: CGFloat = 365) -> UITextInputTokenizer {
+    private func makeTokenizer(text: String, constrainingWidth: CGFloat = 365) -> EditorTextInputTokenizer {
         let textInput = MockTextInput()
         let stringView = StringView(string: text)
         let lineManager = LineManager(stringView: stringView)

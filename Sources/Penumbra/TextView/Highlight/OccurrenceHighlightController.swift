@@ -12,7 +12,7 @@ import Foundation
 final class OccurrenceHighlightController {
     weak var emphasisManager: EmphasisManager?
     var stringView: StringView
-    var tokenizer: UITextInputTokenizer?
+    var tokenizer: EditorTextInputTokenizer?
 
     /// Master switch. When `false`, existing occurrence emphases are cleared.
     var isEnabled = false {

@@ -195,7 +195,7 @@ private extension TreeSitterSyntaxHighlighter {
             if token.fontTraits.contains(.italic) {
                 attributedString.addAttribute(.isItalic, value: true, range: token.range)
             }
-            var symbolicTraits: UIFontDescriptor.SymbolicTraits = []
+            var symbolicTraits: NSFontDescriptor.SymbolicTraits = []
             if let isBold = attributedString.attribute(.isBold, at: token.range.location, effectiveRange: nil) as? Bool, isBold {
                 symbolicTraits.insert(.bold)
             }
@@ -308,7 +308,7 @@ private extension TreeSitterSyntaxHighlighter {
 }
 
 private extension NSFont {
-    func withSymbolicTraits(_ symbolicTraits: UIFontDescriptor.SymbolicTraits) -> NSFont? {
+    func withSymbolicTraits(_ symbolicTraits: NSFontDescriptor.SymbolicTraits) -> NSFont? {
         let newFontDescriptor = fontDescriptor.withSymbolicTraits(symbolicTraits)
         return NSFont(descriptor: newFontDescriptor, size: pointSize)
     }
@@ -325,7 +325,7 @@ private enum DerivedFontCache {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var fonts: [Key: NSFont] = [:]
 
-    static func font(_ base: NSFont, traits: UIFontDescriptor.SymbolicTraits) -> NSFont {
+    static func font(_ base: NSFont, traits: NSFontDescriptor.SymbolicTraits) -> NSFont {
         let key = Key(base: base, traits: Int(traits.rawValue))
         lock.lock()
         if let cached = fonts[key] {

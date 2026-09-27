@@ -2,14 +2,13 @@ import Penumbra
 import TreeSitterJavaScriptPenumbra
 import AppKit
 
-class ViewController: NSViewController {
+final class EditorViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "TextCompanion"
         let textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.editorDelegate = self
-        textView.backgroundColor = .systemBackground
+        textView.backgroundColor = .windowBackgroundColor
         textView.text = UserDefaults.standard.text
         let languageMode = TreeSitterLanguageMode(language: .javaScript)
         textView.setLanguageMode(languageMode)

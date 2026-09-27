@@ -3,7 +3,7 @@ import Foundation
 
 final class SelectionRectService {
     var lineManager: LineManager
-    var textContainerInset: UIEdgeInsets = .zero
+    var textContainerInset: NSEdgeInsets = .zero
     var lineHeightMultiplier: CGFloat = 1
 
     private let contentSizeService: ContentSizeService

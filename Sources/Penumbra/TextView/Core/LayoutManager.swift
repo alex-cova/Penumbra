@@ -132,8 +132,8 @@ final class LayoutManager {
     }
     var isLineWrappingEnabled = true
     /// Spacing around the text. The left-side spacing defines the distance between the text and the gutter.
-    var textContainerInset: UIEdgeInsets = .zero
-    var safeAreaInsets: UIEdgeInsets = .zero
+    var textContainerInset: NSEdgeInsets = .zero
+    var safeAreaInsets: NSEdgeInsets = .zero
     var selectedRange: NSRange? {
         didSet {
             if selectedRange != oldValue {
@@ -623,7 +623,7 @@ final class LayoutManager {
     }
 }
 
-// MARK: - UITextInput
+// MARK: - EditorTextInput
 extension LayoutManager {
     func firstRect(for range: NSRange) -> CGRect {
         guard let line = lineManager.line(containingCharacterAt: range.location) else {

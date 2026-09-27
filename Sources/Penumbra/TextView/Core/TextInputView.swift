@@ -46,8 +46,8 @@ final class TextInputView: EditorView {
     /// whose insertion bypasses the editor delegate. Completion keys its auto-popup off this.
     var onTypingEvent: ((TextViewTypingEvent) -> Void)?
 
-    // MARK: - UITextInput
-    var selectedTextRange: UITextRange? {
+    // MARK: - EditorTextInput
+    var selectedTextRange: EditorTextRange? {
         get {
             if let range = _selectedRange {
                 return IndexedRange(range)
@@ -70,7 +70,7 @@ final class TextInputView: EditorView {
             }
         }
     }
-    private(set) var markedTextRange: UITextRange? {
+    private(set) var markedTextRange: EditorTextRange? {
         get {
             if let imeMarkedRange = imeMarkedRange {
                 return IndexedRange(imeMarkedRange)
@@ -83,16 +83,16 @@ final class TextInputView: EditorView {
         }
     }
     var markedTextStyle: [NSAttributedString.Key: Any]?
-    var beginningOfDocument: UITextPosition {
+    var beginningOfDocument: EditorTextPosition {
         IndexedPosition(index: 0)
     }
-    var endOfDocument: UITextPosition {
+    var endOfDocument: EditorTextPosition {
         IndexedPosition(index: stringView.length)
     }
     var hasText: Bool {
         stringView.length > 0
     }
-    var tokenizer: UITextInputTokenizer {
+    var tokenizer: EditorTextInputTokenizer {
         customTokenizer
     }
     private lazy var customTokenizer = TextInputStringTokenizer(stringView: stringView,
@@ -394,7 +394,7 @@ final class TextInputView: EditorView {
             }
         }
     }
-    var textContainerInset: UIEdgeInsets {
+    var textContainerInset: NSEdgeInsets {
         get {
             layoutManager.textContainerInset
         }
@@ -793,7 +793,7 @@ final class TextInputView: EditorView {
             updateSelectionOverlayPresentationHost()
         }
     }
-    var scrollViewSafeAreaInsets: UIEdgeInsets = .zero {
+    var scrollViewSafeAreaInsets: NSEdgeInsets = .zero {
         didSet {
             if scrollViewSafeAreaInsets != oldValue {
                 layoutManager.safeAreaInsets = scrollViewSafeAreaInsets
@@ -2461,7 +2461,7 @@ extension TextInputView {
 
 // MARK: - Rects
 extension TextInputView {
-    func caretRect(for position: UITextPosition) -> CGRect {
+    func caretRect(for position: EditorTextPosition) -> CGRect {
         guard let indexedPosition = position as? IndexedPosition else {
             fatalError("Expected position to be of type \(IndexedPosition.self)")
         }
@@ -2472,7 +2472,7 @@ extension TextInputView {
         caretRectService.caretRect(at: location, allowMovingCaretToNextLineFragment: true)
     }
 
-    func firstRect(for range: UITextRange) -> CGRect {
+    func firstRect(for range: EditorTextRange) -> CGRect {
         guard let indexedRange = range as? IndexedRange else {
             fatalError("Expected range to be of type \(IndexedRange.self)")
         }
@@ -2519,7 +2519,7 @@ extension TextInputView {
             isRestoringPreviouslyDeletedText = false
             return
         }
-        // If we're inserting text then we can't have a marked range. However, UITextInput doesn't always clear the marked range
+        // If we're inserting text then we can't have a marked range. However, EditorTextInput doesn't always clear the marked range
         // before calling -insertText(_:), so we do it manually. This issue can be tested by entering a backtick (`) in an empty
         // document, then pressing any arrow key (up, right, down or left) followed by the return key.
         // The backtick will remain marked unless we manually clear the marked range.
@@ -2563,7 +2563,7 @@ extension TextInputView {
             deleteSelection = currentSelection
         }
         let deleteRange = rangeForDeletingText(in: deleteSelection)
-        // If we're deleting everything in the marked range then we clear the marked range. UITextInput doesn't do that for us.
+        // If we're deleting everything in the marked range then we clear the marked range. EditorTextInput doesn't do that for us.
         // Can be tested by entering a backtick (`) in an empty document and deleting it.
         if deleteRange == imeMarkedRange {
             imeMarkedRange = nil
@@ -2644,7 +2644,7 @@ extension TextInputView {
         deleteBackward()
     }
 
-    func replace(_ range: UITextRange, withText text: String) {
+    func replace(_ range: EditorTextRange, withText text: String) {
         let preparedText = prepareTextForInsertion(text)
         if let indexedRange = range as? IndexedRange, shouldChangeText(in: indexedRange.range.nonNegativeLength, replacementText: preparedText) {
             replaceText(in: indexedRange.range.nonNegativeLength, with: preparedText)
@@ -2679,7 +2679,7 @@ extension TextInputView {
         }
     }
 
-    func text(in range: UITextRange) -> String? {
+    func text(in range: EditorTextRange) -> String? {
         if let indexedRange = range as? IndexedRange {
             return text(in: indexedRange.range.nonNegativeLength)
         } else {
@@ -3186,7 +3186,7 @@ extension TextInputView {
 
 // MARK: - Selection
 extension TextInputView {
-    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+    func selectionRects(for range: EditorTextRange) -> [EditorTextSelectionRect] {
         if let indexedRange = range as? IndexedRange {
             return selectionRectService.selectionRects(in: indexedRange.range.nonNegativeLength)
         } else {
@@ -3919,7 +3919,7 @@ extension TextInputView {
 
 // MARK: - Ranges and Positions
 extension TextInputView {
-    func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition? {
+    func position(within range: EditorTextRange, farthestIn direction: EditorTextLayoutDirection) -> EditorTextPosition? {
         // This implementation seems to match the behavior of UITextView.
         guard let indexedRange = range as? IndexedRange else {
             return nil
@@ -3934,7 +3934,7 @@ extension TextInputView {
         }
     }
 
-    func position(from position: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition? {
+    func position(from position: EditorTextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> EditorTextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -3944,7 +3944,7 @@ extension TextInputView {
         return IndexedPosition(index: newLocation)
     }
 
-    func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange? {
+    func characterRange(byExtending position: EditorTextPosition, in direction: EditorTextLayoutDirection) -> EditorTextRange? {
         // This implementation seems to match the behavior of UITextView.
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
@@ -3961,7 +3961,7 @@ extension TextInputView {
         }
     }
 
-    func characterRange(at point: CGPoint) -> UITextRange? {
+    func characterRange(at point: CGPoint) -> EditorTextRange? {
         guard let index = layoutManager.closestIndex(to: point) else {
             return nil
         }
@@ -3970,7 +3970,7 @@ extension TextInputView {
         return IndexedRange(range)
     }
 
-    func closestPosition(to point: CGPoint) -> UITextPosition? {
+    func closestPosition(to point: CGPoint) -> EditorTextPosition? {
         if let index = layoutManager.closestIndex(to: point) {
             return IndexedPosition(index: index)
         } else {
@@ -3978,7 +3978,7 @@ extension TextInputView {
         }
     }
 
-    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
+    func closestPosition(to point: CGPoint, within range: EditorTextRange) -> EditorTextPosition? {
         guard let indexedRange = range as? IndexedRange else {
             return nil
         }
@@ -3991,7 +3991,7 @@ extension TextInputView {
         return IndexedPosition(index: cappedIndex)
     }
 
-    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+    func textRange(from fromPosition: EditorTextPosition, to toPosition: EditorTextPosition) -> EditorTextRange? {
         guard let fromIndexedPosition = fromPosition as? IndexedPosition, let toIndexedPosition = toPosition as? IndexedPosition else {
             return nil
         }
@@ -3999,7 +3999,7 @@ extension TextInputView {
         return IndexedRange(range)
     }
 
-    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+    func position(from position: EditorTextPosition, offset: Int) -> EditorTextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -4010,7 +4010,7 @@ extension TextInputView {
         return IndexedPosition(index: newPosition)
     }
 
-    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+    func compare(_ position: EditorTextPosition, to other: EditorTextPosition) -> ComparisonResult {
         guard let indexedPosition = position as? IndexedPosition, let otherIndexedPosition = other as? IndexedPosition else {
             #if targetEnvironment(macCatalyst)
             // Mac Catalyst may pass <uninitialized> to `position`. I'm not sure what the right way to deal with that is but returning .orderedSame seems to work.
@@ -4028,7 +4028,7 @@ extension TextInputView {
         }
     }
 
-    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int {
+    func offset(from: EditorTextPosition, to toPosition: EditorTextPosition) -> Int {
         if let fromPosition = from as? IndexedPosition, let toPosition = toPosition as? IndexedPosition {
             return toPosition.index - fromPosition.index
         } else {
@@ -4039,11 +4039,11 @@ extension TextInputView {
 
 // MARK: - Writing Direction
 extension TextInputView {
-    func baseWritingDirection(for position: UITextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection {
+    func baseWritingDirection(for position: EditorTextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection {
         .natural
     }
 
-    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: EditorTextRange) {}
 }
 
 // MARK: - Context Menu

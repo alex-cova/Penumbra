@@ -582,7 +582,7 @@ extension LineController {
     }
 }
 
-// MARK: - UITextInput
+// MARK: - EditorTextInput
 extension LineController {
     func caretRect(atIndex lineLocalLocation: Int) -> CGRect {
         for lineFragment in typesetter.lineFragments {

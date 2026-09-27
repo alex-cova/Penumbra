@@ -1,62 +1,62 @@
 @preconcurrency import AppKit
 import Foundation
 
-public class UITextPosition: NSObject, @unchecked Sendable {}
-open class UITextRange: NSObject {
-    @objc open var start: UITextPosition { fatalError("override") }
-    @objc open var end: UITextPosition { fatalError("override") }
-    @objc open var isEmpty: Bool { fatalError("override") }
+class EditorTextPosition: NSObject, @unchecked Sendable {}
+class EditorTextRange: NSObject {
+    @objc var start: EditorTextPosition { fatalError("override") }
+    @objc var end: EditorTextPosition { fatalError("override") }
+    @objc var isEmpty: Bool { fatalError("override") }
 }
-open class UITextSelectionRect: NSObject {
-    @objc open var rect: CGRect { .zero }
-    @objc open var writingDirection: NSWritingDirection { .leftToRight }
-    @objc open var containsStart: Bool { false }
-    @objc open var containsEnd: Bool { false }
-    @objc open var isVertical: Bool { false }
-}
-
-public protocol UITextInputTokenizer: NSObjectProtocol {
-    func isPosition(_ position: UITextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool
-    func position(from position: UITextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> UITextPosition?
+class EditorTextSelectionRect: NSObject {
+    @objc var rect: CGRect { .zero }
+    @objc var writingDirection: NSWritingDirection { .leftToRight }
+    @objc var containsStart: Bool { false }
+    @objc var containsEnd: Bool { false }
+    @objc var isVertical: Bool { false }
 }
 
-open class UITextInputStringTokenizer: NSObject, UITextInputTokenizer {
-    public weak var textInput: (NSResponder & UITextInput)?
-    public init(textInput: (NSResponder & UITextInput)? = nil) { self.textInput = textInput; super.init() }
-    open func isPosition(_ position: UITextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool { false }
-    open func position(from position: UITextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> UITextPosition? { nil }
+protocol EditorTextInputTokenizer: NSObjectProtocol {
+    func isPosition(_ position: EditorTextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool
+    func position(from position: EditorTextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> EditorTextPosition?
+}
+
+class EditorTextInputStringTokenizer: NSObject, EditorTextInputTokenizer {
+    weak var textInput: (NSResponder & EditorTextInput)?
+    init(textInput: (NSResponder & EditorTextInput)? = nil) { self.textInput = textInput; super.init() }
+    func isPosition(_ position: EditorTextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool { false }
+    func position(from position: EditorTextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> EditorTextPosition? { nil }
 }
 
 @MainActor
-public protocol UITextInput: AnyObject {
-    var selectedTextRange: UITextRange? { get set }
-    var markedTextRange: UITextRange? { get }
+protocol EditorTextInput: AnyObject {
+    var selectedTextRange: EditorTextRange? { get set }
+    var markedTextRange: EditorTextRange? { get }
     var markedTextStyle: [NSAttributedString.Key: Any]? { get set }
-    var beginningOfDocument: UITextPosition { get }
-    var endOfDocument: UITextPosition { get }
+    var beginningOfDocument: EditorTextPosition { get }
+    var endOfDocument: EditorTextPosition { get }
     var hasText: Bool { get }
-    var tokenizer: UITextInputTokenizer { get }
+    var tokenizer: EditorTextInputTokenizer { get }
     func insertText(_ text: String)
     func deleteBackward()
     func setMarkedText(_ markedText: String?, selectedRange: NSRange)
     func unmarkText()
-    func text(in range: UITextRange) -> String?
-    func replace(_ range: UITextRange, withText text: String)
-    func textRange(from: UITextPosition, to: UITextPosition) -> UITextRange?
-    func position(from: UITextPosition, offset: Int) -> UITextPosition?
-    func position(from: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition?
-    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult
-    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int
-    func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition?
-    func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange?
-    func firstRect(for range: UITextRange) -> CGRect
-    func caretRect(for position: UITextPosition) -> CGRect
-    func selectionRects(for range: UITextRange) -> [UITextSelectionRect]
-    func closestPosition(to point: CGPoint) -> UITextPosition?
-    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition?
-    func characterRange(at point: CGPoint) -> UITextRange?
-    func baseWritingDirection(for position: UITextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection
-    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange)
+    func text(in range: EditorTextRange) -> String?
+    func replace(_ range: EditorTextRange, withText text: String)
+    func textRange(from: EditorTextPosition, to: EditorTextPosition) -> EditorTextRange?
+    func position(from: EditorTextPosition, offset: Int) -> EditorTextPosition?
+    func position(from: EditorTextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> EditorTextPosition?
+    func compare(_ position: EditorTextPosition, to other: EditorTextPosition) -> ComparisonResult
+    func offset(from: EditorTextPosition, to toPosition: EditorTextPosition) -> Int
+    func position(within range: EditorTextRange, farthestIn direction: EditorTextLayoutDirection) -> EditorTextPosition?
+    func characterRange(byExtending position: EditorTextPosition, in direction: EditorTextLayoutDirection) -> EditorTextRange?
+    func firstRect(for range: EditorTextRange) -> CGRect
+    func caretRect(for position: EditorTextPosition) -> CGRect
+    func selectionRects(for range: EditorTextRange) -> [EditorTextSelectionRect]
+    func closestPosition(to point: CGPoint) -> EditorTextPosition?
+    func closestPosition(to point: CGPoint, within range: EditorTextRange) -> EditorTextPosition?
+    func characterRange(at point: CGPoint) -> EditorTextRange?
+    func baseWritingDirection(for position: EditorTextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: EditorTextRange)
     func beginFloatingCursor(at point: CGPoint)
     func updateFloatingCursor(at point: CGPoint)
     func endFloatingCursor()

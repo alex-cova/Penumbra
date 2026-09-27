@@ -22,7 +22,7 @@ protocol MinimapContentSource: AnyObject {
     var stringView: StringView { get }
     var theme: Theme { get }
     var indentStrategy: IndentStrategy { get }
-    var textContainerInset: UIEdgeInsets { get }
+    var textContainerInset: NSEdgeInsets { get }
     /// Bumped every time the syntax tree is rebuilt/reparsed — lets the minimap negative-cache
     /// a `.pending`/`.unavailable` answer without re-querying every frame.
     var syntaxParseGeneration: Int { get }

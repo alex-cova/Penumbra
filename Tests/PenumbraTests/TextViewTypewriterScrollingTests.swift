@@ -21,10 +21,7 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
     }
 
     private func caretMidYRelativeToViewport(in textView: TextView, at location: Int) -> CGFloat? {
-        guard let position = textView.position(from: textView.beginningOfDocument, offset: location) else {
-            return nil
-        }
-        let caretRect = textView.caretRect(for: position)
+        let caretRect = textView.caretRect(at: location)
         let viewportTop = textView.contentOffset.y + textView.adjustedContentInset.top
         return caretRect.midY - viewportTop
     }
