@@ -474,6 +474,47 @@ Remaining in the Enter profile (20k lines, after the parse): viewport relayout ~
 per-fragment paint spec and upsert for moved lines ~16%, line-number views ~7%, row lookups
 (`LineManager.line(atRow:)`) ~5%; the Enter indent scan (`CStyleLineIndentProvider`) ~11%.
 
+### Folding regression and session drift (2026-09-27)
+
+A run at HEAD (`46fdf5e`) looked ~2× slower than the tables above on every path. Paired runs
+against `8d37e2a` in the same session (Release, M1 Pro, macOS 27.0, Xcode 27.0, Swift 6.4)
+showed that most of it was the session: `8d37e2a` measured the same scroll (6.6–6.7 ms), Select
+All Occurrences (~100 ms / ~1.12 s) and mid-file Enter (~22 ms / ~21 ms) as HEAD. One regression
+was real: Enter at 20k lines went from 2.5 ms to 4.0 ms (≈ +1.5 ms at every position). 120k lines
+was unaffected because folding is off above `maxFoldRecomputeLineCount`. It came from the
+`FoldingModel` / `CodeFoldingManager` rewrite (`230119d`; that commit's harness never finishes).
+
+- **Duplicated regions.** The providers describe the whole document, but an incremental update
+  spliced every descriptor in as "discovered in the window", so each landed update added one
+  more copy of every fold outside it. `applyLineDelta` walked all of them on each Enter.
+  `reconcile` now keeps only the descriptors that overlap the scanned rows.
+- **Quadratic nesting depth.** `nestingDepth(for:among:)` converted every descriptor to rows for
+  every descriptor: seconds of main-thread time per reconcile with the thousands of folds in the
+  synthetic 20k-line file (`--enter-only` ran for minutes). Depths now come from one sweep over
+  the converted ranges (`FoldingModel.nestingDepths(of:)`, a Fenwick tree over end rows).
+- **Whole-document snapshot per keystroke.** `updateIfNeeded` (called from `layoutIfNeeded`)
+  materialized the whole text into a `Document` on every edit, about 17% of the Enter loop, and
+  started a full provider scan that a later edit could cancel but not stop, so the scans piled up
+  on background threads. Edits now schedule the update with `afterEdit: true`. It waits
+  `CodeFoldingManager.editDebounceNanoseconds` (150 ms) of idle time and then snapshots. A
+  superseded update passes its rows on to the next one.
+- `applyLineDelta` shifts regions in place instead of copying every `FoldRegion`.
+- Tests: `FoldingControllerTests.testIncrementalRecomputeDoesNotDuplicateRegionsOutsideTheWindow`
+  (four copies of every fold after three edits without the fix),
+  `testNestingDepthsMatchPairwiseCount`, `testSupersededEditUpdateKeepsItsDirtyRows`.
+
+| Release, median of 3 pairs, same session | `8d37e2a` | After |
+|---|---|---|
+| 20k lines, Enter top (fresh / walked) | 2.50–2.54 / 2.35–2.46 ms | 1.69–1.84 / 1.66–1.78 ms |
+| 20k lines, Enter middle (fresh / walked) | 22.0–22.7 / 22.0–22.7 ms | 21.4–21.7 / 21.3–21.7 ms |
+| 120k lines, Enter top / middle | 1.61–1.72 / 21.0–21.6 ms | 1.58–1.73 / 21.5–21.6 ms |
+| Scroll page (20k / 120k) | 6.60–6.67 / 6.69–6.73 ms | 6.60–6.64 / 6.74 ms |
+| Select All Occurrences (20k / 120k) | 99–104 ms / 1.12 s | 99–106 ms / 1.12 s |
+| Glyph extracts / decorations per Enter, live handles after scroll | 6 / 2, 827 | 6 / 2, 827 |
+
+In this session mid-file Enter is ~21 ms, not the ~12 ms recorded on 2026-09-25, for both
+commits. Phase 1 (the Enter indent scan) is still the largest typing cost.
+
 ## Next
 
 0. **Phase 1, Enter indent scan.** With the harness fixed, mid-file Enter is ~12 ms in Release

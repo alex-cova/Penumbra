@@ -17,7 +17,17 @@ final class CodeFoldingManager {
     private var needsUpdate = false
     private var pendingFullUpdate = false
     private var pendingDirtyRows: ClosedRange<Int>?
+    private var pendingAfterEdit = false
+    /// What the unfinished update task covers. A newer update cancels it, so it takes these over.
+    private var inFlightFullUpdate = false
+    private var inFlightDirtyRows: ClosedRange<Int>?
+    private var hasUpdateInFlight = false
     private var contentVersion = 0
+
+    /// Idle time after an edit before the document is snapshotted and rescanned. Snapshotting
+    /// materializes the whole text and the providers walk the whole document, so neither may run
+    /// per keystroke.
+    static let editDebounceNanoseconds: UInt64 = 150_000_000
 
     var isEnabled: Bool {
         get { foldingModel.isEnabled }
@@ -43,11 +53,13 @@ final class CodeFoldingManager {
         }
     }
 
-    func scheduleUpdate(full: Bool = false, dirtyRows: ClosedRange<Int>? = nil) {
+    /// - Parameter afterEdit: Waits for ``editDebounceNanoseconds`` of idle time before scanning.
+    func scheduleUpdate(full: Bool = false, dirtyRows: ClosedRange<Int>? = nil, afterEdit: Bool = false) {
         guard foldingModel.isEnabled else {
             return
         }
         needsUpdate = true
+        pendingAfterEdit = afterEdit
         contentVersion += 1
         if full {
             pendingFullUpdate = true
@@ -70,10 +82,16 @@ final class CodeFoldingManager {
         needsUpdate = false
         let currentGeneration = generation + 1
         generation = currentGeneration
-        let fullUpdate = pendingFullUpdate
-        let dirtyRows = pendingDirtyRows
+        var fullUpdate = pendingFullUpdate
+        var dirtyRows = pendingDirtyRows
+        let delay = pendingAfterEdit ? Self.editDebounceNanoseconds : 0
         pendingFullUpdate = false
         pendingDirtyRows = nil
+        pendingAfterEdit = false
+        if hasUpdateInFlight {
+            fullUpdate = fullUpdate || inFlightFullUpdate
+            dirtyRows = Self.union(dirtyRows, inFlightDirtyRows)
+        }
 
         let lineCount = foldingModel.lineManager.lineCount
         if lineCount > EditorPerformanceConstants.maxFoldRecomputeLineCount {
@@ -81,18 +99,18 @@ final class CodeFoldingManager {
             return
         }
 
-        if fullUpdate || dirtyRows == nil || lineCount == 0 {
-            startUpdateTask(generation: currentGeneration, document: makeDocument(), incrementalRows: nil)
+        guard !fullUpdate, let dirtyRows, lineCount > 0 else {
+            startUpdateTask(generation: currentGeneration, incrementalRows: nil, delay: delay)
             return
         }
 
-        let start = max(0, dirtyRows!.lowerBound)
-        let end = min(lineCount - 1, max(start, dirtyRows!.upperBound))
+        let start = max(0, dirtyRows.lowerBound)
+        let end = min(lineCount - 1, max(start, dirtyRows.upperBound))
         if end - start + 1 >= min(lineCount / 2, 8_192) && end - start + 1 >= 512 {
-            startUpdateTask(generation: currentGeneration, document: makeDocument(), incrementalRows: nil)
+            startUpdateTask(generation: currentGeneration, incrementalRows: nil, delay: delay)
             return
         }
-        startUpdateTask(generation: currentGeneration, document: makeDocument(), incrementalRows: start ... end)
+        startUpdateTask(generation: currentGeneration, incrementalRows: start ... end, delay: delay)
     }
 
     /// Synchronous path for unit tests.
@@ -146,18 +164,34 @@ private extension CodeFoldingManager {
         )
     }
 
-    private func startUpdateTask(generation: UInt, document: Document, incrementalRows: ClosedRange<Int>?) {
+    private func startUpdateTask(generation: UInt, incrementalRows: ClosedRange<Int>?, delay: UInt64) {
         updateTask?.cancel()
+        hasUpdateInFlight = true
+        inFlightFullUpdate = incrementalRows == nil
+        inFlightDirtyRows = incrementalRows
         updateTask = Task { [weak self] in
-            guard let self else {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            guard let self, !Task.isCancelled else {
                 return
             }
-            let descriptors = await fetchDescriptors(for: document)
+            let descriptors = await fetchDescriptors(for: makeDocument())
             guard !Task.isCancelled else {
                 return
             }
             apply(descriptors: descriptors, generation: generation, incrementalRows: incrementalRows)
         }
+    }
+
+    static func union(_ lhs: ClosedRange<Int>?, _ rhs: ClosedRange<Int>?) -> ClosedRange<Int>? {
+        guard let lhs else {
+            return rhs
+        }
+        guard let rhs else {
+            return lhs
+        }
+        return min(lhs.lowerBound, rhs.lowerBound) ... max(lhs.upperBound, rhs.upperBound)
     }
 
     private func fetchDescriptors(for document: Document) async -> [FoldingDescriptor] {
@@ -171,6 +205,7 @@ private extension CodeFoldingManager {
         guard generation == self.generation else {
             return
         }
+        hasUpdateInFlight = false
         foldingModel.reconcile(descriptors: descriptors, incrementalScannedRows: incrementalRows)
     }
 }

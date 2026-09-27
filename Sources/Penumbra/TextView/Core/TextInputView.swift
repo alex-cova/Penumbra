@@ -2931,9 +2931,9 @@ extension TextInputView {
             )
             codeFoldingManager.applyLineDelta(at: spliceRow, delta: delta)
             if let rows = lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount) {
-                codeFoldingManager.scheduleUpdate(dirtyRows: rows)
+                codeFoldingManager.scheduleUpdate(dirtyRows: rows, afterEdit: true)
             } else {
-                codeFoldingManager.scheduleUpdate(full: true)
+                codeFoldingManager.scheduleUpdate(full: true, afterEdit: true)
             }
         }
         // One existing line whose height did not change is already typeset and on the canvas.

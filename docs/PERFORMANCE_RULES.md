@@ -7,11 +7,11 @@ show the measurement.
 
 ## Budgets
 
-| Path | Budget (Release, 20k and 120k-line Java) | Measured today |
+| Path | Budget (Release, 20k and 120k-line Java) | Measured (2026-09-25 / 2026-09-27) |
 |---|---|---|
 | Keystroke (`insertText` + layout) | < 4 ms, flat with file size | ~1–3 ms |
-| Enter | < 2 ms at top of file; mid-file is a known gap (~12 ms, Phase 1) | 0.8–1.5 ms top |
-| Scroll page (offset + layout + display) | < 6 ms | ~3.1–3.5 ms |
+| Enter | < 2 ms at top of file; mid-file is a known gap (~12 ms, Phase 1) | 0.8–1.5 ms / 1.6–1.7 ms top; ~12 / ~21 ms mid |
+| Scroll page (offset + layout + display) | < 6 ms | ~3.1–3.5 ms / ~6.7 ms |
 | Live line handles after a full scroll | < ~2k | ~450–950 |
 | malloc after scrolling a 120k-line file | < 200 MB | ~140 MB |
 | Glyph extracts / decoration builds per Enter | single digits | 6 / 2 |
@@ -133,7 +133,11 @@ swift run -c release PerfHarness java-completion synthetic   # completion change
 ```
 
 - Run the harness on the parent commit and on your change back to back (timings drift between
-  sessions; compare pairs, not old tables). Report medians of at least two runs.
+  sessions; compare pairs, not old tables). Report medians of at least two runs. The same binary
+  has measured up to 2× apart on different days (2026-09-25 vs 2026-09-27), so a number that
+  misses a budget is a regression only if the parent commit, run in the same session, doesn't.
+  Build each commit into its own `--build-path`: a shared `.build` is overwritten by the next
+  checkout, and resource bundles must stay next to the binary.
 - Any change to layout, rendering, `LineManager`, folding, highlighting, selection, typing
   observers or the intelligence controller needs an `enter-session` run before and after.
 - Make sure the harness measures what you think: check the caret really is where the step says

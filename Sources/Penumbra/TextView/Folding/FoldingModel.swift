@@ -62,25 +62,24 @@ final class FoldingModel {
         guard isEnabled, delta != 0 else {
             return
         }
-        var shifted: [FoldRegion] = []
-        shifted.reserveCapacity(regions.count)
-        for region in regions {
-            var lower = region.lineRange.lowerBound
-            var upper = region.lineRange.upperBound
-            if lower >= row {
-                lower += delta
-            }
-            if upper >= row {
-                upper += delta
-            }
-            guard lower >= 0, upper > lower else {
+        // In place: copying every region (and its placeholder string) cost more than the shift.
+        var invalidIndices: [Int] = []
+        for index in regions.indices {
+            let range = regions[index].lineRange
+            guard range.upperBound >= row else {
                 continue
             }
-            var updated = region
-            updated.lineRange = lower ... upper
-            shifted.append(updated)
+            let lower = range.lowerBound >= row ? range.lowerBound + delta : range.lowerBound
+            let upper = range.upperBound + delta
+            guard lower >= 0, upper > lower else {
+                invalidIndices.append(index)
+                continue
+            }
+            regions[index].lineRange = lower ... upper
         }
-        regions = shifted
+        for index in invalidIndices.reversed() {
+            regions.remove(at: index)
+        }
     }
 
     func isLineHidden(_ lineID: DocumentLineNodeID) -> Bool {
@@ -298,17 +297,27 @@ final class FoldingModel {
             return
         }
 
+        // Each descriptor is converted to rows once; depths come from one sweep over the result.
+        var lineRanges: [ClosedRange<Int>?] = []
+        lineRanges.reserveCapacity(descriptors.count)
+        for descriptor in descriptors {
+            lineRanges.append(FoldingDescriptorConversion.lineRange(for: descriptor, in: lineManager))
+        }
+        let depths = Self.nestingDepths(of: lineRanges)
         var candidateRegions: [FoldRegion] = []
         candidateRegions.reserveCapacity(descriptors.count)
-        for descriptor in descriptors {
-            guard let lineRange = FoldingDescriptorConversion.lineRange(for: descriptor, in: lineManager),
-                  lineRange.upperBound > lineRange.lowerBound else {
+        for (index, descriptor) in descriptors.enumerated() {
+            guard let lineRange = lineRanges[index], lineRange.upperBound > lineRange.lowerBound else {
                 continue
             }
-            let depth = nestingDepth(for: lineRange, among: descriptors)
+            if let scanned = incrementalScannedRows,
+               lineRange.upperBound < scanned.lowerBound || lineRange.lowerBound > scanned.upperBound {
+                // Providers describe the whole document; outside the window the existing regions stay.
+                continue
+            }
             candidateRegions.append(
                 FoldRegion(
-                    depth: depth,
+                    depth: depths[index],
                     lineRange: lineRange,
                     placeholder: descriptor.placeholder,
                     groupID: descriptor.groupID,
@@ -443,19 +452,6 @@ private extension FoldingModel {
         }
     }
 
-    func nestingDepth(for lineRange: ClosedRange<Int>, among descriptors: [FoldingDescriptor]) -> Int {
-        var depth = 0
-        for other in descriptors {
-            guard let otherRange = FoldingDescriptorConversion.lineRange(for: other, in: lineManager) else {
-                continue
-            }
-            if otherRange.lowerBound < lineRange.lowerBound && otherRange.upperBound >= lineRange.upperBound {
-                depth += 1
-            }
-        }
-        return depth
-    }
-
     func spliceRegions(discovered: [FoldRegion], scanned: ClosedRange<Int>) {
         var kept: [FoldRegion] = []
         kept.reserveCapacity(regions.count)
@@ -547,5 +543,69 @@ private extension FoldingModel {
                 lineManager.setHeight(of: line, to: lineController.lineHeight)
             }
         }
+    }
+}
+
+extension FoldingModel {
+    /// For each range, the number of other ranges that start on an earlier row and end on the same
+    /// row or later. O(n log n): ranges are visited by start row and counted by end row in a
+    /// Fenwick tree. A pairwise count (every descriptor against every other) took seconds per
+    /// reconcile with the thousands of folds in a 20k-line Java file.
+    static func nestingDepths(of lineRanges: [ClosedRange<Int>?]) -> [Int] {
+        var depths = [Int](repeating: 0, count: lineRanges.count)
+        let indices = lineRanges.indices
+            .filter { lineRanges[$0] != nil }
+            .sorted { lineRanges[$0]!.lowerBound < lineRanges[$1]!.lowerBound }
+        guard !indices.isEmpty else {
+            return depths
+        }
+        let upperBounds = Array(Set(indices.map { lineRanges[$0]!.upperBound })).sorted()
+        var tree = [Int](repeating: 0, count: upperBounds.count + 1)
+        func slot(ofUpperBound upperBound: Int) -> Int {
+            var low = 0
+            var high = upperBounds.count
+            while low < high {
+                let mid = (low + high) / 2
+                if upperBounds[mid] < upperBound {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            return low
+        }
+        // Inserted ranges whose end row is below `upperBound`.
+        func countEnding(before upperBound: Int) -> Int {
+            var total = 0
+            var position = slot(ofUpperBound: upperBound)
+            while position > 0 {
+                total += tree[position]
+                position -= position & -position
+            }
+            return total
+        }
+        var inserted = 0
+        var groupStart = 0
+        while groupStart < indices.count {
+            let lowerBound = lineRanges[indices[groupStart]]!.lowerBound
+            var groupEnd = groupStart
+            while groupEnd < indices.count && lineRanges[indices[groupEnd]]!.lowerBound == lowerBound {
+                groupEnd += 1
+            }
+            // Ranges starting on the same row don't contain each other, so query the group before inserting it.
+            for index in indices[groupStart ..< groupEnd] {
+                depths[index] = inserted - countEnding(before: lineRanges[index]!.upperBound)
+            }
+            for index in indices[groupStart ..< groupEnd] {
+                var position = slot(ofUpperBound: lineRanges[index]!.upperBound) + 1
+                while position <= upperBounds.count {
+                    tree[position] += 1
+                    position += position & -position
+                }
+                inserted += 1
+            }
+            groupStart = groupEnd
+        }
+        return depths
     }
 }

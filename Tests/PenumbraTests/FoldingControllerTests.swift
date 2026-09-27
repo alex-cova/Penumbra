@@ -252,6 +252,75 @@ final class FoldingControllerTests: XCTestCase {
         XCTAssertGreaterThan(manager.foldingModel.regions.count, 40)
     }
 
+    func testIncrementalRecomputeDoesNotDuplicateRegionsOutsideTheWindow() async {
+        var text = ""
+        for index in 0..<60 {
+            text += "func f\(index)() {\n    let x = \(index)\n}\n"
+        }
+        let (manager, lineManager, stringView) = makeFoldingStack(text: text)
+        manager.isEnabled = true
+        await recompute(manager)
+        let expected = manager.foldingModel.regions.map(\.lineRange)
+        XCTAssertEqual(expected.count, 60)
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        for _ in 0..<3 {
+            let body = lineManager.line(atRow: 91)
+            let result = helper.replaceText(in: NSRange(location: body.location, length: body.data.length), with: "    let x = 99")
+            let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+            manager.scheduleUpdate(dirtyRows: rows)
+            await manager.updateSynchronously()
+        }
+        XCTAssertEqual(manager.foldingModel.regions.map(\.lineRange), expected)
+    }
+
+    func testSupersededEditUpdateKeepsItsDirtyRows() async throws {
+        var text = ""
+        for index in 0..<60 {
+            text += "func f\(index)() {\n    let x = \(index)\n}\n"
+        }
+        let (manager, lineManager, stringView) = makeFoldingStack(text: text)
+        manager.isEnabled = true
+        await recompute(manager)
+        XCTAssertEqual(manager.foldingModel.regions.first?.lineRange, 0 ... 1)
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        // Unindenting the first body removes the first fold.
+        for row in [1, 151] {
+            let body = lineManager.line(atRow: row)
+            let result = helper.replaceText(in: NSRange(location: body.location, length: body.data.length), with: "let x = 0")
+            let rows = try XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+            manager.scheduleUpdate(dirtyRows: rows, afterEdit: true)
+            manager.updateIfNeeded()
+        }
+        XCTAssertEqual(manager.foldingModel.regions.count, 60, "edits are debounced")
+        try await Task.sleep(nanoseconds: CodeFoldingManager.editDebounceNanoseconds * 4)
+        XCTAssertEqual(manager.foldingModel.regions.count, 58)
+        XCTAssertNotEqual(manager.foldingModel.regions.first?.lineRange, 0 ... 1)
+    }
+
+    func testNestingDepthsMatchPairwiseCount() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<50 {
+            let ranges: [ClosedRange<Int>?] = (0..<60).map { _ in
+                if Int.random(in: 0..<10, using: &generator) == 0 {
+                    return nil
+                }
+                let lower = Int.random(in: 0..<40, using: &generator)
+                return lower ... lower + Int.random(in: 0..<20, using: &generator)
+            }
+            let expected = ranges.map { range -> Int in
+                guard let range else {
+                    return 0
+                }
+                return ranges.compactMap { $0 }
+                    .filter { $0.lowerBound < range.lowerBound && $0.upperBound >= range.upperBound }
+                    .count
+            }
+            XCTAssertEqual(FoldingModel.nestingDepths(of: ranges), expected)
+        }
+    }
+
     func testIncrementalRecomputePreservesADistantCollapsedFold() async {
         var text = ""
         for index in 0..<40 {
