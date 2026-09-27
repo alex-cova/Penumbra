@@ -1,11 +1,10 @@
 import Penumbra
-import UIKit
+import AppKit
 
-class ViewController: UIViewController {
+class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "TextCompanion"
-        navigationController?.navigationBar.scrollEdgeAppearance = UINavigationBarAppearance()
         let textView = TextView()
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.backgroundColor = .systemBackground
@@ -20,6 +19,6 @@ class ViewController: UIViewController {
     }
 
     private func setCustomization(on textView: TextView) {
-        textView.textContainerInset = UIEdgeInsets(top: 8, left: 5, bottom: 8, right: 5)
+        textView.textContainerInset = NSEdgeInsets(top: 8, left: 5, bottom: 8, right: 5)
     }
 }

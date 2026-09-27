@@ -1,24 +1,24 @@
 import Penumbra
-import UIKit
+import AppKit
 
 class TomorrowTheme: Theme {
-    let font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
-    let textColor: UIColor = .tomorrow.foreground
+    let font: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    let textColor: NSColor = .tomorrow.foreground
 
-    let gutterBackgroundColor: UIColor = .tomorrow.background
-    let gutterHairlineColor: UIColor = .tomorrow.background
+    let gutterBackgroundColor: NSColor = .tomorrow.background
+    let gutterHairlineColor: NSColor = .tomorrow.background
 
-    let lineNumberColor: UIColor = .tomorrow.comment
-    let lineNumberFont: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    let lineNumberColor: NSColor = .tomorrow.comment
+    let lineNumberFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
 
-    let selectedLineBackgroundColor: UIColor = .tomorrow.currentLine
-    let selectedLinesLineNumberColor: UIColor = .tomorrow.foreground
-    let selectedLinesGutterBackgroundColor: UIColor = .tomorrow.background
+    let selectedLineBackgroundColor: NSColor = .tomorrow.currentLine
+    let selectedLinesLineNumberColor: NSColor = .tomorrow.foreground
+    let selectedLinesGutterBackgroundColor: NSColor = .tomorrow.background
 
-    let invisibleCharactersColor: UIColor = .tomorrow.comment
+    let invisibleCharactersColor: NSColor = .tomorrow.comment
 
-    let pageGuideHairlineColor: UIColor = .tomorrow.foreground.withAlphaComponent(0.1)
-    let pageGuideBackgroundColor: UIColor = .tomorrow.foreground.withAlphaComponent(0.2)
+    let pageGuideHairlineColor: NSColor = .tomorrow.foreground.withAlphaComponent(0.1)
+    let pageGuideBackgroundColor: NSColor = .tomorrow.foreground.withAlphaComponent(0.2)
 
-    let markedTextBackgroundColor: UIColor = .tomorrow.foreground.withAlphaComponent(0.2)
+    let markedTextBackgroundColor: NSColor = .tomorrow.foreground.withAlphaComponent(0.2)
 }

@@ -1,7 +1,7 @@
 import Penumbra
-import UIKit
+import AppKit
 
 class TomorrowTheme: Theme {
-    let font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
-    let lineNumberFont: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    let font: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    let lineNumberFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
 }

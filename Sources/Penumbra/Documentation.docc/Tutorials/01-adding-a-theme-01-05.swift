@@ -1,5 +1,5 @@
 import Penumbra
-import UIKit
+import AppKit
 
 class TomorrowTheme: Theme {
     

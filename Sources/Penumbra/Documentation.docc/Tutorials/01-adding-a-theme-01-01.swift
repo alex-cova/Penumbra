@@ -1,5 +1,5 @@
-import UIKit
+import AppKit
 
-extension UIColor {
+extension NSColor {
 
 }

@@ -1,7 +1,7 @@
 import Penumbra
-import UIKit
+import AppKit
 
-class ViewController: UIViewController {
+class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "TextCompanion"

@@ -27,6 +27,7 @@ patterns=(
   'public typealias UIColor'
   'var font: UIColor'
   'var keyboardType:'
+  'import UIKit'
 )
 
 failed=0
