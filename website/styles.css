@@ -151,15 +151,30 @@ button:focus-visible {
   text-decoration: none;
 }
 
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.brand-icon {
+  display: block;
   width: 2rem;
   height: 2rem;
   border-radius: 0.55rem;
-  background: var(--accent-soft);
-  color: var(--accent);
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
+.umbra-section-head {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  max-width: none;
+}
+
+.umbra-app-icon {
+  flex-shrink: 0;
+  width: 5rem;
+  height: 5rem;
+  border-radius: 1rem;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
 }
 
 .nav-toggle {
@@ -227,6 +242,12 @@ button:focus-visible {
   max-width: 32rem;
   color: var(--text-muted);
   font-size: 1.0625rem;
+}
+
+.hero p code,
+.umbra-card code {
+  font-family: var(--mono);
+  font-size: 0.88em;
 }
 
 .cta-row {
@@ -343,7 +364,6 @@ button:focus-visible {
 }
 
 .section h2,
-.showcase-copy h2,
 .install-copy h2 {
   margin: 0 0 0.75rem;
   font-size: clamp(1.75rem, 3vw, 2.35rem);
@@ -352,7 +372,6 @@ button:focus-visible {
 }
 
 .section-head p,
-.showcase-copy p,
 .install-copy p {
   margin: 0;
   color: var(--text-muted);
@@ -404,6 +423,80 @@ button:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
+.umbra-bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.umbra-card {
+  padding: 1.35rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.umbra-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.umbra-card p {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.umbra-card p:last-child {
+  margin-bottom: 0;
+}
+
+.umbra-java {
+  grid-column: span 8;
+  background:
+    linear-gradient(145deg, var(--accent-soft), transparent 55%),
+    var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+.umbra-http {
+  grid-column: span 4;
+  background: var(--bg-muted);
+}
+
+.umbra-markdown {
+  grid-column: span 6;
+}
+
+.umbra-git {
+  grid-column: span 6;
+  background: var(--bg-muted);
+}
+
+.umbra-workbench {
+  grid-column: span 12;
+}
+
+.feature-list {
+  margin: 0 0 1rem;
+  padding-left: 1.15rem;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.feature-list li {
+  margin-bottom: 0.35rem;
+}
+
+.feature-list li:last-child {
+  margin-bottom: 0;
+}
+
+.feature-list-compact {
+  columns: 2;
+  column-gap: 1.5rem;
+}
+
 .tag-list {
   display: flex;
   flex-wrap: wrap;
@@ -423,18 +516,39 @@ button:focus-visible {
   font-size: 0.78rem;
 }
 
-.showcase-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 2rem;
-  align-items: end;
-}
-
-.showcase-copy {
-  padding-bottom: 0.5rem;
+.showcase-section .section-head {
+  margin-bottom: 1.75rem;
 }
 
 .showcase-primary {
+  margin: 0 0 1rem;
+  overflow: hidden;
+  border-radius: calc(var(--radius) + 4px);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-strong);
+}
+
+.showcase-primary img {
+  display: block;
+  width: 100%;
+}
+
+.showcase-primary figcaption,
+.screenshot-card figcaption {
+  padding: 0.85rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.screenshot-gallery {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.screenshot-card {
   margin: 0;
   overflow: hidden;
   border-radius: calc(var(--radius) + 4px);
@@ -443,16 +557,22 @@ button:focus-visible {
   box-shadow: var(--shadow);
 }
 
-.showcase-primary img {
-  display: block;
-  width: 100%;
+.screenshot-card:nth-child(1) {
+  grid-column: span 7;
 }
 
-.showcase-primary figcaption {
-  padding: 0.85rem 1rem;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  border-top: 1px solid var(--border);
+.screenshot-card:nth-child(2) {
+  grid-column: span 5;
+}
+
+.screenshot-card:nth-child(3),
+.screenshot-card:nth-child(4) {
+  grid-column: span 6;
+}
+
+.screenshot-card img {
+  display: block;
+  width: 100%;
 }
 
 .install-layout {
@@ -493,6 +613,10 @@ button:focus-visible {
 .spec-list dd {
   margin: 0;
   font-size: 0.98rem;
+}
+
+.spec-list dd a {
+  color: var(--accent);
 }
 
 .code-panels {
@@ -631,17 +755,29 @@ button:focus-visible {
   .bento-engine,
   .bento-intel,
   .bento-workbench,
-  .bento-languages {
+  .bento-languages,
+  .umbra-java,
+  .umbra-http,
+  .umbra-markdown,
+  .umbra-git,
+  .umbra-workbench {
     grid-column: span 12;
   }
 
-  .showcase-layout,
+  .feature-list-compact {
+    columns: 1;
+  }
+
   .install-layout {
     grid-template-columns: 1fr;
   }
 
-  .showcase-copy {
-    padding-bottom: 0;
+  .screenshot-card,
+  .screenshot-card:nth-child(1),
+  .screenshot-card:nth-child(2),
+  .screenshot-card:nth-child(3),
+  .screenshot-card:nth-child(4) {
+    grid-column: span 12;
   }
 }
 
@@ -678,6 +814,11 @@ button:focus-visible {
 
   .nav-toggle[aria-expanded="true"] .nav-toggle-bar:last-child {
     transform: translateY(-4px) rotate(-45deg);
+  }
+
+  .umbra-section-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .stack-strip {

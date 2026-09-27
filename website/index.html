@@ -6,12 +6,12 @@
     <title>Penumbra - macOS code editor framework</title>
     <meta
       name="description"
-      content="Penumbra is a high-performance plain text and code editor framework for macOS with IDE intelligence, LSP support, and a multi-pane workbench."
+      content="Umbra is a lightweight macOS code editor with native Java and Gradle support, an in-app HTTP client, Git integration, and Markdown preview. Built on the Penumbra text engine."
     />
-    <meta property="og:title" content="Penumbra - macOS code editor framework" />
+    <meta property="og:title" content="Penumbra and Umbra - macOS code editor" />
     <meta
       property="og:description"
-      content="High-performance AppKit text engine with tree-sitter highlighting, multi-cursor editing, and a decoupled IDE intelligence layer."
+      content="Fast folder editing with Java intelligence, Gradle sync, .http request files, tree-sitter highlighting, and a split-pane workbench."
     />
     <meta
       property="og:image"
@@ -19,6 +19,8 @@
     />
     <meta name="theme-color" content="#090b10" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
+    <link rel="icon" href="Umbra.jpeg" type="image/jpeg" />
+    <link rel="apple-touch-icon" href="Umbra.jpeg" />
     <link rel="stylesheet" href="styles.css" />
     <script src="main.js" defer></script>
   </head>
@@ -28,12 +30,7 @@
     <header class="site-header">
       <nav class="nav" aria-label="Primary">
         <a class="brand" href="#top">
-          <span class="brand-mark" aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 14L10 4L16 14H4Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-              <path d="M7 11H13" stroke="currentColor" stroke-width="1.5" />
-            </svg>
-          </span>
+          <img class="brand-icon" src="Umbra.jpeg" alt="" width="32" height="32" />
           <span>Penumbra</span>
         </a>
 
@@ -49,7 +46,8 @@
         </button>
 
         <div class="nav-links" id="nav-menu">
-          <a href="#features">Features</a>
+          <a href="#umbra">Umbra</a>
+          <a href="#framework">Framework</a>
           <a href="#screenshots">Screenshots</a>
           <a href="#install">Install</a>
           <a href="https://github.com/alex-cova/Penumbra">GitHub</a>
@@ -60,14 +58,14 @@
     <main id="main">
       <section class="hero" id="top">
         <div class="hero-copy">
-          <h1>A fast code editor engine for macOS.</h1>
+          <h1>A fast macOS code editor and engine.</h1>
           <p>
-            High-performance AppKit text engine with tree-sitter highlighting, multi-cursor editing,
-            and a decoupled IDE intelligence layer.
+            Umbra ships with Java and Gradle tooling, <code>.http</code> requests, Git, and Markdown
+            preview. Penumbra is the Swift engine underneath.
           </p>
           <div class="cta-row">
-            <a class="button button-primary" href="https://github.com/alex-cova/Penumbra">View on GitHub</a>
-            <a class="button button-secondary" href="#install">Add to your app</a>
+            <a class="button button-primary" href="https://github.com/alex-cova/Penumbra/releases">Download Umbra</a>
+            <a class="button button-secondary" href="#umbra">See what it does</a>
           </div>
         </div>
 
@@ -85,8 +83,26 @@
       </section>
 
       <section class="stack-strip" aria-label="Built with">
-        <p class="stack-label">Built with</p>
+        <p class="stack-label">Languages and tools</p>
         <ul class="stack-logos">
+          <li>
+            <img
+              src="https://cdn.simpleicons.org/java/9aa3b2"
+              alt="Java"
+              width="28"
+              height="28"
+              loading="lazy"
+            />
+          </li>
+          <li>
+            <img
+              src="https://cdn.simpleicons.org/gradle/9aa3b2"
+              alt="Gradle"
+              width="28"
+              height="28"
+              loading="lazy"
+            />
+          </li>
           <li>
             <img
               src="https://cdn.simpleicons.org/swift/9aa3b2"
@@ -98,8 +114,8 @@
           </li>
           <li>
             <img
-              src="https://cdn.simpleicons.org/apple/9aa3b2"
-              alt="Apple"
+              src="https://cdn.simpleicons.org/git/9aa3b2"
+              alt="Git"
               width="28"
               height="28"
               loading="lazy"
@@ -107,8 +123,8 @@
           </li>
           <li>
             <img
-              src="https://cdn.simpleicons.org/github/9aa3b2"
-              alt="GitHub"
+              src="https://cdn.simpleicons.org/markdown/9aa3b2"
+              alt="Markdown"
               width="28"
               height="28"
               loading="lazy"
@@ -117,12 +133,117 @@
         </ul>
       </section>
 
-      <section class="section bento-section" id="features">
-        <div class="section-head">
-          <h2>Built for real editors</h2>
+      <section class="section umbra-section" id="umbra">
+        <div class="section-head umbra-section-head reveal">
+          <img
+            class="umbra-app-icon"
+            src="Umbra.jpeg"
+            alt="Umbra app icon"
+            width="80"
+            height="80"
+            loading="lazy"
+          />
+          <div>
+          <h2>Umbra, the editor app</h2>
           <p>
-            Forked from Runestone and extended for macOS. Ships as a Swift Package with a decoupled
-            intelligence layer and Umbra, a reference editor app.
+            A Sublime Text-style editor for macOS: open a folder, edit fast, and stay in one window for
+            Java projects, API calls, docs, and Git. No Electron, no LSP server to configure for Java.
+          </p>
+          </div>
+        </div>
+
+        <div class="umbra-bento">
+          <article class="umbra-card umbra-java reveal">
+            <h3>Java and Gradle</h3>
+            <p>
+              Native <code>JavaIntelligence</code> indexes your JDK, project sources, and Gradle-resolved
+              JARs. Sync a trusted Gradle build to load modules, dependencies, and source sets, then
+              build from the editor and see compiler errors in the Problems panel.
+            </p>
+            <ul class="feature-list">
+              <li>Smart completion with auto-import and parameter hints</li>
+              <li>Hover with Javadoc, go to definition, implementation, and super method</li>
+              <li>Find usages, rename, and type hierarchy</li>
+              <li><code>javac</code> diagnostics, quick fixes, and optimize imports</li>
+              <li>Gradle tool window: tasks, dependencies, source sets, reload and run</li>
+              <li>Saved run configurations and classpath launch targets</li>
+            </ul>
+            <ul class="tag-list">
+              <li>Completion</li>
+              <li>Gradle sync</li>
+              <li>Build project</li>
+              <li>Run configs</li>
+            </ul>
+          </article>
+
+          <article class="umbra-card umbra-http reveal">
+            <h3>HTTP client</h3>
+            <p>
+              Edit IntelliJ-style <code>.http</code> request files with tree-sitter highlighting. Place
+              the caret on a request and send it; status, timing, headers, and body appear in the
+              response panel.
+            </p>
+            <ul class="tag-list">
+              <li>.http files</li>
+              <li>Send at caret</li>
+              <li>Response panel</li>
+            </ul>
+          </article>
+
+          <article class="umbra-card umbra-markdown reveal">
+            <h3>Markdown preview</h3>
+            <p>
+              Side-by-side Markdown editing with live preview, fenced code highlighting, blockquotes,
+              and Mermaid sequence, class, and flow diagrams.
+            </p>
+            <ul class="tag-list">
+              <li>Live preview</li>
+              <li>Mermaid</li>
+              <li>Fenced code</li>
+            </ul>
+          </article>
+
+          <article class="umbra-card umbra-git reveal">
+            <h3>Git and source control</h3>
+            <p>
+              File status colors in the explorer, a source-control panel for stage and commit, inline
+              diffs, history, branch switch, push, and fast-forward pull.
+            </p>
+            <ul class="tag-list">
+              <li>Status colors</li>
+              <li>Diff</li>
+              <li>History</li>
+            </ul>
+          </article>
+
+          <article class="umbra-card umbra-workbench reveal">
+            <h3>Editing and workbench</h3>
+            <p>
+              Tree-sitter highlighting for Swift, JS/TS, Python, JSON, YAML, HTML, and more. Multi-cursor
+              editing, column selection, find and replace, optional Metal rendering, minimap, and folding.
+            </p>
+            <ul class="feature-list feature-list-compact">
+              <li>Split editors, tab groups, and session restore</li>
+              <li>Integrated terminal and Problems panel (⌘⇧M)</li>
+              <li>Command palette, go to file, symbol, and line</li>
+              <li>Structure view, breadcrumbs, and navigation history</li>
+            </ul>
+            <ul class="tag-list">
+              <li>Multi-cursor</li>
+              <li>Splits</li>
+              <li>Terminal</li>
+              <li>⌘P palette</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section bento-section" id="framework">
+        <div class="section-head reveal">
+          <h2>Penumbra, the framework</h2>
+          <p>
+            Forked from Runestone and ported to macOS. Use the Swift package in your own AppKit app:
+            text engine, Editor Intelligence platform, LSP bridge, and workbench layout APIs.
           </p>
         </div>
 
@@ -154,31 +275,78 @@
           </article>
 
           <article class="bento-cell bento-languages reveal">
-            <h3>Languages in Umbra</h3>
-            <p>Bundled Tree-sitter packs plus Java intelligence: Gradle sync, completion, diagnostics, and run configs.</p>
+            <h3>JavaIntelligence</h3>
+            <p>
+              A separate Swift package wired into Umbra: JDK discovery, Gradle models, completion,
+              diagnostics, navigation, refactoring, and semantic highlighting with no Penumbra dependency.
+            </p>
           </article>
         </div>
       </section>
 
       <section class="section showcase-section" id="screenshots">
-        <div class="showcase-layout">
-          <div class="showcase-copy reveal">
-            <h2>Umbra in action</h2>
-            <p>
-              Umbra is the Sublime Text-style editor in this repo: fast folder editing, Markdown preview,
-              and Mermaid diagram rendering.
-            </p>
-          </div>
+        <div class="section-head reveal">
+          <h2>Umbra in action</h2>
+          <p>
+            Java editing with Gradle sync, Markdown and Mermaid preview, Git history, the welcome screen,
+            and an integrated terminal, all in one native macOS window.
+          </p>
+        </div>
 
-          <figure class="showcase-primary reveal">
+        <figure class="showcase-primary reveal">
+          <img
+            src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-mermaid-diagrams.png"
+            alt="Umbra Markdown preview rendering Mermaid sequence and class diagrams"
+            width="2450"
+            height="2038"
+            loading="lazy"
+          />
+          <figcaption>Mermaid diagrams in Markdown preview</figcaption>
+        </figure>
+
+        <div class="screenshot-gallery">
+          <figure class="screenshot-card reveal">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-mermaid-diagrams.png"
-              alt="Umbra Markdown preview rendering Mermaid sequence and class diagrams"
-              width="1280"
-              height="800"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-welcome.png"
+              alt="Umbra welcome screen with Open File, Open Folder, and keyboard shortcut hints"
+              width="2540"
+              height="2092"
               loading="lazy"
             />
-            <figcaption>Mermaid diagrams in Markdown preview</figcaption>
+            <figcaption>Welcome screen with quick-open shortcuts</figcaption>
+          </figure>
+
+          <figure class="screenshot-card reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-blockquotes.png"
+              alt="Markdown preview with nested blockquotes and syntax-highlighted Swift and JavaScript code blocks"
+              width="2540"
+              height="2092"
+              loading="lazy"
+            />
+            <figcaption>Markdown preview with blockquotes and fenced code</figcaption>
+          </figure>
+
+          <figure class="screenshot-card reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-java-terminal.png"
+              alt="Umbra editing a Java file with project explorer, minimap, and integrated terminal"
+              width="2540"
+              height="2092"
+              loading="lazy"
+            />
+            <figcaption>Java editing with integrated terminal</figcaption>
+          </figure>
+
+          <figure class="screenshot-card reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-git-history.png"
+              alt="Umbra split view showing Swift source above Git commit history and inline diff"
+              width="2540"
+              height="1884"
+              loading="lazy"
+            />
+            <figcaption>Git history and inline diff</figcaption>
           </figure>
         </div>
       </section>
@@ -187,9 +355,19 @@
         <div class="install-layout">
           <div class="install-copy reveal">
             <h2>Get started</h2>
-            <p>Add Penumbra to your Swift package, link the products you need, and drop a <code>TextView</code> into your app.</p>
+            <p>
+              Download a release build of Umbra, or run it from source. To embed the editor engine in
+              your own app, add Penumbra as a Swift package dependency.
+            </p>
 
             <dl class="spec-list">
+              <div>
+                <dt>Umbra app</dt>
+                <dd>
+                  <a href="https://github.com/alex-cova/Penumbra/releases">GitHub Releases</a>
+                  or <code>swift run Umbra</code>
+                </dd>
+              </div>
               <div>
                 <dt>Platform</dt>
                 <dd>macOS 14+, Swift 6, Xcode 16+</dd>
@@ -197,10 +375,6 @@
               <div>
                 <dt>Tests</dt>
                 <dd>1,050+ in <code>swift test</code></dd>
-              </div>
-              <div>
-                <dt>Demo app</dt>
-                <dd><code>swift run Umbra</code></dd>
               </div>
             </dl>
           </div>
