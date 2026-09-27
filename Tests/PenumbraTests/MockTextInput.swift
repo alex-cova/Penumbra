@@ -18,18 +18,18 @@ final class MockTextInput: NSResponder, UITextInput {
     func replace(_ range: UITextRange, withText text: String) {}
     func textRange(from: UITextPosition, to: UITextPosition) -> UITextRange? { nil }
     func position(from: UITextPosition, offset: Int) -> UITextPosition? { nil }
-    func position(from: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? { nil }
+    func position(from: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition? { nil }
     func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult { .orderedSame }
     func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int { 0 }
-    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? { nil }
-    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? { nil }
+    func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition? { nil }
+    func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange? { nil }
     func firstRect(for range: UITextRange) -> CGRect { .zero }
     func caretRect(for position: UITextPosition) -> CGRect { .zero }
     func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
     func closestPosition(to point: CGPoint) -> UITextPosition? { nil }
     func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { nil }
     func characterRange(at point: CGPoint) -> UITextRange? { nil }
-    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection) -> NSWritingDirection { .natural }
+    func baseWritingDirection(for position: UITextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection { .natural }
     func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
     func beginFloatingCursor(at point: CGPoint) {}
     func updateFloatingCursor(at point: CGPoint) {}

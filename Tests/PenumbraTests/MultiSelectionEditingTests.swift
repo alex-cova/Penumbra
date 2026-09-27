@@ -143,7 +143,7 @@ final class MultiSelectionEditingTests: XCTestCase {
             NSRange(location: 8, length: 3)
         ]
         performResponderAction("copy:", on: textView)
-        XCTAssertEqual(UIPasteboard.general.string, "foo\nbaz")
+        XCTAssertEqual(EditorPasteboard.general.string, "foo\nbaz")
     }
 
     func testCutAtMultipleSelectionsRemovesEveryRange() {
@@ -161,7 +161,7 @@ final class MultiSelectionEditingTests: XCTestCase {
         ]
         performResponderAction("cut:", on: textView)
         XCTAssertEqual(textView.text as String, " bar ")
-        XCTAssertEqual(UIPasteboard.general.string, "foo\nbaz")
+        XCTAssertEqual(EditorPasteboard.general.string, "foo\nbaz")
     }
 
     func testPasteDistributesOneLinePerCaretWhenLineCountMatches() {
@@ -172,7 +172,7 @@ final class MultiSelectionEditingTests: XCTestCase {
                 NSPasteboard.general.setString(pasteboardBackup, forType: .string)
             }
         }
-        UIPasteboard.general.string = "X\nY"
+        EditorPasteboard.general.string = "X\nY"
         let textView = makeFocusedTextView(text: "aa\nbb")
         textView.selectedRanges = [
             NSRange(location: 0, length: 0),
@@ -190,7 +190,7 @@ final class MultiSelectionEditingTests: XCTestCase {
                 NSPasteboard.general.setString(pasteboardBackup, forType: .string)
             }
         }
-        UIPasteboard.general.string = "Z"
+        EditorPasteboard.general.string = "Z"
         let textView = makeFocusedTextView(text: "aa bb")
         textView.selectedRanges = [
             NSRange(location: 0, length: 0),

@@ -16,15 +16,15 @@ open class UITextSelectionRect: NSObject {
 }
 
 public protocol UITextInputTokenizer: NSObjectProtocol {
-    func isPosition(_ position: UITextPosition, atBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> Bool
-    func position(from position: UITextPosition, toBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> UITextPosition?
+    func isPosition(_ position: UITextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool
+    func position(from position: UITextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> UITextPosition?
 }
 
 open class UITextInputStringTokenizer: NSObject, UITextInputTokenizer {
-    public weak var textInput: (UIResponder & UITextInput)?
-    public init(textInput: (UIResponder & UITextInput)? = nil) { self.textInput = textInput; super.init() }
-    open func isPosition(_ position: UITextPosition, atBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> Bool { false }
-    open func position(from position: UITextPosition, toBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> UITextPosition? { nil }
+    public weak var textInput: (NSResponder & UITextInput)?
+    public init(textInput: (NSResponder & UITextInput)? = nil) { self.textInput = textInput; super.init() }
+    open func isPosition(_ position: UITextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool { false }
+    open func position(from position: UITextPosition, toBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> UITextPosition? { nil }
 }
 
 @MainActor
@@ -44,18 +44,18 @@ public protocol UITextInput: AnyObject {
     func replace(_ range: UITextRange, withText text: String)
     func textRange(from: UITextPosition, to: UITextPosition) -> UITextRange?
     func position(from: UITextPosition, offset: Int) -> UITextPosition?
-    func position(from: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition?
+    func position(from: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition?
     func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult
     func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int
-    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition?
-    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange?
+    func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition?
+    func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange?
     func firstRect(for range: UITextRange) -> CGRect
     func caretRect(for position: UITextPosition) -> CGRect
     func selectionRects(for range: UITextRange) -> [UITextSelectionRect]
     func closestPosition(to point: CGPoint) -> UITextPosition?
     func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition?
     func characterRange(at point: CGPoint) -> UITextRange?
-    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection) -> NSWritingDirection
+    func baseWritingDirection(for position: UITextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection
     func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange)
     func beginFloatingCursor(at point: CGPoint)
     func updateFloatingCursor(at point: CGPoint)

@@ -99,7 +99,7 @@ public protocol Theme: AnyObject {
     ///   - foundTextRange: The text range matching a search query.
     ///   - style: Style used to decorate the text.
     /// - Returns: The object used for highlighting the provided text range, or `nil` if the range should not be highlighted.
-    func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: UITextSearchFoundTextStyle) -> HighlightedRange?
+    func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: EditorTextSearchFoundTextStyle) -> HighlightedRange?
 }
 
 public extension Theme {
@@ -172,7 +172,7 @@ public extension Theme {
         nil
     }
 
-    func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: UITextSearchFoundTextStyle) -> HighlightedRange? {
+    func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: EditorTextSearchFoundTextStyle) -> HighlightedRange? {
         switch style {
         case .found:
             return HighlightedRange(range: foundTextRange, color: .systemYellow.withAlphaComponent(0.2))

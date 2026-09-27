@@ -212,7 +212,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The autocorrection style for the text view.
-    public var autocorrectionType: UITextAutocorrectionType {
+    public var autocorrectionType: EditorTextAutocorrectionType {
         get {
             textInputView.autocorrectionType
         }
@@ -221,7 +221,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The autocapitalization style for the text view.
-    public var autocapitalizationType: UITextAutocapitalizationType {
+    public var autocapitalizationType: EditorTextAutocapitalizationType {
         get {
             textInputView.autocapitalizationType
         }
@@ -230,7 +230,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The spell-checking style for the text view.
-    public var smartQuotesType: UITextSmartQuotesType {
+    public var smartQuotesType: EditorTextSmartQuotesType {
         get {
             textInputView.smartQuotesType
         }
@@ -239,7 +239,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The configuration state for smart dashes.
-    public var smartDashesType: UITextSmartDashesType {
+    public var smartDashesType: EditorTextSmartDashesType {
         get {
             textInputView.smartDashesType
         }
@@ -248,7 +248,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The configuration state for the smart insertion and deletion of space characters.
-    public var smartInsertDeleteType: UITextSmartInsertDeleteType {
+    public var smartInsertDeleteType: EditorTextSmartInsertDeleteType {
         get {
             textInputView.smartInsertDeleteType
         }
@@ -257,7 +257,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The spell-checking style for the text object.
-    public var spellCheckingType: UITextSpellCheckingType {
+    public var spellCheckingType: EditorTextSpellCheckingType {
         get {
             textInputView.spellCheckingType
         }
@@ -266,7 +266,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The keyboard type for the text view.
-    public var keyboardType: UIKeyboardType {
+    public var keyboardType: EditorKeyboardType {
         get {
             textInputView.keyboardType
         }
@@ -275,7 +275,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The appearance style of the keyboard for the text view.
-    public var keyboardAppearance: UIKeyboardAppearance {
+    public var keyboardAppearance: EditorKeyboardAppearance {
         get {
             textInputView.keyboardAppearance
         }
@@ -284,7 +284,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The display of the return key.
-    public var returnKeyType: UIReturnKeyType {
+    public var returnKeyType: EditorReturnKeyType {
         get {
             textInputView.returnKeyType
         }
@@ -431,7 +431,7 @@ public struct DocumentTextExport: Sendable {
         }
     }
     /// The input assistant to use when configuring the keyboard's shortcuts bar.
-    public override var inputAssistantItem: UITextInputAssistantItem {
+    public override var inputAssistantItem: EditorTextInputAssistantItem {
         textInputView.inputAssistantItem
     }
     /// Returns a Boolean value indicating whether this object can become the first responder.
@@ -2156,10 +2156,10 @@ extension TextView {
     /// Returns the text position at a specified offset in a specified direction from another text position.
     /// - Parameters:
     ///   - position: A custom UITextPosition object that represents a location in a document.
-    ///   - direction: A UITextLayoutDirection constant that represents the direction of the offset from position.
+    ///   - direction: A EditorTextLayoutDirection constant that represents the direction of the offset from position.
     ///   - offset: A character offset from position.
     /// - Returns: Returns the text position at a specified offset in a specified direction from another text position. Returns nil if the computed text position is less than 0 or greater than the length of the backing string.
-    public func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? {
+    public func position(from position: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition? {
         textInputView.position(from: position, in: direction, offset: offset)
     }
 
@@ -2191,7 +2191,7 @@ extension TextView {
     ///   - range: A text-range object that demarcates a range of text in a document.
     ///   - direction: A constant that indicates a direction of layout (right, left, up, down).
     /// - Returns: A text-position object that identifies a location in the visible text.
-    public func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+    public func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition? {
         textInputView.position(within: range, farthestIn: direction)
     }
 
@@ -2200,7 +2200,7 @@ extension TextView {
     ///   - position: A text-position object that identifies a location in a document.
     ///   - direction: A constant that indicates a direction of layout (right, left, up, down).
     /// - Returns: A text-range object that represents the distance from position to the farthest extent in direction.
-    public func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+    public func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange? {
         textInputView.characterRange(byExtending: position, in: direction)
     }
 

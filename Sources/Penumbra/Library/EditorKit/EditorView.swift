@@ -17,9 +17,9 @@ open class EditorView: NSView {
         layer?.backgroundColor = backgroundColor?.cgColor
     }
     open var isUserInteractionEnabled = true
-    open var traitCollection: UITraitCollection { UITraitCollection() }
+    open var traitCollection: EditorTraitCollection { EditorTraitCollection() }
     open var inputAccessoryView: EditorView?
-    open var inputAssistantItem: UITextInputAssistantItem { UITextInputAssistantItem() }
+    open var inputAssistantItem: EditorTextInputAssistantItem { EditorTextInputAssistantItem() }
     open func reloadInputViews() {}
     private var editorGestureRecognizers: [EditorGestureRecognizer] = []
 
@@ -74,14 +74,14 @@ open class EditorView: NSView {
     }
 
     open func safeAreaInsetsDidChange() {}
-    open func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {}
+    open func traitCollectionDidChange(_ previousTraitCollection: EditorTraitCollection?) {}
     open func addInteraction(_ interaction: Any) {}
     open func removeInteraction(_ interaction: Any) {}
     open func addGestureRecognizer(_ gestureRecognizer: EditorGestureRecognizer) {
         gestureRecognizer.view = self; editorGestureRecognizers.append(gestureRecognizer)
     }
     open func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
-    open func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {}
+    open func pressesEnded(_ presses: Set<EditorPress>, with event: EditorPressesEvent?) {}
     override open func hitTest(_ point: NSPoint) -> NSView? { isUserInteractionEnabled ? super.hitTest(point) : nil }
     override open func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

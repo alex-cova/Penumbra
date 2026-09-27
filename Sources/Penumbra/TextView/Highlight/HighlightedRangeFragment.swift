@@ -9,7 +9,7 @@ final class HighlightedRangeFragment: Equatable {
     let cornerRadius: CGFloat
     let style: HighlightStyle
     let isInactive: Bool
-    var roundedCorners: UIRectCorner {
+    var roundedCorners: RectCorner {
         if containsStart && containsEnd {
             return .allCorners
         } else if containsStart {

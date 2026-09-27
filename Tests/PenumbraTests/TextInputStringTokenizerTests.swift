@@ -13,7 +13,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfFirstLineFragmentFromBeginningOfDocument() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 39)
@@ -23,7 +23,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfFirstLineFragmentFromWithinFirstLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 10)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 39)
@@ -33,7 +33,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfSecondLineFragmentFromWithinSecondLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 45)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 77)
@@ -43,7 +43,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfLineFromWithinLastLineFragmentInLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 274)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 289)
@@ -53,7 +53,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfFirstLineFragmentFromBeginningOfDocument() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -63,7 +63,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfFirstLineFragmentFromWithinFirstLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 10)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -73,7 +73,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfSecondLineFragmentFromWithinSecondLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 45)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 40)
@@ -83,7 +83,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfLineFromWithinLastLineFragmentInLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 274)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 267)
@@ -93,7 +93,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfLineFineFragmentFromEmptyLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 290)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 290)
@@ -103,7 +103,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfLineFineFragmentFromEmptyLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 290)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .line, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 290)
@@ -112,7 +112,7 @@ extension TextInputStringTokenizerTests {
     func testBeginningOfDocumentIsAtBoundary() {
         let tokenizer = makeTokenizer()
         let position = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let isAtBoundary = tokenizer.isPosition(position, atBoundary: .line, inDirection: textDirection)
         XCTAssertTrue(isAtBoundary)
     }
@@ -120,7 +120,7 @@ extension TextInputStringTokenizerTests {
     func testEndOfDocumentIsAtBoundary() {
         let tokenizer = makeTokenizer()
         let position = IndexedPosition(index: 457)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let isAtBoundary = tokenizer.isPosition(position, atBoundary: .line, inDirection: textDirection)
         XCTAssertTrue(isAtBoundary)
     }
@@ -128,7 +128,7 @@ extension TextInputStringTokenizerTests {
     func testBeginningOfLineFragmentIsAtBoundary() {
         let tokenizer = makeTokenizer()
         let position = IndexedPosition(index: 35)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let isAtBoundary = tokenizer.isPosition(position, atBoundary: .line, inDirection: textDirection)
         XCTAssertFalse(isAtBoundary)
     }
@@ -136,7 +136,7 @@ extension TextInputStringTokenizerTests {
     func testEndOfLineFragmentIsAtBoundary() {
         let tokenizer = makeTokenizer()
         let position = IndexedPosition(index: 87)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let isAtBoundary = tokenizer.isPosition(position, atBoundary: .line, inDirection: textDirection)
         XCTAssertFalse(isAtBoundary)
     }
@@ -144,7 +144,7 @@ extension TextInputStringTokenizerTests {
     func testMiddleOfLineFragmentIsNotAtBoundary() {
         let tokenizer = makeTokenizer()
         let position = IndexedPosition(index: 35)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let isAtBoundary = tokenizer.isPosition(position, atBoundary: .line, inDirection: textDirection)
         XCTAssertFalse(isAtBoundary)
     }
@@ -156,7 +156,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfParagraphFromBeginningOfDocument() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 289)
@@ -166,7 +166,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfParagraphFromMiddleOfFirstLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 10)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 289)
@@ -176,7 +176,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfParagraphFromMiddleOfSecondLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 50)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 289)
@@ -186,7 +186,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfParagraphFromMiddleOfLastLineFragmentInLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 274)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 289)
@@ -196,7 +196,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfParagraphFromBeginningOfDocument() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -206,7 +206,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfParagraphFromMiddleOfFirstLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 10)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -216,7 +216,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfParagraphFromMiddleOfSecondLineFragment() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 50)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -226,7 +226,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfParagraphFromMiddleOfLastLineFragmentInLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 274)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 0)
@@ -236,7 +236,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToEndOfLineFromEmptyLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 290)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 290)
@@ -246,7 +246,7 @@ extension TextInputStringTokenizerTests {
     func testMovingToBeginningOfLineFromEmptyLine() {
         let tokenizer = makeTokenizer()
         let fromPosition = IndexedPosition(index: 290)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .paragraph, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 290)
@@ -258,7 +258,7 @@ extension TextInputStringTokenizerTests {
     func testMovingForwardToWordBoundarySkipsTheCurrentWord() {
         let tokenizer = makeTokenizer(text: "hello   world")
         let fromPosition = IndexedPosition(index: 0)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 5)
@@ -267,7 +267,7 @@ extension TextInputStringTokenizerTests {
     func testMovingForwardFromWhitespaceLandsOnTheNextWord() {
         let tokenizer = makeTokenizer(text: "hello   world")
         let fromPosition = IndexedPosition(index: 5)
-        let textDirection = UITextDirection(storageDirection: .forward)
+        let textDirection = EditorTextDirection(storageDirection: .forward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 8)
@@ -276,7 +276,7 @@ extension TextInputStringTokenizerTests {
     func testMovingBackwardToWordBoundaryLandsOnTheWordStart() {
         let tokenizer = makeTokenizer(text: "hello   world")
         let fromPosition = IndexedPosition(index: 13)
-        let textDirection = UITextDirection(storageDirection: .backward)
+        let textDirection = EditorTextDirection(storageDirection: .backward)
         let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
         let indexedPosition = position as! IndexedPosition
         XCTAssertEqual(indexedPosition.index, 8)
@@ -289,21 +289,21 @@ extension TextInputStringTokenizerTests {
         let forward = tokenizer.position(
             from: IndexedPosition(index: 0),
             toBoundary: .paragraph,
-            inDirection: UITextDirection(storageDirection: .forward)
+            inDirection: EditorTextDirection(storageDirection: .forward)
         ) as! IndexedPosition
         XCTAssertEqual(forward.index, 50_000)
 
         let backFromMiddle = tokenizer.position(
             from: IndexedPosition(index: 12_345),
             toBoundary: .paragraph,
-            inDirection: UITextDirection(storageDirection: .backward)
+            inDirection: EditorTextDirection(storageDirection: .backward)
         ) as! IndexedPosition
         XCTAssertEqual(backFromMiddle.index, 0)
 
         let backFromSecond = tokenizer.position(
             from: IndexedPosition(index: 50_001),
             toBoundary: .paragraph,
-            inDirection: UITextDirection(storageDirection: .backward)
+            inDirection: EditorTextDirection(storageDirection: .backward)
         ) as! IndexedPosition
         XCTAssertEqual(backFromSecond.index, 50_001)
     }
@@ -315,14 +315,14 @@ extension TextInputStringTokenizerTests {
         let forward = tokenizer.position(
             from: IndexedPosition(index: 0),
             toBoundary: .word,
-            inDirection: UITextDirection(storageDirection: .forward)
+            inDirection: EditorTextDirection(storageDirection: .forward)
         ) as! IndexedPosition
         XCTAssertEqual(forward.index, 40_000)
 
         let backward = tokenizer.position(
             from: IndexedPosition(index: 40_004),
             toBoundary: .word,
-            inDirection: UITextDirection(storageDirection: .backward)
+            inDirection: EditorTextDirection(storageDirection: .backward)
         ) as! IndexedPosition
         XCTAssertEqual(backward.index, 40_003)
     }

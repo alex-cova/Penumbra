@@ -98,15 +98,15 @@ final class TextInputView: EditorView {
     private lazy var customTokenizer = TextInputStringTokenizer(stringView: stringView,
                                                                 lineManager: lineManager,
                                                                 lineControllerStorage: lineControllerStorage)
-    var autocorrectionType: UITextAutocorrectionType = .default
-    var autocapitalizationType: UITextAutocapitalizationType = .sentences
-    var smartQuotesType: UITextSmartQuotesType = .default
-    var smartDashesType: UITextSmartDashesType = .default
-    var smartInsertDeleteType: UITextSmartInsertDeleteType = .default
-    var spellCheckingType: UITextSpellCheckingType = .default
-    var keyboardType: UIKeyboardType = .default
-    var keyboardAppearance: UIKeyboardAppearance = .default
-    var returnKeyType: UIReturnKeyType = .default
+    var autocorrectionType: EditorTextAutocorrectionType = .default
+    var autocapitalizationType: EditorTextAutocapitalizationType = .sentences
+    var smartQuotesType: EditorTextSmartQuotesType = .default
+    var smartDashesType: EditorTextSmartDashesType = .default
+    var smartInsertDeleteType: EditorTextSmartInsertDeleteType = .default
+    var spellCheckingType: EditorTextSpellCheckingType = .default
+    var keyboardType: EditorKeyboardType = .default
+    var keyboardAppearance: EditorKeyboardAppearance = .default
+    var returnKeyType: EditorReturnKeyType = .default
     @objc var insertionPointColor: UIColor = .label {
         didSet {
             if insertionPointColor != oldValue {
@@ -1217,14 +1217,14 @@ final class TextInputView: EditorView {
 
     @objc func copy(_ sender: Any?) {
         if multiSelectionController.hasMultipleSelections {
-            UIPasteboard.general.string = joinedMultiSelectionText()
+            EditorPasteboard.general.string = joinedMultiSelectionText()
         } else if let selectedTextRange = selectedTextRange, let text = text(in: selectedTextRange) {
-            UIPasteboard.general.string = text
+            EditorPasteboard.general.string = text
         }
     }
 
     @objc func paste(_ sender: Any?) {
-        guard let string = UIPasteboard.general.string else {
+        guard let string = EditorPasteboard.general.string else {
             return
         }
         if multiSelectionController.hasMultipleSelections {
@@ -1248,10 +1248,10 @@ final class TextInputView: EditorView {
 
     @objc func cut(_ sender: Any?) {
         if multiSelectionController.hasMultipleSelections {
-            UIPasteboard.general.string = joinedMultiSelectionText()
+            EditorPasteboard.general.string = joinedMultiSelectionText()
             insertTextAtAllSelections("")
         } else if let selectedTextRange = selectedTextRange, let text = text(in: selectedTextRange) {
-            UIPasteboard.general.string = text
+            EditorPasteboard.general.string = text
             replace(selectedTextRange, withText: "")
         }
     }
@@ -1288,7 +1288,7 @@ final class TextInputView: EditorView {
             }
         } else if action == #selector(paste(_:)) {
             let isEditable = delegate?.textInputViewIsEditable(self) ?? true
-            return isEditing && isEditable && UIPasteboard.general.hasStrings
+            return isEditing && isEditable && EditorPasteboard.general.hasStrings
         } else if action == #selector(selectAll(_:)) {
             return true
         } else {
@@ -1674,7 +1674,7 @@ final class TextInputView: EditorView {
         return result
     }
 
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    override func traitCollectionDidChange(_ previousTraitCollection: EditorTraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
             invalidateLines()
@@ -1686,7 +1686,7 @@ final class TextInputView: EditorView {
     /// (`LineTypesetter`), so a dynamic (appearance-adaptive) theme color is frozen against
     /// whatever the effective appearance was when a line was last typeset — typically off the
     /// main thread, well before any `draw(_:)` call. `traitCollectionDidChange` above is meant to
-    /// catch this but never fires on macOS (`UITraitCollection.hasDifferentColorAppearance` is a
+    /// catch this but never fires on macOS (`EditorTraitCollection.hasDifferentColorAppearance` is a
     /// UIKit-compat stub that always returns `false` here), so hook the real AppKit callback:
     /// force every line to re-typeset whenever the effective appearance actually changes,
     /// including when a caller forces one via `NSView.appearance` independent of the system
@@ -1698,7 +1698,7 @@ final class TextInputView: EditorView {
         layoutManager.setNeedsLayout()
     }
 
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    override func pressesEnded(_ presses: Set<EditorPress>, with event: EditorPressesEvent?) {
         super.pressesEnded(presses, with: event)
         if let keyCode = presses.first?.key?.keyCode, presses.count == 1 {
             if imeMarkedRange != nil {
@@ -1732,7 +1732,7 @@ private extension TextInputView {
 
 // MARK: - Navigation
 private extension TextInputView {
-    private func handleKeyPressDuringMultistageTextInput(keyCode: UIKeyboardHIDUsage) {
+    private func handleKeyPressDuringMultistageTextInput(keyCode: EditorKeyboardHIDUsage) {
         // When editing multistage text input (that is, we have a marked text) we let the user unmark the text
         // by pressing the arrow keys or Escape. This isn't common in iOS apps but it's the default behavior
         // on macOS and I think that works quite well for plain text editors on iOS too.
@@ -1764,7 +1764,7 @@ private extension TextInputView {
         }
     }
 
-    private func navigate(in direction: UITextLayoutDirection, offset: Int) {
+    private func navigate(in direction: EditorTextLayoutDirection, offset: Int) {
         if let selection = selection {
             if let location = lineMovementController.location(from: selection.location, in: direction, offset: offset) {
                 self.selection = NSRange(location: location, length: 0)
@@ -2288,7 +2288,7 @@ extension TextInputView {
     /// Adds a new caret one visual line above the topmost caret (`.up`) or below the bottommost
     /// caret (`.down`), reusing the same fragment-local vertical movement plain arrow keys use.
     /// No-op at a document edge, where movement can't advance past the existing caret.
-    private func addCaret(in direction: UITextLayoutDirection) {
+    private func addCaret(in direction: EditorTextLayoutDirection) {
         let carets = selectedRanges.filter { $0.length == 0 }
         guard let source = direction == .up
             ? carets.min(by: { $0.location < $1.location })
@@ -2336,7 +2336,7 @@ extension TextInputView {
         insertTextAtAllSelections(text, at: editRanges)
     }
 
-    func moveAllSelections(in direction: UITextLayoutDirection) {
+    func moveAllSelections(in direction: EditorTextLayoutDirection) {
         var newSelections: [NSRange] = []
         for range in selectedRanges {
             if range.length > 0 {
@@ -2396,7 +2396,7 @@ extension TextInputView {
 
     /// Grows or shrinks the active block selection by one row/character via the keyboard
     /// (⌃⇧←/→/↑/↓). Starts a block at the current primary caret if one isn't already active.
-    func extendBlockSelection(in direction: UITextLayoutDirection) {
+    func extendBlockSelection(in direction: EditorTextLayoutDirection) {
         beginBlockSelectionAtCurrentCaretIfNeeded()
         guard let active = blockSelectionController.active else {
             return
@@ -3928,7 +3928,7 @@ extension TextInputView {
 
 // MARK: - Ranges and Positions
 extension TextInputView {
-    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+    func position(within range: UITextRange, farthestIn direction: EditorTextLayoutDirection) -> UITextPosition? {
         // This implementation seems to match the behavior of UITextView.
         guard let indexedRange = range as? IndexedRange else {
             return nil
@@ -3943,7 +3943,7 @@ extension TextInputView {
         }
     }
 
-    func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? {
+    func position(from position: UITextPosition, in direction: EditorTextLayoutDirection, offset: Int) -> UITextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -3953,7 +3953,7 @@ extension TextInputView {
         return IndexedPosition(index: newLocation)
     }
 
-    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+    func characterRange(byExtending position: UITextPosition, in direction: EditorTextLayoutDirection) -> UITextRange? {
         // This implementation seems to match the behavior of UITextView.
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
@@ -4048,7 +4048,7 @@ extension TextInputView {
 
 // MARK: - Writing Direction
 extension TextInputView {
-    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection) -> NSWritingDirection {
+    func baseWritingDirection(for position: UITextPosition, in direction: EditorTextStorageDirection) -> NSWritingDirection {
         .natural
     }
 

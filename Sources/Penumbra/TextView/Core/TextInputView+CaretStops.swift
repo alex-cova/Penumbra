@@ -14,7 +14,7 @@ enum CaretStop {
 extension TextInputView {
     /// Where a caret at `location` lands when moved to `stop` in `direction`, or `nil` when the
     /// boundary can't be resolved.
-    func caretStopLocation(_ stop: CaretStop, from location: Int, direction: UITextDirection) -> Int? {
+    func caretStopLocation(_ stop: CaretStop, from location: Int, direction: EditorTextDirection) -> Int? {
         let forward = direction != .backward
         switch stop {
         case .document:
@@ -109,7 +109,7 @@ private extension TextInputView {
 // MARK: - Line stops
 private extension TextInputView {
     func lineStopLocation(from location: Int, forward: Bool) -> Int? {
-        let direction: UITextDirection = forward ? .forward : .backward
+        let direction: EditorTextDirection = forward ? .forward : .backward
         guard let fragmentBoundary = (tokenizer.position(from: IndexedPosition(index: location),
                                                          toBoundary: .line,
                                                          inDirection: direction) as? IndexedPosition)?.index else {

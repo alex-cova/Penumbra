@@ -551,7 +551,7 @@ extension TextInputView {
         }
     }
 
-    private func moveSelectionForArrowKey(direction: UITextLayoutDirection, flags: NSEvent.ModifierFlags) {
+    private func moveSelectionForArrowKey(direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) {
         if flags.contains(.shift), isMultiCursorActive {
             collapseMultiSelectionToPrimary()
         }
@@ -574,7 +574,7 @@ extension TextInputView {
 
     /// Where a modified arrow key moves the caret: ⌘←/→ to the line boundary (Smart Home),
     /// ⌘↑/↓ to the document boundary, ⌥ + arrow to the next word stop.
-    private func caretStop(for direction: UITextLayoutDirection, flags: NSEvent.ModifierFlags) -> CaretStop? {
+    private func caretStop(for direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) -> CaretStop? {
         if flags.contains(.command) {
             return direction == .up || direction == .down ? .document : .line
         }
@@ -584,7 +584,7 @@ extension TextInputView {
         return nil
     }
 
-    private func moveSelectionToCaretStop(_ stop: CaretStop, direction: UITextDirection, extending: Bool) {
+    private func moveSelectionToCaretStop(_ stop: CaretStop, direction: EditorTextDirection, extending: Bool) {
         guard let currentRange = selection else {
             return
         }
@@ -603,7 +603,7 @@ extension TextInputView {
         updateSelection(anchor: target, activeLocation: target, extending: false)
     }
 
-    private func layoutDirectionToTextDirection(_ direction: UITextLayoutDirection) -> UITextDirection {
+    private func layoutDirectionToTextDirection(_ direction: EditorTextLayoutDirection) -> EditorTextDirection {
         switch direction {
         case .left, .up:
             return .backward
@@ -631,7 +631,7 @@ extension TextInputView {
         return (selection.location, selection.upperBound)
     }
 
-    private func moveSelectionByCharacter(in direction: UITextLayoutDirection, extending: Bool) {
+    private func moveSelectionByCharacter(in direction: EditorTextLayoutDirection, extending: Bool) {
         guard let currentRange = selection else {
             return
         }
@@ -670,7 +670,7 @@ extension TextInputView {
         }
     }
 
-    private func moveAllSelectionsByCharacter(in direction: UITextLayoutDirection) {
+    private func moveAllSelectionsByCharacter(in direction: EditorTextLayoutDirection) {
         moveAllSelections(in: direction)
     }
 

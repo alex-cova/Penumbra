@@ -20,6 +20,10 @@ patterns=(
   'Penumbra/UIBridge'
   'open class UIView'
   'open class UIScrollView'
+  'open class UIPasteboard'
+  'open class UIScreen'
+  'public final class UIBezierPath'
+  'public enum UITextAutocorrectionType'
 )
 
 failed=0

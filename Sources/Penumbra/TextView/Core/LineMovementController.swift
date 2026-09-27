@@ -13,7 +13,7 @@ final class LineMovementController {
         self.lineControllerStorage = lineControllerStorage
     }
 
-    func location(from location: Int, in direction: UITextLayoutDirection, offset: Int) -> Int? {
+    func location(from location: Int, in direction: EditorTextLayoutDirection, offset: Int) -> Int? {
         let newLocation: Int?
         switch direction {
         case .left:

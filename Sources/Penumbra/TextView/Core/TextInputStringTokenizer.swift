@@ -15,7 +15,7 @@ final class TextInputStringTokenizer: UITextInputStringTokenizer {
         super.init()
     }
 
-    override func isPosition(_ position: UITextPosition, atBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> Bool {
+    override func isPosition(_ position: UITextPosition, atBoundary granularity: EditorTextGranularity, inDirection direction: EditorTextDirection) -> Bool {
         if granularity == .line {
             return isPosition(position, atLineBoundaryInDirection: direction)
         } else if granularity == .paragraph {
@@ -28,8 +28,8 @@ final class TextInputStringTokenizer: UITextInputStringTokenizer {
     }
 
     override func position(from position: UITextPosition,
-                           toBoundary granularity: UITextGranularity,
-                           inDirection direction: UITextDirection) -> UITextPosition? {
+                           toBoundary granularity: EditorTextGranularity,
+                           inDirection direction: EditorTextDirection) -> UITextPosition? {
         if granularity == .line {
             return self.position(from: position, toLineBoundaryInDirection: direction)
         } else if granularity == .paragraph {
@@ -44,7 +44,7 @@ final class TextInputStringTokenizer: UITextInputStringTokenizer {
 
 // MARK: - Lines
 private extension TextInputStringTokenizer {
-    private func isPosition(_ position: UITextPosition, atLineBoundaryInDirection direction: UITextDirection) -> Bool {
+    private func isPosition(_ position: UITextPosition, atLineBoundaryInDirection direction: EditorTextDirection) -> Bool {
         guard let indexedPosition = position as? IndexedPosition else {
             return false
         }
@@ -73,7 +73,7 @@ private extension TextInputStringTokenizer {
         }
     }
 
-    private func position(from position: UITextPosition, toLineBoundaryInDirection direction: UITextDirection) -> UITextPosition? {
+    private func position(from position: UITextPosition, toLineBoundaryInDirection direction: EditorTextDirection) -> UITextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -113,13 +113,13 @@ private extension TextInputStringTokenizer {
 
 // MARK: - Paragraphs
 private extension TextInputStringTokenizer {
-    private func isPosition(_ position: UITextPosition, atParagraphBoundaryInDirection direction: UITextDirection) -> Bool {
+    private func isPosition(_ position: UITextPosition, atParagraphBoundaryInDirection direction: EditorTextDirection) -> Bool {
         // I can't seem to make Ctrl+A, Ctrl+E, Cmd+Left, and Cmd+Right work properly if this function returns anything but false.
         // I've tried various ways of determining the paragraph boundary but UIKit doesn't seem to be happy with anything I come up with ultimately leading to incorrect keyboard navigation. I haven't yet found any drawbacks to returning false in all cases.
         false
     }
 
-    private func position(from position: UITextPosition, toParagraphBoundaryInDirection direction: UITextDirection) -> UITextPosition? {
+    private func position(from position: UITextPosition, toParagraphBoundaryInDirection direction: EditorTextDirection) -> UITextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -144,7 +144,7 @@ private extension TextInputStringTokenizer {
 
 // MARK: - Words
 private extension TextInputStringTokenizer {
-    private func isPosition(_ position: UITextPosition, atWordBoundaryInDirection direction: UITextDirection) -> Bool {
+    private func isPosition(_ position: UITextPosition, atWordBoundaryInDirection direction: EditorTextDirection) -> Bool {
         guard let indexedPosition = position as? IndexedPosition else {
             return false
         }
@@ -181,7 +181,7 @@ private extension TextInputStringTokenizer {
         }
     }
 
-    private func position(from position: UITextPosition, toWordBoundaryInDirection direction: UITextDirection) -> UITextPosition? {
+    private func position(from position: UITextPosition, toWordBoundaryInDirection direction: EditorTextDirection) -> UITextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
@@ -238,7 +238,7 @@ private extension TextInputStringTokenizer {
 }
 
 private extension TextInputStringTokenizer {
-    private func adjustedLocation(forNavigation location: Int, direction: UITextDirection) -> Int {
+    private func adjustedLocation(forNavigation location: Int, direction: EditorTextDirection) -> Int {
         guard let foldingModel else {
             return location
         }
@@ -268,7 +268,7 @@ private extension TextInputStringTokenizer {
     }
 }
 
-private extension UITextDirection {
+private extension EditorTextDirection {
     var isForward: Bool {
         if self == .backward {
             return false
@@ -276,8 +276,8 @@ private extension UITextDirection {
         if self == .forward {
             return true
         }
-        return rawValue == UITextLayoutDirection.right.rawValue
-            || rawValue == UITextLayoutDirection.down.rawValue
+        return rawValue == EditorTextLayoutDirection.right.rawValue
+            || rawValue == EditorTextLayoutDirection.down.rawValue
     }
 }
 

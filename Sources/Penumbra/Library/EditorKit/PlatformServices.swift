@@ -1,8 +1,8 @@
 @preconcurrency import AppKit
 import Foundation
 
-public final class UIPasteboard: @unchecked Sendable {
-    public static let general = UIPasteboard()
+public final class EditorPasteboard: @unchecked Sendable {
+    public static let general = EditorPasteboard()
     public var string: String? {
         get { NSPasteboard.general.string(forType: .string) }
         set {
@@ -15,7 +15,7 @@ public final class UIPasteboard: @unchecked Sendable {
     }
 }
 
-public final class UIScreen: @unchecked Sendable {
-    public static let main = UIScreen()
+public final class EditorScreen: @unchecked Sendable {
+    public static let main = EditorScreen()
     public var scale: CGFloat { NSScreen.main?.backingScaleFactor ?? 2 }
 }

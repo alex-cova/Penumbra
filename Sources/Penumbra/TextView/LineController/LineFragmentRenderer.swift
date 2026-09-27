@@ -195,7 +195,7 @@ private extension LineFragmentRenderer {
         context.setFillColor(fillColor.cgColor)
         if !roundedCorners.isEmpty && highlightedRange.cornerRadius > 0 {
             let cornerRadii = CGSize(width: highlightedRange.cornerRadius, height: highlightedRange.cornerRadius)
-            let bezierPath = UIBezierPath(roundedRect: rect, byRoundingCorners: roundedCorners, cornerRadii: cornerRadii)
+            let bezierPath = EditorBezierPath(roundedRect: rect, byRoundingCorners: roundedCorners, cornerRadii: cornerRadii)
             context.addPath(bezierPath.cgPath)
             context.fillPath()
         } else {

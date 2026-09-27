@@ -8,7 +8,7 @@ extension NSColor {
     static var systemFill: NSColor { .controlBackgroundColor }
     static var systemBackground: NSColor { .windowBackgroundColor }
 
-    convenience init?(named name: String, in bundle: Bundle?, compatibleWith traitCollection: UITraitCollection?) {
+    convenience init?(named name: String, in bundle: Bundle?, compatibleWith traitCollection: EditorTraitCollection?) {
         self.init(named: name)
     }
 }

@@ -102,7 +102,7 @@ public final class DefaultTheme: Penumbra.Theme {
         return traits
     }
 
-    public func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: UITextSearchFoundTextStyle) -> HighlightedRange? {
+    public func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: EditorTextSearchFoundTextStyle) -> HighlightedRange? {
         switch style {
         case .found:
             return HighlightedRange(range: foundTextRange, color: Self.searchMatchFoundColor, cornerRadius: 2)
