@@ -415,9 +415,7 @@ extension TextInputView {
     private func setSelectedRange(from anchor: Int, to index: Int) {
         let start = min(anchor, index)
         let end = max(anchor, index)
-        inputDelegate?.selectionWillChange(self)
         selection = NSRange(location: start, length: end - start)
-        inputDelegate?.selectionDidChange(self)
     }
 
     private func selectWord(at point: CGPoint) {
@@ -430,9 +428,7 @@ extension TextInputView {
               let endIndex = (end as? IndexedPosition)?.index else {
             return
         }
-        inputDelegate?.selectionWillChange(self)
         selection = NSRange(location: startIndex, length: endIndex - startIndex)
-        inputDelegate?.selectionDidChange(self)
     }
 
     private func selectParagraph(at point: CGPoint) {
@@ -445,9 +441,7 @@ extension TextInputView {
               let endIndex = (end as? IndexedPosition)?.index else {
             return
         }
-        inputDelegate?.selectionWillChange(self)
         selection = NSRange(location: startIndex, length: endIndex - startIndex)
-        inputDelegate?.selectionDidChange(self)
     }
 
     /// Performs a keymap action the editor core owns. Returns `false` for actions that need a
@@ -672,9 +666,7 @@ extension TextInputView {
             setSelectedRange(from: anchor, to: activeLocation)
             // Host notify deferred via selection mutation paths / setter.
         } else {
-            inputDelegate?.selectionWillChange(self)
             selection = NSRange(location: activeLocation, length: 0)
-            inputDelegate?.selectionDidChange(self)
         }
     }
 

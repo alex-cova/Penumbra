@@ -7,7 +7,6 @@ final class MockTextInput: NSResponder, UITextInput {
     var markedTextStyle: [NSAttributedString.Key: Any]?
     var beginningOfDocument: UITextPosition { IndexedPosition(index: 0) }
     var endOfDocument: UITextPosition { IndexedPosition(index: 0) }
-    var inputDelegate: UITextInputDelegate?
     var hasText: Bool { false }
     var tokenizer: UITextInputTokenizer { UITextInputStringTokenizer(textInput: self) }
 

@@ -5,18 +5,14 @@ final class TextInputStringTokenizer: UITextInputStringTokenizer {
     var lineManager: LineManager
     var stringView: StringView
     weak var foldingModel: FoldingModel?
-    // Used to ensure we can workaround bug where multi-stage input, like when entering Korean text
-    // does not work properly. If we do not treat navigation between word boundies as a special case then
-    // navigating with Shift + Option + Arrow Keys followed by Shift + Arrow Keys will not work correctly.
-    var didCallPositionFromPositionToWordBoundary = false
 
     private let lineControllerStorage: LineControllerStorage
 
-    init(textInput: UIResponder & UITextInput, stringView: StringView, lineManager: LineManager, lineControllerStorage: LineControllerStorage) {
+    init(stringView: StringView, lineManager: LineManager, lineControllerStorage: LineControllerStorage) {
         self.lineManager = lineManager
         self.stringView = stringView
         self.lineControllerStorage = lineControllerStorage
-        super.init(textInput: textInput)
+        super.init()
     }
 
     override func isPosition(_ position: UITextPosition, atBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> Bool {
@@ -189,7 +185,6 @@ private extension TextInputStringTokenizer {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
-        didCallPositionFromPositionToWordBoundary = true
         let location = indexedPosition.index
         let alphanumerics = CharacterSet.alphanumerics
         if direction.isForward {

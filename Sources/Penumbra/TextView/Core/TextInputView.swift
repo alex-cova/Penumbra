@@ -38,7 +38,7 @@ protocol TextInputViewDelegate: AnyObject {
 }
 
 // swiftlint:disable:next type_body_length
-final class TextInputView: UIView, UITextInput {
+final class TextInputView: UIView {
     /// Modifier changes (Command pressed or released) for Cmd-hover navigation. The text input
     /// is first responder, so it — not the enclosing scroll view — receives `flagsChanged`.
     var onFlagsChanged: ((NSEvent) -> Void)?
@@ -56,45 +56,16 @@ final class TextInputView: UIView, UITextInput {
             }
         }
         set {
-            // We should not use this setter. It's intended for UIKit to use. It'll invoke the setter in various scenarios, for example when navigating the text using the keyboard.
-            // On the iOS 16 beta, UIKit may pass an NSRange with a negatives length (e.g. {4, -2}) when double tapping to select text. This will cause a crash when UIKit later attempts to use the selected range with NSString's -substringWithRange:. This can be tested with a string containing the following three lines:
-            //    A
-            //
-            //    A
-            // Placing the character on the second line, which is empty, and double tapping several times on the empty line to select text will cause the editor to crash. To work around this we take the non-negative value of the selected range. Last tested on August 30th, 2022.
-                let newRange = (newValue as? IndexedRange)?.range.nonNegativeLength
-                let sanitizedRange = sanitizedSelection(newRange)
-                if sanitizedRange != _selectedRange || multiSelectionController.hasMultipleSelections {
+            let newRange = (newValue as? IndexedRange)?.range.nonNegativeLength
+            let sanitizedRange = sanitizedSelection(newRange)
+            if sanitizedRange != _selectedRange || multiSelectionController.hasMultipleSelections {
                 notifyDelegateAboutSelectionChangeInLayoutSubviews = true
-                // The logic for determining whether or not to notify the input delegate is based on advice provided by Alexander Blach, developer of Textastic.
-                var shouldNotifyInputDelegate = false
-                if didCallPositionFromPositionInDirectionWithOffset {
-                    shouldNotifyInputDelegate = true
-                    didCallPositionFromPositionInDirectionWithOffset = false
-                }
-                // This is a consequence of our workaround that ensures multi-stage input, such as when entering Korean,
-                // works correctly. The workaround causes bugs when selecting words using Shift + Option + Arrow Keys
-                // followed by Shift + Arrow Keys if we do not treat it as a special case.
-                // The consequence of not having this workaround is that Shift + Arrow Keys may adjust the wrong end of
-                // the selected text when followed by navigating between word boundaries usign Shift + Option + Arrow Keys.
-                if customTokenizer.didCallPositionFromPositionToWordBoundary && !didCallDeleteBackward {
-                    shouldNotifyInputDelegate = true
-                    customTokenizer.didCallPositionFromPositionToWordBoundary = false
-                }
-                didCallDeleteBackward = false
-                notifyInputDelegateAboutSelectionChangeInLayoutSubviews = !shouldNotifyInputDelegate
-                if shouldNotifyInputDelegate {
-                    inputDelegate?.selectionWillChange(self)
-                }
                 if !isApplyingMultipleSelectionUpdate {
                     multiSelectionController.setSelections(sanitizedRange.map { [$0] } ?? [])
                 }
                 _selectedRange = sanitizedRange
                 if !isApplyingSnippetSelection && !isApplyingMultipleSelectionUpdate {
                     invalidateSnippetSessionIfSelectionLeftStops(sanitizedRange.map { [$0] } ?? [])
-                }
-                if shouldNotifyInputDelegate {
-                    inputDelegate?.selectionDidChange(self)
                 }
             }
         }
@@ -118,15 +89,13 @@ final class TextInputView: UIView, UITextInput {
     var endOfDocument: UITextPosition {
         IndexedPosition(index: stringView.length)
     }
-    weak var inputDelegate: UITextInputDelegate?
     var hasText: Bool {
         stringView.length > 0
     }
     var tokenizer: UITextInputTokenizer {
         customTokenizer
     }
-    private lazy var customTokenizer = TextInputStringTokenizer(textInput: self,
-                                                                stringView: stringView,
+    private lazy var customTokenizer = TextInputStringTokenizer(stringView: stringView,
                                                                 lineManager: lineManager,
                                                                 lineControllerStorage: lineControllerStorage)
     var autocorrectionType: UITextAutocorrectionType = .default
@@ -687,9 +656,7 @@ final class TextInputView: UIView, UITextInput {
                 stringView.string = newValue
                 lineManager.rebuild()
                 if let oldSelectedRange = selection {
-                    inputDelegate?.selectionWillChange(self)
                     selection = safeSelectionRange(from: oldSelectedRange)
-                    inputDelegate?.selectionDidChange(self)
                 }
                 // `rebuild()` recycles `DocumentLineNodeID`s (they restart at 1), and this setter
                 // mutates `stringView` / `lineManager` in place rather than swapping in fresh
@@ -1058,10 +1025,7 @@ final class TextInputView: UIView, UITextInput {
     private var maximumLeadingCharacterPairComponentLength = 0
     private var hasPendingFullLayout = false
     private let editMenuController = EditMenuController()
-    private var notifyInputDelegateAboutSelectionChangeInLayoutSubviews = false
     private var notifyDelegateAboutSelectionChangeInLayoutSubviews = false
-    private var didCallPositionFromPositionInDirectionWithOffset = false
-    private var didCallDeleteBackward = false
     private var hasDeletedTextWithPendingLayoutSubviews = false
     private var preserveUndoStackWhenSettingString = false
     private var cancellables: [AnyCancellable] = []
@@ -1241,20 +1205,12 @@ final class TextInputView: UIView, UITextInput {
         selectionOverlayController.updateLayout()
         // Defer selection notifications out of layout — hosts (SwiftUI) writing state
         // from these callbacks during AppKit layout abort with Update Constraints in Window.
-        let shouldNotifyInputDelegate = notifyInputDelegateAboutSelectionChangeInLayoutSubviews
         let shouldNotifyDelegate = notifyDelegateAboutSelectionChangeInLayoutSubviews
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = false
         notifyDelegateAboutSelectionChangeInLayoutSubviews = false
-        if shouldNotifyInputDelegate || shouldNotifyDelegate {
+        if shouldNotifyDelegate {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                if shouldNotifyInputDelegate {
-                    self.inputDelegate?.selectionWillChange(self)
-                    self.inputDelegate?.selectionDidChange(self)
-                }
-                if shouldNotifyDelegate {
-                    self.delegate?.textInputViewDidChangeSelection(self)
-                }
+                self.delegate?.textInputViewDidChangeSelection(self)
             }
         }
     }
@@ -1285,10 +1241,8 @@ final class TextInputView: UIView, UITextInput {
             return
         }
         if let selectedTextRange = selectedTextRange {
-            inputDelegate?.selectionWillChange(self)
             let preparedText = prepareTextForInsertion(string)
             replace(selectedTextRange, withText: preparedText)
-            inputDelegate?.selectionDidChange(self)
         }
     }
 
@@ -1312,7 +1266,7 @@ final class TextInputView: UIView, UITextInput {
     }
 
     @objc override func selectAll(_ sender: Any?) {
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         selection = NSRange(location: 0, length: stringView.length)
     }
 
@@ -1423,9 +1377,7 @@ final class TextInputView: UIView, UITextInput {
             timedUndoManager.removeAllActions()
         }
         if let oldSelectedRange = selection {
-            inputDelegate?.selectionWillChange(self)
             selection = safeSelectionRange(from: oldSelectedRange)
-            inputDelegate?.selectionDidChange(self)
         }
         if window != nil {
             performFullLayout()
@@ -1465,9 +1417,7 @@ final class TextInputView: UIView, UITextInput {
     func updateSelection(from anchor: Int, to index: Int) {
         let start = min(anchor, index)
         let end = max(anchor, index)
-        inputDelegate?.selectionWillChange(self)
         selection = NSRange(location: start, length: end - start)
-        inputDelegate?.selectionDidChange(self)
         // Host selection notify is deferred via `selection` setter.
     }
 
@@ -2403,8 +2353,6 @@ extension TextInputView {
         if let primary = selection {
             selectionAnchor = primary.length == 0 ? primary.location : primary.upperBound
         }
-        inputDelegate?.selectionWillChange(self)
-        inputDelegate?.selectionDidChange(self)
     }
 }
 
@@ -2603,7 +2551,6 @@ extension TextInputView {
     }
 
     func deleteBackward() {
-        didCallDeleteBackward = true
         defer {
             onTypingEvent?(.deletedBackward)
         }
@@ -2642,8 +2589,6 @@ extension TextInputView {
         hasDeletedTextWithPendingLayoutSubviews = true
         // Disable notifying delegate in layout subviews to prevent sending the selected range with length > 0 when deleting text. This aligns with the behavior of UITextView and was introduced to resolve issue #158: https://github.com/simonbs/Runestone/issues/158
         notifyDelegateAboutSelectionChangeInLayoutSubviews = false
-        // Disable notifying input delegate in layout subviews to prevent issues when entering Korean text. This workaround is inspired by a dialog with Alexander Black (@lextar), developer of Textastic.
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = false
         // Just before calling deleteBackward(), UIKit will set the selected range to a range of length 1, if the selected range has a length of 0.
         // In that case we want to undo to a selected range of length 0, so we construct our range here and pass it all the way to the undo operation.
         let selectedRangeAfterUndo: NSRange
@@ -2658,8 +2603,6 @@ extension TextInputView {
             timedUndoManager.beginUndoGrouping()
         }
         replaceText(in: deleteRange, with: "", selectedRangeAfterUndo: selectedRangeAfterUndo)
-        // Sending selection changed without calling the input delegate directly. This ensures that both inputting Korean letters and deleting entire words with Option+Backspace works properly.
-        sendSelectionChangedToTextSelectionView()
         if isDeletingMultipleCharacters {
             timedUndoManager.endUndoGrouping()
         }
@@ -3030,7 +2973,6 @@ extension TextInputView {
         timedUndoManager.setActionName(actionName)
         timedUndoManager.registerUndo(withTarget: self) { textInputView in
             textInputView.imeMarkedRange = nil
-            textInputView.inputDelegate?.selectionWillChange(textInputView)
             textInputView.replaceText(in: range, with: text)
             // A multi-range restore target (captured once, before a whole batch of edits) takes
             // priority over the single-range one: every edit within a multi-caret/block batch
@@ -3042,7 +2984,6 @@ extension TextInputView {
             } else {
                 textInputView.selection = oldSelectedRange
             }
-            textInputView.inputDelegate?.selectionDidChange(textInputView)
         }
         timedUndoManager.notePayloadBytes((text as NSString).length * 2)
     }
@@ -3204,7 +3145,6 @@ extension TextInputView {
         }
         timedUndoManager.endUndoGrouping()
         applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
-        sendSelectionChangedToTextSelectionView()
         delegate?.textInputViewDidChange(self)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -3280,12 +3220,6 @@ extension TextInputView {
         }
     }
 
-    private func sendSelectionChangedToTextSelectionView() {
-        // The only way I've found to get the selection change to be reflected properly while still supporting Korean, Chinese, and deleting words with Option+Backspace is to call a private API in some cases. However, as pointed out by Alexander Blach in the following PR, there is another workaround to the issue.
-        // When passing nil to the input delete, the text selection is update but the text input ignores it.
-        // Even the Swift Playgrounds app does not get this right for all languages in all cases, so there seems to be some workarounds needed to due bugs in internal classes in UIKit that communicate with instances of UITextInput.
-        inputDelegate?.selectionDidChange(nil)
-    }
 }
 
 // MARK: - Indent and Outdent
@@ -3294,9 +3228,7 @@ extension TextInputView {
         if multiSelectionController.hasMultipleSelections {
             shiftAllSelections(right: false)
         } else if let selection = selection {
-            inputDelegate?.textWillChange(self)
             indentController.shiftLeft(in: selection)
-            inputDelegate?.textDidChange(self)
         }
     }
 
@@ -3304,9 +3236,7 @@ extension TextInputView {
         if multiSelectionController.hasMultipleSelections {
             shiftAllSelections(right: true)
         } else if let selection = selection {
-            inputDelegate?.textWillChange(self)
             indentController.shiftRight(in: selection)
-            inputDelegate?.textDidChange(self)
         }
     }
 
@@ -3343,7 +3273,6 @@ extension TextInputView {
         let indentLength = indentString.utf16.count
         var deltaByRow: [Int: Int] = [:]
         let primaryIndex = multiSelectionController.primaryIndex
-        inputDelegate?.textWillChange(self)
         timedUndoManager.beginIsolatedUndoGrouping()
         // Descending row order: an edit at one row's start never shifts the location of a row
         // above it, so rows still to be processed are unaffected by ones already done.
@@ -3371,7 +3300,6 @@ extension TextInputView {
             }
         }
         timedUndoManager.endUndoGrouping()
-        inputDelegate?.textDidChange(self)
         var newSelections: [NSRange] = []
         for pair in boundPairs {
             guard let startLocation = adjustedLocation(forRow: pair.start.row, column: pair.start.column, deltaByRow: deltaByRow),
@@ -3478,7 +3406,6 @@ extension TextInputView {
         }
         var editByRow: [Int: (editColumn: Int, delta: Int)] = [:]
         let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
-        inputDelegate?.textWillChange(self)
         timedUndoManager.beginIsolatedUndoGrouping()
         // Descending row order: an edit at one row's start never shifts the location of a row
         // above it, so rows still to be processed are unaffected by ones already done.
@@ -3492,7 +3419,6 @@ extension TextInputView {
             editByRow[edit.row] = (edit.editColumn, edit.delta)
         }
         timedUndoManager.endUndoGrouping()
-        inputDelegate?.textDidChange(self)
         var newSelections: [NSRange] = []
         for pair in boundPairs {
             guard let startLocation = adjustedCommentLocation(forRow: pair.start.row, column: pair.start.column, editByRow: editByRow),
@@ -3556,7 +3482,7 @@ extension TextInputView {
         timedUndoManager.beginUndoGrouping()
         replaceText(in: operation.removeRange, with: "", undoActionName: undoActionName)
         replaceText(in: operation.replacementRange, with: operation.replacementString, undoActionName: undoActionName)
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         selection = operation.selectedRange
         timedUndoManager.endUndoGrouping()
     }
@@ -3629,7 +3555,7 @@ extension TextInputView {
                        undoActionName: undoActionName,
                        updateSelection: false)
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         var newSelections: [NSRange] = []
         for pair in boundPairs {
             guard let startLocation = location(forRow: pair.start.row + lineOffset, column: pair.start.column),
@@ -3671,7 +3597,7 @@ extension TextInputView {
             return
         }
         pushCaretHistory()
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         applySelectedRanges(newRanges)
     }
 
@@ -3726,7 +3652,7 @@ extension TextInputView {
                        updateSelection: false)
         }
         timedUndoManager.endUndoGrouping()
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         let sortedGroups = groups.sorted { $0.lowerBound < $1.lowerBound }
         var newSelections: [NSRange] = []
         for pair in boundPairs {
@@ -3791,7 +3717,7 @@ extension TextInputView {
                        updateSelection: false)
         }
         timedUndoManager.endUndoGrouping()
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         let sortedGroups = groups.sorted { $0.lowerBound < $1.lowerBound }
         let newLineCount = lineManager.lineCount
         var newSelections: [NSRange] = []
@@ -3915,7 +3841,7 @@ extension TextInputView {
         guard !newSelections.isEmpty else {
             return
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         if newSelections.count == 1 {
             selection = newSelections[0]
             selectionAnchor = newSelections[0].location
@@ -3967,7 +3893,7 @@ extension TextInputView {
         guard !newSelections.isEmpty else {
             return
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         applySelectedRanges(newSelections.sorted { $0.location < $1.location })
     }
 }
@@ -3990,16 +3916,12 @@ extension TextInputView {
         replaceText(in: range, with: markedText)
         // The selected range passed to setMarkedText(_:selectedRange:) is local to the marked range.
         let preferredSelectedRange = NSRange(location: range.location + markedSelectedRange.location, length: markedSelectedRange.length)
-        inputDelegate?.selectionWillChange(self)
         _selectedRange = safeSelectionRange(from: preferredSelectedRange)
-        inputDelegate?.selectionDidChange(self)
         delegate?.textInputViewDidUpdateMarkedRange(self)
     }
 
     func unmarkText() {
-        inputDelegate?.selectionWillChange(self)
         imeMarkedRange = nil
-        inputDelegate?.selectionDidChange(self)
         delegate?.textInputViewDidUpdateMarkedRange(self)
     }
 }
@@ -4025,7 +3947,6 @@ extension TextInputView {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
-        didCallPositionFromPositionInDirectionWithOffset = true
         guard let newLocation = lineMovementController.location(from: indexedPosition.index, in: direction, offset: offset) else {
             return nil
         }
@@ -4213,9 +4134,7 @@ extension TextInputView: IndentControllerDelegate {
     }
 
     func indentController(_ controller: IndentController, shouldSelect range: NSRange) {
-        inputDelegate?.selectionWillChange(self)
         selection = range
-        inputDelegate?.selectionDidChange(self)
     }
 
     func indentControllerDidUpdateTabWidth(_ controller: IndentController) {
@@ -4284,7 +4203,7 @@ extension TextInputView {
         }) else {
             return
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         selection = next
         selectionAnchor = next.location
     }
@@ -4293,7 +4212,7 @@ extension TextInputView {
         guard let current = selection, let previous = semanticSelectionController.shrink(from: current) else {
             return
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         selection = previous
         selectionAnchor = previous.location
     }
@@ -4384,7 +4303,7 @@ extension TextInputView {
         timedUndoManager.beginUndoGrouping()
         replaceText(in: operation.removeRange, with: "", undoActionName: undoName)
         replaceText(in: operation.replacementRange, with: operation.replacementString, undoActionName: undoName)
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         selection = operation.selectedRange
         timedUndoManager.endUndoGrouping()
     }
@@ -4468,7 +4387,7 @@ extension TextInputView {
             .map { NSRange(location: min($0, string.length), length: 0) }
             .sorted { $0.location < $1.location }
         guard !newSelections.isEmpty else { return }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         if newSelections.count == 1 {
             selection = newSelections[0]
             selectionAnchor = newSelections[0].location
@@ -4572,7 +4491,7 @@ extension TextInputView {
                 extraIndentPerNewline: extraIndentPerNewline
             )
         }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         isApplyingSnippetSelection = true
         selection = NSRange(location: min(origin + caretOffset, string.length), length: 0)
         selectionAnchor = selection?.location
@@ -4580,7 +4499,7 @@ extension TextInputView {
     }
 
     private func applySnippetStep(_ step: SnippetSessionStep) {
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         isApplyingSnippetSelection = true
         switch step {
         case .select(let ranges):

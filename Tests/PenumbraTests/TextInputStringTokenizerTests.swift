@@ -362,8 +362,7 @@ Donec laoreet, massa sed commodo tincidunt, dui neque ullamcorper sapien, laoree
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             lineController.prepareToDisplayString(toLocation: line.data.totalLength, syntaxHighlightAsynchronously: false)
         }
-        return TextInputStringTokenizer(textInput: textInput,
-                                        stringView: stringView,
+        return TextInputStringTokenizer(stringView: stringView,
                                         lineManager: lineManager,
                                         lineControllerStorage: lineControllerStorage)
     }

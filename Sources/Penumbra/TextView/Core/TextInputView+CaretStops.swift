@@ -39,8 +39,6 @@ extension TextInputView {
         if let primary = selection {
             selectionAnchor = primary.length == 0 ? primary.location : primary.upperBound
         }
-        inputDelegate?.selectionWillChange(self)
-        inputDelegate?.selectionDidChange(self)
     }
 
     /// IntelliJ's Start New Line (⇧⏎): every caret moves to the end of its line and a

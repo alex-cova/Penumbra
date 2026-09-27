@@ -1641,9 +1641,7 @@ public struct DocumentTextExport: Sendable {
     /// Inserts text at the location of the caret or, if no selection or caret is present, at the end of the text.
     /// - Parameter text: A string to insert.
     open func insertText(_ text: String) {
-        textInputView.inputDelegate?.selectionWillChange(textInputView)
         textInputView.insertText(text)
-        textInputView.inputDelegate?.selectionDidChange(textInputView)
     }
 
     /// Replaces the text that is in the specified range.
@@ -1651,9 +1649,7 @@ public struct DocumentTextExport: Sendable {
     ///   - range: A range of text in the document.
     ///   - text: A string to replace the text in range.
     open func replace(_ range: UITextRange, withText text: String) {
-        textInputView.inputDelegate?.selectionWillChange(textInputView)
         textInputView.replace(range, withText: text)
-        textInputView.inputDelegate?.selectionDidChange(textInputView)
     }
 
     /// Replaces the text that is in the specified range.
@@ -1661,10 +1657,8 @@ public struct DocumentTextExport: Sendable {
     ///   - range: A range of text in the document.
     ///   - text: A string to replace the text in range.
     public func replace(_ range: NSRange, withText text: String) {
-        textInputView.inputDelegate?.selectionWillChange(textInputView)
         let indexedRange = IndexedRange(range)
         textInputView.replace(indexedRange, withText: text)
-        textInputView.inputDelegate?.selectionDidChange(textInputView)
     }
 
     /// Replaces the text in the specified matches.

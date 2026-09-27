@@ -22,17 +22,9 @@ public protocol UITextInputTokenizer: NSObjectProtocol {
 
 open class UITextInputStringTokenizer: NSObject, UITextInputTokenizer {
     public weak var textInput: (UIResponder & UITextInput)?
-    public init(textInput: UIResponder & UITextInput) { self.textInput = textInput; super.init() }
+    public init(textInput: (UIResponder & UITextInput)? = nil) { self.textInput = textInput; super.init() }
     open func isPosition(_ position: UITextPosition, atBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> Bool { false }
     open func position(from position: UITextPosition, toBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> UITextPosition? { nil }
-}
-
-@MainActor
-public protocol UITextInputDelegate: NSObjectProtocol {
-    func selectionWillChange(_ textInput: UITextInput?)
-    func selectionDidChange(_ textInput: UITextInput?)
-    func textWillChange(_ textInput: UITextInput?)
-    func textDidChange(_ textInput: UITextInput?)
 }
 
 @MainActor
@@ -42,7 +34,6 @@ public protocol UITextInput: AnyObject {
     var markedTextStyle: [NSAttributedString.Key: Any]? { get set }
     var beginningOfDocument: UITextPosition { get }
     var endOfDocument: UITextPosition { get }
-    var inputDelegate: UITextInputDelegate? { get set }
     var hasText: Bool { get }
     var tokenizer: UITextInputTokenizer { get }
     func insertText(_ text: String)
