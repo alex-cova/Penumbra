@@ -5,14 +5,14 @@ import Foundation
 /// scrollers: a slim rounded knob that appears while the document scrolls, fades out when idle,
 /// and widens over a track when hovered or dragged.
 ///
-/// `TextView` is a clip-view-backed `UIScrollView` shim, not an `NSScrollView`, so AppKit never
+/// `TextView` is a clip-view-backed `EditorScrollView` shim, not an `NSScrollView`, so AppKit never
 /// provides scrollers for it. This view fills that gap the way ``MinimapView`` does — a
 /// viewport-anchored overlay (added through `addFixedOverlaySubview`) that reads the editor's
 /// scroll metrics through ``ScrollerGeometry`` and scrolls it by assigning `contentOffset`.
 ///
 /// With the system's "Show scroll bars: Always" (legacy style) the scroller never fades and always
 /// draws its track.
-final class OverlayScrollerView: UIView {
+final class OverlayScrollerView: EditorView {
     enum Axis {
         case vertical
         case horizontal
@@ -54,7 +54,7 @@ final class OverlayScrollerView: UIView {
     }
     var suppressionDuration: TimeInterval = OverlayScrollerView.fadeDuration
 
-    private let knobView = UIView()
+    private let knobView = EditorView()
     private var theme: Theme?
     private var isRevealed = false
     private var isHovered = false

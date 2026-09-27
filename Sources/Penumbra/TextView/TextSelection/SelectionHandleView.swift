@@ -1,7 +1,7 @@
 @preconcurrency import AppKit
 import Foundation
 
-final class SelectionHandleView: UIView {
+final class SelectionHandleView: EditorView {
     enum Kind {
         case start
         case end

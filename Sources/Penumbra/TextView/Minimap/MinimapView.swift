@@ -18,7 +18,7 @@ import Foundation
 /// first (always inside the minimap's bounds) and derives the drawn content's offset from it, so
 /// the box can neither leave the view nor drift away from the rows it frames — regardless of
 /// `textContainerInset`, typewriter overscroll, line wrapping, or folding.
-final class MinimapView: UIView {
+final class MinimapView: EditorView {
     /// Source of line/string/syntax data this minimap reflects. Not owned by the minimap.
     weak var lineDataSource: TextInputView?
     /// The scroll view whose `contentOffset`/`contentSize` this minimap reflects and controls.
@@ -35,8 +35,8 @@ final class MinimapView: UIView {
     /// Horizontal inset kept clear at the trailing edge (the fade lives inside it).
     var trailingInset: CGFloat = 2
 
-    private let hairlineView = UIView()
-    private let viewportIndicatorView = UIView()
+    private let hairlineView = EditorView()
+    private let viewportIndicatorView = EditorView()
     private var isDraggingIndicator = false
     private var dragStartLocalY: CGFloat = 0
     private var dragStartContentOffsetY: CGFloat = 0
@@ -427,8 +427,8 @@ final class MinimapView: UIView {
         layoutViewportIndicator()
     }
 
-    /// `viewportIndicatorView.layer?.borderColor` isn't a `UIView.backgroundColor`, so it isn't
-    /// covered by `UIView.viewDidChangeEffectiveAppearance()`'s re-bake — re-apply it here too, on
+    /// `viewportIndicatorView.layer?.borderColor` isn't a `EditorView.backgroundColor`, so it isn't
+    /// covered by `EditorView.viewDidChangeEffectiveAppearance()`'s re-bake — re-apply it here too, on
     /// both theme changes and effective-appearance changes.
     private func applyViewportIndicatorBorderColor(theme: Theme) {
         viewportIndicatorView.layer?.borderColor = theme.selectionColor.withAlphaComponent(0.6).cgColor

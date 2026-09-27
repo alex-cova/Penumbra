@@ -1,7 +1,7 @@
 @preconcurrency import AppKit
 import Foundation
 
-final class SelectionOverlayView: UIView {
+final class SelectionOverlayView: EditorView {
     var selectionRects: [TextSelectionRect] = [] {
         didSet {
             setNeedsDisplay()

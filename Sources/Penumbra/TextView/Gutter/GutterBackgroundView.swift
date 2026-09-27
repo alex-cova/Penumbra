@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class GutterBackgroundView: UIView {
+final class GutterBackgroundView: EditorView {
     var hairlineWidth: CGFloat = 1 {
         didSet {
             if hairlineWidth != oldValue {
@@ -18,7 +18,7 @@ final class GutterBackgroundView: UIView {
         }
     }
 
-    private let hairlineView = UIView()
+    private let hairlineView = EditorView()
 
     override init(frame: CGRect = .zero) {
         super.init(frame: .zero)

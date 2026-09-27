@@ -1,9 +1,7 @@
 @preconcurrency import AppKit
 import Foundation
 
-public typealias UIResponder = NSResponder
-
-open class UIView: NSView {
+open class EditorView: NSView {
     open var isFirstResponder: Bool { window?.firstResponder === self }
     open var backgroundColor: UIColor? {
         didSet { wantsLayer = true; layer?.backgroundColor = backgroundColor?.cgColor }
@@ -20,16 +18,16 @@ open class UIView: NSView {
     }
     open var isUserInteractionEnabled = true
     open var traitCollection: UITraitCollection { UITraitCollection() }
-    open var inputAccessoryView: UIView?
+    open var inputAccessoryView: EditorView?
     open var inputAssistantItem: UITextInputAssistantItem { UITextInputAssistantItem() }
     open func reloadInputViews() {}
-    private var uiGestureRecognizers: [UIGestureRecognizer] = []
+    private var editorGestureRecognizers: [EditorGestureRecognizer] = []
 
     /// `nonisolated`: AppKit calls this thousands of times per frame (every coordinate conversion),
     /// and a main-actor override pays a Swift 6 executor check on each call. It reads no state.
     nonisolated override open var isFlipped: Bool { true }
 
-    /// Frame-driven UIKit port: never participate in Auto Layout measuring.
+    /// Frame-driven layout: never participate in Auto Layout measuring.
     override open var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
@@ -51,7 +49,7 @@ open class UIView: NSView {
     open func setNeedsDisplay() { needsDisplay = true }
 
     /// Reorder without remove+readd (which dirties the window during layout).
-    open func bringSubviewToFront(_ view: UIView) {
+    open func bringSubviewToFront(_ view: EditorView) {
         guard view.superview === self else {
             addSubview(view)
             return
@@ -61,7 +59,7 @@ open class UIView: NSView {
         }
     }
 
-    open func sendSubviewToBack(_ view: UIView) {
+    open func sendSubviewToBack(_ view: EditorView) {
         guard view.superview === self else {
             if let first = subviews.first {
                 addSubview(view, positioned: .below, relativeTo: first)
@@ -79,8 +77,8 @@ open class UIView: NSView {
     open func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {}
     open func addInteraction(_ interaction: Any) {}
     open func removeInteraction(_ interaction: Any) {}
-    open func addGestureRecognizer(_ gestureRecognizer: UIGestureRecognizer) {
-        gestureRecognizer.view = self; uiGestureRecognizers.append(gestureRecognizer)
+    open func addGestureRecognizer(_ gestureRecognizer: EditorGestureRecognizer) {
+        gestureRecognizer.view = self; editorGestureRecognizers.append(gestureRecognizer)
     }
     open func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
     open func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {}
@@ -93,7 +91,7 @@ open class UIView: NSView {
     open override var acceptsFirstResponder: Bool { false }
     override open func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        uiGestureRecognizers.forEach { $0.handleMouseDown(event) }
+        editorGestureRecognizers.forEach { $0.handleMouseDown(event) }
         super.mouseDown(with: event)
     }
 }

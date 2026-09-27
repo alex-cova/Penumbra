@@ -50,7 +50,7 @@ public struct DocumentTextExport: Sendable {
     /// The function takes an instance of ``TextViewState`` as input which can be created on a background queue to avoid blocking the main queue while doing the initial parse of a text.
     /// Pass ``SyntaxParsePolicy/deferred`` to skip the parse during `TextViewState` construction entirely: the text view paints immediately and highlights once the background parse finishes.
     /// Pass ``SyntaxParsePolicy/viewport`` to parse only the visible window so a large file does not build a full-document tree.
-    open class TextView: UIScrollView {
+    open class TextView: EditorScrollView {
     /// Delegate to receive callbacks for events triggered by the editor.
     public weak var editorDelegate: TextViewDelegate?
     /// Optional handler invoked before default key handling. Return `true` to consume the event.
@@ -1235,7 +1235,7 @@ public struct DocumentTextExport: Sendable {
     var selectionRectsForTesting: [TextSelectionRect] { textInputView.selectionRectsForTesting }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
-    private let tapGestureRecognizer = QuickTapGestureRecognizer()
+    private let tapGestureRecognizer = EditorQuickTapGestureRecognizer()
     private var delegateAllowsEditingToBegin: Bool {
         guard isEditable else {
             return false
@@ -1351,7 +1351,7 @@ public struct DocumentTextExport: Sendable {
     }
 
     /// Lays out subviews.
-    override open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override open func gestureRecognizerShouldBegin(_ gestureRecognizer: EditorGestureRecognizer) -> Bool {
         if gestureRecognizer === tapGestureRecognizer {
             return !isEditing && !isDragging && !isDecelerating && delegateAllowsEditingToBegin
         } else {
@@ -1398,7 +1398,7 @@ public struct DocumentTextExport: Sendable {
         textInputView.scrollViewWidth = frame.width - reservedMinimapWidth - reservedScrollerWidth
         textInputView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, frame.width), height: max(contentSize.height, frame.height))
         textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
-        // UIView.layout does not walk children; explicitly layout the input view
+        // EditorView.layout does not walk children; explicitly layout the input view
         // so viewport-driven line fragments exist for the current offset.
         textInputView.layoutIfNeeded()
         textInputView.ensureViewportSyntaxParse()
@@ -2297,7 +2297,7 @@ extension TextView {
 }
 
 private extension TextView {
-    @objc private func handleTap(_ gestureRecognizer: UITapGestureRecognizer) {
+    @objc private func handleTap(_ gestureRecognizer: EditorTapGestureRecognizer) {
         guard isSelectable else {
             return
         }

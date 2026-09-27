@@ -19,14 +19,14 @@ final class AppearanceChangeSmokeTests: XCTestCase {
         body()
     }
 
-    func testCompatUIViewRebakesBackgroundColorWithoutCrashing() {
-        let view = UIView(frame: .zero)
+    func testEditorViewRebakesBackgroundColorWithoutCrashing() {
+        let view = EditorView(frame: .zero)
         view.backgroundColor = DefaultTheme().gutterBackgroundColor
         exerciseAppearanceChange(on: view)
     }
 
-    func testCompatUIViewWithNoBackgroundColorDoesNotCrash() {
-        let view = UIView(frame: .zero)
+    func testEditorViewWithNoBackgroundColorDoesNotCrash() {
+        let view = EditorView(frame: .zero)
         exerciseAppearanceChange(on: view)
     }
 

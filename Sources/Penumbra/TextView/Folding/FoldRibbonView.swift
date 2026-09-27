@@ -9,7 +9,7 @@ import Foundation
 /// with the document (its frame spans the full content height, not just the viewport). Drawing is
 /// scoped to `dirtyRect` — AppKit only asks for the currently-exposed band — so cost stays bounded
 /// by the number of folds overlapping the visible region rather than the total fold count.
-final class FoldRibbonView: UIView {
+final class FoldRibbonView: EditorView {
     weak var lineManager: LineManager?
     weak var foldingModel: FoldingModel?
     var textContainerInsetTop: CGFloat = 0

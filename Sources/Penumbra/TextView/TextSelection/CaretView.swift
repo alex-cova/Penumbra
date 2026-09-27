@@ -1,7 +1,7 @@
 @preconcurrency import AppKit
 import Foundation
 
-final class CaretView: UIView {
+final class CaretView: EditorView {
     var caretColor: UIColor = .label {
         didSet {
             layer?.backgroundColor = caretColor.cgColor

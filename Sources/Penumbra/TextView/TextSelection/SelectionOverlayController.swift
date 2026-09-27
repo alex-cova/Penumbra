@@ -56,11 +56,11 @@ final class SelectionOverlayController {
     /// The Metal canvas is a fixed overlay above the clip view. Move selection/caret chrome into a
     /// second fixed overlay so an opaque canvas cannot cover it; a viewport-origin `bounds` keeps
     /// the existing content-space caret and selection frames valid while scrolling.
-    func setPresentationHost(_ parent: UIView?, viewport: CGRect) {
+    func setPresentationHost(_ parent: EditorView?, viewport: CGRect) {
         if let parent {
             if overlayHostView.superview !== parent {
                 overlayHostView.removeFromSuperview()
-                if let scrollView = parent as? UIScrollView {
+                if let scrollView = parent as? EditorScrollView {
                     scrollView.addFixedOverlaySubview(overlayHostView)
                 } else {
                     parent.addSubview(overlayHostView)
@@ -88,7 +88,7 @@ final class SelectionOverlayController {
         guard let canvas = parent.subviews.first(where: { $0 is MetalTextCanvasView }) else {
             return
         }
-        if let scrollView = parent as? UIScrollView {
+        if let scrollView = parent as? EditorScrollView {
             scrollView.insertFixedOverlaySubview(overlayHostView, positioned: .above, relativeTo: canvas)
         } else {
             parent.addSubview(overlayHostView, positioned: .above, relativeTo: canvas)
@@ -350,7 +350,7 @@ private extension SelectionOverlayController {
 /// Layer-backed host so caret/selection chrome composite above `CAMetalLayer`. Empty space must
 /// not eat hits — the Metal canvas already returns `nil` from `hitTest`, and text input lives
 /// under the clip view.
-private final class SelectionChromeHostView: UIView {
+private final class SelectionChromeHostView: EditorView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true

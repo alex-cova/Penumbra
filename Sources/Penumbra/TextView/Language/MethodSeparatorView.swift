@@ -9,7 +9,7 @@ import Foundation
 /// the document and scrolls with it, so Core Graphics drawing is scoped to `dirtyRect`. When Metal
 /// is the paint backend the opaque canvas covers this view; `LayoutManager` replays
 /// ``separatorLineFrames(clip:)`` into the canvas underlay, the same path as the page-guide hairline.
-final class MethodSeparatorView: UIView {
+final class MethodSeparatorView: EditorView {
     weak var lineManager: LineManager?
     var textContainerInsetTop: CGFloat = 0 {
         didSet { if textContainerInsetTop != oldValue { needsDisplay = true } }

@@ -1,7 +1,7 @@
 @preconcurrency import AppKit
 import Foundation
 
-open class UIScrollView: UIView {
+open class EditorScrollView: EditorView {
     open var contentSize: CGSize = .zero {
         didSet {
             guard contentSize != oldValue else { return }
@@ -38,9 +38,9 @@ open class UIScrollView: UIView {
     open var adjustedContentInset: UIEdgeInsets { contentInset }
     open var isDragging = false
     open var isDecelerating = false
-    open var panGestureRecognizer = UIPanGestureRecognizer()
+    open var panGestureRecognizer = EditorPanGestureRecognizer()
     private let clipView = FlippedClipView()
-    private let documentContainer = UIView(frame: .zero)
+    private let documentContainer = EditorView(frame: .zero)
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -81,7 +81,7 @@ open class UIScrollView: UIView {
     /// Adds a view directly to the scroll view itself, outside the scrollable document
     /// container, so it stays fixed on screen instead of scrolling with content. `addSubview(_:)`
     /// always routes into the scrolling document container, so this is the only way to add a
-    /// viewport-anchored overlay (e.g. a minimap) as a child of a `UIScrollView`.
+    /// viewport-anchored overlay (e.g. a minimap) as a child of an `EditorScrollView`.
     open func addFixedOverlaySubview(_ view: NSView) { super.addSubview(view) }
     /// Reorders a fixed overlay without routing it into the scrolling document container.
     open func bringFixedOverlaySubviewToFront(_ view: NSView) {
@@ -98,7 +98,7 @@ open class UIScrollView: UIView {
     ) {
         super.addSubview(view, positioned: place, relativeTo: otherView)
     }
-    open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
+    open func gestureRecognizerShouldBegin(_ gestureRecognizer: EditorGestureRecognizer) -> Bool { true }
 
     /// Scrolls to `offset`, optionally animating the AppKit clip view with an ease-out curve.
     open func setContentOffset(_ offset: CGPoint, animationDuration: TimeInterval) {
@@ -169,7 +169,7 @@ open class UIScrollView: UIView {
 
 private final class FlippedClipView: NSClipView { override var isFlipped: Bool { true } }
 
-extension UIScrollView {
+extension EditorScrollView {
     public var minimumContentOffset: CGPoint { CGPoint(x: adjustedContentInset.left * -1, y: adjustedContentInset.top * -1) }
     public var maximumContentOffset: CGPoint {
         CGPoint(x: max(contentSize.width - bounds.width + adjustedContentInset.right, adjustedContentInset.left * -1),

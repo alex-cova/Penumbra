@@ -16,6 +16,9 @@ patterns=(
   'UIFindInteraction'
   'UIMenuController'
   'UIApplication\.didReceiveMemoryWarningNotification'
+  'UIKitCompatibility'
+  'open class UIView'
+  'open class UIScrollView'
 )
 
 failed=0

@@ -2,7 +2,7 @@
 import Foundation
 
 /// Draws gutter decoration icons at document line Y positions and reports clicks.
-final class GutterDecorationView: UIView {
+final class GutterDecorationView: EditorView {
     weak var lineManager: LineManager?
     var textContainerInsetTop: CGFloat = 0
     var decorations: [GutterDecoration] = [] {

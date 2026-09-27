@@ -11,7 +11,7 @@ extension ReusableView {
 }
 
 @MainActor
-final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
+final class ViewReuseQueue<Key: Hashable, View: EditorView & ReusableView> {
     private(set) var visibleViews: [Key: View] = [:]
 
     private var queuedViews: Set<View> = []

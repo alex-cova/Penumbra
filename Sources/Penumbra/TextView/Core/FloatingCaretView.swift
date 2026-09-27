@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class FloatingCaretView: UIView {
+final class FloatingCaretView: EditorView {
     override func layoutSubviews() {
         super.layoutSubviews()
         wantsLayer = true

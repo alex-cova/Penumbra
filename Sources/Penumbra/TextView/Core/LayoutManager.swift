@@ -12,14 +12,14 @@ protocol LayoutManagerDelegate: AnyObject {
 @MainActor
 final class LayoutManager {
     weak var delegate: LayoutManagerDelegate?
-    weak var gutterParentView: UIView? {
+    weak var gutterParentView: EditorView? {
         didSet {
             if gutterParentView != oldValue {
                 setupViewHierarchy()
             }
         }
     }
-    weak var textInputView: UIView? {
+    weak var textInputView: EditorView? {
         didSet {
             if textInputView != oldValue {
                 setupViewHierarchy()
@@ -206,11 +206,11 @@ final class LayoutManager {
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>(hidesQueuedViews: true)
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     var currentlyVisibleLineIDs: Set<DocumentLineNodeID> { visibleLineIDs }
-    private let linesContainerView = UIView()
+    private let linesContainerView = EditorView()
     private let gutterBackgroundView = GutterBackgroundView()
-    private let lineNumbersContainerView = UIView()
-    private let gutterSelectionBackgroundView = UIView()
-    private let lineSelectionBackgroundView = UIView()
+    private let lineNumbersContainerView = EditorView()
+    private let gutterSelectionBackgroundView = EditorView()
+    private let lineSelectionBackgroundView = EditorView()
     private let foldRibbonView = FoldRibbonView()
     private let gutterDecorationView = GutterDecorationView()
     var gutterDecorations: [GutterDecoration] = [] {
@@ -1398,7 +1398,7 @@ extension LayoutManager {
         guard let metalCanvasView else {
             return
         }
-        if let scrollView = gutterParentView as? UIScrollView {
+        if let scrollView = gutterParentView as? EditorScrollView {
             scrollView.addFixedOverlaySubview(metalCanvasView)
         } else if let gutterParentView {
             gutterParentView.addSubview(metalCanvasView)

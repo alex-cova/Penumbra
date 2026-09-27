@@ -38,7 +38,7 @@ protocol TextInputViewDelegate: AnyObject {
 }
 
 // swiftlint:disable:next type_body_length
-final class TextInputView: UIView {
+final class TextInputView: EditorView {
     /// Modifier changes (Command pressed or released) for Cmd-hover navigation. The text input
     /// is first responder, so it — not the enclosing scroll view — receives `flagsChanged`.
     var onFlagsChanged: ((NSEvent) -> Void)?
@@ -517,7 +517,7 @@ final class TextInputView: UIView {
         scheduleDeferredLayoutIfNeeded()
     }
 
-    /// `UIView.layout` does not recurse into children, and SwiftUI / Auto Layout hosts often
+    /// `EditorView.layout` does not recurse into children, and SwiftUI / Auto Layout hosts often
     /// do not call `layoutIfNeeded` on `TextInputView` after `setNeedsLayout`. Without a
     /// deferred flush, Metal glyph upserts and `presentIfDirty` wait until a resize forces
     /// `TextView.layoutSubviews`.
@@ -685,7 +685,7 @@ final class TextInputView: UIView {
             if newValue != layoutManager.viewport {
                 layoutManager.viewport = newValue
                 layoutManager.setNeedsLayout()
-                // Must dirty the view: UIView.layout does not recurse into children,
+                // Must dirty the view: EditorView.layout does not recurse into children,
                 // and scroll updates contentOffset → viewport without a parent layout
                 // pass. Without this, layoutLinesInViewport never runs and scrolled
                 // regions stay blank.
@@ -793,7 +793,7 @@ final class TextInputView: UIView {
     var canBecomeFirstResponder: Bool {
         true
     }
-    weak var gutterParentView: UIView? {
+    weak var gutterParentView: EditorView? {
         get {
             layoutManager.gutterParentView
         }
@@ -809,7 +809,7 @@ final class TextInputView: UIView {
             }
         }
     }
-    var gutterContainerView: UIView {
+    var gutterContainerView: EditorView {
         layoutManager.gutterContainerView
     }
     var isFileBacked: Bool {

@@ -130,14 +130,14 @@ extension LineFragmentDecorations: Equatable {
 @MainActor
 final class CGLinePaintBackend: LinePaintBackend {
     private let reuseQueue = ViewReuseQueue<LineFragmentID, LineFragmentView>()
-    private weak var linesContainerView: UIView?
+    private weak var linesContainerView: EditorView?
     private var fragmentLineIDs: [LineFragmentID: DocumentLineNodeID] = [:]
 
     var trackedFragmentIDs: Set<LineFragmentID> {
         Set(reuseQueue.visibleViews.keys)
     }
 
-    init(linesContainerView: UIView) {
+    init(linesContainerView: EditorView) {
         self.linesContainerView = linesContainerView
     }
 

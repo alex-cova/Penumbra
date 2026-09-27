@@ -36,7 +36,7 @@ protocol MetalCanvasGlyphEncoding: AnyObject {
 ///
 /// `draw(_:)` is the only place that calls `nextDrawable()`. Layout updates CPU state and
 /// `setNeedsDisplay()` so a flick-scroll cannot present faster than vsync.
-final class MetalTextCanvasView: UIView {
+final class MetalTextCanvasView: EditorView {
     var onRenderingFailure: (() -> Void)?
     /// Set by `MetalRenderer` when it becomes the active paint backend; cleared when it steps down.
     weak var glyphEncoder: MetalCanvasGlyphEncoding?

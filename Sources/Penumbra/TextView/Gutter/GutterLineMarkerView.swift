@@ -8,7 +8,7 @@ import Foundation
 /// gutter column (in document coordinates, so `frame.minY` is the document y of its top), and a
 /// redraw — after scrolling, an edit or new markers — paints the visible rows' markers, found by a
 /// binary search into the ``GutterLineMarkerStore``, without line handles.
-final class GutterLineMarkerView: UIView {
+final class GutterLineMarkerView: EditorView {
     nonisolated static let maximumSlots = 2
     static let slotWidth: CGFloat = 14
     static let iconSize: CGFloat = 12

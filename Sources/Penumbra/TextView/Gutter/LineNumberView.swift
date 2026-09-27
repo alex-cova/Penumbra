@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class LineNumberView: UIView, ReusableView {
+final class LineNumberView: EditorView, ReusableView {
     var textColor: UIColor {
         get {
             titleLabel.textColor
@@ -27,8 +27,8 @@ final class LineNumberView: UIView, ReusableView {
         }
     }
 
-    private let titleLabel: UILabel = {
-        let this = UILabel()
+    private let titleLabel: EditorLabel = {
+        let this = EditorLabel()
         this.textAlignment = .right
         return this
     }()

@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class LineFragmentView: UIView, ReusableView {
+final class LineFragmentView: EditorView, ReusableView {
     var renderer: LineFragmentRenderer? {
         didSet {
             if renderer !== oldValue {

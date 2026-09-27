@@ -1,41 +1,41 @@
 @preconcurrency import AppKit
 import Foundation
 
-public enum UIGestureRecognizerState: Int {
+public enum EditorGestureRecognizerState: Int {
     case possible, began, changed, ended, cancelled, failed
 }
 
 @MainActor
-public protocol UIGestureRecognizerDelegate: AnyObject {
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool
+public protocol EditorGestureRecognizerDelegate: AnyObject {
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: EditorGestureRecognizer) -> Bool
+    func gestureRecognizer(_ gestureRecognizer: EditorGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: EditorGestureRecognizer) -> Bool
 }
 
-extension UIGestureRecognizerDelegate {
-    public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
-    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+extension EditorGestureRecognizerDelegate {
+    public func gestureRecognizerShouldBegin(_ gestureRecognizer: EditorGestureRecognizer) -> Bool { true }
+    public func gestureRecognizer(_ gestureRecognizer: EditorGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: EditorGestureRecognizer) -> Bool { false }
 }
 
-open class UIGestureRecognizer: NSObject {
-    public weak var delegate: UIGestureRecognizerDelegate?
-    weak var view: UIView?
-    public var state: UIGestureRecognizerState = .possible
+open class EditorGestureRecognizer: NSObject {
+    public weak var delegate: EditorGestureRecognizerDelegate?
+    weak var view: EditorView?
+    public var state: EditorGestureRecognizerState = .possible
     private weak var target: AnyObject?
     private var action: Selector?
     public func addTarget(_ target: AnyObject, action: Selector) { self.target = target; self.action = action }
-    public func require(toFail otherGestureRecognizer: UIGestureRecognizer) {}
-    public func location(in view: UIView?) -> CGPoint { .zero }
+    public func require(toFail otherGestureRecognizer: EditorGestureRecognizer) {}
+    public func location(in view: EditorView?) -> CGPoint { .zero }
     fileprivate func sendAction() { _ = target?.perform(action, with: self) }
     func handleMouseDown(_ event: NSEvent) { state = .ended; sendAction(); state = .possible }
 }
 
-open class UITapGestureRecognizer: UIGestureRecognizer {}
-open class QuickTapGestureRecognizer: UITapGestureRecognizer {
+open class EditorTapGestureRecognizer: EditorGestureRecognizer {}
+open class EditorQuickTapGestureRecognizer: EditorTapGestureRecognizer {
     open var maximumPressDuration: TimeInterval = 0.3
 }
-open class UIPanGestureRecognizer: UIGestureRecognizer {}
+open class EditorPanGestureRecognizer: EditorGestureRecognizer {}
 
-open class UILabel: UIView {
+open class EditorLabel: EditorView {
     // Setters only invalidate on a real change. The gutter reassigns text, font and colour on
     // every layout pass, and unconditional `needsDisplay` redrew every visible line number with
     // AppKit string drawing on every scroll frame (~6% of main-thread time).

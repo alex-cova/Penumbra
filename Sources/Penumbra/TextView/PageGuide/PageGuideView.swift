@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 
-final class PageGuideView: UIView {
+final class PageGuideView: EditorView {
     var hairlineWidth: CGFloat {
         didSet {
             if hairlineWidth != oldValue {
@@ -34,8 +34,8 @@ final class PageGuideView: UIView {
         }
     }
 
-    private let hairlineView = UIView()
-    private let shadingView = UIView()
+    private let hairlineView = EditorView()
+    private let shadingView = EditorView()
 
     override init(frame: CGRect) {
         self.hairlineWidth = hairlineLength
