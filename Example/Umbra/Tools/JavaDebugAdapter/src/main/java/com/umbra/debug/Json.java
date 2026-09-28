@@ -28,7 +28,11 @@ final class Json {
                     case '\n' -> out.append("\\n");
                     case '\r' -> out.append("\\r");
                     case '\t' -> out.append("\\t");
-                    default -> out.append(c);
+                    default -> {
+                        // Any other control character would make the line invalid JSON.
+                        if (c < 0x20) out.append(String.format("\\u%04x", (int) c));
+                        else out.append(c);
+                    }
                 }
             }
             out.append('"');

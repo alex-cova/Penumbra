@@ -17,6 +17,53 @@ struct JavaDebugVariable: Identifiable, Equatable, Sendable {
     var id: String { name }
 }
 
+/// One node of an evaluated value: a result, or a field or array element of one. Children arrive
+/// one level at a time; ``hasChildren`` says whether evaluating ``expression`` again would list some.
+struct JavaDebugValue: Identifiable, Equatable, Sendable {
+    let name: String?
+    let type: String
+    let value: String
+    /// Reaches this value again from the frame, so opening a node is another evaluation.
+    let expression: String
+    let hasChildren: Bool
+    let children: [JavaDebugValue]?
+
+    var id: String { "\(name ?? "")|\(expression)" }
+
+    init(name: String? = nil, type: String, value: String, expression: String, hasChildren: Bool = false, children: [JavaDebugValue]? = nil) {
+        self.name = name
+        self.type = type
+        self.value = value
+        self.expression = expression
+        self.hasChildren = hasChildren
+        self.children = children
+    }
+
+    init?(json: [String: Any]) {
+        guard let type = json["type"] as? String, let value = json["value"] as? String else { return nil }
+        self.init(
+            name: json["name"] as? String,
+            type: type,
+            value: value,
+            expression: json["expression"] as? String ?? "",
+            hasChildren: json["hasChildren"] as? Bool ?? false,
+            children: (json["children"] as? [[String: Any]])?.compactMap(JavaDebugValue.init(json:))
+        )
+    }
+}
+
+/// An expression the user evaluated, with what came back.
+struct JavaDebugEvaluation: Identifiable, Equatable, Sendable {
+    enum Outcome: Equatable, Sendable {
+        case value(JavaDebugValue)
+        case failure(String)
+    }
+
+    let id = UUID()
+    let expression: String
+    let outcome: Outcome
+}
+
 enum JavaDebugSessionState: Equatable, Sendable {
     case idle
     case launching
@@ -34,6 +81,13 @@ final class JavaDebugSession {
     private(set) var stackFrames: [JavaDebugStackFrame] = []
     private(set) var variables: [JavaDebugVariable] = []
     private(set) var selectedFrameIndex = 0
+    /// Expressions evaluated in this session, newest first.
+    private(set) var evaluations: [JavaDebugEvaluation] = []
+    /// The Evaluate field's text. Quick Evaluate and ⌥F8 fill it from the editor.
+    var evaluationDraft = ""
+    /// Bumped to ask the panel to focus its Evaluate field.
+    private(set) var evaluationFocusRequest = 0
+    static let maximumEvaluations = 30
 
     private var process: Process?
     private var inputHandle: FileHandle?
@@ -63,7 +117,7 @@ final class JavaDebugSession {
             let process = try launcher.startAdapter(javaHome: javaHome)
             self.process = process
             inputHandle = (process.standardInput as? Pipe)?.fileHandleForWriting
-            readTask = Task { await self.readLoop(process: process) }
+            startReading(process)
             let classpath = launch.classpath.map(\.path).joined(separator: ":")
             var request: [String: Any] = [
                 "command": "launch",
@@ -106,7 +160,7 @@ final class JavaDebugSession {
         let process = try launcher.startAdapter(javaHome: javaHome)
         self.process = process
         inputHandle = (process.standardInput as? Pipe)?.fileHandleForWriting
-        readTask = Task { await self.readLoop(process: process) }
+        startReading(process)
     }
 
     /// Attaches to the Gradle-spawned JVM, applies breakpoints, and optionally resumes.
@@ -198,6 +252,52 @@ final class JavaDebugSession {
         }
     }
 
+    /// Evaluates `expression` in the selected stack frame. Works only while the program is paused;
+    /// otherwise the outcome is a failure that says so. Recorded in ``evaluations`` when `record`.
+    @discardableResult
+    func evaluate(_ expression: String, record: Bool = true) async -> JavaDebugEvaluation.Outcome {
+        let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outcome: JavaDebugEvaluation.Outcome
+        if case .stopped = state {
+            do {
+                let response = try await send(["command": "evaluate", "expression": trimmed, "frameIndex": selectedFrameIndex])
+                if let node = (response["result"] as? [String: Any]).flatMap(JavaDebugValue.init(json:)) {
+                    outcome = .value(node)
+                } else {
+                    outcome = .failure("The debugger sent no result.")
+                }
+            } catch {
+                outcome = .failure(Self.message(for: error))
+            }
+        } else {
+            outcome = .failure("The program is not paused.")
+        }
+        if record {
+            evaluations.insert(JavaDebugEvaluation(expression: trimmed, outcome: outcome), at: 0)
+            if evaluations.count > Self.maximumEvaluations { evaluations.removeLast(evaluations.count - Self.maximumEvaluations) }
+        }
+        return outcome
+    }
+
+    func clearEvaluations() {
+        evaluations = []
+    }
+
+    /// Fills the Evaluate field and asks the panel to focus it.
+    func requestEvaluationInput(prefilledWith text: String?) {
+        if let text, !text.isEmpty { evaluationDraft = text }
+        evaluationFocusRequest += 1
+    }
+
+    private static func message(for error: Error) -> String {
+        switch error as? JavaDebugProcessError {
+        case .launchFailed(let message): return message
+        case .disconnected: return "The debugger is no longer connected."
+        case .adapterNotFound: return "The debug adapter was not found."
+        case nil: return error.localizedDescription
+        }
+    }
+
     func stop() {
         readTask?.cancel()
         readTask = nil
@@ -212,6 +312,7 @@ final class JavaDebugSession {
         stackFrames = []
         variables = []
         selectedFrameIndex = 0
+        evaluations = []
         isGradleAttachSession = false
         if case .failed = state { return }
         state = .terminated
@@ -231,22 +332,44 @@ final class JavaDebugSession {
         throw lastError
     }
 
-    private func readLoop(process: Process) async {
+    /// Reads the adapter's stdout line by line. The reads block, so they run off the main actor:
+    /// on it, the first quiet moment would freeze the app and starve every reply the session
+    /// is waiting for.
+    private func startReading(_ process: Process) {
         guard let output = process.standardOutput as? Pipe else { return }
-        var buffer = ""
-        while !Task.isCancelled {
-            let chunk = output.fileHandleForReading.availableData
-            if chunk.isEmpty { break }
-            buffer += String(decoding: chunk, as: UTF8.self)
-            while let newline = buffer.firstIndex(of: "\n") {
-                let line = String(buffer[..<newline])
-                buffer = String(buffer[buffer.index(after: newline)...])
-                handleEventLine(line)
+        let handle = output.fileHandleForReading
+        let processID = ObjectIdentifier(process)
+        readTask = Task.detached(priority: .userInitiated) { [weak self] in
+            var buffer = Data()
+            while !Task.isCancelled {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                buffer.append(chunk)
+                var lines: [String] = []
+                while let newline = buffer.firstIndex(of: 0x0A) {
+                    lines.append(String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self))
+                    buffer = Data(buffer[buffer.index(after: newline)...])
+                }
+                if !lines.isEmpty {
+                    await self?.handle(lines: lines)
+                }
             }
+            await self?.adapterOutputEnded(processID: processID)
         }
-        if !process.isRunning, case .failed = state {} else if !process.isRunning {
-            state = .terminated
+    }
+
+    private func handle(lines: [String]) {
+        for line in lines {
+            handleEventLine(line)
         }
+    }
+
+    /// The adapter closed its output: the program is over, unless this is an older session's
+    /// adapter finishing after a new one started.
+    private func adapterOutputEnded(processID: ObjectIdentifier) {
+        guard let process, ObjectIdentifier(process) == processID, !process.isRunning else { return }
+        if case .failed = state { return }
+        state = .terminated
     }
 
     private func handleEventLine(_ line: String) {
@@ -260,6 +383,8 @@ final class JavaDebugSession {
                 let reason = json["reason"] as? String ?? "breakpoint"
                 let file = URL(fileURLWithPath: filePath)
                 state = .stopped(file: file, line: line, reason: reason)
+                // A new stop starts at the innermost frame, whichever one was selected before.
+                selectedFrameIndex = 0
                 refreshStack()
                 // A relative path means no source root held the file; there is nothing to open.
                 if filePath.hasPrefix("/") {

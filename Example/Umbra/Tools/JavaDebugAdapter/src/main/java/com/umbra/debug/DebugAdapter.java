@@ -25,6 +25,13 @@ public final class DebugAdapter {
         return t;
     });
 
+    /** Evaluations run here so a slow {@code toString()} cannot stop the adapter reading commands. */
+    private final ExecutorService evaluations = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "debug-evaluate");
+        t.setDaemon(true);
+        return t;
+    });
+
     private VirtualMachine vm;
     private Process targetProcess;
     private volatile ThreadReference currentThread;
@@ -87,6 +94,10 @@ public final class DebugAdapter {
                 }
                 case "localVariables" -> {
                     localVariables(id, intValue(request.get("frameIndex")));
+                    return;
+                }
+                case "evaluate" -> {
+                    evaluate(id, stringValue(request.get("expression")), request.containsKey("frameIndex") ? intValue(request.get("frameIndex")) : 0);
                     return;
                 }
                 case "disconnect" -> disconnect();
@@ -440,6 +451,46 @@ public final class DebugAdapter {
             throw new IllegalStateException(e.getMessage());
         }
         replyData(id, Map.of("variables", variables));
+    }
+
+    private void evaluate(int id, String expression, int frameIndex) {
+        ensureVM();
+        ensureThread();
+        if (!stopped) throw new IllegalStateException("The program is running: pause it or wait for a breakpoint.");
+        ThreadReference thread = currentThread;
+        VirtualMachine machine = vm;
+        evaluations.submit(() -> {
+            try {
+                Evaluator evaluator = new Evaluator(machine, thread, frameIndex, this::disableBreakpoints, this::enableBreakpoints);
+                replyData(id, Map.of("result", evaluator.evaluate(expression)));
+            } catch (Evaluator.EvaluationException e) {
+                replyError(id, e.getMessage());
+            } catch (VMDisconnectedException e) {
+                replyError(id, "The program has ended.");
+            } catch (Exception e) {
+                replyError(id, e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * A method invoked for an evaluation must not stop at a breakpoint of its own: the invoking
+     * thread would wait for a resume that never comes.
+     */
+    private void disableBreakpoints() {
+        synchronized (breakpointLock) {
+            for (PendingBreakpoint breakpoint : breakpoints) {
+                for (BreakpointRequest request : breakpoint.requests) request.disable();
+            }
+        }
+    }
+
+    private void enableBreakpoints() {
+        synchronized (breakpointLock) {
+            for (PendingBreakpoint breakpoint : breakpoints) {
+                for (BreakpointRequest request : breakpoint.requests) request.enable();
+            }
+        }
     }
 
     private void disconnect() {

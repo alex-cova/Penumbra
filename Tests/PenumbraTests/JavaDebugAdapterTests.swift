@@ -87,6 +87,7 @@ final class JavaDebugAdapterTests: XCTestCase {
     private var directory: URL!
     private var hello: URL!
     private var util: URL!
+    private var probe: URL!
     private var java: URL!
     private var adapterJar: URL!
 
@@ -139,11 +140,51 @@ final class JavaDebugAdapterTests: XCTestCase {
         }
         """.write(to: util, atomically: true, encoding: .utf8)
 
+        probe = sources.appendingPathComponent("Probe.java")
+        try """
+        public class Probe {
+            static class Point {
+                int x = 3;
+                int y = 4;
+                String label = "origin";
+                Point next;
+            }
+
+            static class Noisy {
+                public String toString() {
+                    return "noisy"; // NOISY
+                }
+            }
+
+            enum Color { RED, GREEN }
+
+            int counter = 7;
+            static String greeting = "hi";
+
+            void run() throws Exception {
+                int[] numbers = {10, 20, 30};
+                Point p = new Point();
+                p.next = new Point();
+                Integer boxed = 42;
+                Color color = Color.GREEN;
+                String text = "a\\"b";
+                Noisy noisy = new Noisy();
+                int i = 1;
+                System.out.println(i + text + noisy + boxed + color + numbers.length); // BREAK
+                Thread.sleep(30000);
+            }
+
+            public static void main(String[] args) throws Exception {
+                new Probe().run();
+            }
+        }
+        """.write(to: probe, atomically: true, encoding: .utf8)
+
         let compile = Process()
         compile.executableURL = javac
         // Java 17 bytecode, so it runs on whichever JDK the test machine has.
         compile.arguments = ["--release", "17", "-g", "-d", directory.appendingPathComponent("classes").path,
-                             hello.path, util.path]
+                             hello.path, util.path, probe.path]
         compile.standardError = Pipe()
         try compile.run()
         compile.waitUntilExit()
@@ -154,12 +195,12 @@ final class JavaDebugAdapterTests: XCTestCase {
         if let directory { try? FileManager.default.removeItem(at: directory) }
     }
 
-    private func launch() throws -> Adapter {
+    private func launch(mainClass: String = "Hello") throws -> Adapter {
         let adapter = try Adapter(java: java, jar: adapterJar)
         let reply = adapter.send("launch", [
             "java": java.path,
             "classpath": directory.appendingPathComponent("classes").path,
-            "mainClass": "Hello",
+            "mainClass": mainClass,
             "programArgs": "",
             "vmArgs": "",
             "port": JavaDebugPortPicker.pickPort(preferred: nil),
@@ -234,6 +275,132 @@ final class JavaDebugAdapterTests: XCTestCase {
         let adapter = try launch()
         let reply = adapter.send("stepInto")
         XCTAssertEqual(reply["ok"] as? Bool, false)
+        _ = adapter.send("disconnect")
+    }
+
+    // MARK: - Evaluate
+
+    private func line(of marker: String, in file: URL) throws -> Int {
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let index = try XCTUnwrap(text.components(separatedBy: "\n").firstIndex { $0.contains(marker) })
+        return index + 1
+    }
+
+    /// Runs `Probe` to its breakpoint and hands back the adapter, stopped there.
+    private func stoppedInProbe() throws -> Adapter {
+        let adapter = try launch(mainClass: "Probe")
+        let line = try line(of: "// BREAK", in: probe)
+        XCTAssertEqual(adapter.send("setBreakpoint", ["file": probe.path, "line": line])["ok"] as? Bool, true)
+        XCTAssertEqual(adapter.send("resume")["ok"] as? Bool, true)
+        stopped(adapter, file: probe, line: line, reason: "breakpoint", "breakpoint in Probe.run")
+        return adapter
+    }
+
+    private func evaluate(_ adapter: Adapter, _ expression: String) -> [String: Any] {
+        adapter.send("evaluate", ["expression": expression, "frameIndex": 0])
+    }
+
+    private func result(_ adapter: Adapter, _ expression: String, file: StaticString = #filePath, line: UInt = #line) -> [String: Any] {
+        let reply = evaluate(adapter, expression)
+        XCTAssertEqual(reply["ok"] as? Bool, true, "\(expression): \(reply)", file: file, line: line)
+        return reply["result"] as? [String: Any] ?? [:]
+    }
+
+    private func value(_ adapter: Adapter, _ expression: String, file: StaticString = #filePath, line: UInt = #line) -> String? {
+        result(adapter, expression, file: file, line: line)["value"] as? String
+    }
+
+    private func error(_ adapter: Adapter, _ expression: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        let reply = evaluate(adapter, expression)
+        XCTAssertEqual(reply["ok"] as? Bool, false, "\(expression) should fail: \(reply)", file: file, line: line)
+        return reply["error"] as? String ?? ""
+    }
+
+    func testEvaluateReadsLocalsFieldsAndArrayElements() throws {
+        let adapter = try stoppedInProbe()
+        XCTAssertEqual(value(adapter, "i"), "1")
+        XCTAssertEqual(value(adapter, "numbers[i]"), "20")
+        XCTAssertEqual(value(adapter, "numbers.length"), "3")
+        XCTAssertEqual(value(adapter, "p.x"), "3")
+        XCTAssertEqual(value(adapter, "p.next.label"), "\"origin\"")
+        // A field of `this`, with and without the receiver, and a static field.
+        XCTAssertEqual(value(adapter, "this.counter"), "7")
+        XCTAssertEqual(value(adapter, "counter"), "7")
+        XCTAssertEqual(value(adapter, "greeting"), "\"hi\"")
+        // Boxes and enums show their value; strings are quoted and escaped.
+        XCTAssertEqual(value(adapter, "boxed"), "42")
+        XCTAssertEqual(value(adapter, "color"), "GREEN")
+        XCTAssertEqual(value(adapter, "text"), "\"a\\\"b\"")
+        _ = adapter.send("disconnect")
+    }
+
+    func testEvaluateLiteralsAndTheTypeOfAResult() throws {
+        let adapter = try stoppedInProbe()
+        XCTAssertEqual(value(adapter, "5"), "5")
+        XCTAssertEqual(value(adapter, "-7L"), "-7")
+        XCTAssertEqual(value(adapter, "1.5"), "1.5")
+        XCTAssertEqual(value(adapter, "true"), "true")
+        XCTAssertEqual(value(adapter, "null"), "null")
+        XCTAssertEqual(value(adapter, "\"lit\""), "\"lit\"")
+        XCTAssertEqual(value(adapter, "'c'"), "'c'")
+        XCTAssertEqual(result(adapter, "numbers")["type"] as? String, "int[]")
+        XCTAssertEqual(value(adapter, "numbers"), "int[3] {10, 20, 30}")
+        _ = adapter.send("disconnect")
+    }
+
+    func testEvaluateExpandsObjectsAndArraysOneLevelAtATime() throws {
+        let adapter = try stoppedInProbe()
+        let point = result(adapter, "p")
+        XCTAssertEqual(point["hasChildren"] as? Bool, true)
+        let children = try XCTUnwrap(point["children"] as? [[String: Any]])
+        XCTAssertEqual(children.compactMap { $0["name"] as? String }, ["x", "y", "label", "next"])
+        XCTAssertEqual(children.compactMap { $0["expression"] as? String }, ["p.x", "p.y", "p.label", "p.next"])
+        // A child says it can be opened, and opening it is another evaluation of its expression.
+        XCTAssertEqual(children.last?["hasChildren"] as? Bool, true)
+        XCTAssertNil(children.last?["children"])
+        let next = result(adapter, "p.next")
+        XCTAssertEqual((next["children"] as? [[String: Any]])?.count, 4)
+
+        let numbers = try XCTUnwrap(result(adapter, "numbers")["children"] as? [[String: Any]])
+        XCTAssertEqual(numbers.compactMap { $0["value"] as? String }, ["10", "20", "30"])
+        XCTAssertEqual(numbers.compactMap { $0["expression"] as? String }, ["numbers[0]", "numbers[1]", "numbers[2]"])
+        _ = adapter.send("disconnect")
+    }
+
+    func testEvaluateCallsToStringWithoutStoppingAtABreakpointInsideIt() throws {
+        let adapter = try stoppedInProbe()
+        // A breakpoint inside toString() would hang the invoking thread if it were live.
+        let inside = try line(of: "// NOISY", in: probe)
+        XCTAssertEqual(adapter.send("setBreakpoint", ["file": probe.path, "line": inside])["ok"] as? Bool, true)
+        XCTAssertEqual(value(adapter, "noisy.toString()"), "\"noisy\"")
+        XCTAssertEqual(value(adapter, "text.toString()"), "\"a\\\"b\"")
+        XCTAssertTrue(try XCTUnwrap(value(adapter, "p.toString()")).hasPrefix("\"Probe$Point@"))
+        // The frame is still usable after the invocation, and the breakpoint is live again.
+        XCTAssertEqual(value(adapter, "i"), "1")
+        XCTAssertNil(adapter.nextEvent(timeout: 0.5), "the evaluation must not report a stop")
+        _ = adapter.send("disconnect")
+    }
+
+    func testEvaluateSaysWhatItCannotDo() throws {
+        let adapter = try stoppedInProbe()
+        XCTAssertTrue(error(adapter, "i + 1").hasPrefix("Not supported"))
+        XCTAssertTrue(error(adapter, "numbers.clone()").contains("toString()"))
+        let staticCall = error(adapter, "Math.max(1, 2)")
+        XCTAssertTrue(staticCall.hasPrefix("Cannot find 'Math'") && staticCall.contains("Static members"), staticCall)
+        XCTAssertTrue(error(adapter, "nope").hasPrefix("Cannot find 'nope'"))
+        XCTAssertTrue(error(adapter, "numbers[9]").contains("out of bounds"))
+        XCTAssertTrue(error(adapter, "p.next.next.x").contains("of null"))
+        XCTAssertTrue(error(adapter, "p.missing").contains("no field 'missing'"))
+        XCTAssertEqual(error(adapter, "   "), "Enter an expression.")
+        _ = adapter.send("disconnect")
+    }
+
+    func testEvaluateNeedsAPausedProgram() throws {
+        let adapter = try launch()
+        XCTAssertEqual(adapter.send("evaluate", ["expression": "1"])["ok"] as? Bool, false)
+        XCTAssertEqual(adapter.send("resume")["ok"] as? Bool, true)
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(adapter.send("evaluate", ["expression": "1"])["ok"] as? Bool, false)
         _ = adapter.send("disconnect")
     }
 }

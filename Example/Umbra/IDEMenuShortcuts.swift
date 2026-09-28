@@ -18,11 +18,12 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case showContextActions, parameterInfo, goToTypeDefinition
     case extractVariable, extractField, extractConstant, extractMethod
     case inlineVariable, encapsulateField
-    case runLastConfiguration, debugLastConfiguration
+    case runLastConfiguration, debugLastConfiguration, runInContext, debugInContext
     // Git
     case gitPull, gitPush, gitFileHistory, gitRevert
     // Run
     case toggleBreakpoint, debugResume, debugPause, debugStepOver, debugStepInto, debugStepOut, debugStop
+    case evaluateExpression, quickEvaluate
     // HTTP
     case sendHTTPRequest
     // View
@@ -92,6 +93,10 @@ enum IDEMenuShortcuts {
         .debugStepInto: nil,
         .debugStepOut: nil,
         .debugStop: nil,
+        .evaluateExpression: nil,
+        .quickEvaluate: nil,
+        .runInContext: nil,
+        .debugInContext: nil,
         .fileStructure: nil,
         .nextProblem: nil,
         .previousProblem: nil,
@@ -156,6 +161,11 @@ enum IDEMenuShortcuts {
         .debugStepInto: KeyboardShortcut(functionKey7, modifiers: []),
         .debugStepOut: KeyboardShortcut(functionKey8, modifiers: .shift),
         .debugStop: KeyboardShortcut(functionKey2, modifiers: .command),
+        // Evaluate Expression and Quick Evaluate Expression, then Run / Debug (in context).
+        .evaluateExpression: KeyboardShortcut(functionKey8, modifiers: .option),
+        .quickEvaluate: KeyboardShortcut(functionKey8, modifiers: [.command, .option]),
+        .runInContext: KeyboardShortcut("r", modifiers: [.control, .shift]),
+        .debugInContext: KeyboardShortcut("d", modifiers: [.control, .shift]),
         .nextProblem: KeyboardShortcut(functionKey2, modifiers: []),
         .previousProblem: KeyboardShortcut(functionKey2, modifiers: .shift),
         .goToTypeDefinition: KeyboardShortcut("b", modifiers: [.control, .shift]),

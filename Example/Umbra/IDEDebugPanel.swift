@@ -2,6 +2,8 @@ import SwiftUI
 
 struct IDEDebugPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @FocusState private var evaluateFieldFocused: Bool
+    @State private var handledFocusRequest = 0
 
     var body: some View {
         let session = workspace.debugSession
@@ -11,7 +13,13 @@ struct IDEDebugPanel: View {
             SplitPanes(minPrimary: 220, minSecondary: 220, storageKey: "umbra.debug.stackSplit") {
                 stackList(session)
             } secondary: {
-                variablesList(session)
+                SplitPanes(minPrimary: 200, minSecondary: 220, storageKey: "umbra.debug.evaluateSplit") {
+                    variablesList(session)
+                } secondary: {
+                    evaluateSection(session)
+                } divider: {
+                    Splitter.rule()
+                }
             } divider: {
                 Splitter.rule()
             }
@@ -71,7 +79,10 @@ struct IDEDebugPanel: View {
                 .font(IDEAppearance.Typography.caption.weight(.semibold))
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, IDEAppearance.Spacing.xs)
-            List(session.stackFrames) { frame in
+            List(session.stackFrames, selection: Binding(
+                get: { session.selectedFrameIndex },
+                set: { session.selectFrame($0) }
+            )) { frame in
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(frame.className).\(frame.name)")
                         .font(IDEAppearance.Typography.body)
@@ -81,10 +92,64 @@ struct IDEDebugPanel: View {
                 }
                 .tag(frame.index)
             }
-            .onChange(of: session.selectedFrameIndex) { _, index in
-                session.selectFrame(index)
+        }
+    }
+
+    private func evaluateSection(_ session: JavaDebugSession) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Evaluate")
+                    .font(IDEAppearance.Typography.caption.weight(.semibold))
+                Spacer()
+                if !session.evaluations.isEmpty {
+                    Button("Clear") { session.clearEvaluations() }
+                        .buttonStyle(.plain)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            }
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
+            TextField("Expression, then Return", text: Bindable(session).evaluationDraft)
+                .textFieldStyle(.roundedBorder)
+                .font(IDEAppearance.Typography.monoSmall)
+                .focused($evaluateFieldFocused)
+                .disabled(!canControl(session))
+                .onSubmit { submitEvaluation(session) }
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
+                .padding(.bottom, IDEAppearance.Spacing.xs)
+            List(session.evaluations) { evaluation in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(evaluation.expression)
+                        .font(IDEAppearance.Typography.monoSmall.weight(.semibold))
+                        .lineLimit(1)
+                    switch evaluation.outcome {
+                    case .value(let value):
+                        IDEDebugValueRow(session: session, value: value)
+                    case .failure(let message):
+                        Text(message)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
+        .onAppear { focusEvaluationFieldIfRequested(session) }
+        .onChange(of: session.evaluationFocusRequest) { _, _ in focusEvaluationFieldIfRequested(session) }
+    }
+
+    private func submitEvaluation(_ session: JavaDebugSession) {
+        let expression = session.evaluationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expression.isEmpty else { return }
+        Task { await session.evaluate(expression) }
+    }
+
+    /// The field may not exist yet when ⌥F8 opens this tab, so the request is compared on appearing too.
+    private func focusEvaluationFieldIfRequested(_ session: JavaDebugSession) {
+        guard handledFocusRequest != session.evaluationFocusRequest else { return }
+        handledFocusRequest = session.evaluationFocusRequest
+        Task { @MainActor in evaluateFieldFocused = true }
     }
 
     private func variablesList(_ session: JavaDebugSession) -> some View {

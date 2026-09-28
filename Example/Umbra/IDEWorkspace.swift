@@ -1194,6 +1194,94 @@ public final class IDEWorkspace {
         debugLaunch(configuration)
     }
 
+    // MARK: - Run / Debug in context
+
+    /// What Run in Context (⌃⇧R) and Debug in Context (⌃⇧D) act on, from the caret.
+    private enum RunContextTarget {
+        case configuration(JavaRunConfiguration)
+        case testMethod(JavaTestMethod, taskPath: String)
+        case testClass(JavaTestClass)
+    }
+
+    /// Runs (or debugs) what the caret is in: the `main` method of the file's class, a test method,
+    /// or a test class. Anywhere else, and in a file that isn't Java, it repeats the last
+    /// configuration, so the key is never dead.
+    func runInContext(debug: Bool) {
+        Task { @MainActor [self] in
+            guard let target = await resolveRunContext() else {
+                if debug { debugLastConfiguration() } else { runLastRunConfiguration() }
+                return
+            }
+            switch target {
+            case .configuration(var configuration):
+                // Run and Debug both go through the store, so the toolbar picker now selects it.
+                configuration.launchMode = debug ? .debug : .run
+                launch(configuration)
+            case .testMethod(let method, let taskPath):
+                guard !debug else { return reportRunProblem("Debugging tests isn't supported yet. Run the test instead.") }
+                runTestMethod(method, taskPath: taskPath)
+            case .testClass(let testClass):
+                guard !debug else { return reportRunProblem("Debugging tests isn't supported yet. Run the test instead.") }
+                testResults.beginRun(label: "Running \(testClass.gradleTaskPath)…")
+                showTestResults()
+                javaSupport.runTests(scope: .testClass(testClass))
+            }
+        }
+    }
+
+    private func resolveRunContext() async -> RunContextTarget? {
+        guard let document = workbench.activePane.selectedDocument, document.languageIdentifier == "java",
+              let url = document.url else { return nil }
+        let textView = host(for: workbench.activePaneID).textView
+        let text = textView.text
+        guard let context = await javaSupport.structureProvider.caretContext(
+            in: text, atUTF16Offset: textView.selectedRange.location
+        ) else { return nil }
+        let testClass = await javaSupport.tests(for: url)
+        if let testClass, !testClass.methods.isEmpty {
+            if let name = context.methodName,
+               let method = testClass.methods.first(where: { $0.methodName == name && $0.line == context.methodNameLine }) {
+                return .testMethod(method, taskPath: testClass.gradleTaskPath)
+            }
+            return .testClass(testClass)
+        }
+        guard JavaMainMethod.containsMain(in: text) else { return nil }
+        // A `main` outside the file's own class can't be told apart by a file-based launch.
+        let fileClass = url.deletingPathExtension().lastPathComponent
+        let fresh = context.typeName == fileClass
+            ? JavaRunConfiguration.makeClasspathLaunch(file: url, source: text, model: javaSupport.gradleModel)
+            : nil
+        guard let configuration = fresh ?? activeRunConfiguration() else { return nil }
+        let saved = runConfigurationStore.configurations(forProject: project.rootURL)
+        return .configuration(configuration.inheritingSettings(from: saved.last { $0.target == configuration.target }))
+    }
+
+    // MARK: - Evaluate
+
+    @ObservationIgnored private let quickEvaluatePopover = IDEQuickEvaluatePopover()
+
+    /// Opens the Debug tool window on its Evaluate field (⌥F8), starting from the selection.
+    func showEvaluateExpression() {
+        guard isDebuggerStopped else { return }
+        let textView = host(for: workbench.activePaneID).textView
+        let range = textView.selectedRange
+        let selected = range.length > 0 ? (textView.text as NSString).substring(with: range) : nil
+        selectDebugTab()
+        debugSession.requestEvaluationInput(prefilledWith: selected.flatMap { $0.contains("\n") ? nil : $0 })
+    }
+
+    /// Shows the value of the selection, or of the name at the caret, in a popover (⌥⌘F8).
+    func quickEvaluate() {
+        guard isDebuggerStopped else { return }
+        let textView = host(for: workbench.activePaneID).textView
+        let range = textView.selectedRange
+        guard let expression = IDEEvaluateExpressionScanner.expression(in: textView.text, selection: range) else {
+            host(for: workbench.activePaneID).intelligenceController?.showHint("No expression at the caret")
+            return
+        }
+        quickEvaluatePopover.present(expression: expression, session: debugSession, in: textView, at: range.location)
+    }
+
     /// Directories the debugged program's sources live in: every Gradle source set, then the
     /// project folder.
     private func debugSourceRoots() -> [URL] {
@@ -3618,6 +3706,14 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.pushProject() }),
             EditorCommand(id: "app.git.fileHistory", title: "Git: Show History for File", group: "Git",
                           action: { [weak self] in self?.showFileHistory() }),
+            EditorCommand(id: "app.run.inContext", title: "Run: Run in Context", group: "Run",
+                          action: { [weak self] in self?.runInContext(debug: false) }),
+            EditorCommand(id: "app.run.debugInContext", title: "Run: Debug in Context", group: "Run",
+                          action: { [weak self] in self?.runInContext(debug: true) }),
+            EditorCommand(id: "app.debug.evaluate", title: "Run: Evaluate Expression…", group: "Run",
+                          action: { [weak self] in self?.showEvaluateExpression() }),
+            EditorCommand(id: "app.debug.quickEvaluate", title: "Run: Quick Evaluate Expression", group: "Run",
+                          action: { [weak self] in self?.quickEvaluate() }),
             EditorCommand(id: "app.git.blame", title: "Git: Toggle Blame (Annotate)", group: "Git",
                           action: { [weak self] in self?.toggleGitBlame() }),
             EditorCommand(id: "app.git.revert", title: "Git: Revert File…", group: "Git",

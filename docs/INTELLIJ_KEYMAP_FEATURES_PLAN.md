@@ -17,25 +17,24 @@ Origin: a JetBrains Fleet keymap cheat sheet (`~/Desktop/keymap.pdf`) was compar
 | 0 | Done | `IDEMenuShortcuts` (`Example/Umbra/IDEMenuShortcuts.swift`) gives every preset-dependent menu item its shortcut per `KeymapPreset`; `UmbraApp.swift` uses it. The IntelliJ column also carries the tool-window keys of 6.3 (⌘1, ⌘6, ⌘9, ⌥F12; ⌘7 unchanged) and Reveal in Explorer on ⌥F1. `Keymap.intelliJ` gained ⇧⌘F (Find in Files) and ⌘F12 (File Structure). `IDEMenuShortcutsTests` checks no two commands share a key, the Sublime/Default columns are unchanged, and menu keys agree with the IntelliJ keymap. Sublime/Default lost the duplicate ⌥⌘E on Reveal Active File (Encapsulate Field keeps it). |
 | 1 | Done | (Editor actions are tested; the menu-level shortcuts were not run in the app.) 1.1 block comment (`BlockCommentService`, `BlockCommentDelimiters`, ⌥⌘/), 1.2 matching brace (`BracketNavigation`, `goToMatchingBracket`), 1.3 folding commands (landed upstream before this work), 1.4 `unselectLastOccurrence`, 1.5 complete statement (`StatementCompletionService`, ⇧⌘↵), 1.6 IntelliJ line-insert keys (⇧↵, ⌥⌘↵; ⌘↵ unbound), 1.7 `findNext`/`findPrevious`. |
 | 2 | Done | (Tested; the Umbra wiring and the bare F2 menu shortcut were not run in the app.) 2.1 next/prev problem (`ProblemNavigator`, `goToNextProblem`/`goToPreviousProblem`, F2 / ⇧F2), 2.2 go to type declaration (`NavigationKind.typeDefinition`, `JavaGoToTypeDefinition`, `LSPTypeDefinitionProvider`, ⌃⇧B), 2.3 parameter info (`showParameterInfo`, ⌘P), 2.4 symbol scopes (`goToFileSymbol` ⌘F12 / `goToSymbol` ⌥⌘O, `FileSymbolsPaletteProvider`). |
-| 3 | Partly done | Done: 3.1 step into/out, 3.2 pause, 3.5 Run menu and IntelliJ keys, plus the adapter fixes below that debugging needed before any of it could work. Verified against a real JVM by `JavaDebugAdapterTests`; the Swift session, panel, stop-line reveal and menu were built but not run in the app. Open: 3.3 evaluate, 3.4 run in context. |
+| 3 | Done (UI not run) | 3.1 step into/out, 3.2 pause, 3.3 evaluate and quick evaluate, 3.4 run and debug in context, 3.5 Run menu and IntelliJ keys, plus the adapter and session fixes below that debugging needed before any of it could work. The adapter and the Swift session are verified against a real JVM (`JavaDebugAdapterTests`, `JavaDebugSessionEvaluateTests`); the panel, the Quick Evaluate popover, the stop-line reveal and the menu were built but not run in the app. Debug in Context does not cover tests. |
 | 4 | Done (UI not run) | 4.1 blame, 4.2 file history, 4.3 revert, 4.4 pull/push keys and a Git menu; the git side is tested against real repositories, the blame column is tested in Penumbra and rendered to a bitmap in a test, but the Umbra wiring (menu, toggle, refresh on save/commit) and the panel header and dialogs were built, not run. |
 | H | Built, not seen on screen | `play.fill` gutter button per request in `.http` files (`HTTPRequestParser.requestLocations`, `IDEWorkspace.refreshHTTPGutter`). Parser tests pass; the app launches with an `.http` file without crashing, but I could not take a screenshot here, so the icons have not been looked at. |
 | 5 | Done (UI not run) | `ProjectReplacePlanner` + `IDEReplaceInFilesGuard`, the drawer's replace row and options, ⇧⌘R in the IntelliJ column. Planner, guard and the write-to-disk path are tested; the drawer and the live-editor path were built but not run in the app. |
 | 6 | Done (not run in the app) | 6.1 next/prev tab, 6.2 next/prev split, 6.3 tool-window keys (⌘1/⌘5/⌘6/⌘7/⌘9/⌥F12 and Hide All ⇧⌘F12), 6.4 zoom, 6.5 Clear Terminal, 6.6 Go to Tool Window, 6.7 emoji (checked in code only, no change needed). Differences from the plan below. |
 | 7 | Needs a decision | Generate Code with AI |
 
-Last full test run: 2747 tests, 0 failures (4 skipped). Phase 0 went first because every later menu-level action needs it.
+Last full test run: 2771 tests, 0 failures (4 skipped). Phase 0 went first because every later menu-level action needs it.
 
 ## Open work and unverified items
 
 **Not built**
 
-- **3.3 Evaluate Expression / Quick Evaluate.** Limited to variable and field paths and `toString()`, because JDI has no expression evaluator.
-- **3.4 Run / Debug in Context.**
+- **Debug in Context for tests** (3.4): `Debug in Context` on a test method or class says debugging tests isn't supported. It would need `--debug-jvm` on the test task and the Gradle attach path, which has the unverified `attachForGradle` problem below.
 - **7 Generate Code with AI.** Blocked on decisions: provider, credential storage, first-use disclosure, diff-preview UX, and a key.
 - **Smaller gaps:** revert is active-file only; Replace in Files has no file mask or scope; workspace Go to Symbol covers open files only (no project-wide Java members); Go to Type Declaration from a *use* of a type-variable value reaches its bound, not the parameter; the debugger ignores the adapter's `output` events.
 
-**Built and tested, but never run in the running app** (no way to launch or screenshot it while building): Git blame's menu item, per-file toggle and refresh after save, commit or pull (the column itself was drawn in a test bitmap); the HTTP play buttons (H); F2 / ⇧F2, ⌘P and the bare function-key menu shortcuts F2 / F7 / F8 (SwiftUI may ignore a key with no modifier); block comment and complete statement through the app; the debugger panel, stop-line reveal and Run menu (the adapter itself *was* run against real JVMs); next/prev tab and split, Hide All, zoom, Clear Terminal (including whether ⌘K reaches the terminal); the Git menu, file-history header and Revert dialog; the Replace in Files drawer and its open-editor apply path.
+**Built and tested, but never run in the running app** (no way to launch or screenshot it while building): the Evaluate section of the Debug panel, the Quick Evaluate popover, frame selection in the call stack and Run / Debug in Context (the adapter and `JavaDebugSession` behind them were run against real JVMs); Git blame's menu item, per-file toggle and refresh after save, commit or pull (the column itself was drawn in a test bitmap); the HTTP play buttons (H); F2 / ⇧F2, ⌘P and the bare function-key menu shortcuts F2 / F7 / F8 (SwiftUI may ignore a key with no modifier); block comment and complete statement through the app; the debugger panel, stop-line reveal and Run menu (the adapter itself *was* run against real JVMs); next/prev tab and split, Hide All, zoom, Clear Terminal (including whether ⌘K reaches the terminal); the Git menu, file-history header and Revert dialog; the Replace in Files drawer and its open-editor apply path.
 
 **Risks and loose ends**
 
@@ -230,10 +229,27 @@ Building 3.1 and 3.2 meant driving the adapter against a real JVM for the first 
 
 Not touched, and not verified: `attachForGradle` resumes only `if !suspendOnStart`, which looks inverted for a JVM that Gradle starts suspended. The Gradle debug path was not exercised.
 
+### 3.3 and 3.4 as built
+
+**Evaluate (⌥F8) and Quick Evaluate (⌥⌘F8)**
+
+- **Adapter:** an `evaluate` command (`expression`, `frameIndex`) handled by `Evaluator.java`, on its own thread so a slow call cannot stop the adapter reading commands. It reads locals, fields of `this` and of the frame's class, `a.b.c`, `arr[i]` (the index is any supported integer expression), `arr.length`, literals (int, long, float, double, char, string, boolean, null) and `toString()`. Everything else (operators, calls with arguments, casts, `new`, lambdas, static members of a class) is refused with a message that says so. Only `toString()` is callable, not every zero-argument method, because an invoked method can run arbitrary code on the paused thread. While one runs, the breakpoint requests are disabled and enabled again after, so a breakpoint inside `toString()` cannot hang the invoking thread. Frames go invalid after an invocation, so the evaluator fetches the frame again each time.
+- **Result shape:** a node with `type`, `value`, `expression`, `hasChildren` and, for the top node, its `children` one level down (instance fields, or up to 100 array elements). Every child carries the expression that reaches it, so opening a child is another `evaluate`. Strings are quoted and escaped, boxes and enums show their value, arrays show `int[3] {10, 20, 30}`, other objects `@id`. `localVariables` is unchanged (flat, no children); the plan's "same shape as localVariables" turned out not to describe it.
+- **Umbra:** `JavaDebugSession.evaluate(_:record:)` (only while stopped, uses the selected frame) keeps the last 30 evaluations, newest first, cleared when the session stops. The Debug tab has a third pane, **Evaluate**: a field, and the history with expandable values (`IDEDebugValueRow`, which loads a node's children when it is opened). ⌥F8 opens the tab on that field, prefilled with a single-line selection. ⌥⌘F8 evaluates the selection, or the name at the caret with the chain leading to it (`IDEEvaluateExpressionScanner`: `p.ne|xt.label` gives `p.next`, a call breaks the chain), in a popover at the caret. Both are enabled only while the program is paused. Selecting a row in the call stack now selects that frame (it was not wired before), and a new stop resets the selection to the innermost frame.
+- **Limits:** results are a snapshot of the moment they were asked for. Quick Evaluate results are not added to the history. Nothing evaluates in a thread other than the one that stopped.
+
+**Run in Context (⌃⇧R) and Debug in Context (⌃⇧D)**
+
+- `JavaStructureProvider.caretContext(in:atUTF16Offset:)` (`Sources/JavaIntelligence/Launch/JavaCaretContext.swift`) names the innermost type and the method around the caret. `IDEWorkspace.runInContext(debug:)` then picks: a test method (matched by name and line against the test index) runs that test; anywhere else in a test class runs the class; otherwise a file with `main` runs it (`.classpathMain` for the file's own top-level class in a synced Gradle project, else the file's default Run configuration, so a `main` in a nested or secondary class still launches the file's default); anything else repeats the last configuration, so the key is never dead. The launched configuration goes through the same store as Run, so the toolbar picker selects it, and it keeps the arguments last typed for the same target.
+- Debug in Context works for what Debug already supports (Gradle and classpath launches); a plain single file can't be debugged yet. It refuses tests with a message.
+- Both are in the Run menu and Find Action. Sublime and Default have no key for them.
+
+**Found while testing:** `JavaDebugSession` read the adapter's output with a blocking `availableData` on the main actor, so after the first reply nothing else could run: the app would have frozen, and the session tests hung. The reads now run off the main actor. An older adapter's output ending after a new session started could also mark the new one terminated; that is guarded.
+
 ### 3.5 Run menu and keys
 
 - Move run and debug items out of the Java menu into a top-level **Run** menu: Run, Debug, Run/Debug in Context, Stop (⌘F2), Resume (⌥⌘R), Step Over/Into/Out (F8/F7/⇧F8), Pause, Toggle Breakpoint (⌘F8), Evaluate, Quick Evaluate.
-- **As built:** a top-level **Run** menu (Run/Debug Last Configuration, Edit Run Configuration…, Toggle Breakpoint, Resume, Pause, Step Over/Into/Out, Stop), moved out of the Java menu; step and resume items are enabled only while stopped, Pause only while running, and the debug panel has matching buttons. IntelliJ column: F8 / F7 / ⇧F8, ⌥⌘R Resume, ⌘F2 Stop, ⌘F8 Toggle Breakpoint; Pause has no key. Run in Context and Evaluate are not in the menu yet.
+- **As built:** a top-level **Run** menu (Run/Debug Last Configuration, Edit Run Configuration…, Toggle Breakpoint, Resume, Pause, Step Over/Into/Out, Stop), moved out of the Java menu; step and resume items are enabled only while stopped, Pause only while running, and the debug panel has matching buttons. IntelliJ column: F8 / F7 / ⇧F8, ⌥⌘R Resume, ⌘F2 Stop, ⌘F8 Toggle Breakpoint; Pause has no key. Run in Context and Evaluate were added with 3.3 and 3.4 (⌃⇧R / ⌃⇧D, ⌥F8 / ⌥⌘F8).
 - Existing keys ⌃⌥R / ⌃⌥D for Run/Debug Last Configuration are left as they are. Keys go in the menu table from phase 0, IntelliJ column only, so Sublime and Default users see no change.
 
 ---
@@ -411,7 +427,7 @@ If settled: an `AITextModel` conformance in Umbra, a Settings pane (provider, mo
 | 10 | 1.5 Complete Statement | M–L | 1.x helpers | Done |
 | 11 | 4.2 File history, 4.3 Revert, 4.4 Push/pull keys | M | 0 | Done (UI not run) |
 | 12 | 5 Replace in Files | M | 0 (for the ⇧⌘R menu key) | Done (UI not run) |
-| 13 | 3.3 Evaluate, 3.4 Run in Context | M–L | 3.1 | **Open** |
+| 13 | 3.3 Evaluate, 3.4 Run in Context | M–L | 3.1 | Done (UI not run) |
 | 14 | 4.1 Git blame (gutter annotations) | L | new gutter text-annotation API | Done (UI not run) |
 | 15 | 6.6 Go to Tool | S | none | Done |
 | 16 | 7 Generate Code with AI | L | decision | **Open** (needs a decision) |
