@@ -70,6 +70,13 @@ final class WorkbenchSaveTests: XCTestCase {
         XCTAssertFalse(document.isFileBacked)
     }
 
+    func testSaveInfersLanguageIdentifierFromDestinationExtension() async throws {
+        let document = WorkbenchDocument(displayName: "Untitled", text: "# Title")
+        let dest = try uniqueDest(named: "notes.md")
+        _ = try await document.save(to: dest)
+        XCTAssertEqual(document.languageIdentifier, "markdown")
+    }
+
     func testSaveAsUpdatesURL() async throws {
         let source = try writeTempFile("original body\n")
         let document = try await WorkbenchDocument.load(contentsOf: source)

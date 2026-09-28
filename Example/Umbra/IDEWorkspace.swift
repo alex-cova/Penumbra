@@ -463,6 +463,37 @@ public final class IDEWorkspace {
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
+    /// Applies syntax highlighting inferred from a file's extension after save (e.g. untitled →
+    /// `name.md` switches to markdown). Matches ``loadDocument(from:)`` / ``setLanguage``.
+    private func applyLanguageInferredFromURL(
+        _ url: URL,
+        document: WorkbenchDocument,
+        in pane: EditorPane
+    ) {
+        guard document.contentKind == .text else { return }
+        guard let identifier = LanguageIdentifier.identifier(for: url) else { return }
+        document.languageIdentifier = identifier
+        document.language = IDELanguageSupport.language(forIdentifier: identifier)
+
+        let languageMode: LanguageMode
+        if let language = document.language {
+            languageMode = TreeSitterLanguageMode(language: language, languageProvider: Self.languageProvider)
+        } else {
+            languageMode = PlainTextLanguageMode()
+        }
+        let host = host(for: pane.id)
+        host.textView.languageIdentifier = identifier
+        host.textView.setLanguageMode(languageMode)
+        host.markdownPreviewController.documentBaseURL = url
+        host.markdownPreviewController.closeIfNotMarkdown()
+
+        if pane.id == workbench.activePaneID {
+            statusLanguage = identifier
+        }
+        scheduleSemanticHighlighting(host: host, languageIdentifier: identifier)
+        Task { await workspaceBridge.syncPane(pane) }
+    }
+
     /// Sets the syntax highlighting language for the given pane's selected document (the active
     /// pane by default), the way Sublime Text's "View > Syntax" / status bar syntax picker does.
     /// `identifier` is a ``LanguageIdentifier`` string, or `nil` for plain text — needed since
@@ -648,6 +679,7 @@ public final class IDEWorkspace {
         if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
         do {
             _ = try await document.save(from: textView, to: destination)
+            applyLanguageInferredFromURL(destination!, document: document, in: pane)
             recordRecentFile(destination!)
             gitStatus.refresh()
             refreshPresentation()
@@ -798,6 +830,7 @@ public final class IDEWorkspace {
         await optimizeImportsBeforeSaving(to: url, pane: pane)
         do {
             _ = try await document.save(from: textView, to: url)
+            applyLanguageInferredFromURL(url, document: document, in: pane)
             recordRecentFile(url)
             gitStatus.refresh()
             refreshPresentation()

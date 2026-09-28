@@ -189,6 +189,9 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         }
         self.url = dest
         displayName = dest.lastPathComponent
+        if contentKind == .text {
+            languageIdentifier = LanguageIdentifier.identifier(for: dest)
+        }
         return result
     }
 
