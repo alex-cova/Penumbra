@@ -15,11 +15,10 @@ enum IDEAppearance {
         static let sidebarWidth = 220.0
         static let sidebarMinWidth = 160.0
         static let sidebarMaxWidth = 420.0
-        static let toolbarHeight = 38.0
+        /// Floor for the titlebar row, which otherwise matches the system titlebar's height.
+        static let titlebarMinHeight = 28.0
         static let tabHeight = 32.0
         static let iconButton = 26.0
-        static let toolWindowStripeWidth = 40.0
-        static let toolWindowButton = 30.0
         static let statusBarHeight = 24.0
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
@@ -50,7 +49,6 @@ enum IDEAppearance {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
         static let titlebarGlyph = 14.0
-        static let toolWindowGlyph = 15.0
     }
 
     enum Typography {

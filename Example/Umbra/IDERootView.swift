@@ -8,6 +8,9 @@ public struct IDERootView: View {
     @State private var structureSidebarWidth = IDESessionStore.load().structureSidebarWidth
     @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
     @State private var didBootstrap = false
+    /// The system titlebar's height (the top safe-area inset). The titlebar row takes exactly
+    /// this height so its controls line up with the traffic lights.
+    @State private var titlebarHeight = IDEAppearance.Spacing.titlebarMinHeight
 
     public init() {}
 
@@ -16,17 +19,13 @@ public struct IDERootView: View {
         let _ = workspace.showsWelcome
         VStack(spacing: 0) {
             IDEToolbarPanel()
+                .frame(height: titlebarHeight)
+                .padding(.bottom, IDEAppearance.Spacing.xs)
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
 
             HStack(spacing: 0) {
-                if IDEToolWindowStripe.hasItems(edge: .leading, workspace: workspace) {
-                    IDEToolWindowStripe(edge: .leading)
-                        .opacity(workspace.chromeOpacity)
-                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                } else {
-                    Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
-                }
+                Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
 
                 if workspace.showsSidebar {
                     IDESidebarPanel()
@@ -101,13 +100,7 @@ public struct IDERootView: View {
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
 
-                if IDEToolWindowStripe.hasItems(edge: .trailing, workspace: workspace) {
-                    IDEToolWindowStripe(edge: .trailing)
-                        .opacity(workspace.chromeOpacity)
-                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                } else {
-                    Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
-                }
+                Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
             }
 
             IDEStatusBarPanel()
@@ -115,6 +108,10 @@ public struct IDERootView: View {
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
         }
         .ignoresSafeArea(.container, edges: .top)
+        .onGeometryChange(for: CGFloat.self, of: \.safeAreaInsets.top) { inset in
+            // Full screen hides the titlebar (inset 0) but keeps the row.
+            titlebarHeight = max(inset, IDEAppearance.Spacing.titlebarMinHeight)
+        }
         // The frame color is `NSWindow.backgroundColor` (set in `IDEWindowConfiguratorView`); an
         // opaque SwiftUI fill here would paint over the traffic lights.
         .background(IDEWindowConfigurator(title: workspace.windowTitle, workspace: workspace))
@@ -353,15 +350,6 @@ final class IDEWindowConfiguratorView: NSView {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.backgroundColor = IDEAppearance.NSToken.window
-        // An empty compact toolbar only makes the titlebar as tall as the titlebar row, so the
-        // traffic lights sit centered in it; the row itself is SwiftUI content drawn underneath.
-        if window.toolbar == nil {
-            let toolbar = NSToolbar(identifier: "UmbraTitlebar")
-            toolbar.showsBaselineSeparator = false
-            toolbar.allowsUserCustomization = false
-            window.toolbar = toolbar
-        }
-        window.toolbarStyle = .unifiedCompact
         if let closeGuard {
             MainActor.assumeIsolated {
                 closeGuard.install(on: window)

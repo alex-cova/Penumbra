@@ -71,7 +71,7 @@ struct IDEToolbarPanel: View {
         }
         .padding(.leading, IDEAppearance.Spacing.trafficLightsInset)
         .padding(.trailing, IDEAppearance.Spacing.sm)
-        .frame(height: IDEAppearance.Spacing.toolbarHeight)
+        .frame(maxHeight: .infinity)
         .frame(maxWidth: .infinity)
         // No fill: the row sits over the traffic lights (SwiftUI's hosting view is above the
         // titlebar), so the frame color comes from `NSWindow.backgroundColor` underneath.
@@ -440,6 +440,6 @@ private struct IDEToolbarIconLabel: View {
             )
             return workspace
         }())
-        .frame(width: 720)
+        .frame(width: 720, height: IDEAppearance.Spacing.titlebarMinHeight)
         .preferredColorScheme(.dark)
 }
