@@ -207,6 +207,19 @@ final class MinimapView: EditorView {
         lastRenderKey = makeRenderKey(geometry: geometry, source: source)
         #if DEBUG
         debugLastDrawnRowCount = visible.count
+        if debugRecordsDrawnRows {
+            var drawn: [Int: String] = [:]
+            for entry in visible {
+                drawn[entry.line.row] = (rowByLineID[entry.line.id]?.segments ?? []).map { segment in
+                    let color = (palette.colors[min(max(segment.colorIndex, 0), palette.colors.count - 1)]
+                        .usingColorSpace(.sRGB)).map {
+                        String(format: "%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255))
+                    } ?? "?"
+                    return "\(Int(segment.x))+\(Int(segment.width)):\(color):\(segment.fadeStep)"
+                }.joined(separator: " ")
+            }
+            debugDrawnRows = drawn
+        }
         #endif
     }
 
@@ -362,6 +375,10 @@ final class MinimapView: EditorView {
     /// Number of source-line rows the last `draw(_:)` touched. Test hook for the folding
     /// regression — a collapsed fold must not inflate this.
     private(set) var debugLastDrawnRowCount = 0
+    /// When set, `draw(_:)` records each drawn row's segments (x+width:colour:fade) by row. Test
+    /// hook for comparing an edited minimap with a freshly opened one.
+    var debugRecordsDrawnRows = false
+    private(set) var debugDrawnRows: [Int: String] = [:]
     /// Distinct fill colors interned while building rows. Index 0 is the theme base color;
     /// syntax captures append more. Test hook so we don't have to pixel-sample appearance-adaptive
     /// `NSColor`s through a bitmap (those round to the same 8-bit RGB in some environments).

@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 import PenumbraMarkdownLanguage
+import TestTreeSitterLanguages
 @testable import Penumbra
 
 final class ViewportParseWindowTests: XCTestCase {
@@ -58,6 +59,39 @@ final class ViewportParseWindowTests: XCTestCase {
         let range = NSRange(location: 10, length: 10)
         let shifted = ViewportParseWindow.shift(range, utf16Location: 0, oldLength: 1, newLength: 3)
         XCTAssertEqual(shifted, NSRange(location: 12, length: 10))
+    }
+
+    func testShiftTakesAnInsertAtTheRangeStartIntoTheRange() {
+        let whole = NSRange(location: 0, length: 20)
+        XCTAssertEqual(ViewportParseWindow.shift(whole, utf16Location: 0, oldLength: 0, newLength: 2),
+                       NSRange(location: 0, length: 22))
+        let window = NSRange(location: 10, length: 10)
+        XCTAssertEqual(ViewportParseWindow.shift(window, utf16Location: 10, oldLength: 0, newLength: 3),
+                       NSRange(location: 10, length: 13))
+    }
+
+    // Two edits with no parse between them, the first at offset 0. The shifted parse range used to
+    // start after the inserted `/*`, so the next parse left it out of the tree.
+    func testParseAfterUnparsedEditsIncludesTextInsertedAtTheStart() {
+        func parsed(_ text: String) -> (TreeSitterInternalLanguageMode, StringView, LineManager) {
+            let stringView = StringView(string: text)
+            let lineManager = LineManager(stringView: stringView)
+            lineManager.rebuild()
+            let mode = TreeSitterInternalLanguageMode(
+                language: TreeSitterLanguage(tree_sitter_javascript()).internalLanguage,
+                languageProvider: nil, stringView: stringView, lineManager: lineManager)
+            mode.parse()
+            return (mode, stringView, lineManager)
+        }
+        let (mode, stringView, lineManager) = parsed("function f() {\n  a();\n}\nlet b = 1;\n")
+        let editHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        _ = mode.textDidChange(editHelper.replaceText(in: NSRange(location: 0, length: 0), with: "/*").textChange)
+        let closing = (stringView.string as NSString).range(of: "}").location + 1
+        _ = mode.textDidChange(editHelper.replaceText(in: NSRange(location: closing, length: 0), with: "*/").textChange)
+        mode.parse()
+
+        let (fresh, _, _) = parsed(stringView.string as String)
+        XCTAssertEqual(mode.rootSyntaxNode?.expressionString, fresh.rootSyntaxNode?.expressionString)
     }
 
     func testShiftLeavesEarlierRangeUnchanged() {

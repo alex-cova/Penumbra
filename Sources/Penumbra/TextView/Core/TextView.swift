@@ -1150,6 +1150,15 @@ public struct DocumentTextExport: Sendable {
     var lineControllerCountForTesting: Int { textInputView.lineControllerCount }
     /// Test hook — the selection highlight rects the overlay currently draws.
     var selectionRectsForTesting: [TextSelectionRect] { textInputView.selectionRectsForTesting }
+    /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
+    var foldLineRangesForTesting: [ClosedRange<Int>] { textInputView.foldLineRangesForTesting }
+    var methodSeparatorRowsForTesting: [Int] { textInputView.methodSeparatorRowsForTesting }
+    /// Test hook — rows of the lines laid out for the current viewport, ascending.
+    var visibleRowsForTesting: [Int] { textInputView.visibleRowsForTesting }
+    /// Test hook — the attributed string and height a line is currently displayed with.
+    func displayedLineForTesting(row: Int) -> (string: NSAttributedString, height: CGFloat)? {
+        textInputView.displayedLineForTesting(row: row)
+    }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
     private let tapGestureRecognizer = EditorQuickTapGestureRecognizer()

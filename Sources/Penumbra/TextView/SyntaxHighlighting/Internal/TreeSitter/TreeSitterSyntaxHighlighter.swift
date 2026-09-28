@@ -63,9 +63,39 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
 
     private func apply(_ captures: [TreeSitterCapture], to input: LineSyntaxHighlighterInput) {
         let tokens = self.tokens(for: captures, localTo: input.byteRange)
-        let colorsChanged = setAttributes(for: tokens, on: input.attributedString)
-        let semanticChanged = applySemanticHighlights(to: input)
-        lastHighlightChangedAttributes = colorsChanged || semanticChanged
+        lastHighlightChangedAttributes = applyHighlights(tokens, to: input)
+    }
+
+    /// Repaints the line from scratch: the syntax-owned attributes go back to the theme defaults
+    /// before the tokens are applied. A colour-only refresh (`LineController.invalidateSyntaxColorsOnly`)
+    /// keeps the previous pass's attributes, so without this reset a capture that went away — a
+    /// `## heading` whose `#`s were deleted, a comment that was closed — would leave its colour and
+    /// font on the line. Returns whether the line's attributes changed.
+    private func applyHighlights(_ tokens: [TreeSitterSyntaxHighlightToken], to input: LineSyntaxHighlighterInput) -> Bool {
+        let attributedString = input.attributedString
+        if input.hasOnlyDefaultAttributes {
+            let colorsChanged = setAttributes(for: tokens, on: attributedString)
+            let semanticChanged = applySemanticHighlights(to: input)
+            return colorsChanged || semanticChanged
+        }
+        let before = NSAttributedString(attributedString: attributedString)
+        resetSyntaxAttributes(on: attributedString)
+        setAttributes(for: tokens, on: attributedString)
+        applySemanticHighlights(to: input)
+        return !attributedString.isEqual(to: before)
+    }
+
+    private func resetSyntaxAttributes(on attributedString: NSMutableAttributedString) {
+        let range = NSRange(location: 0, length: attributedString.length)
+        guard range.length > 0 else {
+            return
+        }
+        attributedString.beginEditing()
+        attributedString.addAttributes([.foregroundColor: theme.textColor, .font: theme.font], range: range)
+        attributedString.removeAttribute(.shadow, range: range)
+        attributedString.removeAttribute(.isBold, range: range)
+        attributedString.removeAttribute(.isItalic, range: range)
+        attributedString.endEditing()
     }
 
     func syntaxHighlightFromCache(_ input: LineSyntaxHighlighterInput) -> Bool {
@@ -102,9 +132,7 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
             if !operation.isCancelled {
                 DispatchQueue.main.async {
                     if !operation.isCancelled {
-                        let colorsChanged = self.setAttributes(for: tokens, on: input.attributedString)
-                        let semanticChanged = self.applySemanticHighlights(to: input)
-                        self.lastHighlightChangedAttributes = colorsChanged || semanticChanged
+                        self.lastHighlightChangedAttributes = self.applyHighlights(tokens, to: input)
                         completion(.success(()))
                     } else {
                         completion(.failure(TreeSitterSyntaxHighlighterError.cancelled))
@@ -130,7 +158,7 @@ extension TreeSitterSyntaxHighlighter {
     /// The font a token derives its bold/italic variant from. A token with no font of its own inherits
     /// whatever is already applied at its location, so a capture nested in a larger one (`**bold**`
     /// inside a `# heading`) keeps the enclosing size instead of snapping back to the body font.
-    /// Captures arrive outermost-first, and default attributes are reapplied before every pass, so
+    /// Captures arrive outermost-first, and the syntax attributes are reset before every pass, so
     /// `currentFont` is always the enclosing capture's font, never a stale one.
     static func baseFont(tokenFont: NSFont?, currentFont: NSFont?, defaultFont: NSFont) -> NSFont {
         tokenFont ?? currentFont ?? defaultFont

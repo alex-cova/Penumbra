@@ -66,6 +66,11 @@ final class LineController: @unchecked Sendable {
         lineFragmentControllers.values.map { $0.lineFragment.id }
     }
 
+    /// Height of the fragments typeset so far, without the estimate for the rest of the line.
+    private var typesetFragmentsHeight: CGFloat {
+        typesetter.lineFragments.reduce(0) { $0 + $1.scaledSize.height }
+    }
+
     var lineHeight: CGFloat {
         if let lineHeight = _lineHeight {
             return lineHeight
@@ -118,6 +123,8 @@ final class LineController: @unchecked Sendable {
         typesetter.isFinishedTypesetting
     }
     private(set) var attributedString: NSMutableAttributedString?
+    /// `attributedString` has only the theme defaults: nothing has highlighted it since they were applied.
+    private var attributesAreDefaults = false
 
     private let stringView: StringView
     private let invisibleCharacterConfiguration: InvisibleCharacterConfiguration
@@ -345,6 +352,7 @@ private extension LineController {
                     tabWidth: tabWidth
                 )
                 defaultStringAttributes.apply(to: input.attributedString)
+                attributesAreDefaults = true
             }
             isDefaultAttributesInvalid = false
             isSyntaxHighlightingInvalid = true
@@ -425,6 +433,7 @@ private extension LineController {
                     }
                     if case .success = result, let self = self {
                         let oldWidth = self.lineWidth
+                        let oldTypesetHeight = self.typesetFragmentsHeight
                         self.colorsStale = false
                         self.isSyntaxHighlightingInvalid = false
                         let colorsChanged = (self.syntaxHighlighter as? TreeSitterSyntaxHighlighter)?.lastHighlightChangedAttributes ?? true
@@ -438,7 +447,11 @@ private extension LineController {
                         self.isTypesetterInvalid = true
                         self.redisplayLineFragments()
                         self.delegate?.lineControllerDidRefreshDisplayedLineFragments(self)
-                        if abs(self.lineWidth - oldWidth) > CGFloat.ulpOfOne {
+                        // A capture with its own font (a markdown heading) changes the height too.
+                        // Compare typeset fragments only: `lineHeight` also estimates the rest of
+                        // the line, and that estimate moving is not a reason to relayout.
+                        if abs(self.lineWidth - oldWidth) > CGFloat.ulpOfOne
+                            || abs(self.typesetFragmentsHeight - oldTypesetHeight) > CGFloat.ulpOfOne {
                             self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
                         }
                     }
@@ -491,7 +504,15 @@ private extension LineController {
     private func createLineSyntaxHighlightInput() -> LineSyntaxHighlighterInput? {
         if let attributedString = attributedString {
             let byteRange = line.data.totalByteRange
-            return LineSyntaxHighlighterInput(attributedString: attributedString, byteRange: byteRange)
+            // Only the first pass after the defaults were applied may skip the reset; assume every
+            // input handed out gets highlighted.
+            let hasOnlyDefaultAttributes = attributesAreDefaults
+            attributesAreDefaults = false
+            return LineSyntaxHighlighterInput(
+                attributedString: attributedString,
+                byteRange: byteRange,
+                hasOnlyDefaultAttributes: hasOnlyDefaultAttributes
+            )
         } else {
             return nil
         }

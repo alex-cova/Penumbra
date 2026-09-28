@@ -934,6 +934,23 @@ final class TextInputView: EditorView {
     private let lineControllerStorage: LineControllerStorage
     var lineControllerCount: Int { lineControllerStorage.numberOfLineControllers }
     var selectionRectsForTesting: [TextSelectionRect] { selectionOverlayController.selectionRects }
+    /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
+    var foldLineRangesForTesting: [ClosedRange<Int>] { foldingModel.regions.map(\.lineRange) }
+    var methodSeparatorRowsForTesting: [Int] { methodSeparatorController.separatorRows }
+    /// Test hook — rows of the lines laid out for the current viewport, ascending.
+    var visibleRowsForTesting: [Int] {
+        layoutManager.visibleLineIDsForTesting.compactMap { lineControllerStorage[$0]?.line.index }.sorted()
+    }
+    /// Test hook — the attributed string and height a line is currently displayed with, or nil
+    /// when the row has no `LineController`.
+    func displayedLineForTesting(row: Int) -> (string: NSAttributedString, height: CGFloat)? {
+        guard row >= 0, row < lineManager.lineCount,
+              let controller = lineControllerStorage[lineManager.lineID(atRow: row)],
+              let attributedString = controller.attributedString else {
+            return nil
+        }
+        return (NSAttributedString(attributedString: attributedString), controller.lineHeight)
+    }
     private let layoutManager: LayoutManager
     private let timedUndoManager = TimedUndoManager()
     private let indentController: IndentController
@@ -1919,6 +1936,41 @@ private extension TextInputView {
         }
     }
 
+    /// The fold scan after an edit covers the edited rows and may run before the parse lands. A
+    /// parse can also change structure on rows nobody edited (closing a `/*` turns the code below
+    /// it into a comment), so rescan what the root tree says changed, plus the edited rows, against
+    /// the new tree. `rootRows` are in current coordinates; `nil` means the change is unknown (a
+    /// keystroke discarded the previous tree), which takes a full rescan after the edit debounce.
+    private func rescanFoldsAfterParse(rootRows: [ClosedRange<Int>]?, editedRows: Set<Int>) {
+        guard foldingModel.isEnabled, languageMode is TreeSitterInternalLanguageMode else {
+            return
+        }
+        let lastRow = lineManager.lineCount - 1
+        guard let rootRows else {
+            codeFoldingManager.invalidateTreeSitterProviderForEdit(
+                changedRows: nil,
+                lineCount: lineManager.lineCount,
+                previousLineCount: lineManager.lineCount,
+                spliceRow: 0
+            )
+            codeFoldingManager.scheduleUpdate(full: true, afterEdit: true)
+            return
+        }
+        let lower = (rootRows.map(\.lowerBound) + editedRows).min()
+        let upper = (rootRows.map(\.upperBound) + editedRows).max()
+        guard let lower, let upper, lastRow >= 0 else {
+            return
+        }
+        let rows = min(max(lower, 0), lastRow) ... min(max(upper, lower, 0), lastRow)
+        codeFoldingManager.invalidateTreeSitterProviderForEdit(
+            changedRows: rows,
+            lineCount: lineManager.lineCount,
+            previousLineCount: lineManager.lineCount,
+            spliceRow: rows.lowerBound
+        )
+        codeFoldingManager.scheduleUpdate(dirtyRows: rows, afterEdit: true)
+    }
+
     private func applySyntaxColorRefreshAfterParse() {
         var rows = rowsEditedSinceSyntaxParse
         let rowsShifted = rowsShiftedSinceSyntaxParse
@@ -1926,6 +1978,10 @@ private extension TextInputView {
         rowsShiftedSinceSyntaxParse = false
         let treeRows = (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingSyntaxRows()
         noteMinimapSyntaxRows(treeRows)
+        rescanFoldsAfterParse(
+            rootRows: (languageMode as? TreeSitterInternalLanguageMode)?.consumePendingRootSyntaxRows(),
+            editedRows: rowsShifted ? [] : rows
+        )
         let lastRow = max(lineManager.lineCount - 1, 0)
         guard let treeRows, !rowsShifted else {
             invalidateVisibleLineSyntaxHighlighting()
@@ -2846,6 +2902,11 @@ extension TextInputView {
         }
         EditorPerformanceTrace.shared.measure(.incrementalParse) {
             restartSyntaxParseAfterCancelledEdit()
+        }
+        if languageMode.isSyntaxTreeReady, languageMode is TreeSitterInternalLanguageMode {
+            // The keystroke was parsed synchronously (`PenumbraSyncKeystrokeParse`), so no
+            // background parse will finish and rescan the rows it noted. Only those rows are walked.
+            methodSeparatorController.recomputeAfterParse(changedRows: nil)
         }
         let updatedTextEditResult = TextEditResult(textChange: textChange, lineChangeSet: lineChangeSet)
         let change = TextContentChange(

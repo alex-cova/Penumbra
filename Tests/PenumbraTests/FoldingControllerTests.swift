@@ -516,9 +516,64 @@ final class FoldingControllerTests: XCTestCase {
         let placeholder = try! XCTUnwrap(manager.foldingModel.regions.first?.placeholder)
         XCTAssertEqual(placeholder, "{...}")
     }
+
+    // A declaration and its body span the same lines, so the tree-sitter provider describes each
+    // fold two or three times. Each copy took its own collapse, so every other ⌘- did nothing.
+    func testNodesCoveringTheSameLinesMakeOneFold() async {
+        let text = "class A {\n  m() {\n    if (x) {\n      y();\n    }\n  }\n}\n"
+        let (manager, _, _, languageMode) = makeTreeSitterFoldingStack(text: text)
+        _ = languageMode
+        manager.isEnabled = true
+        await recompute(manager)
+        XCTAssertEqual(manager.foldingModel.regions.map(\.lineRange), [0 ... 5, 1 ... 4, 2 ... 3])
+
+        let caret = (text as NSString).range(of: "y()").location
+        manager.foldingModel.collapseRegion(atCaret: caret)
+        manager.foldingModel.collapseRegion(atCaret: caret)
+        XCTAssertEqual(manager.foldingModel.regions.filter(\.isCollapsed).map(\.lineRange), [1 ... 4, 2 ... 3],
+                       "the second collapse folds the next enclosing block")
+    }
+
+    // A region ends one row above its node (the closing `}` stays visible); an edit on that closing
+    // row must still rescan the region.
+    func testEditOnAFoldsClosingLineRescansIt() async {
+        let text = "function f() {\n  a();\n}\nlet b = 1;\n"
+        let (_, lineManager, stringView, languageMode) = makeTreeSitterFoldingStack(text: text)
+        let provider = TreeSitterFoldingProvider()
+        provider.languageMode = languageMode
+        let before = await provider.foldRegions(for: makeDocument(stringView))
+        XCTAssertEqual(before.count, 2, "the function and its body")
+
+        // Comment the function out: `/*` on row 0, `*/` on row 2 (the `}` row). Only row 2 is
+        // reported as changed, as when the edit was the `*/`.
+        let editHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        _ = languageMode.textDidChange(editHelper.replaceText(in: NSRange(location: 0, length: 0), with: "/*").textChange)
+        let closing = (stringView.string as NSString).range(of: "}").location + 1
+        _ = languageMode.textDidChange(editHelper.replaceText(in: NSRange(location: closing, length: 0), with: "*/").textChange)
+        languageMode.parse()
+        provider.invalidateForEdit(changedRows: 2 ... 2, lineCount: lineManager.lineCount,
+                                   previousLineCount: lineManager.lineCount, spliceRow: 2)
+        let after = await provider.foldRegions(for: makeDocument(stringView))
+        print("DBG text", (stringView.string as String).debugDescription)
+        print("DBG tree", languageMode.rootSyntaxNode?.expressionString ?? "nil")
+        print("DBG after", after.map { "\($0.range.start.line)-\($0.range.end.line)" })
+        XCTAssertEqual(after, [], "the commented-out function's folds must go")
+    }
 }
 
 private extension FoldingControllerTests {
+    private func makeDocument(_ stringView: StringView) -> Document {
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        return Document(
+            displayName: "Test",
+            contentSnapshot: TextSnapshot(version: 0, text: stringView.string as String),
+            selection: Selection(range: TextRange(start: position, end: position)),
+            cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 0, height: 0),
+            languageIdentifier: "javascript"
+        )
+    }
+
     private func recompute(_ manager: CodeFoldingManager) async {
         manager.scheduleUpdate(full: true)
         await manager.updateSynchronously()

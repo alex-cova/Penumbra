@@ -125,8 +125,10 @@ private extension TreeSitterFoldingProvider {
         regions = shifted
     }
 
+    /// A region's `endRow` stops one row above its node's last row (the closing `}` stays visible),
+    /// so a change on that closing row still belongs to the region.
     private func regionOverlaps(_ region: (startRow: Int, endRow: Int, placeholder: String), _ rows: ClosedRange<Int>) -> Bool {
-        region.endRow >= rows.lowerBound && region.startRow <= rows.upperBound
+        region.endRow + 1 >= rows.lowerBound && region.startRow <= rows.upperBound
     }
 
     private func collectFoldRegions(

@@ -80,7 +80,9 @@ enum ViewportParseWindow {
         if range.upperBound <= utf16Location {
             return range
         }
-        if range.location >= oldEnd {
+        // Strictly before: an edit that ends exactly at the range's start (typing at offset 0 of a
+        // whole-document range) is taken into the range, or the parse would never see that text.
+        if range.location > oldEnd {
             return NSRange(location: range.location + delta, length: range.length)
         }
         let newStart = min(range.location, utf16Location)

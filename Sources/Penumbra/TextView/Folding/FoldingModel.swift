@@ -300,8 +300,17 @@ final class FoldingModel {
         // Each descriptor is converted to rows once; depths come from one sweep over the result.
         var lineRanges: [ClosedRange<Int>?] = []
         lineRanges.reserveCapacity(descriptors.count)
+        // A node and its body often cover the same lines (`function f() {…}` and its `{…}`). Keep
+        // the first (outermost) of each line range: duplicates would each take a collapse or expand,
+        // so ⌘- and ⌘+ would do nothing visible every other press.
+        var seenLineRanges = Set<ClosedRange<Int>>()
         for descriptor in descriptors {
-            lineRanges.append(FoldingDescriptorConversion.lineRange(for: descriptor, in: lineManager))
+            let lineRange = FoldingDescriptorConversion.lineRange(for: descriptor, in: lineManager)
+            if let lineRange, !seenLineRanges.insert(lineRange).inserted {
+                lineRanges.append(nil)
+            } else {
+                lineRanges.append(lineRange)
+            }
         }
         let depths = Self.nestingDepths(of: lineRanges)
         var candidateRegions: [FoldRegion] = []
@@ -469,7 +478,8 @@ private extension FoldingModel {
                 kept.append(region)
             }
         }
-        var merged = kept + discovered
+        let keptLineRanges = Set(kept.map(\.lineRange))
+        var merged = kept + discovered.filter { !keptLineRanges.contains($0.lineRange) }
         merged.sort { $0.lineRange.lowerBound < $1.lineRange.lowerBound }
         lastScannedLineCount = scanned.upperBound - scanned.lowerBound + 1
         applyReconciledRegions(merged, restoreRows: scanned)

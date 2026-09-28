@@ -264,6 +264,31 @@ final class MarkdownLanguageTests: XCTestCase {
         XCTAssertTrue(boldInBody.fontDescriptor.symbolicTraits.contains(.bold))
     }
 
+    // Deleting a heading's `## ` is a single-line edit: the line keeps its highlighted string and
+    // only gets a colour refresh after the parse. That refresh must drop the heading's colour and
+    // font instead of painting the (now empty) captures over them.
+    func testRehighlightingAFormerHeadingDropsItsColourAndFont() throws {
+        let theme = PaletteTheme(size: 13, palette: ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true),
+                                 postscriptName: "Menlo-Regular")
+        let headingFont = try XCTUnwrap(theme.font(for: "markup.heading.2"))
+        let headingColor = try XCTUnwrap(theme.textColor(for: "markup.heading.2"))
+        let line = "paymentHistory\n"
+        let languageMode = makeMarkdownLanguageMode(text: line + "\n- userId\n", languageProvider: MarkdownLanguageProvider())
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        highlighter.theme = theme
+
+        let attributed = NSMutableAttributedString(string: line, attributes: [
+            .font: headingFont, .foregroundColor: headingColor, .isBold: true
+        ])
+        let byteRange = ByteRange(from: 0, to: (line as NSString).byteCount)
+        highlighter.syntaxHighlight(LineSyntaxHighlighterInput(attributedString: attributed, byteRange: byteRange))
+
+        let font = try XCTUnwrap(attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(font.pointSize, theme.font.pointSize, "a paragraph must not keep the heading size")
+        XCTAssertEqual(attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, theme.textColor)
+        XCTAssertNil(attributed.attribute(.isBold, at: 0, effectiveRange: nil))
+    }
+
     // MARK: - Block constructs
 
     func testTaskListMarkersAreCaptured() {

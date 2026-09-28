@@ -205,6 +205,8 @@ final class LayoutManager {
     private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>(hidesQueuedViews: true)
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
+    /// Test hook — the lines laid out for the current viewport.
+    var visibleLineIDsForTesting: Set<DocumentLineNodeID> { visibleLineIDs }
     var currentlyVisibleLineIDs: Set<DocumentLineNodeID> { visibleLineIDs }
     private let linesContainerView = EditorView()
     private let gutterBackgroundView = GutterBackgroundView()

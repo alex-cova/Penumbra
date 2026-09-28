@@ -13,10 +13,14 @@ struct LineSyntaxHiglighterSetAttributesResult {
 final class LineSyntaxHighlighterInput: @unchecked Sendable {
     let attributedString: NSMutableAttributedString
     let byteRange: ByteRange
+    /// The string carries only the theme's default attributes (it was just built), so a highlighter
+    /// need not reset attributes a previous pass left behind.
+    let hasOnlyDefaultAttributes: Bool
 
-    init(attributedString: NSMutableAttributedString, byteRange: ByteRange) {
+    init(attributedString: NSMutableAttributedString, byteRange: ByteRange, hasOnlyDefaultAttributes: Bool = false) {
         self.attributedString = attributedString
         self.byteRange = byteRange
+        self.hasOnlyDefaultAttributes = hasOnlyDefaultAttributes
     }
 }
 

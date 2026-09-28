@@ -84,6 +84,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     /// Rows whose syntax tree changed in the last background parse that had a previous tree.
     /// `nil` means the caller should recolor the visible lines (no tree to diff against).
     private var pendingSyntaxRows: [ClosedRange<Int>]?
+    /// What the last parse changed in the root tree alone, for consumers that only read the root
+    /// (folding). Unlike ``pendingSyntaxRows`` it is kept when injected layers exist. `nil` when
+    /// there was no previous tree to compare with.
+    private var pendingRootSyntaxRows: [ClosedRange<Int>]?
 
     init(language: TreeSitterInternalLanguage, languageProvider: TreeSitterLanguageProvider?, stringView: StringView, lineManager: LineManager) {
         self.stringView = stringView
@@ -137,6 +141,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     func parseFromBuffer() {
         parseLock.withLock {
             captureWindows.removeAll()
+            // This parse covers (and records) the whole document; a window left from an earlier
+            // viewport parse or edit would otherwise limit it.
+            rootLanguageLayer.setRootIncludedUTF16Range(nil, stringLength: stringView.length)
             rootLanguageLayer.parseUsingReader()
             let ready = rootLanguageLayer.tree != nil && !parser.lastParseAborted
             hasCompletedInitialParse = ready
@@ -236,9 +243,12 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             parsedUTF16Range = publish()
             captureWindows.removeAll()
             // Injected layers (CSS in HTML, …) are not in the root diff; recolor what is on screen.
-            if let previousTree, let newTree = rootLanguageLayer.tree, !rootLanguageLayer.hasChildLayers {
-                pendingSyntaxRows = Self.changedRowRanges(from: previousTree, to: newTree)
+            if let previousTree, let newTree = rootLanguageLayer.tree {
+                let rows = Self.changedRowRanges(from: previousTree, to: newTree)
+                pendingRootSyntaxRows = rows
+                pendingSyntaxRows = rootLanguageLayer.hasChildLayers ? nil : rows
             } else {
+                pendingRootSyntaxRows = nil
                 pendingSyntaxRows = nil
             }
         }
@@ -251,6 +261,14 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         parseLock.withLock {
             defer { pendingSyntaxRows = nil }
             return pendingSyntaxRows
+        }
+    }
+
+    /// Root-tree rows the parse that just finished changed. `nil` means unknown (no previous tree).
+    func consumePendingRootSyntaxRows() -> [ClosedRange<Int>]? {
+        parseLock.withLock {
+            defer { pendingRootSyntaxRows = nil }
+            return pendingRootSyntaxRows
         }
     }
 
