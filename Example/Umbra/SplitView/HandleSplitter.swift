@@ -28,8 +28,8 @@ struct HandleSplitter: SplitDivider {
     init(
         color: Color = .clear,
         activeColor: Color = IDEAppearance.ColorToken.muted.opacity(0.45),
-        thickness: CGFloat = IDEAppearance.Spacing.islandGap,
-        hitThickness: CGFloat = IDEAppearance.Spacing.islandGap,
+        thickness: CGFloat = IDEAppearance.Spacing.panelGap,
+        hitThickness: CGFloat = IDEAppearance.Spacing.panelGap,
         handleLength: CGFloat = 32,
         handleThickness: CGFloat = 3,
         hidesWithPane: Bool = true

@@ -119,7 +119,7 @@ extension Splitter {
             color: IDEAppearance.ColorToken.border,
             inset: 0,
             visibleThickness: 1,
-            invisibleThickness: IDEAppearance.Spacing.islandGap
+            invisibleThickness: IDEAppearance.Spacing.panelGap
         )
     }
 }

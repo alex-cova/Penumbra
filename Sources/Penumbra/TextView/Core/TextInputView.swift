@@ -3950,7 +3950,7 @@ extension TextInputView {
         let newSelections = replacements
             .sorted { $0.range.location < $1.range.location }
             .map { NSRange(location: $0.range.location, length: ($0.text as NSString).length) }
-        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = true
         applySelectedRanges(newSelections)
     }
 

@@ -23,6 +23,12 @@ enum IDEAppearance {
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
         static let terminalMaxHeight = 600.0
+        /// Narrowest the editor column may get when the side panels are dragged against it.
+        static let editorMinLength = 240.0
+        /// Shortest the editor island may get when the terminal is dragged up against it.
+        static let editorMinHeight = 120.0
+        /// Smallest width or height of one editor pane in a split.
+        static let editorPaneMinLength = 120.0
         static let welcomeMaxWidth = 520.0
         /// Gap between the floating panels, and between them and the window edge. Resize handles
         /// live in these gaps.
