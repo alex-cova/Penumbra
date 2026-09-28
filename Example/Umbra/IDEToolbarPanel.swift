@@ -1,53 +1,209 @@
 import EditorIntelligence
 import SwiftUI
 
-/// Full-width chrome row above the sidebar/editor split. Owns the traffic-light gutter, the
-/// sidebar toggle, a path-and-symbol breadcrumb for the active document (the tab already shows
-/// the filename), and pane actions (search, preview, close; split lives in the tab's right-click
-/// menu) — the one place in the window that reserves `Spacing.trafficLightsInset`, so nothing
-/// below it needs to.
+/// The window's titlebar row, drawn on the window frame above the floating panels. Leading: the
+/// traffic-light gutter (`Spacing.trafficLightsInset`, reserved only here), the left / bottom /
+/// right panel toggles and a path-and-symbol breadcrumb for the active document. Center: the
+/// project name and git branch. Trailing: document actions (build, run, preview) and the global
+/// ones (Go to File, Actions, Settings). The two sides share the width equally so the title
+/// stays centered in the window; the breadcrumb truncates first.
 struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.xs) {
-            IDEToolbarBreadcrumb(
-                headerContext: workspace.headerContext,
-                onSelect: workspace.selectBreadcrumb
-            )
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                IDETitlebarPanelToggles(
+                    hasContent: workspace.hasOpenProject || workspace.hasOpenDocuments,
+                    isLeftPanelOpen: workspace.showsSidebar,
+                    isBottomPanelOpen: workspace.isTerminalVisible,
+                    hasRightPanel: workspace.javaSupport.isGradleProject,
+                    isRightPanelOpen: workspace.showsGradleSidebar,
+                    toggleLeftPanel: workspace.toggleSidebar,
+                    toggleBottomPanel: workspace.toggleTerminal,
+                    toggleRightPanel: workspace.toggleGradleSidebar
+                )
 
-            Spacer(minLength: IDEAppearance.Spacing.sm)
+                IDETitlebarSeparator()
 
-            if let branch = workspace.gitStatus.currentBranch {
-                IDEToolbarGitBranch(name: branch, action: workspace.showSourceControl)
+                IDEToolbarBreadcrumb(
+                    headerContext: workspace.headerContext,
+                    onSelect: workspace.selectBreadcrumb
+                )
+                .padding(.leading, IDEAppearance.Spacing.xs)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            IDEToolbarActionCluster(
-                showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
-                showsCloseGroup: workspace.tabsByPane.count > 1,
-                isMarkdownFile: workspace.statusLanguage == "markdown",
-                isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
-                isGradleProject: workspace.javaSupport.isGradleProject,
-                isJavaRunnable: workspace.javaFileCanRun,
-                isJavaTestable: workspace.javaFileCanTest,
-                javaRunHelp: workspace.javaRunHelp,
-                isHTTPFile: workspace.statusLanguage == "http",
-                isHTTPSendable: workspace.httpFileCanSend,
-                showQuickOpen: workspace.showQuickOpen,
-                toggleMarkdownPreview: workspace.toggleMarkdownPreview,
-                buildGradle: workspace.buildGradleProject,
-                runJava: workspace.runActiveJava,
-                runJavaTests: workspace.runActiveJavaTests,
-                sendHTTPRequest: workspace.sendActiveHTTPRequest,
-                exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
-                closeActivePane: workspace.closeActivePane
+            IDETitlebarProjectTitle(
+                title: workspace.project.rootURL?.lastPathComponent ?? "Umbra",
+                branch: workspace.gitStatus.currentBranch,
+                showSourceControl: workspace.showSourceControl
             )
+            .fixedSize()
+
+            HStack(spacing: 2) {
+                IDEToolbarActionCluster(
+                    showsCloseGroup: workspace.tabsByPane.count > 1,
+                    isMarkdownFile: workspace.statusLanguage == "markdown",
+                    isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                    isGradleProject: workspace.javaSupport.isGradleProject,
+                    isJavaRunnable: workspace.javaFileCanRun,
+                    isJavaTestable: workspace.javaFileCanTest,
+                    javaRunHelp: workspace.javaRunHelp,
+                    isHTTPFile: workspace.statusLanguage == "http",
+                    isHTTPSendable: workspace.httpFileCanSend,
+                    toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                    buildGradle: workspace.buildGradleProject,
+                    runJava: workspace.runActiveJava,
+                    runJavaTests: workspace.runActiveJavaTests,
+                    sendHTTPRequest: workspace.sendActiveHTTPRequest,
+                    exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
+                    closeActivePane: workspace.closeActivePane
+                )
+
+                IDETitlebarGlobalActions(
+                    showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
+                    showQuickOpen: workspace.showQuickOpen,
+                    showCommandPalette: workspace.showCommandPalette
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.leading, IDEAppearance.Spacing.trafficLightsInset)
+        .padding(.trailing, IDEAppearance.Spacing.sm)
         .frame(height: IDEAppearance.Spacing.toolbarHeight)
         .frame(maxWidth: .infinity)
-        .background(IDEAppearance.ColorToken.toolbar)
+        // No fill: the row sits over the traffic lights (SwiftUI's hosting view is above the
+        // titlebar), so the frame color comes from `NSWindow.backgroundColor` underneath.
         .focusable(false)
+    }
+}
+
+/// Layout toggles for the three panel areas around the editor, drawn as the panel they toggle.
+private struct IDETitlebarPanelToggles: View {
+    let hasContent: Bool
+    let isLeftPanelOpen: Bool
+    let isBottomPanelOpen: Bool
+    let hasRightPanel: Bool
+    let isRightPanelOpen: Bool
+    let toggleLeftPanel: () -> Void
+    let toggleBottomPanel: () -> Void
+    let toggleRightPanel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            IDEToolbarIconButton(
+                systemName: "sidebar.left",
+                isActive: isLeftPanelOpen,
+                help: isLeftPanelOpen ? "Hide Left Panel" : "Show Left Panel",
+                action: toggleLeftPanel
+            )
+            .disabled(!hasContent)
+
+            IDEToolbarIconButton(
+                systemName: "rectangle.bottomthird.inset.filled",
+                isActive: isBottomPanelOpen,
+                help: isBottomPanelOpen ? "Hide Bottom Panel" : "Show Bottom Panel",
+                action: toggleBottomPanel
+            )
+
+            IDEToolbarIconButton(
+                systemName: "sidebar.right",
+                isActive: isRightPanelOpen,
+                help: isRightPanelOpen ? "Hide Right Panel" : "Show Right Panel",
+                action: toggleRightPanel
+            )
+            .disabled(!hasRightPanel)
+        }
+    }
+}
+
+private struct IDETitlebarSeparator: View {
+    var body: some View {
+        Rectangle()
+            .fill(IDEAppearance.ColorToken.border)
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, IDEAppearance.Spacing.xs)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Centered `project ⑂ branch` title; the branch opens Source Control.
+private struct IDETitlebarProjectTitle: View {
+    let title: String
+    let branch: String?
+    let showSourceControl: () -> Void
+
+    @State private var isHoveringBranch = false
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Text(title)
+                .font(IDEAppearance.Typography.titlebarTitle)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+
+            if let branch {
+                Button(action: showSourceControl) {
+                    HStack(spacing: IDEAppearance.Spacing.xs + 2) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        Text(branch)
+                            .font(IDEAppearance.Typography.titlebarTitle)
+                            .foregroundStyle(isHoveringBranch ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.foreground.opacity(0.85))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
+                    .padding(.vertical, 3)
+                    .background(isHoveringBranch ? IDEAppearance.ColorToken.controlHover : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { isHoveringBranch = $0 }
+                .help("Show Source Control")
+                .accessibilityLabel("Git branch \(branch)")
+                .accessibilityHint("Show Source Control")
+                .focusable(false)
+            }
+        }
+    }
+}
+
+/// The always-available actions at the trailing end of the titlebar.
+private struct IDETitlebarGlobalActions: View {
+    let showsGoToFile: Bool
+    let showQuickOpen: () -> Void
+    let showCommandPalette: () -> Void
+
+    @State private var isHoveringSettings = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            IDEToolbarIconButton(
+                systemName: "bolt",
+                help: "Actions…",
+                action: showCommandPalette
+            )
+
+            if showsGoToFile {
+                IDEToolbarIconButton(
+                    systemName: "magnifyingglass",
+                    help: "Go to File…",
+                    action: showQuickOpen
+                )
+            }
+
+            SettingsLink {
+                IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHoveringSettings = $0 }
+            .help("Settings")
+            .accessibilityLabel("Settings")
+            .focusable(false)
+        }
     }
 }
 
@@ -119,32 +275,7 @@ private struct IDEToolbarBreadcrumbSegment: View {
     }
 }
 
-private struct IDEToolbarGitBranch: View {
-    let name: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: IDEAppearance.Spacing.xs) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Text(name)
-                    .font(IDEAppearance.Typography.tabLabel)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-            }
-            .padding(.trailing, IDEAppearance.Spacing.xs)
-        }
-        .buttonStyle(.plain)
-        .help("Show Source Control")
-        .accessibilityLabel("Git branch \(name)")
-        .accessibilityHint("Show Source Control")
-    }
-}
-
 private struct IDEToolbarActionCluster: View {
-    let showsGoToFile: Bool
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
@@ -154,7 +285,6 @@ private struct IDEToolbarActionCluster: View {
     let javaRunHelp: String
     let isHTTPFile: Bool
     let isHTTPSendable: Bool
-    let showQuickOpen: () -> Void
     let toggleMarkdownPreview: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
@@ -165,14 +295,6 @@ private struct IDEToolbarActionCluster: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            if showsGoToFile {
-                IDEToolbarIconButton(
-                    systemName: "magnifyingglass",
-                    help: "Go to File",
-                    action: showQuickOpen
-                )
-            }
-
             if showsCloseGroup {
                 IDEToolbarIconButton(
                     systemName: "rectangle.slash",
@@ -180,7 +302,7 @@ private struct IDEToolbarActionCluster: View {
                     action: closeActivePane
                 )
             }
-            
+
             if isGradleProject {
                 IDEToolbarIconButton(
                     systemName: "hammer",
@@ -232,13 +354,12 @@ private struct IDEToolbarActionCluster: View {
                     action: toggleMarkdownPreview
                 )
             }
-           
         }
     }
 }
 
-/// Shared glyph-button chrome for the toolbar row: a fixed square hit target, muted by default,
-/// brightening on hover so every action in the row reads as one family.
+/// Shared glyph-button chrome for the titlebar: a fixed square hit target, muted by default,
+/// brightening on hover (and filled while its panel is open) so every action reads as one family.
 private struct IDEToolbarIconButton: View {
     let systemName: String
     var isActive = false
@@ -246,24 +367,47 @@ private struct IDEToolbarIconButton: View {
     let help: String
     let action: () -> Void
 
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(tint ?? (isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .background(isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
+            IDEToolbarIconLabel(
+                systemName: systemName,
+                isActive: isActive,
+                isHighlighted: isHovering && isEnabled,
+                tint: tint
+            )
+            .opacity(isEnabled ? 1 : 0.4)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .focusable(false)
+    }
+}
+
+private struct IDEToolbarIconLabel: View {
+    let systemName: String
+    var isActive = false
+    var isHighlighted = false
+    var tint: Color? = nil
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: IDEAppearance.IconSize.titlebarGlyph, weight: .regular))
+            .foregroundStyle(tint ?? (isActive || isHighlighted ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
+            .frame(width: IDEAppearance.Spacing.titlebarButton, height: IDEAppearance.Spacing.titlebarButton)
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            .contentShape(Rectangle())
+    }
+
+    private var background: Color {
+        if isActive { return IDEAppearance.ColorToken.card }
+        return isHighlighted ? IDEAppearance.ColorToken.controlHover : Color.clear
     }
 }
 

@@ -25,27 +25,98 @@ public struct IDERootView: View {
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 } else {
-                    IDEAppearance.ColorToken.frame.frame(width: IDEAppearance.Spacing.islandGap)
+                    Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
                 }
 
-                workbenchSplits
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if workspace.showsSidebar {
+                    IDESidebarPanel()
+                        .frame(width: sidebarWidth)
+                        .idePanel()
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+
+                    IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
+                }
+
+                if workspace.showsStructureSidebar {
+                    IDEJavaStructurePanel()
+                        .frame(width: structureSidebarWidth)
+                        .idePanel()
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+
+                    IDESidebarResizeHandle(width: $structureSidebarWidth, edge: .leading)
+                }
+
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        if workspace.isFindInFilesVisible {
+                            FindInFilesPanel()
+                                .opacity(workspace.chromeOpacity)
+                                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                        }
+
+                        if workspace.javaSupport.gradleBuildFilesChanged {
+                            IDEGradleReloadBanner()
+                                .opacity(workspace.chromeOpacity)
+                                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                        }
+
+                        ZStack {
+                            // A folder alone is not a document. The workbench always has an empty
+                            // pane, so showing it here paints a text editor with no tab and no text.
+                            if workspace.hasOpenDocuments {
+                                IDEEditorLayoutNode(layout: workspace.editorLayout)
+                                    .id("editor-layout")
+                            } else {
+                                IDEWelcomeView()
+                            }
+                        }
+                        .frame(maxHeight: .infinity)
+                        .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
+                    }
+                    .idePanel()
+
+                    if workspace.isTerminalVisible {
+                        IDETerminalResizeHandle(height: Binding(
+                            get: { workspace.terminalHeight },
+                            set: { workspace.terminalHeight = $0 }
+                        ))
+
+                        IDETerminalPanel()
+                            .frame(height: workspace.terminalHeight)
+                            .idePanel()
+                            .opacity(workspace.chromeOpacity)
+                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                    }
+                }
+
+                if workspace.showsGradleSidebar {
+                    IDESidebarResizeHandle(width: $gradleSidebarWidth, edge: .trailing)
+
+                    IDEGradleSidebarPanel()
+                        .frame(width: gradleSidebarWidth)
+                        .idePanel()
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                }
 
                 if IDEToolWindowStripe.hasItems(edge: .trailing, workspace: workspace) {
                     IDEToolWindowStripe(edge: .trailing)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 } else {
-                    IDEAppearance.ColorToken.frame.frame(width: IDEAppearance.Spacing.islandGap)
+                    Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
                 }
             }
-            .padding(.bottom, IDEAppearance.Spacing.islandGap)
 
             IDEStatusBarPanel()
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
         }
-        .background(IDEAppearance.ColorToken.frame)
+        .ignoresSafeArea(.container, edges: .top)
+        // The frame color is `NSWindow.backgroundColor` (set in `IDEWindowConfiguratorView`); an
+        // opaque SwiftUI fill here would paint over the traffic lights.
         .background(IDEWindowConfigurator(title: workspace.windowTitle, workspace: workspace))
         .overlay {
             IDEPaletteOverlayHost(workspace: workspace)
@@ -104,108 +175,6 @@ public struct IDERootView: View {
         .focusable(false)
     }
 
-    // MARK: - Splits
-
-    /// Sidebar | structure | (editor over terminal) | Gradle, as nested `SplitPanes`. Every pane
-    /// stays in the same place in the view tree whether it is shown or not (`hiddenSide`), so
-    /// toggling a tool window never remounts the editor's text views.
-    private var workbenchSplits: some View {
-        SplitPanes(
-            minPrimary: IDEAppearance.Spacing.sidebarMinWidth,
-            maxPrimary: IDEAppearance.Spacing.sidebarMaxWidth,
-            idealPrimary: sidebarWidth,
-            minSecondary: IDEAppearance.Spacing.editorMinLength,
-            hiddenSide: workspace.showsSidebar ? nil : .primary,
-            onResize: { primary, _ in settle(&sidebarWidth, to: primary) }
-        ) {
-            chrome(IDESidebarPanel().ideIsland())
-        } secondary: {
-            SplitPanes(
-                minPrimary: IDEAppearance.Spacing.sidebarMinWidth,
-                maxPrimary: IDEAppearance.Spacing.sidebarMaxWidth,
-                idealPrimary: structureSidebarWidth,
-                minSecondary: IDEAppearance.Spacing.editorMinLength,
-                hiddenSide: workspace.showsStructureSidebar ? nil : .primary,
-                onResize: { primary, _ in settle(&structureSidebarWidth, to: primary) }
-            ) {
-                chrome(IDEJavaStructurePanel().ideIsland())
-            } secondary: {
-                SplitPanes(
-                    minPrimary: IDEAppearance.Spacing.editorMinLength,
-                    minSecondary: IDEAppearance.Spacing.sidebarMinWidth,
-                    maxSecondary: IDEAppearance.Spacing.sidebarMaxWidth,
-                    idealSecondary: gradleSidebarWidth,
-                    priority: .secondary,
-                    hiddenSide: workspace.showsGradleSidebar ? nil : .secondary,
-                    onResize: { _, secondary in settle(&gradleSidebarWidth, to: secondary) }
-                ) {
-                    editorColumn
-                } secondary: {
-                    chrome(IDEGradleSidebarPanel().ideIsland())
-                }
-            }
-        }
-    }
-
-    /// The editor island over the terminal / bottom panel.
-    private var editorColumn: some View {
-        SplitPanes(
-            axis: .vertical,
-            minPrimary: IDEAppearance.Spacing.editorMinHeight,
-            minSecondary: IDEAppearance.Spacing.terminalMinHeight,
-            maxSecondary: IDEAppearance.Spacing.terminalMaxHeight,
-            idealSecondary: workspace.terminalHeight,
-            priority: .secondary,
-            hiddenSide: workspace.isTerminalVisible ? nil : .secondary,
-            onResize: { _, secondary in
-                var height = workspace.terminalHeight
-                settle(&height, to: secondary)
-                workspace.terminalHeight = height
-            }
-        ) {
-            VStack(spacing: 0) {
-                if workspace.isFindInFilesVisible {
-                    chrome(FindInFilesPanel())
-                }
-
-                if workspace.javaSupport.gradleBuildFilesChanged {
-                    chrome(IDEGradleReloadBanner())
-                }
-
-                ZStack {
-                    // A folder alone is not a document. The workbench always has an empty
-                    // pane, so showing it here paints a text editor with no tab and no text.
-                    if workspace.hasOpenDocuments {
-                        IDEEditorLayoutNode(layout: workspace.editorLayout)
-                            .id("editor-layout")
-                    } else {
-                        IDEWelcomeView()
-                    }
-                }
-                .frame(maxHeight: .infinity)
-                .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
-            }
-            .ideIsland()
-        } secondary: {
-            chrome(IDETerminalPanel().ideIsland())
-        }
-    }
-
-    /// Tool-window chrome fades out (and stops taking clicks) in distraction-free mode.
-    private func chrome(_ content: some View) -> some View {
-        content
-            .opacity(workspace.chromeOpacity)
-            .allowsHitTesting(workspace.chromeOpacity > 0.05)
-    }
-
-    /// Takes a divider position reported by `SplitPanes.onResize`. Nothing is written before
-    /// `bootstrap()` — the first layout reports the restored sizes back, and saving then would
-    /// store a session with no documents in it — nor for sub-point rounding noise.
-    private func settle(_ stored: inout Double, to reported: CGFloat) {
-        guard didBootstrap, abs(stored - reported) >= 1 else { return }
-        stored = reported
-    }
-
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { item, _ in
@@ -250,7 +219,85 @@ struct IDEGradleReloadBanner: View {
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.sm)
         .background(IDEAppearance.ColorToken.tabActive)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+        }
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct IDETerminalResizeHandle: View {
+    @Binding var height: Double
+    @State private var lastTranslation: CGFloat = 0
+
+    var body: some View {
+        // The gap between the editor card and the bottom panel is the handle.
+        Color.clear
+            .frame(height: IDEAppearance.Spacing.panelGap)
+            .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let delta = lastTranslation - value.translation.height
+                    lastTranslation = value.translation.height
+                    height = min(
+                        max(height + delta, IDEAppearance.Spacing.terminalMinHeight),
+                        IDEAppearance.Spacing.terminalMaxHeight
+                    )
+                }
+                .onEnded { _ in
+                    lastTranslation = 0
+                }
+        )
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}
+
+private struct IDESidebarResizeHandle: View {
+    enum Edge {
+        case leading, trailing
+    }
+
+    @Binding var width: Double
+    var edge: Edge = .leading
+    @State private var lastTranslation: CGFloat = 0
+
+    var body: some View {
+        // The gap between two cards is the handle.
+        Color.clear
+            .frame(width: IDEAppearance.Spacing.panelGap)
+            .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let rawDelta = value.translation.width - lastTranslation
+                    lastTranslation = value.translation.width
+                    let delta = edge == .leading ? rawDelta : -rawDelta
+                    width = min(
+                        max(width + delta, IDEAppearance.Spacing.sidebarMinWidth),
+                        IDEAppearance.Spacing.sidebarMaxWidth
+                    )
+                }
+                .onEnded { _ in
+                    lastTranslation = 0
+                }
+        )
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 }
 
@@ -305,6 +352,16 @@ final class IDEWindowConfiguratorView: NSView {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
+        window.backgroundColor = IDEAppearance.NSToken.window
+        // An empty compact toolbar only makes the titlebar as tall as the titlebar row, so the
+        // traffic lights sit centered in it; the row itself is SwiftUI content drawn underneath.
+        if window.toolbar == nil {
+            let toolbar = NSToolbar(identifier: "UmbraTitlebar")
+            toolbar.showsBaselineSeparator = false
+            toolbar.allowsUserCustomization = false
+            window.toolbar = toolbar
+        }
+        window.toolbarStyle = .unifiedCompact
         if let closeGuard {
             MainActor.assumeIsolated {
                 closeGuard.install(on: window)

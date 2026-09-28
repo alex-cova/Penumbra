@@ -24,13 +24,10 @@ enum IDEAppearance {
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
         static let terminalMaxHeight = 600.0
-        /// Narrowest the editor column may get when the side panels are dragged against it.
-        static let editorMinLength = 240.0
-        /// Shortest the editor island may get when the terminal is dragged up against it.
-        static let editorMinHeight = 120.0
-        /// Smallest width or height of one editor pane in a split.
-        static let editorPaneMinLength = 120.0
         static let welcomeMaxWidth = 520.0
+        /// Gap between the floating panels, and between them and the window edge. Resize handles
+        /// live in these gaps.
+        static let panelGap = 6.0
         static let firstRunGuideWidth = 640.0
         static let firstRunGuideHeight = 428.0
         static let firstRunGuideRailWidth = 168.0
@@ -39,21 +36,20 @@ enum IDEAppearance {
         static let settingsMinHeight = 520.0
         /// Space reserved so traffic lights do not overlap the toolbar row.
         static let trafficLightsInset = 78.0
+        static let titlebarButton = 28.0
         static let dirtyDotSize = 5.0
-        /// Frame-coloured gap between islands; also the thickness of the `SplitPanes` dividers
-        /// (`HandleSplitter`) that sit in it.
-        static let islandGap = 6.0
     }
 
     enum Radius {
         static let control = 6.0
         static let card = 8.0
-        static let island = 10.0
+        static let panel = 10.0
     }
 
     enum IconSize {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
+        static let titlebarGlyph = 14.0
         static let toolWindowGlyph = 15.0
     }
 
@@ -66,22 +62,25 @@ enum IDEAppearance {
         static let monoSmall = Font.system(size: 11, design: .monospaced)
         static let tabLabel = Font.system(size: 12)
         static let sidebarHeader = Font.system(size: 11, weight: .semibold)
+        static let titlebarTitle = Font.system(size: 13, weight: .semibold)
+        static let panelTab = Font.system(size: 12, weight: .medium)
     }
 
     enum ColorToken {
+        /// The window frame the floating panels sit on: titlebar, stripes, gaps, status bar.
+        static let window = Color(hex: 0x0B0B0D)
+        /// Floating panel (card) fill and outline.
+        static let panel = Color(hex: 0x18181B)
+        static let panelBorder = Color.white.opacity(0.05)
+        static let card = Color(hex: 0x27272B)
         static let workbench = Color(hex: 0x101012)
-        /// The window frame behind the islands: toolbar, tool-window stripes, status bar and the
-        /// gaps between panels. Regions are told apart by fill, not by hairlines.
-        static let frame = Color(hex: 0x1D1D22)
-        static let sidebar = Color(hex: 0x151518)
+        static let sidebar = Color(hex: 0x18181B)
         static let editor = Color(hex: 0x101012)
-        static let toolbar = frame
         static let tabBar = Color(hex: 0x18181B)
         static let tabActive = Color(hex: 0x2A2A30)
         static let tabInactive = Color.clear
         static let tabHover = Color(hex: 0x1C1C20)
         static let controlHover = Color.white.opacity(0.06)
-        static let statusBar = frame
         static let border = Color.white.opacity(0.08)
         static let accent = Color(hex: 0x74ADE8)
         static let run = Color(hex: 0x3DDC84)
@@ -100,9 +99,10 @@ enum IDEAppearance {
     }
 
     enum NSToken {
+        static let window = ns(0x0B0B0D)
         static let workbench = ns(0x101012)
         static let editor = ns(0x101012)
-        static let sidebar = ns(0x151518)
+        static let sidebar = ns(0x18181B)
         static let border = NSColor.white.withAlphaComponent(0.08)
         static let accent = ns(0x74ADE8)
         static let foreground = ns(0xECEDEE)
@@ -130,27 +130,41 @@ extension Color {
     }
 }
 
-/// The frame-coloured area outside a rounded rectangle, filled even-odd.
-struct IDEIslandCornerMask: Shape {
-    var radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path(rect)
-        path.addRoundedRect(in: rect, cornerSize: CGSize(width: radius, height: radius), style: .continuous)
-        return path
+extension View {
+    /// Floating-panel chrome: the content becomes a rounded card sitting on the window frame
+    /// (`ColorToken.window`), with a faint outline so adjacent cards separate without hairlines.
+    func idePanel(fill: Color = IDEAppearance.ColorToken.panel) -> some View {
+        let shape = RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
+        return background(fill)
+            .clipShape(shape)
+            .overlay {
+                shape
+                    .strokeBorder(IDEAppearance.ColorToken.panelBorder, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
     }
 }
 
-extension View {
-    /// Rounds a content region into an island on the window frame (IntelliJ's Islands look).
-    /// The corners are painted over in the frame colour rather than clipped, because hosted
-    /// AppKit views (the text view, the terminal) ignore SwiftUI clip shapes.
-    func ideIsland() -> some View {
-        overlay {
-            IDEIslandCornerMask(radius: IDEAppearance.Radius.island)
-                .fill(IDEAppearance.ColorToken.frame, style: FillStyle(eoFill: true))
-                .allowsHitTesting(false)
-        }
+/// A side panel's title, drawn as the selected tab of a tab strip (the panel is its only tab).
+struct IDEPanelTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(IDEAppearance.Typography.panelTab)
+            .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            .lineLimit(1)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, 3)
+            .background(
+                IDEAppearance.ColorToken.card,
+                in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+            )
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -187,8 +201,8 @@ enum IDEFileIcon {
     nonisolated static func paletteIcon(forFilename filename: String) -> PaletteIcon {
         if gradleFilenames.contains(filename) { return PaletteIcon(systemName: "hammer", tint: .green) }
         switch (filename as NSString).pathExtension.lowercased() {
-        case "java": return PaletteIcon(systemName: "c.circle", tint: .blue)
-        case "kt", "kts": return PaletteIcon(systemName: "k.circle", tint: .purple)
+        case "java": return PaletteIcon(systemName: "c.circle.fill", tint: .blue)
+        case "kt", "kts": return PaletteIcon(systemName: "k.circle.fill", tint: .purple)
         case "class": return PaletteIcon(systemName: "c.circle", tint: .secondary)
         case "swift": return PaletteIcon(systemName: "swift", tint: .orange)
         case "http", "rest": return PaletteIcon(systemName: "globe", tint: .blue)

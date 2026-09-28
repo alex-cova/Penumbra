@@ -62,10 +62,14 @@ final class IDETerminalHostView: NSView {
             name: IDEPreferences.shared.fontName,
             size: IDEPreferences.shared.fontSize
         )
+        // Inset so the prompt doesn't touch the bottom panel card's rounded edge; the host paints
+        // the terminal's background so the inset reads as part of the terminal.
+        wantsLayer = true
+        layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         addSubview(terminalView)
         NSLayoutConstraint.activate([
             terminalView.topAnchor.constraint(equalTo: topAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            terminalView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: IDEAppearance.Spacing.sm),
             terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
             terminalView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
@@ -435,7 +439,7 @@ struct IDETerminalPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
         }
-        .background(IDEAppearance.ColorToken.sidebar)
+        .background(IDEAppearance.ColorToken.panel)
         .onExitCommand { workspace.hideTerminal() }
     }
 }

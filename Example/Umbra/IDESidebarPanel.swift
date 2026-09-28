@@ -11,10 +11,8 @@ struct IDESidebarPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
-                Text("Explorer")
-                    .font(IDEAppearance.Typography.sidebarHeader)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
+                IDEPanelTitle("Explorer")
+                    .fixedSize()
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if workspace.project.rootNode != nil {
@@ -47,9 +45,9 @@ struct IDESidebarPanel: View {
                     action: toggleSearch
                 )
             }
-            .padding(.leading, IDEAppearance.Spacing.lg)
+            .padding(.leading, IDEAppearance.Spacing.sm)
             .padding(.trailing, IDEAppearance.Spacing.xs)
-            .frame(height: IDEAppearance.Spacing.tabHeight)
+            .frame(height: IDEAppearance.Spacing.tabHeight + 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
@@ -94,7 +92,7 @@ struct IDESidebarPanel: View {
             collapsedWhileFiltering.removeAll()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(IDEAppearance.ColorToken.sidebar)
+        .background(IDEAppearance.ColorToken.panel)
     }
 
     private func toggleSearch() {

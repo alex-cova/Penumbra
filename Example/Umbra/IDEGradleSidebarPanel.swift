@@ -69,7 +69,7 @@ struct IDEGradleSidebarPanel: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(IDEAppearance.ColorToken.sidebar)
+        .background(IDEAppearance.ColorToken.panel)
         .onChange(of: root?.id, initial: true) { _, id in
             guard let root, id != nil else {
                 expanded.removeAll()
@@ -94,10 +94,8 @@ struct IDEGradleSidebarPanel: View {
 
     private var header: some View {
         HStack(spacing: 2) {
-            Text("Gradle")
-                .font(IDEAppearance.Typography.sidebarHeader)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
+            IDEPanelTitle("Gradle")
+                .fixedSize()
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if java.isGradleBusy {
@@ -147,9 +145,9 @@ struct IDEGradleSidebarPanel: View {
                 action: workspace.showGradleOutput
             )
         }
-        .padding(.leading, IDEAppearance.Spacing.lg)
+        .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
-        .frame(height: IDEAppearance.Spacing.tabHeight)
+        .frame(height: IDEAppearance.Spacing.tabHeight + 2)
     }
 
     // MARK: Content

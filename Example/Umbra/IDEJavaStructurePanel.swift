@@ -18,17 +18,14 @@ struct IDEJavaStructurePanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(IDEAppearance.ColorToken.sidebar)
+        .background(IDEAppearance.ColorToken.panel)
     }
 
     private var header: some View {
-        Text("Structure")
-            .font(IDEAppearance.Typography.sidebarHeader)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, IDEAppearance.Spacing.sm)
+        IDEPanelTitle("Structure")
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .frame(height: IDEAppearance.Spacing.tabHeight + 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
     }
 
     private func tree(_ store: IDEJavaStructureStore, root: JavaStructureNode) -> some View {
