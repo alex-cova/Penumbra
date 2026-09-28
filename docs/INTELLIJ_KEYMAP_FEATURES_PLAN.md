@@ -14,9 +14,9 @@ Origin: a JetBrains Fleet keymap cheat sheet (`~/Desktop/keymap.pdf`) was compar
 
 | Phase | State | Scope |
 |---|---|---|
-| 0 | Done | `IDEMenuShortcuts` (`Example/Umbra/IDEMenuShortcuts.swift`) gives every preset-dependent menu item its shortcut per `KeymapPreset`; `UmbraApp.swift` uses it. The IntelliJ column also carries the tool-window keys of 6.3 (⌘1, ⌘6, ⌘9, ⌥F12; ⌘7 unchanged) and Reveal in Explorer on ⌥F1. `Keymap.intelliJ` gained ⇧⌘F (Find in Files) and ⌘F12 (File Structure). `IDEMenuShortcutsTests` checks no two commands share a key, the Sublime/Default columns are unchanged, and menu keys agree with the IntelliJ keymap. Sublime/Default lost the duplicate ⌥⌘E on Reveal Active File (Encapsulate Field keeps it). Full suite: 2531 tests, 0 failures. |
-| 1 | Done | 1.1 block comment (`BlockCommentService`, `BlockCommentDelimiters`, ⌥⌘/), 1.2 matching brace (`BracketNavigation`, `goToMatchingBracket`), 1.3 folding commands (landed upstream before this work), 1.4 `unselectLastOccurrence`, 1.5 complete statement (`StatementCompletionService`, ⇧⌘↵), 1.6 IntelliJ line-insert keys (⇧↵, ⌥⌘↵; ⌘↵ unbound), 1.7 `findNext`/`findPrevious`. |
-| 2 | Done | 2.1 next/prev problem (`ProblemNavigator`, `goToNextProblem`/`goToPreviousProblem`, F2 / ⇧F2), 2.2 go to type declaration (`NavigationKind.typeDefinition`, `JavaGoToTypeDefinition`, `LSPTypeDefinitionProvider`, ⌃⇧B), 2.3 parameter info (`showParameterInfo`, ⌘P), 2.4 symbol scopes (`goToFileSymbol` ⌘F12 / `goToSymbol` ⌥⌘O, `FileSymbolsPaletteProvider`). |
+| 0 | Done | `IDEMenuShortcuts` (`Example/Umbra/IDEMenuShortcuts.swift`) gives every preset-dependent menu item its shortcut per `KeymapPreset`; `UmbraApp.swift` uses it. The IntelliJ column also carries the tool-window keys of 6.3 (⌘1, ⌘6, ⌘9, ⌥F12; ⌘7 unchanged) and Reveal in Explorer on ⌥F1. `Keymap.intelliJ` gained ⇧⌘F (Find in Files) and ⌘F12 (File Structure). `IDEMenuShortcutsTests` checks no two commands share a key, the Sublime/Default columns are unchanged, and menu keys agree with the IntelliJ keymap. Sublime/Default lost the duplicate ⌥⌘E on Reveal Active File (Encapsulate Field keeps it). |
+| 1 | Done | (Editor actions are tested; the menu-level shortcuts were not run in the app.) 1.1 block comment (`BlockCommentService`, `BlockCommentDelimiters`, ⌥⌘/), 1.2 matching brace (`BracketNavigation`, `goToMatchingBracket`), 1.3 folding commands (landed upstream before this work), 1.4 `unselectLastOccurrence`, 1.5 complete statement (`StatementCompletionService`, ⇧⌘↵), 1.6 IntelliJ line-insert keys (⇧↵, ⌥⌘↵; ⌘↵ unbound), 1.7 `findNext`/`findPrevious`. |
+| 2 | Done | (Tested; the Umbra wiring and the bare F2 menu shortcut were not run in the app.) 2.1 next/prev problem (`ProblemNavigator`, `goToNextProblem`/`goToPreviousProblem`, F2 / ⇧F2), 2.2 go to type declaration (`NavigationKind.typeDefinition`, `JavaGoToTypeDefinition`, `LSPTypeDefinitionProvider`, ⌃⇧B), 2.3 parameter info (`showParameterInfo`, ⌘P), 2.4 symbol scopes (`goToFileSymbol` ⌘F12 / `goToSymbol` ⌥⌘O, `FileSymbolsPaletteProvider`). |
 | 3 | Partly done | Done: 3.1 step into/out, 3.2 pause, 3.5 Run menu and IntelliJ keys, plus the adapter fixes below that debugging needed before any of it could work. Verified against a real JVM by `JavaDebugAdapterTests`; the Swift session, panel, stop-line reveal and menu were built but not run in the app. Open: 3.3 evaluate, 3.4 run in context. |
 | 4 | Partly done | Done: 4.2 file history, 4.3 revert, 4.4 pull/push keys and a Git menu; the git side is tested against real repositories, the Umbra UI (panel header, dialogs, menu) was built but not run. Open: 4.1 blame. |
 | H | Built, not seen on screen | `play.fill` gutter button per request in `.http` files (`HTTPRequestParser.requestLocations`, `IDEWorkspace.refreshHTTPGutter`). Parser tests pass; the app launches with an `.http` file without crashing, but I could not take a screenshot here, so the icons have not been looked at. |
@@ -24,7 +24,27 @@ Origin: a JetBrains Fleet keymap cheat sheet (`~/Desktop/keymap.pdf`) was compar
 | 6 | Done (not run in the app) | 6.1 next/prev tab, 6.2 next/prev split, 6.3 tool-window keys (⌘1/⌘5/⌘6/⌘7/⌘9/⌥F12 and Hide All ⇧⌘F12), 6.4 zoom, 6.5 Clear Terminal, 6.6 Go to Tool Window, 6.7 emoji (checked in code only, no change needed). Differences from the plan below. |
 | 7 | Needs a decision | Generate Code with AI |
 
-Phase 0 goes first because every later menu-level action needs it. Phases 1–3 need only Penumbra and JavaIntelligence and can run in parallel.
+Last full test run: 2730 tests, 0 failures (4 skipped). Phase 0 went first because every later menu-level action needs it.
+
+## Open work and unverified items
+
+**Not built**
+
+- **4.1 Git blame.** Needs a new display-only text-annotation API in the gutter (today's gutter draws icons only). `GitRepository.blame` already exists and nothing in Umbra calls it.
+- **3.3 Evaluate Expression / Quick Evaluate.** Limited to variable and field paths and `toString()`, because JDI has no expression evaluator.
+- **3.4 Run / Debug in Context.**
+- **7 Generate Code with AI.** Blocked on decisions: provider, credential storage, first-use disclosure, diff-preview UX, and a key.
+- **Smaller gaps:** revert is active-file only; Replace in Files has no file mask or scope; workspace Go to Symbol covers open files only (no project-wide Java members); Go to Type Declaration from a *use* of a type-variable value reaches its bound, not the parameter; the debugger ignores the adapter's `output` events.
+
+**Built and tested, but never run in the running app** (no way to launch or screenshot it while building): the HTTP play buttons (H); F2 / ⇧F2, ⌘P and the bare function-key menu shortcuts F2 / F7 / F8 (SwiftUI may ignore a key with no modifier); block comment and complete statement through the app; the debugger panel, stop-line reveal and Run menu (the adapter itself *was* run against real JVMs); next/prev tab and split, Hide All, zoom, Clear Terminal (including whether ⌘K reaches the terminal); the Git menu, file-history header and Revert dialog; the Replace in Files drawer and its open-editor apply path.
+
+**Risks and loose ends**
+
+- `attachForGradle` resumes only when suspend-on-start is *off*, which looks inverted for a JVM Gradle starts suspended. Not touched and not exercised.
+- `Example/Umbra/Tools/JavaDebugAdapter/build/java-debug-adapter.jar` is a committed binary (Java 17 bytecode). Rerun `build.sh` after editing `DebugAdapter.java`.
+- IntelliJ preset bindings outside this plan that differ from IntelliJ itself: ⌘B is Markdown Preview (IntelliJ: Go to Declaration), Find Usages is ⌘⌥⇧B (IntelliJ: ⌥F7).
+- IntelliJ key choices in the key map above are from memory and were not checked against JetBrains' reference card.
+
 
 ---
 
@@ -370,24 +390,24 @@ If settled: an `AITextModel` conformance in Umbra, a Settings pane (provider, mo
 
 ## Delivery order and effort
 
-| Order | Item | Effort | Depends on |
-|---|---|---|---|
-| 1 | 0 Menu shortcuts per preset, IntelliJ gap fixes | M | none |
-| 2 | 1.6 Start New Line keys, 1.7 Find Next/Prev | S each | 0 |
-| 3 | 1.2 Matching brace, 1.4 Unselect occurrence | S each | 0 |
-| 4 | H HTTP request play.fill gutter icon | S–M | 0 (⌃↵ key only) |
-| 5 | 1.1 Block comment, 1.3 Folding commands | M each | 0 |
-| 6 | 2.1 Next/prev problem, 2.3 Parameter info, 2.4 Symbol scopes | S each | 0 |
-| 7 | 3.1 Step into/out, 3.2 Pause, 3.5 Run menu | M | 0 |
-| 8 | 6.1–6.5 Tabs, splits, tool-window keys, zoom, Clear Terminal | S each | 0 |
-| 9 | 2.2 Go to Type Declaration | M | none |
-| 10 | 1.5 Complete Statement | M–L | 1.x helpers |
-| 11 | 4.2 File history, 4.3 Revert, 4.4 Push/pull keys | M | 0 |
-| 12 | 5 Replace in Files | M | 0 (for the ⇧⌘R menu key) |
-| 13 | 3.3 Evaluate, 3.4 Run in Context | M–L | 3.1 |
-| 14 | 4.1 Git blame (gutter annotations) | L | new gutter text-annotation API |
-| 15 | 6.6 Go to Tool | S | none |
-| 16 | 7 Generate Code with AI | L | decision |
+| Order | Item | Effort | Depends on | Status |
+|---|---|---|---|---|
+| 1 | 0 Menu shortcuts per preset, IntelliJ gap fixes | M | none | Done |
+| 2 | 1.6 Start New Line keys, 1.7 Find Next/Prev | S each | 0 | Done |
+| 3 | 1.2 Matching brace, 1.4 Unselect occurrence | S each | 0 | Done |
+| 4 | H HTTP request play.fill gutter icon | S–M | 0 (⌃↵ key only) | Done (not run in the app) |
+| 5 | 1.1 Block comment, 1.3 Folding commands | M each | 0 | Done |
+| 6 | 2.1 Next/prev problem, 2.3 Parameter info, 2.4 Symbol scopes | S each | 0 | Done |
+| 7 | 3.1 Step into/out, 3.2 Pause, 3.5 Run menu | M | 0 | Done (UI not run) |
+| 8 | 6.1–6.5 Tabs, splits, tool-window keys, zoom, Clear Terminal | S each | 0 | Done (not run in the app) |
+| 9 | 2.2 Go to Type Declaration | M | none | Done |
+| 10 | 1.5 Complete Statement | M–L | 1.x helpers | Done |
+| 11 | 4.2 File history, 4.3 Revert, 4.4 Push/pull keys | M | 0 | Done (UI not run) |
+| 12 | 5 Replace in Files | M | 0 (for the ⇧⌘R menu key) | Done (UI not run) |
+| 13 | 3.3 Evaluate, 3.4 Run in Context | M–L | 3.1 | **Open** |
+| 14 | 4.1 Git blame (gutter annotations) | L | new gutter text-annotation API | **Open** |
+| 15 | 6.6 Go to Tool | S | none | Done |
+| 16 | 7 Generate Code with AI | L | decision | **Open** (needs a decision) |
 
 S is under a day, M is 1–3 days, L is more than 3 days. These are rough.
 
