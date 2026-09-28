@@ -19,6 +19,8 @@ struct IDETerminalTab: Identifiable, Equatable {
     var title: String
     var workingDirectory: URL
     var restartRequestID: UInt64 = 0
+    /// Bumped to wipe the screen and scrollback of this tab's terminal.
+    var clearRequestID: UInt64 = 0
 
     static func defaultTitle(for directory: URL) -> String {
         let base = directory.lastPathComponent
@@ -171,6 +173,13 @@ public final class IDEWorkspace {
     private let breakpointStore = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
+    /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
+    private struct HTTPGutterStamp: Equatable {
+        let view: ObjectIdentifier
+        let documentID: UUID?
+        let generation: UInt64
+    }
+    @ObservationIgnored private var httpGutterStamp: HTTPGutterStamp?
     let httpSupport = IDEHTTPSupport()
     /// Bumped when the play button should type a command into the selected terminal.
     var terminalCommandTicket: UInt64 = 0
@@ -184,6 +193,12 @@ public final class IDEWorkspace {
     @ObservationIgnored private var lastAutoRevealedDocumentID: UUID?
     var isFindInFilesVisible = false
     var findInFilesQuery = ""
+    var findInFilesReplacement = ""
+    var findInFilesCaseSensitive = false
+    var findInFilesWholeWord = false
+    var findInFilesRegex = false
+    /// Whether the Find in Files drawer shows its replacement row (⇧⌘R opens it that way).
+    var isFindInFilesReplaceVisible = false
     var findInFilesHits: [ProjectSearchResult] = []
     var findInFilesStatus = ""
     var isTerminalVisible = false
@@ -700,9 +715,19 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.showContextActions)
     }
 
+    /// Shows the signatures of the call around the caret (⌘P in the IntelliJ keymap).
+    func showParameterInfo() {
+        _ = host(for: workbench.activePane.id).textView.perform(.showParameterInfo)
+    }
+
     /// Jumps to the method the caret's method overrides, or a class's supertypes (⌘U in the IntelliJ keymap).
     func goToSuperMethod() {
         _ = host(for: workbench.activePane.id).textView.perform(.goToSuperMethod)
+    }
+
+    /// Jumps to the declaration of the type of the symbol at the caret (⌃⇧B in the IntelliJ keymap).
+    func goToTypeDefinition() {
+        _ = host(for: workbench.activePane.id).textView.perform(.goToTypeDefinition)
     }
 
     /// Reformats the selection, or the whole file when nothing is selected (⌥⌘L in the IntelliJ keymap).
@@ -853,6 +878,71 @@ public final class IDEWorkspace {
         sharedPalette(for: host(for: workbench.activePaneID)).presentQuickOpen()
     }
 
+    /// Lists the tool windows (Terminal, Problems, …) and opens the one chosen.
+    public func showToolWindows() {
+        _ = sharedPalette(for: host(for: workbench.activePaneID)).presentToolWindows()
+    }
+
+    /// The tool windows that exist right now, for Go to Tool Window. Choosing one opens it (never
+    /// toggles it shut), so the list can be used to jump between windows.
+    func toolWindowEntries() -> [ToolWindowEntry] {
+        var entries: [ToolWindowEntry] = []
+        func add(_ id: String, _ title: String, _ action: @escaping @MainActor @Sendable () -> Void) {
+            entries.append(ToolWindowEntry(id: id, title: title, action: action))
+        }
+        add("explorer", "Project") { [weak self] in
+            guard let self, !self.isSidebarVisible else { return }
+            self.toggleSidebar()
+        }
+        if showsJavaStructureButton {
+            add("structure", "Structure") { [weak self] in
+                guard let self, !self.isStructureSidebarVisible else { return }
+                self.toggleStructureSidebar()
+            }
+        }
+        if javaSupport.isGradleProject {
+            add("gradle", "Gradle") { [weak self] in
+                guard let self, !self.isGradleSidebarVisible else { return }
+                self.toggleGradleSidebar()
+            }
+        }
+        add("terminal", "Terminal") { [weak self] in
+            guard let self, !self.isBottomToolWindowOpen(.terminal) else { return }
+            self.toggleBottomToolWindow(.terminal)
+        }
+        add("problems", "Problems") { [weak self] in self?.selectProblemsTab() }
+        if showsSourceControlTab {
+            add("sourceControl", "Source Control") { [weak self] in self?.selectSourceControlTab() }
+        }
+        if showsDebugTab {
+            add("debug", "Debug") { [weak self] in self?.selectDebugTab() }
+        }
+        if showsUsagesTab {
+            add("usages", "Usages") { [weak self] in self?.selectUsagesTab() }
+        }
+        if showsTypeHierarchyTab {
+            add("typeHierarchy", "Type Hierarchy") { [weak self] in self?.selectTypeHierarchyTab() }
+        }
+        if showsCallHierarchyTab {
+            add("callHierarchy", "Call Hierarchy") { [weak self] in self?.selectCallHierarchyTab() }
+        }
+        if showsTestResultsTab {
+            add("testResults", "Test Results") { [weak self] in self?.selectTestResultsTab() }
+        }
+        if showsGradleConsoleTab {
+            add("gradleConsole", "Gradle Output") { [weak self] in self?.selectGradleConsoleTab() }
+        }
+        if showsHTTPTab {
+            add("http", "HTTP Response") { [weak self] in self?.selectHTTPConsoleTab() }
+        }
+        return entries
+    }
+
+    /// Lists the declarations of the focused file (⌘F12 in the IntelliJ keymap).
+    public func showFileStructure() {
+        _ = sharedPalette(for: host(for: workbench.activePaneID)).presentFileSymbols()
+    }
+
     public func showGoToSymbol() {
         sharedPalette(for: host(for: workbench.activePaneID)).presentSymbols()
     }
@@ -876,6 +966,22 @@ public final class IDEWorkspace {
                 ? "Open a folder to search the project"
                 : "Enter a query and press Return"
         }
+    }
+
+    /// Opens Find in Files with the replacement row showing (⇧⌘R in the IntelliJ keymap).
+    public func showReplaceInFiles() {
+        isFindInFilesReplaceVisible = true
+        showFindInFiles()
+    }
+
+    /// The query the drawer's field and option toggles describe.
+    var findInFilesSearchQuery: WorkspaceSearchQuery {
+        WorkspaceSearchQuery(
+            text: findInFilesQuery,
+            isCaseSensitive: findInFilesCaseSensitive,
+            matchWholeWord: findInFilesWholeWord,
+            useRegularExpression: findInFilesRegex
+        )
     }
 
     func hideFindInFiles() {
@@ -1019,10 +1125,12 @@ public final class IDEWorkspace {
                     return
                 }
                 gradleDebugActive = true
+                configureDebugSession()
                 Task {
                     await debugSession.attachForGradle(
                         suspendOnStart: configuration.suspendOnStart,
-                        breakpoints: breakpoints
+                        breakpoints: breakpoints,
+                        sourceRoots: debugSourceRoots()
                     )
                 }
                 showGradleOutput()
@@ -1066,7 +1174,8 @@ public final class IDEWorkspace {
                 refreshLastRunConfiguration()
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
                 selectDebugTab()
-                await debugSession.start(launch: launch, breakpoints: breakpoints)
+                configureDebugSession()
+                await debugSession.start(launch: launch, breakpoints: breakpoints, sourceRoots: debugSourceRoots())
             }
         default:
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
@@ -1078,6 +1187,64 @@ public final class IDEWorkspace {
         configuration.launchMode = .debug
         debugLaunch(configuration)
     }
+
+    /// Directories the debugged program's sources live in: every Gradle source set, then the
+    /// project folder.
+    private func debugSourceRoots() -> [URL] {
+        var roots: [URL] = []
+        for subproject in javaSupport.gradleModel?.subprojects ?? [] {
+            for sourceSet in subproject.sourceSets {
+                roots.append(contentsOf: sourceSet.sourceDirs)
+                roots.append(contentsOf: sourceSet.generatedSourceDirs)
+            }
+        }
+        if let root = project.rootURL {
+            roots.append(root)
+        }
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    private func configureDebugSession() {
+        debugSession.onStopped = { [weak self] file, line in
+            self?.revealDebugStop(file: file, line: line)
+        }
+    }
+
+    /// Opens the file the program stopped in and selects the stopped line.
+    private func revealDebugStop(file: URL, line: Int) {
+        let text = openBufferText(for: file) ?? (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        let start = TextPosition(line: max(0, line - 1), column: 0, utf16Offset: 0)
+        let end = TextPosition(line: max(0, line - 1), column: Int.max / 2, utf16Offset: 0)
+        let nsRange = ProblemLocator.nsRange(for: EditorIntelligence.TextRange(start: start, end: end), in: text)
+        let document = workbench.allDocuments().first { $0.url?.standardizedFileURL == file.standardizedFileURL }
+        _ = openNavigationLocation(Location(
+            documentID: document?.documentID ?? DocumentID(),
+            url: file,
+            range: EditorIntelligence.TextRange(
+                start: TextPosition(line: start.line, column: 0, utf16Offset: nsRange.location),
+                end: TextPosition(line: start.line, column: nsRange.length, utf16Offset: nsRange.location + nsRange.length)
+            ),
+            displayName: file.lastPathComponent
+        ))
+    }
+
+    /// True while a debug session is stopped at a line, so stepping and Resume mean something.
+    var isDebuggerStopped: Bool {
+        if case .stopped = debugSession.state { return true }
+        return false
+    }
+
+    var isDebuggerRunning: Bool {
+        if case .running = debugSession.state { return true }
+        return false
+    }
+
+    func debugResume() { debugSession.resume() }
+    func debugPause() { debugSession.pause() }
+    func debugStepOver() { debugSession.stepOver() }
+    func debugStepInto() { debugSession.stepInto() }
+    func debugStepOut() { debugSession.stepOut() }
 
     func stopDebugging() {
         if gradleDebugActive || debugSession.isGradleAttachSession {
@@ -1359,6 +1526,81 @@ public final class IDEWorkspace {
         selectSourceControlTab()
     }
 
+    /// The file behind the active editor, when it is inside the open git repository.
+    private func activeFileInRepository() -> URL? {
+        guard gitStatus.isRepository, let root = gitStatus.repositoryRootPath,
+              let url = workbench.activePane.selectedDocument?.url?.standardizedFileURL,
+              url.path.hasPrefix(root + "/") else { return nil }
+        return url
+    }
+
+    private func showGitNotice(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Lists the commits that touched the active file, in the Source Control tab.
+    func showFileHistory() {
+        guard let url = activeFileInRepository() else {
+            showGitNotice("No File History", "The active file is not in a git repository.")
+            return
+        }
+        gitStatus.showFileHistory(path: url.path)
+        showSourceControl()
+    }
+
+    /// Puts the active file back to its last commit (⌥⌘Z in the IntelliJ keymap), after asking.
+    /// Staged and unstaged changes and unsaved edits are all discarded; nothing can bring them back.
+    func revertActiveFile() {
+        guard let url = activeFileInRepository() else {
+            showGitNotice("Nothing to Revert", "The active file is not in a git repository.")
+            return
+        }
+        let name = url.lastPathComponent
+        let isDirty = workbench.activePane.selectedDocument?.isDirty == true
+        let status = gitStatus.status(for: url, isDirectory: false)
+        if status == nil, !isDirty {
+            showGitNotice("Nothing to Revert", "\(name) has no changes since the last commit.")
+            return
+        }
+        if status == .untracked {
+            showGitNotice("Nothing to Revert", "\(name) is not under version control yet, so there is no earlier version to go back to.")
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Revert changes to \(name)?"
+        alert.informativeText = "This discards every change to \(name) since the last commit, including unsaved edits. It cannot be undone."
+        // Cancel first, so it is the default answer to Return.
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Revert")
+        alert.buttons[1].hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        gitStatus.revert(
+            path: url.path,
+            then: { [weak self] in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: [url.path]) },
+            onFailure: { [weak self] message in self?.showGitNotice("Could Not Revert", message) }
+        )
+    }
+
+    /// Fast-forwards the current branch from its remote (⌘T in the IntelliJ keymap). The outcome
+    /// shows in the Source Control tab.
+    func pullProject() {
+        guard gitStatus.isRepository else { return }
+        gitStatus.pull()
+        showSourceControl()
+    }
+
+    /// Pushes the current branch (⇧⌘K in the IntelliJ keymap). The outcome shows in the Source Control tab.
+    func pushProject() {
+        guard gitStatus.isRepository else { return }
+        gitStatus.push()
+        showSourceControl()
+    }
+
     /// Switch and pull rewrite files on disk. An unsaved editor in the repository would be saved
     /// over that result, or reloaded out from under the user, so those actions wait for a save.
     private func hasUnsavedEditorsInRepository() -> Bool {
@@ -1374,7 +1616,9 @@ public final class IDEWorkspace {
 
     /// Reloads clean text tabs from disk after a branch switch or fast-forward pull, and closes
     /// tabs whose files the new tree removed. Dirty buffers are left untouched.
-    private func reloadOpenEditorsAfterGitChange() {
+    /// - Parameter discardingEditsIn: paths whose unsaved edits were thrown away on purpose (a
+    ///   revert), so those tabs reload too instead of being left as dirty buffers.
+    private func reloadOpenEditorsAfterGitChange(discardingEditsIn forced: Set<String> = []) {
         guard let root = gitStatus.repositoryRootPath else { return }
         let open = workbench.panes.flatMap { pane in
             pane.documents.compactMap { document -> (EditorPane, WorkbenchDocument)? in
@@ -1396,7 +1640,8 @@ public final class IDEWorkspace {
                     missing.append(contentsOf: open.filter { $0.1 === document })
                     continue
                 }
-                guard document.contentKind == .text, !document.isDirty else { continue }
+                let discarded = forced.contains(url.standardizedFileURL.path)
+                guard document.contentKind == .text, !document.isDirty || discarded else { continue }
                 let showing = workbench.panes.filter { $0.selectedDocument === document }
                 if showing.isEmpty {
                     do {
@@ -1640,6 +1885,14 @@ public final class IDEWorkspace {
         restartTerminalTab(selectedTerminalTabID)
     }
 
+    /// Wipes the visible terminal's screen and scrollback; the shell redraws its prompt.
+    func clearTerminal() {
+        guard isTerminalVisible, isTerminalTabSelected,
+              let id = selectedTerminalTabID,
+              let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        terminalTabs[index].clearRequestID += 1
+    }
+
     func restartTerminalTab(_ id: UUID?) {
         guard let id = id ?? selectedTerminalTabID,
               let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
@@ -1697,9 +1950,20 @@ public final class IDEWorkspace {
         guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else {
             return
         }
+        if findInFilesRegex, findInFilesSearchQuery.compiledRegularExpression() == nil {
+            findInFilesHits = []
+            findInFilesStatus = "Not a valid regular expression"
+            return
+        }
         findInFilesStatus = "Searching…"
         Task {
-            let hits = await intelligenceController.searchProject(query, in: root)
+            let hits = await intelligenceController.searchProject(
+                query,
+                in: root,
+                isCaseSensitive: findInFilesCaseSensitive,
+                matchWholeWord: findInFilesWholeWord,
+                useRegularExpression: findInFilesRegex
+            )
             findInFilesHits = hits
             if hits.isEmpty {
                 findInFilesStatus = "No results"
@@ -1709,6 +1973,108 @@ public final class IDEWorkspace {
                 findInFilesStatus = "\(hits.count) results"
             }
         }
+    }
+
+    /// Replaces the search text with the replacement text across the project, after a preview.
+    /// Files open in an editor are edited in that editor (left unsaved, one undo step); the rest
+    /// are rewritten on disk. Nothing is changed until Apply, and a match whose text has changed
+    /// since the search is skipped rather than overwritten.
+    func replaceInFiles() {
+        isFindInFilesVisible = true
+        isFindInFilesReplaceVisible = true
+        guard let root = project.rootURL else {
+            findInFilesStatus = "Open a folder to replace in its files"
+            return
+        }
+        let query = findInFilesSearchQuery
+        guard !query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || query.useRegularExpression && !query.text.isEmpty else {
+            findInFilesStatus = "Enter the text to replace and press Replace All"
+            return
+        }
+        guard query.compiledRegularExpression() != nil else {
+            findInFilesStatus = "Not a valid regular expression"
+            return
+        }
+        guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else { return }
+        let replacement = findInFilesReplacement
+        findInFilesStatus = "Preparing the replacement…"
+        Task {
+            // The search only picks the files; each is then read as the editor or disk has it now.
+            let hits = await intelligenceController.searchProject(
+                query.text,
+                in: root,
+                isCaseSensitive: query.isCaseSensitive,
+                matchWholeWord: query.matchWholeWord,
+                useRegularExpression: query.useRegularExpression
+            )
+            var urls: [URL] = []
+            var seen = Set<String>()
+            for hit in hits where seen.insert(hit.url.standardizedFileURL.path).inserted {
+                urls.append(hit.url)
+            }
+            var live: [URL: String] = [:]
+            for url in urls {
+                if let text = openBufferText(for: url) { live[url] = text }
+            }
+            let planned = await Task.detached(priority: .userInitiated) { () -> (entries: [WorkspaceEditPlanEntry], unreadable: Int) in
+                var entries: [WorkspaceEditPlanEntry] = []
+                var unreadable = 0
+                for url in urls {
+                    guard let text = live[url] ?? (try? String(contentsOf: url, encoding: .utf8)) else {
+                        unreadable += 1
+                        continue
+                    }
+                    entries.append(contentsOf: ProjectReplacePlanner.entries(for: query, replacement: replacement, in: text, url: url))
+                }
+                return (entries, unreadable)
+            }.value
+            guard !planned.entries.isEmpty else {
+                findInFilesStatus = "Nothing to replace"
+                return
+            }
+            var warnings: [String] = []
+            if hits.count >= 2_000 {
+                warnings.append("The search stopped at 2,000 matches, so some files may be missing. Search again after applying.")
+            }
+            if planned.unreadable > 0 {
+                warnings.append("\(planned.unreadable) file\(planned.unreadable == 1 ? "" : "s") couldn't be read as UTF-8 text and \(planned.unreadable == 1 ? "was" : "were") skipped.")
+            }
+            if !live.isEmpty {
+                warnings.append("Files that are open are changed in their editors and left unsaved.")
+            }
+            let replacementLabel = replacement.isEmpty ? "nothing" : "“\(replacement)”"
+            let plan = WorkspaceEditPlan(
+                entries: planned.entries,
+                warnings: warnings,
+                title: "Replace “\(query.text)” with \(replacementLabel)"
+            )
+            let files = Set(planned.entries.map(\.url)).count
+            findInFilesStatus = "\(planned.entries.count) replacement\(planned.entries.count == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s"): review and apply"
+            presentWorkspaceEditPreview(plan) { [weak self] edit in
+                await self?.applyReplacement(edit, plan: plan) ?? WorkspaceEditApplyResult()
+            }
+        }
+    }
+
+    private func applyReplacement(_ edit: WorkspaceEdit, plan: WorkspaceEditPlan) async -> WorkspaceEditApplyResult {
+        var texts: [URL: String] = [:]
+        for url in edit.changes.keys {
+            texts[url] = openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
+        }
+        let outcome = IDEReplaceInFilesGuard.verified(edit, against: plan, texts: texts)
+        var result = outcome.edit.changes.isEmpty
+            ? WorkspaceEditApplyResult()
+            : await IDEWorkspaceEditApplier(host: self).apply(outcome.edit)
+        for (url, count) in outcome.staleCounts {
+            let note = "\(count) replacement\(count == 1 ? "" : "s") skipped: the file changed since the search."
+            result.failures[url] = result.failures[url].map { "\($0) \(note)" } ?? note
+        }
+        if result.failures.isEmpty {
+            let count = outcome.edit.changes.values.reduce(0) { $0 + $1.count }
+            findInFilesHits = []
+            findInFilesStatus = "Replaced \(count) occurrence\(count == 1 ? "" : "s") in \(result.appliedFiles.count) file\(result.appliedFiles.count == 1 ? "" : "s")"
+        }
+        return result
     }
 
     /// Opens a Go to Definition target. A file already open is focused without reloading it, so a
@@ -1759,6 +2125,25 @@ public final class IDEWorkspace {
         ))
     }
 
+    /// Jumps to the next (or previous) error or warning after the caret, across files, wrapping
+    /// around (F2 / ⇧F2 in the IntelliJ keymap). It walks the same list the Problems tab shows.
+    func goToProblem(forward: Bool) {
+        let host = host(for: workbench.activePane.id)
+        let textView = host.textView
+        let location = textView.textLocation(at: textView.selectedRange.location)
+        let position = ProblemNavigator.Position(
+            url: workbench.activePane.selectedDocument?.url?.standardizedFileURL,
+            line: location?.lineNumber ?? 0,
+            column: location?.column ?? 0
+        )
+        guard let row = ProblemNavigator.step(from: position, forward: forward, in: problems.files) else {
+            host.intelligenceController?.showHint(problems.errorCount + problems.warningCount == 0
+                                                  ? "No problems" : "No more problems")
+            return
+        }
+        openProblem(row)
+    }
+
     /// A file's directory relative to the open project (or abbreviated home) for compact display.
     func displayDirectory(of url: URL) -> String {
         let directory = url.deletingLastPathComponent().standardizedFileURL.path
@@ -1800,6 +2185,7 @@ public final class IDEWorkspace {
         case .definition: return "Go to Definition"
         case .implementation: return "Go to Implementation"
         case .superMethod: return "Go to Super Method"
+        case .typeDefinition: return "Go to Type Declaration"
         case .references: return "Find Usages"
         }
     }
@@ -1896,6 +2282,99 @@ public final class IDEWorkspace {
 
     public func closeActivePane() {
         closePane(workbench.activePaneID)
+    }
+
+    /// Selects the tab after (or before) the active one in the active pane, wrapping around.
+    func selectAdjacentTab(forward: Bool) {
+        let pane = workbench.activePane
+        let documents = pane.documents
+        guard documents.count > 1,
+              let current = documents.firstIndex(where: { $0.id == pane.selectedDocumentID }),
+              let target = forward
+                ? TabListEngine.nextIndex(after: current, count: documents.count)
+                : TabListEngine.previousIndex(before: current, count: documents.count) else { return }
+        selectTab(documents[target].id, in: pane.id)
+    }
+
+    /// Moves focus to the next (or previous) editor split, wrapping around, in layout order.
+    func focusAdjacentPane(forward: Bool) {
+        let panes = workbench.layout.flattenedPanes()
+        guard panes.count > 1,
+              let current = panes.firstIndex(where: { $0.id == workbench.activePaneID }),
+              let target = forward
+                ? TabListEngine.nextIndex(after: current, count: panes.count)
+                : TabListEngine.previousIndex(before: current, count: panes.count) else { return }
+        // Flush the pane being left so it keeps its caret and scroll position.
+        let leaving = workbench.activePane
+        if let document = leaving.selectedDocument {
+            syncTextViewToDocument(host(for: leaving.id).textView, document: document, from: host(for: leaving.id))
+        }
+        workbench.activatePane(panes[target].id)
+        activatePane(panes[target].id)
+        focusActiveEditor()
+    }
+
+    /// ⌘5 in the IntelliJ keymap. There is no Debug window before a session has started.
+    func toggleDebugToolWindow() {
+        guard showsDebugTab else { return }
+        toggleBottomToolWindow(.debug)
+    }
+
+    private struct HiddenToolWindows {
+        var sidebar: Bool
+        var structure: Bool
+        var gradle: Bool
+        var bottomPanel: Bool
+    }
+
+    @ObservationIgnored private var hiddenToolWindows: HiddenToolWindows?
+
+    /// IntelliJ's Hide All Tool Windows (⇧⌘F12): hides the sidebars and the bottom panel, and
+    /// the next press brings back exactly the ones that were showing.
+    func toggleAllToolWindows() {
+        if let saved = hiddenToolWindows {
+            isSidebarVisible = saved.sidebar
+            isStructureSidebarVisible = saved.structure
+            isGradleSidebarVisible = saved.gradle
+            isTerminalVisible = saved.bottomPanel
+            hiddenToolWindows = nil
+            saveSession()
+            return
+        }
+        let saved = HiddenToolWindows(
+            sidebar: isSidebarVisible,
+            structure: isStructureSidebarVisible,
+            gradle: isGradleSidebarVisible,
+            bottomPanel: isTerminalVisible
+        )
+        guard saved.sidebar || saved.structure || saved.gradle || saved.bottomPanel else { return }
+        hiddenToolWindows = saved
+        isSidebarVisible = false
+        isStructureSidebarVisible = false
+        isGradleSidebarVisible = false
+        isTerminalVisible = false
+        focusActiveEditor()
+        saveSession()
+    }
+
+    func zoomIn() { changeZoom(bySteps: 1) }
+    func zoomOut() { changeZoom(bySteps: -1) }
+
+    func resetZoom() {
+        preferences.zoomPercent = 100
+        applyZoom()
+    }
+
+    private func changeZoom(bySteps steps: Int) {
+        preferences.zoomPercent = IDEPreferences.zoomed(preferences.zoomPercent, bySteps: steps)
+        applyZoom()
+    }
+
+    /// Rebuilds the editor theme at the zoomed size and repaints every editor.
+    private func applyZoom() {
+        preferences.applyTheme()
+        applyPreferencesToAllHosts()
+        host(for: workbench.activePaneID).intelligenceController?.showHint("Zoom \(preferences.zoomPercent)%")
     }
 
     public func toggleSidebar() {
@@ -2369,6 +2848,9 @@ public final class IDEWorkspace {
         host.wireHTTPActions(sendRequest: { [weak self] in
             self?.sendActiveHTTPRequest()
         })
+        host.wireProblemNavigation { [weak self] forward in
+            self?.goToProblem(forward: forward)
+        }
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
         // `.goToLine` natively.
@@ -3018,6 +3500,8 @@ public final class IDEWorkspace {
             }
         )
         palette.symbolIndex = intelligenceServices.symbolIndex
+        palette.toolWindowEntriesProvider = { [weak self] in self?.toolWindowEntries() ?? [] }
+        palette.activeDocumentIDProvider = { [weak self] in self?.workbench.activePane.selectedDocument?.documentID }
         palette.workspaceRoot = project.rootURL
         palette.onOpenFile = { [weak self] url in
             guard let self else { return }
@@ -3085,6 +3569,46 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.runActiveJavaTests() }),
             EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
                           action: { [weak self] in self?.runLastRunConfiguration() }),
+            EditorCommand(id: "app.replaceInFiles", title: "Replace in Files…", group: "Edit",
+                          action: { [weak self] in self?.showReplaceInFiles() }),
+            EditorCommand(id: "app.git.pull", title: "Git: Update Project (Pull)", group: "Git",
+                          action: { [weak self] in self?.pullProject() }),
+            EditorCommand(id: "app.git.push", title: "Git: Push", group: "Git",
+                          action: { [weak self] in self?.pushProject() }),
+            EditorCommand(id: "app.git.fileHistory", title: "Git: Show History for File", group: "Git",
+                          action: { [weak self] in self?.showFileHistory() }),
+            EditorCommand(id: "app.git.revert", title: "Git: Revert File…", group: "Git",
+                          action: { [weak self] in self?.revertActiveFile() }),
+            EditorCommand(id: "app.view.nextTab", title: "View: Next Tab", group: "View",
+                          action: { [weak self] in self?.selectAdjacentTab(forward: true) }),
+            EditorCommand(id: "app.view.previousTab", title: "View: Previous Tab", group: "View",
+                          action: { [weak self] in self?.selectAdjacentTab(forward: false) }),
+            EditorCommand(id: "app.view.nextSplit", title: "View: Next Editor Group", group: "View",
+                          action: { [weak self] in self?.focusAdjacentPane(forward: true) }),
+            EditorCommand(id: "app.view.previousSplit", title: "View: Previous Editor Group", group: "View",
+                          action: { [weak self] in self?.focusAdjacentPane(forward: false) }),
+            EditorCommand(id: "app.view.hideAllToolWindows", title: "View: Hide All Tool Windows", group: "View",
+                          action: { [weak self] in self?.toggleAllToolWindows() }),
+            EditorCommand(id: "app.view.zoomIn", title: "View: Zoom In", group: "View",
+                          action: { [weak self] in self?.zoomIn() }),
+            EditorCommand(id: "app.view.zoomOut", title: "View: Zoom Out", group: "View",
+                          action: { [weak self] in self?.zoomOut() }),
+            EditorCommand(id: "app.view.resetZoom", title: "View: Actual Size", group: "View",
+                          action: { [weak self] in self?.resetZoom() }),
+            EditorCommand(id: "app.terminal.clear", title: "Terminal: Clear", group: "View",
+                          action: { [weak self] in self?.clearTerminal() }),
+            EditorCommand(id: "app.debug.resume", title: "Debug: Resume", group: "Run",
+                          action: { [weak self] in self?.debugResume() }),
+            EditorCommand(id: "app.debug.pause", title: "Debug: Pause", group: "Run",
+                          action: { [weak self] in self?.debugPause() }),
+            EditorCommand(id: "app.debug.stepOver", title: "Debug: Step Over", group: "Run",
+                          action: { [weak self] in self?.debugStepOver() }),
+            EditorCommand(id: "app.debug.stepInto", title: "Debug: Step Into", group: "Run",
+                          action: { [weak self] in self?.debugStepInto() }),
+            EditorCommand(id: "app.debug.stepOut", title: "Debug: Step Out", group: "Run",
+                          action: { [weak self] in self?.debugStepOut() }),
+            EditorCommand(id: "app.debug.stop", title: "Debug: Stop", group: "Run",
+                          action: { [weak self] in self?.stopDebugging() }),
             EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Run Configuration…", group: "Java",
                           action: { [weak self] in self?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
@@ -3615,17 +4139,44 @@ public final class IDEWorkspace {
         refreshHTTPSendAvailability(from: textView)
     }
 
+    /// Only clears the flag for a non-HTTP editor. Whether an HTTP file has a request to send comes
+    /// from `refreshHTTPGutter`, on the same debounce as the Java run button: parsing the whole
+    /// buffer on every caret move or keystroke would put document size on the typing path.
     private func refreshHTTPSendAvailability(from textView: TextView) {
-        let document = workbench.activePane.selectedDocument
-        guard document?.languageIdentifier == "http" else {
+        if workbench.activePane.selectedDocument?.languageIdentifier != "http" {
             httpFileCanSend = false
+        }
+    }
+
+    /// Puts a `play.fill` button in the gutter on the first line of every request in an `.http`
+    /// file. Clicking one sends that request, wherever the caret is.
+    private func refreshHTTPGutter(from textView: TextView, fileURL: URL?) {
+        let stamp = HTTPGutterStamp(
+            view: ObjectIdentifier(textView),
+            documentID: workbench.activePane.selectedDocument?.id,
+            generation: textView.contentGeneration
+        )
+        guard stamp != httpGutterStamp else { return }
+        httpGutterStamp = stamp
+        let locations = HTTPRequestParser.requestLocations(in: textView.text)
+        httpFileCanSend = !locations.isEmpty
+        textView.setGutterDecorations(locations.map {
+            GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request")
+        })
+        textView.gutterDecorationHandler = { [weak self, weak textView] line in
+            guard let self, let textView else { return }
+            self.sendHTTPRequest(atLine: line, from: textView, fileURL: fileURL)
+        }
+    }
+
+    /// Parses fresh at click time: the buttons may be one debounce behind an edit.
+    private func sendHTTPRequest(atLine line: Int, from textView: TextView, fileURL: URL?) {
+        let text = textView.text
+        guard let location = HTTPRequestParser.requestLocations(in: text).first(where: { $0.startLine == line }) else {
             return
         }
-        httpFileCanSend = HTTPRequestParser.canParseRequest(
-            in: textView.text,
-            caretUTF16Offset: textView.selectedRange.location,
-            fileURL: document?.url
-        )
+        showHTTPResponse()
+        httpSupport.send(text: text, caretUTF16Offset: location.utf16Range.lowerBound, fileURL: fileURL)
     }
 
     private func refreshJavaRunAvailability(from textView: TextView) {
@@ -3648,7 +4199,14 @@ public final class IDEWorkspace {
         let canGradleRun = javaSupport.isGradleProject && project.rootURL != nil
         javaFileCanRun = hasMain && (canPlainRun || canGradleRun)
         javaRunFileURL = fileURL
-        Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
+        // One owner per editor for the gutter icons: HTTP files get send buttons, everything else
+        // goes through the Java path, which also clears the gutter for non-Java files.
+        if document?.languageIdentifier == "http" {
+            refreshHTTPGutter(from: textView, fileURL: fileURL)
+        } else {
+            httpGutterStamp = nil
+            Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
+        }
     }
 
     private func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
@@ -4040,7 +4598,6 @@ extension IDEWorkspace: TextViewDelegate {
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)
-        refreshHTTPSendAvailability(from: textView)
         refreshJavaStructure()
         recordRecentlyEdited()
         // The tab dot and window chrome do not change on the second character. Rebuilding every

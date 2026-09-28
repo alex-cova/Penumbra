@@ -373,6 +373,42 @@ final class JavaCompletionProviderContextTests: XCTestCase {
         XCTAssertEqual(model.activeSignature, 1)
     }
 
+    /// Parameter Info (⌘P) works from anywhere inside the argument list, not only right after
+    /// `(` or `,`, and says nothing outside a call.
+    private func signatureHelp(_ source: String) async throws -> ParameterHintsModel? {
+        let bar = stub("Bar", methods: [
+            method("put", [("key", classType("java.lang.String")), ("value", .primitive(.int))]),
+            method("put", [("key", classType("java.lang.String"))])
+        ])
+        let index = try await makeIndex(stubs: [bar, stringStub])
+        let provider = JavaCompletionProvider(index: index)
+        let requestContext = context(source)
+        return await provider.signatureHelp(for: requestContext.document, at: requestContext.cursor.position)
+    }
+
+    func testSignatureHelpFromTheMiddleOfAnArgument() async throws {
+        let model = try await signatureHelp("class Foo { void m(Bar bar, int n) { bar.put(\"a\", n€ + 1); } }")
+        XCTAssertEqual(try XCTUnwrap(model).activeParameter, 1)
+    }
+
+    func testSignatureHelpWithArgumentsAfterTheCaret() async throws {
+        let model = try await signatureHelp("class Foo { void m(Bar bar) { bar.put(€\"a\", 1); } }")
+        XCTAssertEqual(try XCTUnwrap(model).activeParameter, 0)
+    }
+
+    func testSignatureHelpFollowsTheInnerCallOfANestedCall() async throws {
+        let model = try await signatureHelp("class Foo { void m(Bar bar) { bar.put(\"a\".concat(€), 1); } }")
+        // `concat` is unknown to this index, so there are no candidates for the inner call.
+        XCTAssertNil(model)
+    }
+
+    func testNoSignatureHelpOutsideACall() async throws {
+        let afterCall = try await signatureHelp("class Foo { void m(Bar bar) { bar.put(\"a\", 1)€; } }")
+        XCTAssertNil(afterCall)
+        let noCall = try await signatureHelp("class Foo { void m(Bar bar) { int x = €1; } }")
+        XCTAssertNil(noCall)
+    }
+
     func testPrimaryForJavaOnly() {
         let provider = JavaCompletionProvider(index: JavaIndex())
         XCTAssertTrue(provider.isPrimary(for: context("class Foo { €}")))

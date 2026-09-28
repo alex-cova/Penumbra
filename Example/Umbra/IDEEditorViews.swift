@@ -83,6 +83,23 @@ final class IDEEditorPaneHost: NSView {
         }
     }
 
+    /// Routes F2 / ⇧F2 (next / previous problem) to the workspace, which owns the problem list.
+    func wireProblemNavigation(_ go: @escaping (_ forward: Bool) -> Void) {
+        let previousHandler = textView.editorActionHandler
+        textView.editorActionHandler = { action in
+            switch action {
+            case .goToNextProblem:
+                go(true)
+                return true
+            case .goToPreviousProblem:
+                go(false)
+                return true
+            default:
+                return previousHandler?(action) ?? false
+            }
+        }
+    }
+
     func wireHTTPActions(sendRequest: @escaping () -> Void) {
         let previousHandler = textView.editorActionHandler
         textView.editorActionHandler = { action in

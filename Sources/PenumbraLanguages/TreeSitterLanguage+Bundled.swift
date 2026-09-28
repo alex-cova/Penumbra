@@ -17,7 +17,7 @@ public extension TreeSitterLanguage {
             highlightsQuery: highlightsQuery,
             injectionsQuery: injectionsQuery,
             indentationScopes: .javaScript,
-            lineCommentPrefix: "//"
+            lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
         )
     }
 
@@ -50,22 +50,25 @@ public extension TreeSitterLanguage {
 
     /// HTML. Supply ``BundledLanguageProvider`` (or ``HTMLLanguageProvider``) so `<script>` / `<style>`
     /// inject JavaScript and CSS. HTML has no line-comment syntax (only `<!-- -->`), so
-    /// `lineCommentPrefix` stays `nil` — ⌘/ is a no-op here, matching every other editor's HTML mode.
+    /// `lineCommentPrefix` stays `nil` — ⌘/ is a no-op here, matching every other editor's HTML mode;
+    /// ⌥⌘/ toggles `<!-- -->`.
     static var html: TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_html(),
             highlightsQuery: QueryResources.query(named: "highlights", in: "HTML"),
             injectionsQuery: QueryResources.query(named: "injections", in: "HTML"),
-            indentationScopes: .html
+            indentationScopes: .html,
+            blockCommentDelimiters: .html
         )
     }
 
-    // CSS has no line-comment syntax (only `/* */`), so `lineCommentPrefix` stays `nil`.
+    // CSS has no line-comment syntax (only `/* */`), so `lineCommentPrefix` stays `nil`; ⌥⌘/ toggles `/* */`.
     static var css: TreeSitterLanguage {
         TreeSitterLanguage(
             tree_sitter_css(),
             highlightsQuery: QueryResources.query(named: "highlights", in: "CSS"),
-            indentationScopes: .css
+            indentationScopes: .css,
+            blockCommentDelimiters: .cStyle
         )
     }
 
@@ -79,7 +82,7 @@ public extension TreeSitterLanguage {
             tree_sitter_typescript(),
             highlightsQuery: highlightsQuery,
             indentationScopes: .javaScript,
-            lineCommentPrefix: "//"
+            lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
         )
     }
 

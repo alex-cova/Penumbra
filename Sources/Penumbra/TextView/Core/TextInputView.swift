@@ -27,6 +27,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewIsEditable(_ view: TextInputView) -> Bool
     func textInputView(_ view: TextInputView, didRequestSelectionInteraction enabled: Bool)
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
+    func textInputView(_ view: TextInputView, didRequestFindStepForward forward: Bool)
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent)
     /// Asks the host to perform a keymap action the editor core does not handle itself
@@ -2311,6 +2312,44 @@ extension TextInputView {
         applySelectedRanges(ranges)
     }
 
+    /// Removes the most recently added occurrence (the one with the highest `location`, as in
+    /// ``skipCurrentOccurrence()``) and makes the last remaining selection primary. No-op with
+    /// fewer than two selections.
+    func unselectLastOccurrence() {
+        var ranges = selectedRanges
+        guard ranges.count > 1, let last = ranges.max(by: { $0.location < $1.location }) else {
+            return
+        }
+        ranges.removeAll { $0 == last }
+        let primary = ranges.indices.max(by: { ranges[$0].location < ranges[$1].location }) ?? 0
+        pushCaretHistory()
+        applySelectedRanges(ranges, primaryIndex: primary)
+    }
+
+    /// Moves every caret to the bracket matching the one it touches, or to just after the
+    /// innermost enclosing opening bracket. A selection collapses to a caret at its end. Carets
+    /// with no bracket nearby stay where they are.
+    func goToMatchingBracket() {
+        var moved = false
+        let length = stringView.length
+        let targets = selectedRanges.map { range -> NSRange in
+            let origin = range.length == 0 ? range.location : range.upperBound
+            guard let target = BracketNavigation.target(from: origin, documentLength: length,
+                                                        substring: { stringView.substring(in: $0) }),
+                  target != origin || range.length > 0 else {
+                return range
+            }
+            moved = true
+            return NSRange(location: target, length: 0)
+        }
+        guard moved else {
+            return
+        }
+        let primary = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        pushCaretHistory()
+        applySelectedRanges(targets, primaryIndex: primary)
+    }
+
     /// Selects every occurrence of the current query in the document. If the selection is empty,
     /// the word under the caret becomes the query first (matching `selectNextOccurrence()`).
     func selectAllOccurrences() {
@@ -3432,6 +3471,44 @@ extension TextInputView {
         toggleComment(in: ranges, commentPrefix: commentPrefix)
     }
 
+    /// Toggles a block comment around every selection. See ``BlockCommentService`` for the rules.
+    func toggleBlockComment() {
+        guard let delimiters = languageMode.blockCommentDelimiters else {
+            return
+        }
+        let ranges = multiSelectionController.hasMultipleSelections
+            ? multiSelectionController.selections
+            : selection.map { [$0] } ?? []
+        guard !ranges.isEmpty else {
+            return
+        }
+        let stringView = self.stringView
+        let service = BlockCommentService(delimiters: delimiters,
+                                          documentLength: stringView.length,
+                                          substring: { stringView.substring(in: $0) })
+        guard let result = service.toggle(ranges) else {
+            return
+        }
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        timedUndoManager.beginIsolatedUndoGrouping()
+        // Descending order: an edit never shifts the location of one still to be applied.
+        for edit in result.edits.reversed() {
+            replaceText(in: edit.range,
+                        with: edit.replacement,
+                        selectedRangesAfterUndo: ranges,
+                        primaryIndexAfterUndo: primaryIndex,
+                        undoActionName: "Toggle Block Comment",
+                        updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        if result.selections.count == 1 {
+            selection = result.selections[0]
+            selectionAnchor = result.selections[0].location
+        } else {
+            applySelectedRanges(MultiSelectionController.normalize(result.selections), primaryIndex: primaryIndex)
+        }
+    }
+
     private func toggleComment(in ranges: [NSRange], commentPrefix: String) {
         var rows = Set<Int>()
         for range in ranges {
@@ -3501,6 +3578,73 @@ extension TextInputView {
         }
         let adjustedColumn = column >= edit.editColumn ? column + edit.delta : column
         return location(forRow: row, column: adjustedColumn)
+    }
+}
+
+// MARK: - Complete Current Statement
+extension TextInputView {
+    /// IntelliJ's Complete Current Statement (⇧⌘⏎). Each caret's line is finished by
+    /// ``StatementCompletionService`` (brackets closed, `;` or a `{}` body added), then a line
+    /// break is inserted the way Enter would, so a `{|}` body is split and indented. One undo step.
+    func completeStatement() {
+        guard let behavior = languageMode.enterBehavior, behavior.cStyleIndent else {
+            startNewLine()
+            return
+        }
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else {
+            return
+        }
+        var rows = Set<Int>()
+        for range in originalSelections {
+            rows.insert(lineManager.row(containingCharacterAt: range.upperBound) ?? max(lineManager.lineCount - 1, 0))
+        }
+        struct Job {
+            let location: Int
+            let text: String
+            let caretInside: Int?
+            let lineEnd: Int
+        }
+        var jobs: [Job] = []
+        for row in rows.sorted() {
+            let line = lineManager.lineInfo(atRow: row)
+            let content = stringView.substring(in: NSRange(location: line.location, length: line.length)) ?? ""
+            let completion = StatementCompletionService.complete(line: content,
+                                                                 extraControlKeywords: behavior.controlKeywords)
+            jobs.append(Job(location: line.location + (completion?.insertionOffset ?? line.length),
+                            text: completion?.appended ?? "",
+                            caretInside: completion?.caretOffsetInAppended,
+                            lineEnd: line.location + line.length))
+        }
+        let edits = jobs.filter { !$0.text.isEmpty }
+        guard edits.allSatisfy({ shouldChangeText(in: NSRange(location: $0.location, length: 0), replacementText: $0.text) }) else {
+            return
+        }
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        timedUndoManager.beginIsolatedUndoGrouping()
+        // Bottom-to-top, so an insertion never moves one still to be made.
+        for job in edits.sorted(by: { $0.location > $1.location }) {
+            replaceText(in: NSRange(location: job.location, length: 0),
+                        with: job.text,
+                        selectedRangesAfterUndo: originalSelections,
+                        primaryIndexAfterUndo: primaryIndex,
+                        undoActionName: "Complete Statement",
+                        updateSelection: false)
+        }
+        var carets: [NSRange] = []
+        var shift = 0
+        for job in jobs {
+            let appended = (job.text as NSString).length
+            let location = job.caretInside.map { job.location + shift + $0 } ?? job.lineEnd + shift + appended
+            carets.append(NSRange(location: location, length: 0))
+            shift += appended
+        }
+        applySelectedRanges(carets, notifyDelegate: false)
+        if let primary = selection {
+            selectionAnchor = primary.location
+        }
+        insertText(lineEndings.symbol)
+        timedUndoManager.endUndoGrouping()
     }
 }
 

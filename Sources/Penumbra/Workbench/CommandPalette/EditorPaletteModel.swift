@@ -7,6 +7,11 @@ public enum EditorPaletteMode: Hashable {
     case symbols
     /// Types only (the Classes tab).
     case classes
+    /// The declarations of the file in the focused editor, all listed as soon as it opens
+    /// (IntelliJ's File Structure popup).
+    case fileSymbols
+    /// The host's tool windows (Terminal, Problems, …), all listed as soon as it opens.
+    case toolWindows
     case textActions
     /// Every source at once — files, symbols, actions, recent files (double ⇧).
     case searchEverywhere

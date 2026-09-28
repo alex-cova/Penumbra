@@ -513,6 +513,107 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
     }
 }
 
+/// The declarations of one document, in the order they appear, for File Structure. Unlike
+/// ``SymbolsPaletteProvider`` an empty query lists everything, so the popup is a table of contents
+/// that typing then narrows.
+public final class FileSymbolsPaletteProvider: SearchEverywhereProvider {
+    public let sectionTitle = "File Structure"
+    public let sectionOrder = 30
+    private let index: SymbolIndex
+    private let documentID: @MainActor @Sendable () -> DocumentID?
+    private let onSelect: @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
+
+    /// Kinds worth listing: declarations, not the bare words, imports and file names the index also holds.
+    static let declarationKinds: Set<SymbolKind> = [.function, .type, .variable, .property]
+
+    public init(
+        index: SymbolIndex,
+        documentID: @escaping @MainActor @Sendable () -> DocumentID?,
+        onSelect: @escaping @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
+    ) {
+        self.index = index
+        self.documentID = documentID
+        self.onSelect = onSelect
+    }
+
+    public func items(matching query: String, limit: Int) async -> [PaletteItem] {
+        guard let id = await documentID() else { return [] }
+        let symbols = await index.symbols(in: id)
+            .filter { Self.declarationKinds.contains($0.kind) }
+            .sorted { $0.range.start.utf16Offset < $1.range.start.utf16Offset }
+        let onSelect = self.onSelect
+        func item(_ symbol: EditorIntelligence.Symbol, score: Int, matched: [Int] = []) -> PaletteItem {
+            PaletteItem(
+                id: "filesymbol:\(symbol.id)",
+                title: symbol.name,
+                subtitle: symbol.signature ?? String(describing: symbol.kind),
+                sectionTitle: sectionTitle,
+                matchedIndices: matched,
+                score: score,
+                action: { onSelect(symbol) }
+            )
+        }
+        guard !query.isEmpty else {
+            return symbols.prefix(limit).enumerated().map { rank, symbol in item(symbol, score: limit - rank) }
+        }
+        return FuzzyMatcher.rankedWithMatches(query: query, items: symbols, key: { $0.name }, limit: limit)
+            .enumerated()
+            .map { rank, entry in item(entry.item, score: limit - rank, matched: entry.match.matchedIndices) }
+    }
+}
+
+/// A tool window a host can open: an entry of the Go to Tool Window list.
+public struct ToolWindowEntry: Sendable {
+    public let id: String
+    public let title: String
+    /// Dimmed text after the title, e.g. its shortcut.
+    public let subtitle: String?
+    public let action: @MainActor @Sendable () -> Void
+
+    public init(id: String, title: String, subtitle: String? = nil, action: @escaping @MainActor @Sendable () -> Void) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.action = action
+    }
+}
+
+/// The host's tool windows, so any of them opens from the keyboard. An empty query lists every
+/// window in the host's order; typing narrows it.
+public final class ToolWindowsPaletteProvider: SearchEverywhereProvider {
+    public let sectionTitle = "Tool Windows"
+    public let sectionOrder = 12
+    private let entries: @MainActor @Sendable () -> [ToolWindowEntry]
+
+    /// - Parameter entries: The windows available right now; asked on every query, so a window
+    ///   that only exists sometimes (Debug, Source Control) can leave and enter the list.
+    public init(entries: @escaping @MainActor @Sendable () -> [ToolWindowEntry]) {
+        self.entries = entries
+    }
+
+    public func items(matching query: String, limit: Int) async -> [PaletteItem] {
+        let all = await entries()
+        func item(_ entry: ToolWindowEntry, score: Int, matched: [Int] = []) -> PaletteItem {
+            PaletteItem(
+                id: "tool:\(entry.id)",
+                title: entry.title,
+                subtitle: entry.subtitle,
+                sectionTitle: sectionTitle,
+                matchedIndices: matched,
+                score: score,
+                action: entry.action,
+                icon: PaletteIcon(systemName: "rectangle.bottomthird.inset.filled")
+            )
+        }
+        guard !query.isEmpty else {
+            return all.prefix(limit).enumerated().map { rank, entry in item(entry, score: limit - rank) }
+        }
+        return FuzzyMatcher.rankedWithMatches(query: query, items: all, key: { $0.title }, limit: limit)
+            .enumerated()
+            .map { rank, entry in item(entry.item, score: limit - rank, matched: entry.match.matchedIndices) }
+    }
+}
+
 /// A remembered caret position for Recent Locations (⌘⇧E).
 public struct PaletteLocationEntry: Sendable, Hashable {
     public let url: URL

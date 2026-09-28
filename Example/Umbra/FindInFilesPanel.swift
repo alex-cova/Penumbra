@@ -7,6 +7,7 @@ import SwiftUI
 struct FindInFilesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var queryFocused: Bool
+    @FocusState private var replacementFocused: Bool
 
     var body: some View {
         @Bindable var workspace = workspace
@@ -16,6 +17,10 @@ struct FindInFilesPanel: View {
                     workspace.runFindInFiles()
                 }
 
+                FindInFilesOptionToggle(label: "Aa", help: "Match Case", isOn: $workspace.findInFilesCaseSensitive)
+                FindInFilesOptionToggle(label: "W", help: "Whole Word", isOn: $workspace.findInFilesWholeWord)
+                FindInFilesOptionToggle(label: ".*", help: "Regular Expression", isOn: $workspace.findInFilesRegex)
+
                 Button(action: workspace.runFindInFiles) {
                     Image(systemName: "magnifyingglass")
                 }
@@ -23,6 +28,16 @@ struct FindInFilesPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.accent)
                 .help("Search")
                 .accessibilityLabel("Search")
+
+                Button {
+                    workspace.isFindInFilesReplaceVisible.toggle()
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(workspace.isFindInFilesReplaceVisible ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .help("Replace")
+                .accessibilityLabel("Show Replace")
 
                 Button(action: workspace.hideFindInFiles) {
                     Image(systemName: "xmark")
@@ -35,6 +50,26 @@ struct FindInFilesPanel: View {
             .padding(.leading, IDEAppearance.Spacing.md)
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.sm)
+
+            if workspace.isFindInFilesReplaceVisible {
+                HStack(spacing: IDEAppearance.Spacing.sm) {
+                    FindInFilesSearchField(
+                        query: $workspace.findInFilesReplacement,
+                        isFocused: $replacementFocused,
+                        placeholder: "Replace with",
+                        symbol: "arrow.left.arrow.right"
+                    ) {
+                        workspace.replaceInFiles()
+                    }
+                    Button("Replace All…", action: workspace.replaceInFiles)
+                        .controlSize(.small)
+                        .disabled(workspace.findInFilesQuery.isEmpty)
+                        .help("Preview the changes before anything is edited")
+                }
+                .padding(.leading, IDEAppearance.Spacing.md)
+                .padding(.trailing, IDEAppearance.Spacing.md)
+                .padding(.bottom, IDEAppearance.Spacing.sm)
+            }
 
             HStack {
                 Text(workspace.findInFilesStatus)
@@ -57,10 +92,18 @@ struct FindInFilesPanel: View {
                 .listStyle(.plain)
             }
         }
-        .frame(height: 220)
+        .frame(height: workspace.isFindInFilesReplaceVisible ? 256 : 220)
         .background(IDEAppearance.ColorToken.sidebar)
         .task { queryFocused = true }
         .onExitCommand { workspace.hideFindInFiles() }
+        // Results shown for one set of options would be wrong for another.
+        .onChange(of: workspace.findInFilesCaseSensitive) { rerunIfSearching() }
+        .onChange(of: workspace.findInFilesWholeWord) { rerunIfSearching() }
+        .onChange(of: workspace.findInFilesRegex) { rerunIfSearching() }
+    }
+
+    private func rerunIfSearching() {
+        if !workspace.findInFilesQuery.isEmpty { workspace.runFindInFiles() }
     }
 
     private var emptyMessage: String {
@@ -95,14 +138,16 @@ struct FindInFilesPanel: View {
 private struct FindInFilesSearchField: View {
     @Binding var query: String
     var isFocused: FocusState<Bool>.Binding
+    var placeholder = "Search project files"
+    var symbol = "magnifyingglass"
     let onSubmit: () -> Void
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: symbol)
                 .font(.system(size: 11))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            TextField("Search project files", text: $query)
+            TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
                 .font(IDEAppearance.Typography.monoCaption)
                 .focused(isFocused)
@@ -116,6 +161,32 @@ private struct FindInFilesSearchField: View {
             RoundedRectangle(cornerRadius: IDEAppearance.Radius.control)
                 .strokeBorder(isFocused.wrappedValue ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.border, lineWidth: 1)
         }
+    }
+}
+
+/// A small on/off button beside the search field: match case, whole word, regular expression.
+private struct FindInFilesOptionToggle: View {
+    let label: String
+    let help: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            Text(label)
+                .font(IDEAppearance.Typography.monoSmall.weight(.semibold))
+                .foregroundStyle(isOn ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .frame(width: 22, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: IDEAppearance.Radius.control)
+                        .fill(isOn ? IDEAppearance.ColorToken.accent.opacity(0.15) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 

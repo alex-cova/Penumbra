@@ -88,7 +88,8 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
-        guard context.kind == .definition || context.kind == .implementation || context.kind == .superMethod else { return nil }
+        guard context.kind == .definition || context.kind == .implementation || context.kind == .superMethod
+            || context.kind == .typeDefinition else { return nil }
         guard context.document.languageIdentifier == "java" else { return nil }
         let source = JavaNavigationText.fullText(of: context.document)
         guard !source.isEmpty else { return nil }
@@ -101,6 +102,18 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
         let resolve = { () async -> [JavaDefinitionHit] in
             if kind == .superMethod {
                 return await JavaGoToSuperMethod.resolve(
+                    source: source,
+                    fileURL: context.document.url,
+                    utf16Offset: utf16Offset,
+                    index: self.index,
+                    jdkHome: home,
+                    cacheRoot: cacheRoot,
+                    openBuffer: lookup,
+                    decompile: gate
+                )
+            }
+            if kind == .typeDefinition {
+                return await JavaGoToTypeDefinition.resolve(
                     source: source,
                     fileURL: context.document.url,
                     utf16Offset: utf16Offset,

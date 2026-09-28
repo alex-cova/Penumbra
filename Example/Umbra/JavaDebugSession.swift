@@ -42,6 +42,9 @@ final class JavaDebugSession {
     private var pending: [Int: CheckedContinuation<[String: Any], Error>] = [:]
     private let launcher = JavaDebugProcessLauncher()
     private(set) var isGradleAttachSession = false
+    /// Called when the program stops at a source file the adapter could locate on disk, so the
+    /// host can show the line. Not called for a stop in code with no source file.
+    var onStopped: ((_ file: URL, _ line: Int) -> Void)?
 
     var isActive: Bool {
         switch state {
@@ -50,7 +53,9 @@ final class JavaDebugSession {
         }
     }
 
-    func start(launch: JavaManagedLaunch, breakpoints: [JavaBreakpoint]) async {
+    /// - Parameter sourceRoots: directories holding the program's sources, so the adapter can turn a
+    ///   class's `com/acme/Foo.java` into a file when it stops in code that has no breakpoint.
+    func start(launch: JavaManagedLaunch, breakpoints: [JavaBreakpoint], sourceRoots: [URL] = []) async {
         stop()
         state = .launching
         do {
@@ -68,7 +73,8 @@ final class JavaDebugSession {
                 "programArgs": launch.programArguments.joined(separator: " "),
                 "vmArgs": launch.vmArguments.filter { !$0.contains("jdwp") }.joined(separator: " "),
                 "port": launch.jdwpPort,
-                "suspend": launch.suspendOnStart
+                "suspend": launch.suspendOnStart,
+                "sourceRoots": sourceRoots.map(\.path)
             ]
             if !launch.environment.isEmpty {
                 request["environment"] = launch.environment
@@ -82,6 +88,11 @@ final class JavaDebugSession {
                 ])
             }
             state = .running
+            // A JVM started to wait for its debugger holds at the first instruction; breakpoints
+            // are in, so let it go.
+            if launch.suspendOnStart {
+                _ = try await send(["command": "resume"])
+            }
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -102,10 +113,11 @@ final class JavaDebugSession {
     func attachForGradle(
         port: Int = JavaLaunchCommand.gradleDebugJdwpPort,
         suspendOnStart: Bool,
-        breakpoints: [JavaBreakpoint]
+        breakpoints: [JavaBreakpoint],
+        sourceRoots: [URL] = []
     ) async {
         do {
-            try await attachWithRetry(port: port, maxAttempts: 60)
+            try await attachWithRetry(port: port, maxAttempts: 60, sourceRoots: sourceRoots)
             for breakpoint in breakpoints where breakpoint.isEnabled {
                 _ = try await send([
                     "command": "setBreakpoint",
@@ -123,11 +135,35 @@ final class JavaDebugSession {
     }
 
     func resume() {
-        Task { _ = try? await send(["command": "resume"]) }
+        run("resume")
     }
 
     func stepOver() {
-        Task { _ = try? await send(["command": "stepOver"]) }
+        run("stepOver")
+    }
+
+    func stepInto() {
+        run("stepInto")
+    }
+
+    func stepOut() {
+        run("stepOut")
+    }
+
+    /// Suspends a running program where it is; the adapter answers with a `stopped` event.
+    func pause() {
+        guard case .running = state else { return }
+        Task { _ = try? await send(["command": "pause"]) }
+    }
+
+    /// Lets the program run again for `command`. Only from a stop: a stale double press would
+    /// otherwise send a step to a program that is already moving.
+    private func run(_ command: String) {
+        guard case .stopped = state else { return }
+        state = .running
+        stackFrames = []
+        variables = []
+        Task { _ = try? await send(["command": command]) }
     }
 
     func refreshStack() {
@@ -181,11 +217,11 @@ final class JavaDebugSession {
         state = .terminated
     }
 
-    private func attachWithRetry(port: Int, maxAttempts: Int) async throws {
+    private func attachWithRetry(port: Int, maxAttempts: Int, sourceRoots: [URL]) async throws {
         var lastError: Error = JavaDebugProcessError.launchFailed("could not attach")
         for _ in 0..<maxAttempts {
             do {
-                _ = try await send(["command": "attach", "port": port])
+                _ = try await send(["command": "attach", "port": port, "sourceRoots": sourceRoots.map(\.path)])
                 return
             } catch {
                 lastError = error
@@ -222,8 +258,13 @@ final class JavaDebugSession {
                 let filePath = json["file"] as? String ?? ""
                 let line = json["line"] as? Int ?? 0
                 let reason = json["reason"] as? String ?? "breakpoint"
-                state = .stopped(file: URL(fileURLWithPath: filePath), line: line, reason: reason)
+                let file = URL(fileURLWithPath: filePath)
+                state = .stopped(file: file, line: line, reason: reason)
                 refreshStack()
+                // A relative path means no source root held the file; there is nothing to open.
+                if filePath.hasPrefix("/") {
+                    onStopped?(file, line)
+                }
             case "terminated":
                 state = .terminated
             default:

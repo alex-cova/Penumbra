@@ -22,6 +22,12 @@ public final class CommandPaletteController {
     public var onOpenFile: ((URL) -> Void)?
     /// Invoked when a workspace symbol row is chosen.
     public var onSelectSymbol: ((EditorIntelligence.Symbol) -> Void)?
+    /// The document in the focused editor, so File Structure can list its symbols. Needed for
+    /// ``presentFileSymbols()``: the symbol index holds every open document's symbols.
+    public var activeDocumentIDProvider: (@MainActor @Sendable () -> DocumentID?)?
+    /// The host's tool windows (Terminal, Problems, …) for Go to Tool Window. Also searched by
+    /// Search Everywhere. Without it ``presentToolWindows()`` does nothing.
+    public var toolWindowEntriesProvider: (@MainActor @Sendable () -> [ToolWindowEntry])?
     /// Supplies the candidate file list for the Files section (Penumbra has no on-disk index).
     public var fileEntriesProvider: (@MainActor @Sendable () -> [PaletteFileEntry])?
     /// Supplies most-recently-used documents for ⌘E and the Recent Files section.
@@ -248,6 +254,24 @@ public final class CommandPaletteController {
         present(mode: .symbols, placeholder: "Go to Symbol")
     }
 
+    /// Lists the host's tool windows; choosing one opens it. Returns `false` without presenting
+    /// when the host supplied none.
+    @discardableResult
+    public func presentToolWindows() -> Bool {
+        guard toolWindowEntriesProvider != nil else { return false }
+        present(mode: .toolWindows, placeholder: "Go to Tool Window")
+        return true
+    }
+
+    /// Presents the declarations of the focused file, all listed at once (File Structure).
+    /// Returns `false` without presenting when there is no symbol index or active document to read.
+    @discardableResult
+    public func presentFileSymbols() -> Bool {
+        guard symbolIndex != nil, activeDocumentIDProvider != nil else { return false }
+        present(mode: .fileSymbols, placeholder: "File Structure")
+        return true
+    }
+
     /// Presents Go to Line with the field pre-seeded with `:`, matching Sublime's Goto Anything.
     public func presentGoToLine() {
         present(mode: .goToLine, placeholder: "Go to Line", seed: ":")
@@ -311,6 +335,8 @@ public final class CommandPaletteController {
         case .recentLocations: return presentRecentLocations()
         case .quickOpenFile: presentQuickOpen()
         case .goToSymbol: presentSymbols()
+        case .goToFileSymbol: return presentFileSymbols()
+        case .goToTool: return presentToolWindows()
         case .surroundWith: presentSurroundWith()
         case .goToLine: presentGoToLine()
         case .findInFiles: return handlesFindInFilesAction && presentProjectSearch()
@@ -503,6 +529,25 @@ public final class CommandPaletteController {
         }
     }
 
+    private func toolWindowsAndCommandsProviders() -> [SearchEverywhereProvider] {
+        var providers: [SearchEverywhereProvider] = []
+        if let tools = makeToolWindowsProvider() { providers.append(tools) }
+        providers.append(makeCommandsProvider())
+        return providers
+    }
+
+    private func makeToolWindowsProvider() -> ToolWindowsPaletteProvider? {
+        guard let entries = toolWindowEntriesProvider else { return nil }
+        return ToolWindowsPaletteProvider(entries: entries)
+    }
+
+    private func makeFileSymbolsProvider() -> FileSymbolsPaletteProvider? {
+        guard let index = symbolIndex, let documentID = activeDocumentIDProvider else { return nil }
+        return FileSymbolsPaletteProvider(index: index, documentID: documentID) { [weak self] symbol in
+            self?.onSelectSymbol?(symbol)
+        }
+    }
+
     private func makeClassesProvider() -> SearchEverywhereProvider? {
         if let classesProvider { return classesProvider }
         guard let index = symbolIndex else { return nil }
@@ -551,13 +596,17 @@ public final class CommandPaletteController {
             return [makeSymbolsProvider()].compactMap { $0 }
         case .classes:
             return [makeClassesProvider()].compactMap { $0 }
+        case .fileSymbols:
+            return [makeFileSymbolsProvider()].compactMap { $0 }
+        case .toolWindows:
+            return [makeToolWindowsProvider()].compactMap { $0 }
         case .recentFiles:
             return [makeRecentProvider()].compactMap { $0 }
         case .recentLocations:
             return [makeRecentLocationsProvider()].compactMap { $0 }
         case .searchEverywhere:
             return ([makeClassesProvider(), makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
-                .compactMap { $0 } + [makeCommandsProvider()] + extraProviders
+                .compactMap { $0 } + toolWindowsAndCommandsProviders() + extraProviders
         case .goToLine:
             return [makeGoToLineProvider()]
         case .findInFiles:

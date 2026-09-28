@@ -110,6 +110,44 @@ enum HTTPRequestParser {
         return try buildRequest(from: request, fileURL: fileURL)
     }
 
+    /// Where each request in `text` starts, for the gutter's send buttons. One parse and one pass
+    /// over the bytes, so it costs the same however many requests the file has.
+    static func requestLocations(in text: String) -> [HTTPRequestLocation] {
+        guard let tree = parseTree(text) else {
+            return []
+        }
+        let nodes = collectRequests(from: tree.rootNode)
+        guard !nodes.isEmpty else {
+            return []
+        }
+        let bytes = tree.sourceBytes
+        var cursor = 0
+        var line = 1
+        var utf16Offset = 0
+        func advance(to target: Int) {
+            let end = min(target, bytes.count)
+            while cursor < end {
+                let byte = bytes[cursor]
+                if byte == 0x0A {
+                    line += 1
+                }
+                if byte & 0xC0 != 0x80 {
+                    utf16Offset += byte >= 0xF0 ? 2 : 1
+                }
+                cursor += 1
+            }
+        }
+        var locations: [HTTPRequestLocation] = []
+        for node in nodes.sorted(by: { $0.startByte < $1.startByte }) {
+            advance(to: node.startByte)
+            let start = utf16Offset
+            let startLine = line
+            advance(to: node.endByte)
+            locations.append(HTTPRequestLocation(startLine: startLine, utf16Range: start..<max(start, utf16Offset)))
+        }
+        return locations
+    }
+
     private static func parseTree(_ text: String) -> HTTPTSyntaxTree? {
         let bytes = Array(text.utf8)
         let parser = ts_parser_new()
@@ -286,4 +324,12 @@ enum HTTPRequestParser {
 
         return URL(string: "http://\(trimmed)")
     }
+}
+
+/// A request's place in an `.http` file.
+struct HTTPRequestLocation: Equatable, Sendable {
+    /// 1-based line of the request's first token (its method).
+    let startLine: Int
+    /// UTF-16 offsets of the request, so an offset inside it selects the request when sending.
+    let utf16Range: Range<Int>
 }

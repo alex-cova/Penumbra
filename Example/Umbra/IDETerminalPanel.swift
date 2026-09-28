@@ -132,6 +132,24 @@ final class IDETerminalHostView: NSView {
         startProcessIfNeeded()
     }
 
+    /// Wipes the screen and scrollback, then sends Ctrl-L so the shell draws its prompt again.
+    func clearScreen() {
+        terminalView.feed(text: "\u{1B}[H\u{1B}[2J\u{1B}[3J")
+        terminalView.send(txt: "\u{0C}")
+    }
+
+    /// ⌘K clears the terminal, as in Terminal.app and IntelliJ's terminal. It is claimed only while
+    /// this terminal has the keyboard: in an editor ⌘K starts the ⌘K ⌘D chord.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if window?.firstResponder === terminalView, modifiers == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "k" {
+            clearScreen()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     func terminateProcess() {
         isActive = false
         if terminalView.process.running {
@@ -229,6 +247,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let fontSize: Double
     let focusRequestID: UInt64
     let restartRequestID: UInt64
+    let clearRequestID: UInt64
     let commandTicket: UInt64
     let command: String?
     let onTitleUpdate: (String) -> Void
@@ -244,6 +263,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         context.coordinator.hostView = view
         context.coordinator.lastFocusRequestID = focusRequestID
         context.coordinator.lastRestartRequestID = restartRequestID
+        context.coordinator.lastClearRequestID = clearRequestID
         if isActive {
             view.scheduleFocus()
         }
@@ -268,6 +288,13 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
             context.coordinator.lastFocusRequestID = focusRequestID
             if isActive {
                 view.scheduleFocus()
+            }
+        }
+
+        if context.coordinator.lastClearRequestID != clearRequestID {
+            context.coordinator.lastClearRequestID = clearRequestID
+            if isActive {
+                view.clearScreen()
             }
         }
 
@@ -301,6 +328,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         weak var hostView: IDETerminalHostView?
         var lastFocusRequestID: UInt64 = 0
         var lastRestartRequestID: UInt64 = 0
+        var lastClearRequestID: UInt64 = 0
         var lastCommandTicket: UInt64 = 0
         var wasActive = false
     }
@@ -364,6 +392,7 @@ struct IDETerminalPanel: View {
                         fontSize: workspace.preferences.fontSize,
                         focusRequestID: workspace.terminalFocusRequestID,
                         restartRequestID: tab.restartRequestID,
+                        clearRequestID: tab.clearRequestID,
                         commandTicket: isSelected ? workspace.terminalCommandTicket : 0,
                         command: isSelected ? workspace.pendingTerminalCommand : nil,
                         onTitleUpdate: { workspace.updateTerminalTabTitle(tab.id, title: $0) },

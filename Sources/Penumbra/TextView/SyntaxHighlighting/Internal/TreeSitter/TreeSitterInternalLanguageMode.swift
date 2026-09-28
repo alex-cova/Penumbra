@@ -28,6 +28,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         rootLanguageLayer.language.lineCommentPrefix
     }
 
+    var blockCommentDelimiters: BlockCommentDelimiters? {
+        rootLanguageLayer.language.blockCommentDelimiters
+    }
+
     var enterBehavior: EnterBehavior? {
         rootLanguageLayer.language.enterBehavior
     }

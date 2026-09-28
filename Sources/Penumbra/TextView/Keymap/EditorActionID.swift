@@ -47,6 +47,11 @@ public extension EditorActionID {
     static let addCaretAbove = EditorActionID("addCaretAbove")
     static let addCaretBelow = EditorActionID("addCaretBelow")
     static let undoLastCaretChange = EditorActionID("undoLastCaretChange")
+    /// Drops the occurrence most recently added by "select next occurrence" (⌃⇧G in the IntelliJ keymap).
+    static let unselectLastOccurrence = EditorActionID("unselectLastOccurrence")
+    /// Moves each caret to the bracket matching the one beside it, or to the enclosing opening
+    /// bracket (⌃M in the IntelliJ keymap).
+    static let goToMatchingBracket = EditorActionID("goToMatchingBracket")
     static let expandSelection = EditorActionID("expandSelection")
     static let shrinkSelection = EditorActionID("shrinkSelection")
     static let toggleColumnSelectionMode = EditorActionID("toggleColumnSelectionMode")
@@ -64,11 +69,18 @@ public extension EditorActionID {
     static let outdentLines = EditorActionID("outdentLines")
     static let reformatCode = EditorActionID("reformatCode")
     static let toggleComment = EditorActionID("toggleComment")
+    /// Wraps the selection (or the caret's line) in the language's block-comment delimiters, or
+    /// removes them. ⌥⌘/ in the IntelliJ keymap.
+    static let toggleBlockComment = EditorActionID("toggleBlockComment")
     static let insertLineAbove = EditorActionID("insertLineAbove")
     static let insertLineBelow = EditorActionID("insertLineBelow")
     /// Moves every caret to the end of its line and presses Enter there, leaving the line
     /// intact (IntelliJ's Start New Line, ⇧⏎ in the IntelliJ keymap).
     static let startNewLine = EditorActionID("startNewLine")
+    /// Finishes the statement on the caret's line: closes brackets, adds `;` or a `{}` body, then
+    /// starts a new line (⇧⌘↵ in the IntelliJ keymap). Languages without C-style structure just
+    /// start a new line.
+    static let completeStatement = EditorActionID("completeStatement")
     static let sortLinesAscending = EditorActionID("sortLinesAscending")
     static let sortLinesDescending = EditorActionID("sortLinesDescending")
     /// Cycles selected text (or the word at each caret) lower → UPPER → Title. Bound to ⌘⇧U.
@@ -87,6 +99,10 @@ public extension EditorActionID {
     // Find
     static let toggleFindPanel = EditorActionID("toggleFindPanel")
     static let toggleReplacePanel = EditorActionID("toggleReplacePanel")
+    /// Selects the next / previous match of the last find query, with or without the find panel
+    /// open. With no query yet it opens the panel. ⌘G / ⇧⌘G in the IntelliJ keymap.
+    static let findNext = EditorActionID("findNext")
+    static let findPrevious = EditorActionID("findPrevious")
     /// Disk-wide project search. Presented by the command palette; hosts supply the search
     /// backend via ``EditorIntelligenceController``.
     static let findInFiles = EditorActionID("findInFiles")
@@ -99,11 +115,25 @@ public extension EditorActionID {
     static let recentLocations = EditorActionID("recentLocations")
     static let goToSymbol = EditorActionID("goToSymbol")
     static let goToLine = EditorActionID("goToLine")
+    /// Lists the host's tool windows (Terminal, Problems, …) and opens the one chosen. IntelliJ has
+    /// no default key for it; it is reachable from Find Action and Search Everywhere.
+    static let goToTool = EditorActionID("goToTool")
+    /// Lists the declarations of the focused file, filtered as you type (File Structure, ⌘F12 in
+    /// the IntelliJ keymap). ``goToSymbol`` searches every indexed document instead.
+    static let goToFileSymbol = EditorActionID("goToFileSymbol")
     static let toggleMarkdownPreview = EditorActionID("toggleMarkdownPreview")
     static let goToDefinition = EditorActionID("goToDefinition")
     static let goToImplementation = EditorActionID("goToImplementation")
     static let goToSuperMethod = EditorActionID("goToSuperMethod")
+    /// Jumps to the declaration of the type of the symbol at the caret: a variable's or field's
+    /// class, a method's return type, an expression's type (⌃⇧B in the IntelliJ keymap).
+    static let goToTypeDefinition = EditorActionID("goToTypeDefinition")
     static let findUsages = EditorActionID("findUsages")
+    /// Jumps to the next / previous error or warning, across files (F2 / ⇧F2 in the IntelliJ
+    /// keymap). The host owns the problem list, so it handles these through
+    /// ``TextView/editorActionHandler``.
+    static let goToNextProblem = EditorActionID("goToNextProblem")
+    static let goToPreviousProblem = EditorActionID("goToPreviousProblem")
     static let navigateBack = EditorActionID("navigateBack")
     static let navigateForward = EditorActionID("navigateForward")
     /// Show completions at the caret. Bound to Control-Space in the shipped keymaps.
@@ -111,6 +141,10 @@ public extension EditorActionID {
     /// Shows the documentation of the symbol at the caret right away (F1, ⌃J), instead of waiting
     /// for the caret to rest.
     static let quickDocumentation = EditorActionID("quickDocumentation")
+    /// Shows the signatures of the call around the caret, with the argument being typed
+    /// highlighted, from anywhere inside its argument list (⌘P in the IntelliJ keymap). Needs a
+    /// ``SignatureHelpProviding`` on ``EditorIntelligenceServices``.
+    static let showParameterInfo = EditorActionID("showParameterInfo")
     /// Shows the supertype/subtype hierarchy of the type at the caret (⌃H in the IntelliJ keymap).
     /// The host presents it: see ``EditorIntelligenceController/onRequestTypeHierarchy``.
     static let typeHierarchy = EditorActionID("typeHierarchy")
@@ -156,6 +190,8 @@ public extension EditorActionID {
         .addCaretAbove: "Add Caret Above",
         .addCaretBelow: "Add Caret Below",
         .undoLastCaretChange: "Undo Last Caret Change",
+        .unselectLastOccurrence: "Unselect Last Occurrence",
+        .goToMatchingBracket: "Move Caret to Matching Brace",
         .expandSelection: "Extend Selection",
         .shrinkSelection: "Shrink Selection",
         .toggleColumnSelectionMode: "Column Selection Mode",
@@ -171,9 +207,11 @@ public extension EditorActionID {
         .outdentLines: "Unindent Line(s)",
         .reformatCode: "Reformat Code",
         .toggleComment: "Toggle Line Comment",
+        .toggleBlockComment: "Toggle Block Comment",
         .insertLineAbove: "Insert Line Above",
         .insertLineBelow: "Insert Line Below",
         .startNewLine: "Start New Line",
+        .completeStatement: "Complete Current Statement",
         .sortLinesAscending: "Sort Lines Ascending",
         .sortLinesDescending: "Sort Lines Descending",
         .toggleCase: "Toggle Case",
@@ -187,6 +225,8 @@ public extension EditorActionID {
         .expandRegionRecursively: "Expand Recursively",
         .toggleFindPanel: "Find…",
         .toggleReplacePanel: "Replace…",
+        .findNext: "Find Next",
+        .findPrevious: "Find Previous",
         .findInFiles: "Find in Files…",
         .searchEverywhere: "Search Everywhere",
         .findAction: "Find Action…",
@@ -195,11 +235,16 @@ public extension EditorActionID {
         .recentLocations: "Recent Locations",
         .goToSymbol: "Go to Symbol…",
         .goToLine: "Go to Line…",
+        .goToTool: "Go to Tool Window…",
+        .goToFileSymbol: "File Structure…",
         .toggleMarkdownPreview: "Markdown Preview",
         .goToDefinition: "Go to Definition",
         .goToImplementation: "Go to Implementation(s)",
         .goToSuperMethod: "Go to Super Method",
+        .goToTypeDefinition: "Go to Type Declaration",
         .findUsages: "Find Usages",
+        .goToNextProblem: "Go to Next Problem",
+        .goToPreviousProblem: "Go to Previous Problem",
         .navigateBack: "Back",
         .navigateForward: "Forward",
         .triggerCompletion: "Complete",
@@ -218,6 +263,7 @@ public extension EditorActionID {
         .safeDelete: "Safe Delete",
         .typeHierarchy: "Type Hierarchy",
         .quickDocumentation: "Quick Documentation",
+        .showParameterInfo: "Parameter Info",
         .showContextActions: "Show Context Actions",
         .optimizeImports: "Optimize Imports"
     ]

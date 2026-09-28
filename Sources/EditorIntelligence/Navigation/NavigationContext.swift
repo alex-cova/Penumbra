@@ -7,6 +7,9 @@ public enum NavigationKind: Sendable {
     case implementation
     /// The method a method overrides or implements, or the supertypes of a class.
     case superMethod
+    /// The declaration of a symbol's type: the class of a variable, field or expression, or the
+    /// return type of a method.
+    case typeDefinition
     case references
 }
 

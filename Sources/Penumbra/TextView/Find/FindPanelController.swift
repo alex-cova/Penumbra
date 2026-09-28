@@ -97,6 +97,16 @@ final class FindPanelController {
         }
     }
 
+    /// Steps to the next / previous match of the last query without needing the panel, for the
+    /// ⌘G / ⇧⌘G shortcuts. With no query yet there is nothing to step through, so it opens the panel.
+    func findNext() {
+        step(forward: true)
+    }
+
+    func findPrevious() {
+        step(forward: false)
+    }
+
     /// Called on every document edit while the panel is visible. Debounced/off-main like typing in
     /// the find field — this used to run a synchronous full-document scan on every keystroke typed
     /// into the *editor* (not just the find field) whenever the panel was open.
@@ -174,9 +184,28 @@ private extension FindPanelController {
     /// window are refreshed separately, immediately but asynchronously (`scheduleFind(immediate:
     /// true)`), since recomputing those requires a full-document scan.
     private func selectNextMatch() {
-        guard let target, session.matchCount > 0 else {
+        guard session.matchCount > 0 else {
             return
         }
+        step(forward: true)
+    }
+
+    private func step(forward: Bool) {
+        guard let target else {
+            return
+        }
+        guard !session.query.isEmpty else {
+            show()
+            return
+        }
+        if forward {
+            stepForward(in: target)
+        } else {
+            stepBackward(in: target)
+        }
+    }
+
+    private func stepForward(in target: FindPanelTarget) {
         let source = target.findTextSource
         let options = session.searchOptions()
         // Anchor on the target's actual current selection, not `session.currentRange` — the
@@ -191,13 +220,17 @@ private extension FindPanelController {
         }
         target.setSelectedRange(next)
         target.scrollRangeToVisible(next)
-        scheduleFind(immediate: true)
+        refreshAfterStep()
     }
 
     private func selectPreviousMatch() {
-        guard let target, session.matchCount > 0 else {
+        guard session.matchCount > 0 else {
             return
         }
+        step(forward: false)
+    }
+
+    private func stepBackward(in target: FindPanelTarget) {
         let source = target.findTextSource
         let options = session.searchOptions()
         let before = target.findSelection?.location ?? source.utf16Length
@@ -208,7 +241,14 @@ private extension FindPanelController {
         }
         target.setSelectedRange(previous)
         target.scrollRangeToVisible(previous)
-        scheduleFind(immediate: true)
+        refreshAfterStep()
+    }
+
+    /// The match count and highlights only matter while the panel is showing.
+    private func refreshAfterStep() {
+        if isVisible {
+            scheduleFind(immediate: true)
+        }
     }
 
     private func replaceCurrentMatch() {

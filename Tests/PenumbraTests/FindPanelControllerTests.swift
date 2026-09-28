@@ -214,4 +214,41 @@ final class FindPanelControllerTests: XCTestCase {
         )
         XCTAssertEqual(state.stringView.materializeCount, 0)
     }
+
+    // MARK: - findNext / findPrevious (⌘G / ⇧⌘G)
+
+    func testFindNextStepsToTheNextMatchAfterThePanelIsHidden() async {
+        let target = FakeFindTarget(text: "a b a")
+        let controller = FindPanelController(target: target)
+        controller.show(initialQuery: "a")
+        await waitForImmediateSearch()
+        controller.hide()
+
+        controller.findNext()
+
+        XCTAssertEqual(target.selection, NSRange(location: 4, length: 1))
+        XCTAssertFalse(controller.isVisible, "Stepping must not bring the panel back")
+    }
+
+    func testFindPreviousWrapsToTheLastMatch() async {
+        let target = FakeFindTarget(text: "a b a")
+        let controller = FindPanelController(target: target)
+        controller.show(initialQuery: "a")
+        await waitForImmediateSearch()
+        controller.hide()
+
+        controller.findPrevious()
+
+        XCTAssertEqual(target.selection, NSRange(location: 4, length: 1))
+    }
+
+    func testFindNextWithoutAQueryOpensThePanel() {
+        let target = FakeFindTarget(text: "a b a")
+        let controller = FindPanelController(target: target)
+
+        controller.findNext()
+
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertNil(target.selection)
+    }
 }

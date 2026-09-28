@@ -40,13 +40,24 @@ struct IDEDebugPanel: View {
             Spacer()
             Button("Resume") { session.resume() }
                 .disabled(!canControl(session))
+            Button("Pause") { session.pause() }
+                .disabled(!isRunning(session))
             Button("Step Over") { session.stepOver() }
+                .disabled(!canControl(session))
+            Button("Step Into") { session.stepInto() }
+                .disabled(!canControl(session))
+            Button("Step Out") { session.stepOut() }
                 .disabled(!canControl(session))
             Button("Stop") { workspace.stopDebugging() }
                 .disabled(!session.isActive)
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
+    }
+
+    private func isRunning(_ session: JavaDebugSession) -> Bool {
+        if case .running = session.state { return true }
+        return false
     }
 
     private func canControl(_ session: JavaDebugSession) -> Bool {

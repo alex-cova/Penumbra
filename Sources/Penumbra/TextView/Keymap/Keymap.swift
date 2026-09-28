@@ -98,6 +98,12 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("o", [.command, .shift])), to: .quickOpenFile)
         map.bind(KeyStroke(KeyChord("e", .command)), to: .recentFiles)
         map.bind(KeyStroke(KeyChord("e", [.command, .shift])), to: .recentLocations)
+        map.bind(KeyStroke(KeyChord("f", [.command, .shift])), to: .findInFiles)
+        map.bind(KeyStroke(KeyChord("g", .command)), to: .findNext)
+        map.bind(KeyStroke(KeyChord("g", [.command, .shift])), to: .findPrevious)
+        // File Structure lists the current file's declarations; Go to Symbol searches every open one.
+        map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */, .command)), to: .goToFileSymbol)
+        map.bind(KeyStroke(KeyChord("o", [.command, .option])), to: .goToSymbol)
 
         // Navigation
         map.unbindAll(.selectLines)
@@ -105,6 +111,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
         map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */)), to: .goToDefinition)
         map.bind(KeyStroke(KeyChord("b", [.command, .option])), to: .goToImplementation)
+        map.bind(KeyStroke(KeyChord("b", [.control, .shift])), to: .goToTypeDefinition)
         map.bind(KeyStroke(KeyChord("b", [.command, .option, .shift])), to: .findUsages)
         // ⌘U is Go to Super Method in IntelliJ, so it replaces the default keymap's
         // Undo Last Caret Change binding (still reachable through Find Action).
@@ -112,6 +119,8 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("u", .command)), to: .goToSuperMethod)
         map.bind(KeyStroke(KeyChord(code: 0x21 /* [ */, .command)), to: .navigateBack)
         map.bind(KeyStroke(KeyChord(code: 0x1E /* ] */, .command)), to: .navigateForward)
+        map.bind(KeyStroke(KeyChord(code: 0x78 /* F2 */)), to: .goToNextProblem)
+        map.bind(KeyStroke(KeyChord(code: 0x78 /* F2 */, .shift)), to: .goToPreviousProblem)
 
         // Semantic selection — replaces word-wise ⌥↑/↓ caret movement.
         map.bind(KeyStroke(KeyChord(code: 0x7E, .option)), to: .expandSelection)
@@ -125,17 +134,27 @@ public extension Keymap {
 
         // Multi-caret (Control-based, like IntelliJ on macOS)
         map.bind(KeyStroke(KeyChord("g", .control)), to: .selectNextOccurrence)
+        map.bind(KeyStroke(KeyChord("g", [.control, .shift])), to: .unselectLastOccurrence)
+        map.bind(KeyStroke(KeyChord("m", .control)), to: .goToMatchingBracket)
         map.bind(KeyStroke(KeyChord("g", [.control, .command])), to: .selectAllOccurrences)
         map.bind(KeyStroke(KeyChord("8", [.command, .shift])), to: .toggleColumnSelectionMode)
 
         // Editing
+        map.bind(KeyStroke(KeyChord("/", [.command, .option])), to: .toggleBlockComment)
         map.bind(KeyStroke(KeyChord(code: 0x24, .shift)), to: .startNewLine)
+        map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .shift])), to: .completeStatement)
+        // IntelliJ's Start New Line Before Current is ⌥⌘↵. ⌘↵ / ⇧⌘↵ (the default keymap's line
+        // inserts) go unbound; ⇧⌘↵ is Complete Current Statement there.
+        map.unbindAll(.insertLineBelow)
+        map.unbindAll(.insertLineAbove)
+        map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .option])), to: .insertLineAbove)
         map.bind(KeyStroke(KeyChord("j", [.control, .shift])), to: .joinLines)
         map.bind(KeyStroke(KeyChord("t", [.command, .option])), to: .surroundWith)
         map.bind(KeyStroke(KeyChord("l", [.command, .option])), to: .reformatCode)
         map.bind(KeyStroke(KeyChord("d", .command)), to: .duplicateLines)
         map.bind(KeyStroke(KeyChord("o", [.control, .option])), to: .optimizeImports)
         map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
+        map.bind(KeyStroke(KeyChord("p", .command)), to: .showParameterInfo)
         map.bind(KeyStroke(KeyChord("h", .control)), to: .typeHierarchy)
         map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .shift)), to: .rename)
         map.bind(KeyStroke(KeyChord("v", [.command, .option])), to: .extractVariable)

@@ -27,6 +27,9 @@ protocol InternalLanguageMode: AnyObject {
     /// The active language's line-comment token (e.g. `"//"`), or `nil` if it has none. Drives
     /// ``TextView/toggleComment()``.
     var lineCommentPrefix: String? { get }
+    /// The active language's block-comment delimiters (e.g. `/*` `*/`), or `nil`. Drives
+    /// ``TextView/toggleBlockComment()``.
+    var blockCommentDelimiters: BlockCommentDelimiters? { get }
     /// Enter-key rules of the active language (see ``EnterBehavior``), or `nil` for none.
     var enterBehavior: EnterBehavior? { get }
     /// Whether the language defines indentation scopes, i.e. can compute indentation for a new line.
@@ -43,6 +46,7 @@ extension InternalLanguageMode {
         parse()
     }
     var lineCommentPrefix: String? { nil }
+    var blockCommentDelimiters: BlockCommentDelimiters? { nil }
     var enterBehavior: EnterBehavior? { nil }
     var hasIndentationScopes: Bool { false }
     func enclosingSyntaxNodes(at linePosition: LinePosition) -> [SyntaxNode] { [] }

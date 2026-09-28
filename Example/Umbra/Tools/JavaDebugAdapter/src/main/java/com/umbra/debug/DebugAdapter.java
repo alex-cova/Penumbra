@@ -27,7 +27,29 @@ public final class DebugAdapter {
 
     private VirtualMachine vm;
     private Process targetProcess;
-    private ThreadReference currentThread;
+    private volatile ThreadReference currentThread;
+    /** True from a stop (breakpoint, step, pause) until the program is resumed or stepped. */
+    private volatile boolean stopped;
+
+    /** Guards {@link #breakpoints}: the request thread and the event thread both resolve them. */
+    private final Object breakpointLock = new Object();
+    private final List<PendingBreakpoint> breakpoints = new ArrayList<>();
+    private final List<Path> sourceRoots = new ArrayList<>();
+
+    /**
+     * A breakpoint the user asked for. Its JDI requests exist only once a class holding the line
+     * is loaded, so it stays here and is resolved again whenever a class is prepared.
+     */
+    private static final class PendingBreakpoint {
+        final Path file;
+        final int line;
+        final List<BreakpointRequest> requests = new ArrayList<>();
+
+        PendingBreakpoint(Path file, int line) {
+            this.file = file;
+            this.line = line;
+        }
+    }
 
     public static void main(String[] args) throws Exception {
         new DebugAdapter().run();
@@ -48,11 +70,17 @@ public final class DebugAdapter {
         try {
             switch (command) {
                 case "launch" -> launch(request);
-                case "attach" -> attach(intValue(request.get("port")));
+                case "attach" -> {
+                    readSourceRoots(request);
+                    attach(intValue(request.get("port")));
+                }
                 case "setBreakpoint" -> setBreakpoint(stringValue(request.get("file")), intValue(request.get("line")));
                 case "clearBreakpoint" -> clearBreakpoint(stringValue(request.get("file")), intValue(request.get("line")));
                 case "resume" -> resume();
-                case "stepOver" -> stepOver();
+                case "stepOver" -> step(StepRequest.STEP_OVER);
+                case "stepInto" -> step(StepRequest.STEP_INTO);
+                case "stepOut" -> step(StepRequest.STEP_OUT);
+                case "pause" -> pause();
                 case "stackFrames" -> {
                     stackFrames(id);
                     return;
@@ -82,6 +110,7 @@ public final class DebugAdapter {
         String vmArgs = stringValue(request.get("vmArgs"));
         int port = intValue(request.get("port"));
         boolean suspend = boolValue(request.get("suspend"));
+        readSourceRoots(request);
 
         List<String> cmd = new ArrayList<>();
         cmd.add(java);
@@ -100,8 +129,58 @@ public final class DebugAdapter {
                 env.put(String.valueOf(entry.getKey()), String.valueOf(entry.getValue()));
             }
         }
+        pb.redirectErrorStream(true);
         targetProcess = pb.start();
-        attach(port);
+        drainTargetOutput(targetProcess);
+        attachWhenListening(port);
+    }
+
+    /**
+     * The JVM opens its debug port a moment after it starts, so the first attach usually finds
+     * nothing listening. Retries until it does, or the target exits.
+     */
+    private void attachWhenListening(int port) throws Exception {
+        Exception last = null;
+        for (int attempt = 0; attempt < 150; attempt++) {
+            if (targetProcess != null && !targetProcess.isAlive()) {
+                throw new IllegalStateException("the program exited with code " + targetProcess.exitValue() + " before it could be debugged");
+            }
+            try {
+                attach(port);
+                return;
+            } catch (java.net.ConnectException | com.sun.jdi.connect.IllegalConnectorArgumentsException e) {
+                last = e;
+            } catch (IOException e) {
+                last = e;
+            }
+            Thread.sleep(100);
+        }
+        throw last != null ? last : new IllegalStateException("could not attach on port " + port);
+    }
+
+    /** Reads the target's output so its pipe never fills and blocks it; forwarded as events. */
+    private void drainTargetOutput(Process process) {
+        Thread t = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    emitEvent("output", Map.of("text", line));
+                }
+            } catch (IOException ignored) {
+            }
+        }, "target-output");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Directories that hold the program's sources, to turn a class's relative source path into a file. */
+    private void readSourceRoots(Map<String, Object> request) {
+        sourceRoots.clear();
+        if (request.get("sourceRoots") instanceof List<?> roots) {
+            for (Object root : roots) {
+                sourceRoots.add(Paths.get(String.valueOf(root)).toAbsolutePath().normalize());
+            }
+        }
     }
 
     private void attach(int port) throws Exception {
@@ -113,6 +192,10 @@ public final class DebugAdapter {
         Map<String, Connector.Argument> args = connector.defaultArguments();
         ((Connector.IntegerArgument) args.get("port")).setValue(port);
         vm = connector.attach(args);
+        // Ask for every class as it is prepared, to place breakpoints in classes not yet loaded.
+        ClassPrepareRequest prepare = vm.eventRequestManager().createClassPrepareRequest();
+        prepare.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        prepare.enable();
         startEventLoop();
     }
 
@@ -122,32 +205,26 @@ public final class DebugAdapter {
             try {
                 while (true) {
                     EventSet set = queue.remove();
+                    boolean stop = false;
                     for (Event event : set) {
                         if (event instanceof VMDeathEvent || event instanceof VMDisconnectEvent) {
                             emitEvent("terminated", Map.of());
                             disconnectQuietly();
                             return;
                         }
-                        if (event instanceof BreakpointEvent bp) {
-                            currentThread = bp.thread();
-                            Location loc = bp.location();
-                            emitEvent("stopped", Map.of(
-                                    "file", sourcePath(loc),
-                                    "line", loc.lineNumber(),
-                                    "reason", "breakpoint"
-                            ));
-                        }
-                        if (event instanceof StepEvent step) {
-                            currentThread = step.thread();
-                            Location loc = step.location();
-                            emitEvent("stopped", Map.of(
-                                    "file", sourcePath(loc),
-                                    "line", loc.lineNumber(),
-                                    "reason", "step"
-                            ));
+                        if (event instanceof ClassPrepareEvent prepared) {
+                            resolveBreakpoints(prepared.referenceType());
+                        } else if (event instanceof BreakpointEvent bp) {
+                            reportStop(bp.thread(), bp.location(), "breakpoint");
+                            stop = true;
+                        } else if (event instanceof StepEvent step) {
+                            vm.eventRequestManager().deleteEventRequest(step.request());
+                            reportStop(step.thread(), step.location(), "step");
+                            stop = true;
                         }
                     }
-                    set.resume();
+                    // A stop keeps the program suspended until the user resumes or steps it.
+                    if (!stop) set.resume();
                 }
             } catch (Exception ignored) {
                 emitEvent("terminated", Map.of());
@@ -155,57 +232,172 @@ public final class DebugAdapter {
         });
     }
 
-    private void setBreakpoint(String file, int line) throws Exception {
+    private void reportStop(ThreadReference thread, Location location, String reason) {
+        currentThread = thread;
+        stopped = true;
+        emitEvent("stopped", Map.of(
+                "file", resolveFile(location),
+                "line", Math.max(0, location.lineNumber()),
+                "reason", reason
+        ));
+    }
+
+    private void setBreakpoint(String file, int line) {
         ensureVM();
         Path normalized = Paths.get(file).toAbsolutePath().normalize();
-        for (ReferenceType type : vm.allClasses()) {
-            for (Location loc : type.allLineLocations()) {
-                if (loc.lineNumber() != line) continue;
-                if (!normalized.equals(Paths.get(sourcePath(loc)).toAbsolutePath().normalize())) continue;
-                BreakpointRequest req = vm.eventRequestManager().createBreakpointRequest(loc);
-                req.enable();
-                return;
+        synchronized (breakpointLock) {
+            for (PendingBreakpoint existing : breakpoints) {
+                if (existing.line == line && existing.file.equals(normalized)) return;
+            }
+            PendingBreakpoint breakpoint = new PendingBreakpoint(normalized, line);
+            breakpoints.add(breakpoint);
+            for (ReferenceType type : vm.allClasses()) {
+                resolve(breakpoint, type);
             }
         }
-        throw new IllegalStateException("no executable location for " + file + ":" + line);
     }
 
     private void clearBreakpoint(String file, int line) {
         if (vm == null) return;
         Path normalized = Paths.get(file).toAbsolutePath().normalize();
         EventRequestManager manager = vm.eventRequestManager();
-        for (EventRequest request : manager.breakpointRequests()) {
-            if (!(request instanceof BreakpointRequest bp)) continue;
-            Location loc = bp.location();
-            if (loc.lineNumber() != line) continue;
-            if (!normalized.equals(Paths.get(sourcePath(loc)).toAbsolutePath().normalize())) continue;
-            manager.deleteEventRequest(request);
-        }
-    }
-
-    private void resume() throws InvalidStackFrameException {
-        ensureVM();
-        if (currentThread != null) {
-            for (EventRequest request : vm.eventRequestManager().stepRequests()) {
-                if (request instanceof StepRequest step && step.thread().equals(currentThread)) {
-                    vm.eventRequestManager().deleteEventRequest(request);
-                }
+        synchronized (breakpointLock) {
+            Iterator<PendingBreakpoint> iterator = breakpoints.iterator();
+            while (iterator.hasNext()) {
+                PendingBreakpoint breakpoint = iterator.next();
+                if (breakpoint.line != line || !breakpoint.file.equals(normalized)) continue;
+                for (BreakpointRequest request : breakpoint.requests) manager.deleteEventRequest(request);
+                iterator.remove();
             }
-            currentThread.resume();
-        } else {
-            vm.resume();
         }
     }
 
-    private void stepOver() throws InvalidStackFrameException {
+    /** Places every waiting breakpoint that `type` can hold. Called as each class is prepared. */
+    private void resolveBreakpoints(ReferenceType type) {
+        synchronized (breakpointLock) {
+            for (PendingBreakpoint breakpoint : breakpoints) resolve(breakpoint, type);
+        }
+    }
+
+    private void resolve(PendingBreakpoint breakpoint, ReferenceType type) {
+        try {
+            if (!type.sourceNames(vm.getDefaultStratum()).contains(breakpoint.file.getFileName().toString())) return;
+            for (Location location : type.locationsOfLine(breakpoint.line)) {
+                if (!sourceFileMatches(breakpoint.file, location)) continue;
+                boolean present = false;
+                for (BreakpointRequest request : breakpoint.requests) {
+                    if (request.location().equals(location)) present = true;
+                }
+                if (present) continue;
+                BreakpointRequest request = vm.eventRequestManager().createBreakpointRequest(location);
+                request.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+                request.enable();
+                breakpoint.requests.add(request);
+            }
+        } catch (AbsentInformationException | ClassNotPreparedException | ObjectCollectedException ignored) {
+            // No line numbers, not loaded yet, or gone: nothing to place here.
+        }
+    }
+
+    /** `com/acme/Foo.java` from the class file must end the breakpoint's absolute path. */
+    private static boolean sourceFileMatches(Path file, Location location) {
+        String relative = sourcePath(location);
+        return !relative.isEmpty() && file.endsWith(Paths.get(relative).normalize());
+    }
+
+    /** The absolute source file of a location, or its relative source path when no root holds it. */
+    private String resolveFile(Location location) {
+        String relative = sourcePath(location);
+        if (relative.isEmpty()) return "";
+        Path relativePath = Paths.get(relative).normalize();
+        synchronized (breakpointLock) {
+            for (PendingBreakpoint breakpoint : breakpoints) {
+                if (breakpoint.file.endsWith(relativePath)) return breakpoint.file.toString();
+            }
+        }
+        for (Path root : sourceRoots) {
+            Path candidate = root.resolve(relativePath);
+            if (Files.isRegularFile(candidate)) return candidate.toString();
+        }
+        return relative;
+    }
+
+    private void resume() {
+        ensureVM();
+        clearSteps();
+        stopped = false;
+        vm.resume();
+    }
+
+    private void clearSteps() {
+        EventRequestManager manager = vm.eventRequestManager();
+        for (StepRequest request : new ArrayList<>(manager.stepRequests())) manager.deleteEventRequest(request);
+    }
+
+    /**
+     * Runs the stopped thread to its next line: over calls, into them, or out to the caller.
+     * Stepping into skips the JDK's own classes, so it lands in the program's code.
+     */
+    private void step(int depth) {
         ensureVM();
         ensureThread();
-        EventRequestManager manager = vm.eventRequestManager();
-        for (EventRequest request : manager.stepRequests()) manager.deleteEventRequest(request);
-        StepRequest step = manager.createStepRequest(currentThread, StepRequest.STEP_LINE, StepRequest.STEP_OVER);
-        step.addCountFilter(1);
-        step.enable();
-        currentThread.resume();
+        clearSteps();
+        StepRequest request = vm.eventRequestManager().createStepRequest(currentThread, StepRequest.STEP_LINE, depth);
+        if (depth == StepRequest.STEP_INTO) {
+            for (String pattern : RUNTIME_CLASSES) request.addClassExclusionFilter(pattern);
+        }
+        request.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+        request.addCountFilter(1);
+        request.enable();
+        stopped = false;
+        vm.resume();
+    }
+
+    private static final String[] RUNTIME_CLASSES = {"java.*", "javax.*", "jdk.*", "sun.*", "com.sun.*"};
+
+    /** Suspends a running program and reports where its main thread is. */
+    private void pause() throws IncompatibleThreadStateException {
+        ensureVM();
+        if (stopped) throw new IllegalStateException("already paused");
+        vm.suspend();
+        ThreadReference thread = threadToPause();
+        if (thread == null) {
+            vm.resume();
+            throw new IllegalStateException("no thread to pause");
+        }
+        reportStop(thread, locationToShow(thread), "pause");
+    }
+
+    /** The main thread if it has frames, else any other thread of the main group. */
+    private ThreadReference threadToPause() {
+        ThreadReference fallback = null;
+        for (ThreadReference thread : vm.allThreads()) {
+            try {
+                if (thread.frameCount() == 0) continue;
+                ThreadGroupReference group = thread.threadGroup();
+                if (group == null || !"main".equals(group.name())) continue;
+                if ("main".equals(thread.name())) return thread;
+                if (fallback == null) fallback = thread;
+            } catch (IncompatibleThreadStateException ignored) {
+                // Not suspended after all; skip it.
+            }
+        }
+        return fallback;
+    }
+
+    /** The innermost frame in the program's own code; frame 0 when it is all runtime classes. */
+    private static Location locationToShow(ThreadReference thread) throws IncompatibleThreadStateException {
+        List<StackFrame> frames = thread.frames();
+        for (StackFrame frame : frames) {
+            Location location = frame.location();
+            String type = location.declaringType().name();
+            boolean runtime = false;
+            for (String pattern : RUNTIME_CLASSES) {
+                if (type.startsWith(pattern.substring(0, pattern.length() - 1))) runtime = true;
+            }
+            if (!runtime && location.lineNumber() > 0) return location;
+        }
+        return frames.get(0).location();
     }
 
     private void stackFrames(int id) {
@@ -220,7 +412,7 @@ public final class DebugAdapter {
                         "index", index++,
                         "name", frame.location().method().name(),
                         "className", frame.location().declaringType().name(),
-                        "file", sourcePath(loc),
+                        "file", resolveFile(loc),
                         "line", Math.max(0, loc.lineNumber())
                 ));
             }
@@ -264,6 +456,10 @@ public final class DebugAdapter {
             targetProcess = null;
         }
         currentThread = null;
+        stopped = false;
+        synchronized (breakpointLock) {
+            breakpoints.clear();
+        }
     }
 
     private void ensureVM() {

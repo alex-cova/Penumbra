@@ -18,6 +18,9 @@ public final class TreeSitterLanguage {
     /// The token that starts a line comment (e.g. `"//"`, `"#"`), or `nil` if this language has no
     /// line-comment syntax. Drives ``TextView/toggleComment()``.
     public let lineCommentPrefix: String?
+    /// The tokens that open and close a block comment (e.g. `/*` and `*/`), or `nil` if this
+    /// language has none. Drives ``TextView/toggleBlockComment()``.
+    public let blockCommentDelimiters: BlockCommentDelimiters?
     /// Rules for the Enter key (block-comment continuation, string splitting, structure-aware indent),
     /// or `nil` for the generic behavior. See ``EnterBehavior``.
     public let enterBehavior: EnterBehavior?
@@ -42,18 +45,21 @@ public final class TreeSitterLanguage {
     ///   - indentationScopes: Rules used for indenting text.
     ///   - lineCommentPrefix: The token that starts a line comment (e.g. `"//"`), or `nil` if this
     ///     language has no line-comment syntax.
+    ///   - blockCommentDelimiters: The tokens around a block comment, or `nil` if there is no such syntax.
     ///   - enterBehavior: Language-specific Enter-key rules, or `nil`.
     public init(_ language: TreeSitterLanguagePointer,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
                 indentationScopes: TreeSitterIndentationScopes? = nil,
                 lineCommentPrefix: String? = nil,
+                blockCommentDelimiters: BlockCommentDelimiters? = nil,
                 enterBehavior: EnterBehavior? = nil) {
         self.languagePointer = language
         self.highlightsQuery = highlightsQuery
         self.injectionsQuery = injectionsQuery
         self.indentationScopes = indentationScopes
         self.lineCommentPrefix = lineCommentPrefix
+        self.blockCommentDelimiters = blockCommentDelimiters
         self.enterBehavior = enterBehavior
     }
 
@@ -62,12 +68,14 @@ public final class TreeSitterLanguage {
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
                 indentationScopes: TreeSitterIndentationScopes? = nil,
                 lineCommentPrefix: String? = nil,
+                blockCommentDelimiters: BlockCommentDelimiters? = nil,
                 enterBehavior: EnterBehavior? = nil) {
         self.init(TreeSitterLanguagePointer(language),
                   highlightsQuery: highlightsQuery,
                   injectionsQuery: injectionsQuery,
                   indentationScopes: indentationScopes,
                   lineCommentPrefix: lineCommentPrefix,
+                  blockCommentDelimiters: blockCommentDelimiters,
                   enterBehavior: enterBehavior)
     }
 
@@ -119,6 +127,7 @@ private extension TreeSitterInternalLanguage {
                   injectionsQuery: injectionsQuery,
                   indentationScopes: language.indentationScopes,
                   lineCommentPrefix: language.lineCommentPrefix,
+                  blockCommentDelimiters: language.blockCommentDelimiters,
                   enterBehavior: language.enterBehavior)
     }
 

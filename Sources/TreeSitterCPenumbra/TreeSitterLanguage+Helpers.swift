@@ -5,6 +5,6 @@ import TreeSitterCQueries
 public extension TreeSitterLanguage {
     static var c: TreeSitterLanguage {
         let highlightsQuery = TreeSitterLanguage.Query(contentsOf: TreeSitterCQueries.Query.highlightsFileURL)
-        return TreeSitterLanguage(tree_sitter_c(), highlightsQuery: highlightsQuery, lineCommentPrefix: "//")
+        return TreeSitterLanguage(tree_sitter_c(), highlightsQuery: highlightsQuery, lineCommentPrefix: "//", blockCommentDelimiters: .cStyle)
     }
 }

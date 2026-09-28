@@ -1863,6 +1863,23 @@ public struct DocumentTextExport: Sendable {
         textInputView.toggleComment()
     }
 
+    /// Finishes the statement on each caret's line and starts a new line: closes open brackets and
+    /// strings, then adds `;`, or ` {}` with the caret inside for a header that takes a body
+    /// (`if`, `for`, a method, a class, …). Only C-style languages (those whose
+    /// ``TreeSitterLanguage/enterBehavior`` sets `cStyleIndent`) get this; elsewhere it is Start
+    /// New Line. One undo step. Bound to ⇧⌘↵ in the IntelliJ keymap.
+    public func completeStatement() {
+        textInputView.completeStatement()
+    }
+
+    /// Wraps the selection, or the caret's line when nothing is selected, in the language's
+    /// block-comment delimiters (`/* */`, `<!-- -->`), or removes them when the selection or
+    /// caret is already inside such a comment. Does nothing for a language without block
+    /// comments. Multi-caret aware, one undo step. Bound to ⌥⌘/ in the IntelliJ keymap.
+    public func toggleBlockComment() {
+        textInputView.toggleBlockComment()
+    }
+
     /// Inserts a new, indent-matched blank line above every row touched by the current
     /// selection(s) (⌘⏎), one undo step, caret left on the new line(s).
     public func insertLineAbove() {
@@ -2013,6 +2030,19 @@ public struct DocumentTextExport: Sendable {
     /// Toggles the built-in find panel. Bound to ⌘F / ⌥⌘F when the editor is focused.
     public func toggleFindPanel(mode: FindPanelMode = .find) {
         findPanelController.toggle(mode: mode)
+        setNeedsLayout()
+    }
+
+    /// Selects the next match of the last find query and scrolls to it, whether or not the find
+    /// panel is showing. Opens the panel when there is no query yet. ⌘G in the IntelliJ keymap.
+    public func findNext() {
+        findPanelController.findNext()
+        setNeedsLayout()
+    }
+
+    /// Selects the previous match of the last find query. ⇧⌘G in the IntelliJ keymap.
+    public func findPrevious() {
+        findPanelController.findPrevious()
         setNeedsLayout()
     }
 
@@ -2544,6 +2574,14 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode) {
         toggleFindPanel(mode: mode)
+    }
+
+    func textInputView(_ view: TextInputView, didRequestFindStepForward forward: Bool) {
+        if forward {
+            findNext()
+        } else {
+            findPrevious()
+        }
     }
 
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool {

@@ -51,6 +51,8 @@ final class IDEGitStatusModel {
     private(set) var authors: [String] = []
     var historyBranch: String?
     var historyAuthor: String?
+    /// The file whose history the History tab is showing (an absolute path), or nil for the whole repository.
+    private(set) var historyFilePath: String?
     var historySearch = ""
     private(set) var isBusy = false
     private(set) var actionStatus = ""
@@ -104,6 +106,7 @@ final class IDEGitStatusModel {
         commits = []
         selectedCommitHash = nil
         commitDetailText = nil
+        historyFilePath = nil
         needsAnotherPass = false
         rootURL = url?.standardizedFileURL
         commitMessage = ""
@@ -143,18 +146,39 @@ final class IDEGitStatusModel {
         }
     }
 
+    /// Narrows the History tab to the commits that touched `path` (following renames).
+    func showFileHistory(path: String) {
+        guard relativePath(for: path) != nil else { return }
+        historyFilePath = path
+        selectCommit(nil)
+        commits = []
+        loadHistory()
+    }
+
+    /// Back to the history of the whole repository.
+    func clearFileHistory() {
+        guard historyFilePath != nil else { return }
+        historyFilePath = nil
+        selectCommit(nil)
+        commits = []
+        loadHistory()
+    }
+
     func loadHistory(debounced: Bool = false) {
         guard let rootURL else { return }
         historyTask?.cancel()
         let branch = historyBranch
         let author = historyAuthor
         let search = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = historyFilePath.flatMap { relativePath(for: $0) }
         let existing = repository
         historyTask = Task { [weak self] in
             if debounced { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
-            let loaded = await Self.loadHistory(root: rootURL, existing: existing, branch: branch, author: author, search: search)
+            let loaded = await Self.loadHistory(root: rootURL, existing: existing, branch: branch, author: author, search: search, filePath: filePath)
             guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
+            // The file changed (or was cleared) while this loaded: its commits are for another list.
+            guard self.historyFilePath.flatMap({ self.relativePath(for: $0) }) == filePath else { return }
             if loaded.repository != nil { self.repository = loaded.repository }
             let commits = Self.present(loaded.history)
             if loaded.history.branches != self.branches { self.branches = loaded.history.branches }
@@ -174,8 +198,9 @@ final class IDEGitStatusModel {
             return
         }
         let existing = repository
+        let filePath = historyFilePath.flatMap { relativePath(for: $0) }
         commitDetailTask = Task { [weak self] in
-            let text = await Self.loadShow(root: rootURL, existing: existing, hash: hash)
+            let text = await Self.loadShow(root: rootURL, existing: existing, hash: hash, filePath: filePath)
             guard let self, !Task.isCancelled, self.selectedCommitHash == hash else { return }
             self.commitDetailText = text
         }
@@ -236,6 +261,20 @@ final class IDEGitStatusModel {
             return
         }
         runGitAction { try await $0.createBranch(trimmed) }
+    }
+
+    /// Puts `path` back to its last committed content, discarding staged and unstaged changes.
+    /// `then` runs after git has done it, to reload the editors that show the file. A file with no
+    /// committed version (untracked, or staged as new) is refused: there is nothing to go back to.
+    func revert(path: String, then: (@MainActor () -> Void)? = nil, onFailure: (@MainActor (String) -> Void)? = nil) {
+        guard let relative = relativePath(for: path) else { return }
+        runGitAction({ repo in
+            guard await repo.existsInHead(relativePath: relative) else {
+                throw GitError.failed(status: 1, stderr: "\(relative) is not in the last commit, so there is nothing to revert to.", stdout: Data())
+            }
+            try await repo.revertToHead(paths: [relative])
+            return "Reverted \(relative)"
+        }, onSuccess: { then?() }, onFailure: onFailure)
     }
 
     func push() {
@@ -305,7 +344,8 @@ final class IDEGitStatusModel {
 
     private func runGitAction(
         _ action: @escaping @Sendable (GitRepository) async throws -> String,
-        onSuccess: (@MainActor () -> Void)? = nil
+        onSuccess: (@MainActor () -> Void)? = nil,
+        onFailure: (@MainActor (String) -> Void)? = nil
     ) {
         guard let rootURL else { return }
         actionTask?.cancel()
@@ -332,6 +372,7 @@ final class IDEGitStatusModel {
                 guard !Task.isCancelled else { return }
                 self.actionStatus = Self.describe(error)
                 self.actionFailed = true
+                onFailure?(self.actionStatus)
             }
         }
     }
@@ -416,7 +457,8 @@ final class IDEGitStatusModel {
         existing: GitRepository?,
         branch: String?,
         author: String?,
-        search: String
+        search: String,
+        filePath: String? = nil
     ) async -> (repository: GitRepository?, history: HistoryLoad) {
         guard let repo = try? await repository(for: root, existing: existing) else {
             return (nil, HistoryLoad())
@@ -424,10 +466,10 @@ final class IDEGitStatusModel {
         var history = HistoryLoad()
         let scope: GitLogScope = if let branch, !branch.isEmpty { .branch(branch) } else { .all }
         let grep = search.isEmpty ? nil : search
-        if let commits = try? await repo.log(scope: scope, grep: grep, author: author, limit: 300) {
+        if let commits = try? await repo.log(scope: scope, grep: grep, author: author, path: filePath, limit: 300) {
             history.commits = commits
             // Filtered logs drop ancestors, so their lanes would dangle; show plain rows instead.
-            if author == nil && search.isEmpty {
+            if author == nil && search.isEmpty && filePath == nil {
                 var layout = GitGraphLayout()
                 history.graphs = layout.append(commits)
             }
@@ -439,9 +481,14 @@ final class IDEGitStatusModel {
         return (repo, history)
     }
 
-    nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String) async -> String {
+    /// The commit, or with `filePath` just that file's change in it. A file's diff can be empty
+    /// for a commit that changed it under an older name; the whole commit is shown then.
+    nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String, filePath: String?) async -> String {
         guard let repo = try? await repository(for: root, existing: existing) else {
             return "Could not load commit."
+        }
+        if let filePath, let diff = try? await repo.commitDiff(hash: hash, path: filePath), !diff.isEmpty {
+            return diff
         }
         return (try? await repo.show(hash: hash)) ?? "Could not load commit."
     }

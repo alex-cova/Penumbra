@@ -15,7 +15,7 @@ public extension TreeSitterLanguage {
             tree_sitter_cpp(),
             highlightsQuery: highlightsQuery,
             injectionsQuery: injectionsQuery,
-            lineCommentPrefix: "//"
+            lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
         )
     }
 

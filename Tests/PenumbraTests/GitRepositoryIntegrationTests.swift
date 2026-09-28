@@ -243,4 +243,89 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         _ = try await runner.run(["clone", "-q", remote.path, clone.path], in: directory)
         return clone
     }
+
+    // MARK: - File history and revert
+
+    private func commitFile(_ name: String, _ text: String, message: String, _ repo: GitRepository) async throws {
+        try write(name, text)
+        _ = try await repo.commit(message: message, paths: [name], untrackedPaths: [name], amend: false)
+    }
+
+    func testLogOfAFileListsOnlyTheCommitsThatTouchedIt() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "1\n", message: "add a", repo)
+        try await commitFile("b.txt", "1\n", message: "add b", repo)
+        try await commitFile("a.txt", "2\n", message: "change a", repo)
+
+        let history = try await repo.log(scope: .head, path: "a.txt")
+
+        XCTAssertEqual(history.map(\.subject), ["change a", "add a"])
+        let everything = try await repo.log(scope: .head)
+        XCTAssertEqual(everything.map(\.subject), ["change a", "add b", "add a"])
+    }
+
+    func testLogOfAFileFollowsARename() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("old.txt", "some content\nthat is long enough\nto be recognised\n", message: "add old", repo)
+        _ = try await runner.run(["mv", "old.txt", "new.txt"], in: directory)
+        _ = try await repo.commit(message: "rename", paths: [], untrackedPaths: [], amend: false)
+
+        let history = try await repo.log(scope: .head, path: "new.txt")
+
+        XCTAssertEqual(history.map(\.subject), ["rename", "add old"], "History continues under the old name")
+    }
+
+    func testExistsInHeadTellsCommittedFilesFromNewOnes() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "1\n", message: "add a", repo)
+        try write("new.txt", "n\n")
+        _ = try await runner.run(["add", "new.txt"], in: directory)
+
+        let committed = await repo.existsInHead(relativePath: "a.txt")
+        let staged = await repo.existsInHead(relativePath: "new.txt")
+        let missing = await repo.existsInHead(relativePath: "nope.txt")
+        XCTAssertTrue(committed)
+        XCTAssertFalse(staged, "A staged new file has nothing in HEAD to go back to")
+        XCTAssertFalse(missing)
+    }
+
+    func testRevertDiscardsStagedAndUnstagedChanges() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "original\n", message: "add a", repo)
+        try await commitFile("keep.txt", "keep\n", message: "add keep", repo)
+        try write("a.txt", "staged edit\n")
+        try await repo.stage(paths: ["a.txt"])
+        try write("a.txt", "staged edit\nand an unstaged one\n")
+        try write("keep.txt", "keep, edited\n")
+
+        try await repo.revertToHead(paths: ["a.txt"])
+
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "original\n")
+        let status = try await repo.status()
+        XCTAssertEqual(status.map(\.path), ["keep.txt"], "Only the reverted file is clean again")
+    }
+
+    func testRevertBringsBackADeletedFile() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "original\n", message: "add a", repo)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("a.txt"))
+
+        try await repo.revertToHead(paths: ["a.txt"])
+
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "original\n")
+    }
+
+    func testRevertOfAFileNeverCommittedFailsAndChangesNothing() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "1\n", message: "add a", repo)
+        try write("new.txt", "mine\n")
+
+        do {
+            try await repo.revertToHead(paths: ["new.txt"])
+            XCTFail("git should refuse a path with no committed version")
+        } catch {
+            // expected
+        }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("new.txt"), encoding: .utf8), "mine\n")
+    }
 }

@@ -464,6 +464,10 @@ extension TextInputView {
             addCaretBelow()
         case .undoLastCaretChange:
             undoLastCaretChange()
+        case .unselectLastOccurrence:
+            unselectLastOccurrence()
+        case .goToMatchingBracket:
+            goToMatchingBracket()
         case .expandSelection:
             expandSemanticSelection()
         case .shrinkSelection:
@@ -474,6 +478,10 @@ extension TextInputView {
             delegate?.textInputViewDidRequestToggleFindPanel(self, mode: .find)
         case .toggleReplacePanel:
             delegate?.textInputViewDidRequestToggleFindPanel(self, mode: .replace)
+        case .findNext:
+            delegate?.textInputView(self, didRequestFindStepForward: true)
+        case .findPrevious:
+            delegate?.textInputView(self, didRequestFindStepForward: false)
         case .duplicateLines:
             guard isEditable else { return true }
             duplicateSelectedLines()
@@ -504,6 +512,9 @@ extension TextInputView {
         case .toggleComment:
             guard isEditable else { return true }
             toggleComment()
+        case .toggleBlockComment:
+            guard isEditable else { return true }
+            toggleBlockComment()
         case .insertLineAbove:
             guard isEditable else { return true }
             insertLine(above: true)
@@ -513,6 +524,9 @@ extension TextInputView {
         case .startNewLine:
             guard isEditable else { return true }
             startNewLine()
+        case .completeStatement:
+            guard isEditable else { return true }
+            completeStatement()
         case .sortLinesAscending:
             guard isEditable else { return true }
             sortSelectedLines(descending: false)

@@ -284,8 +284,29 @@ public final class IDEPreferences {
         }
     }
 
+    /// Editor zoom, in percent of ``fontSize``. Lives for the session only: the size chosen in
+    /// Settings stays what is saved, and Actual Size returns to it.
+    var zoomPercent = 100
+
+    static let zoomStep = 10
+    static let zoomRange = 50...300
+
+    /// The size the editor draws at: ``fontSize`` scaled by the zoom.
+    var effectiveFontSize: Double {
+        Self.scaledFontSize(fontSize, zoomPercent: zoomPercent)
+    }
+
+    static func scaledFontSize(_ fontSize: Double, zoomPercent: Int) -> Double {
+        fontSize * Double(zoomPercent) / 100
+    }
+
+    /// The zoom after `steps` steps up (or down when negative), kept within ``zoomRange``.
+    static func zoomed(_ percent: Int, bySteps steps: Int) -> Int {
+        min(max(percent + steps * zoomStep, zoomRange.lowerBound), zoomRange.upperBound)
+    }
+
     func applyTheme() {
-        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: fontSize, fontName: fontName, scaleMarkdownHeadings: scaleMarkdownHeadings)
+        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: effectiveFontSize, fontName: fontName, scaleMarkdownHeadings: scaleMarkdownHeadings)
     }
 
     func snapshot() -> IDEPreferencesSnapshot {

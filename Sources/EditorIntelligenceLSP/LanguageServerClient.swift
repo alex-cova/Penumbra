@@ -85,6 +85,17 @@ public actor LanguageServerClient: LSPClient {
         return eipLocations(from: result)
     }
 
+    public func requestTypeDefinition(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
+        let params = TextDocumentPositionParams(
+            textDocument: textDocument(for: document),
+            position: lspPosition(from: position)
+        )
+        guard let result = try await server.typeDefinition(params) else {
+            return []
+        }
+        return eipLocations(from: result)
+    }
+
     public func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> EditorIntelligence.LSPWorkspaceEdit? {
         let params = RenameParams(
             textDocument: textDocument(for: document),

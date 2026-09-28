@@ -118,7 +118,7 @@ enum JavaReferenceClassifier {
         }
     }
 
-    private static func nameToken(_ leaf: SyntaxNode, byteOffset: Int) -> SyntaxNode? {
+    static func nameToken(_ leaf: SyntaxNode, byteOffset: Int) -> SyntaxNode? {
         let type = leaf.type
         let isName = type == "identifier" || type == "type_identifier" || type == "this" || type == "super"
         guard isName, leaf.byteRange.contains(byteOffset) else { return nil }

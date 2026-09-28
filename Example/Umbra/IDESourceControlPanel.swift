@@ -50,6 +50,10 @@ struct IDESourceControlPanel: View {
         .background(IDEAppearance.ColorToken.editor)
         .clipped()
         .onAppear { gitStatus.loadHistory() }
+        // A request for one file's history (Git ▸ Show History for File) opens the History tab.
+        .onChange(of: gitStatus.historyFilePath) { _, path in
+            if path != nil { mode = .history }
+        }
     }
 
     private var changesContent: some View {
@@ -129,13 +133,42 @@ struct IDESourceControlPanel: View {
 
     private var historyContent: some View {
         VStack(spacing: 0) {
-            historyFilters
+            if let path = gitStatus.historyFilePath {
+                fileHistoryBar(path)
+            } else {
+                historyFilters
+            }
             splitContent(
                 list: historyList,
                 text: gitStatus.commitDetailText ?? "Select a commit to see its changes.",
                 listWidth: 380
             )
         }
+    }
+
+    /// Stands in for the branch and author filters while the list is one file's history.
+    private func fileHistoryBar(_ path: String) -> some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("History of \((path as NSString).lastPathComponent)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(path)
+            Button {
+                gitStatus.clearFileHistory()
+            } label: {
+                Label("All Commits", systemImage: "xmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Show the history of the whole repository")
+            Spacer(minLength: 0)
+        }
+        .font(IDEAppearance.Typography.caption)
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private var historyFilters: some View {
@@ -221,7 +254,7 @@ struct IDESourceControlPanel: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if gitStatus.commits.isEmpty {
-                    Text("No commits")
+                    Text(gitStatus.historyFilePath == nil ? "No commits" : "No commits touched this file")
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .padding(.horizontal, IDEAppearance.Spacing.md)

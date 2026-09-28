@@ -103,7 +103,7 @@ public actor ProjectSearchEngine {
         guard !isEffectivelyEmpty(query) else {
             return []
         }
-        guard let regex = try? NSRegularExpression(pattern: regexPattern(for: query), options: regexOptions(for: query)) else {
+        guard let regex = query.compiledRegularExpression() else {
             return []
         }
         var results: [ProjectSearchResult] = []
@@ -215,20 +215,5 @@ public actor ProjectSearchEngine {
             return query.text.isEmpty
         }
         return query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func regexPattern(for query: WorkspaceSearchQuery) -> String {
-        let escaped = NSRegularExpression.escapedPattern(for: query.text)
-        if query.useRegularExpression {
-            return query.text
-        }
-        if query.matchWholeWord {
-            return "\\b\(escaped)\\b"
-        }
-        return escaped
-    }
-
-    private func regexOptions(for query: WorkspaceSearchQuery) -> NSRegularExpression.Options {
-        query.isCaseSensitive ? [] : [.caseInsensitive]
     }
 }

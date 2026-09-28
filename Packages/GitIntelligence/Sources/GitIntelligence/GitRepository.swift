@@ -78,8 +78,11 @@ public struct GitRepository: Sendable {
         return refs
     }
 
-    public func log(scope: GitLogScope = .all, grep: String? = nil, author: String? = nil, skip: Int = 0, limit: Int = 500) async throws -> [GitCommit] {
+    /// - Parameter path: a file to follow through renames, relative to the repository root. The
+    ///   log then holds only the commits that touched it, so its graph lanes would dangle.
+    public func log(scope: GitLogScope = .all, grep: String? = nil, author: String? = nil, path: String? = nil, skip: Int = 0, limit: Int = 500) async throws -> [GitCommit] {
         var args = ["log", "--date-order", "--format=" + GitLogParser.format, "--skip=\(skip)", "-n", "\(limit)"]
+        if path != nil { args.append("--follow") }
         if let grep, !grep.isEmpty { args += ["--grep=\(grep)", "-i"] }
         if let author, !author.isEmpty { args.append("--author=\(author)") }
         switch scope {
@@ -88,8 +91,14 @@ public struct GitRepository: Sendable {
         case .branch(let name): args += [name, "--decorate=short"]
         }
         args.append("--")
+        if let path { args.append(path) }
         let out = try await readOnly(args)
         return GitLogParser.parse(out.text, remotes: await remotes())
+    }
+
+    /// Whether `relativePath` is in the last commit, i.e. has a committed version to go back to.
+    public func existsInHead(relativePath: String) async -> Bool {
+        (try? await readOnly(["cat-file", "-e", "HEAD:" + relativePath])) != nil
     }
 
     public func commit(hash: String) async throws -> (commit: GitCommit, body: String)? {
@@ -188,6 +197,15 @@ public struct GitRepository: Sendable {
         if !paths.isEmpty { args += ["--"] + paths }
         let out = try await runner.run(args, in: root, stdin: nil, environment: nil)
         return out.text
+    }
+
+    /// Puts `paths` back to their last committed content, in the index and in the working tree,
+    /// discarding both staged and unstaged changes. Every path must exist in `HEAD` (see
+    /// ``existsInHead(relativePath:)``): git refuses a file that was never committed, and this
+    /// changes nothing when it does.
+    public func revertToHead(paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        _ = try await runner.run(["restore", "--source=HEAD", "--staged", "--worktree", "--"] + paths, in: root, stdin: nil, environment: nil)
     }
 
     public func push() async throws -> String {

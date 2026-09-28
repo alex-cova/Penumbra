@@ -66,6 +66,29 @@ public actor LSPImplementationProvider: NavigationProvider {
     }
 }
 
+public actor LSPTypeDefinitionProvider: NavigationProvider {
+    public let name = "LSPTypeDefinition"
+    private let client: LSPClient
+
+    public init(client: LSPClient) {
+        self.client = client
+    }
+
+    public func provide(context: NavigationContext) async -> NavigationResult? {
+        guard context.kind == .typeDefinition else { return nil }
+        do {
+            let locations = try await client.requestTypeDefinition(for: context.document, at: context.cursor.position)
+            guard !locations.isEmpty else { return nil }
+            if locations.count == 1, let lspLocation = locations.first {
+                return .single(navigationLocation(from: lspLocation, documentID: context.document.id))
+            }
+            return .multiple(locations.map { navigationLocation(from: $0, documentID: context.document.id) })
+        } catch {
+            return nil
+        }
+    }
+}
+
 public actor LSPFormattingProvider: FormattingProviding {
     public let name = "LSPFormatting"
     private let client: LSPClient

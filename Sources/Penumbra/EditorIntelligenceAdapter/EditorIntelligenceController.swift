@@ -582,6 +582,8 @@ public final class EditorIntelligenceController {
             return navigate(kind: .implementation)
         case .goToSuperMethod:
             return navigate(kind: .superMethod)
+        case .goToTypeDefinition:
+            return navigate(kind: .typeDefinition)
         case .findUsages:
             return navigate(kind: .references)
         case .triggerCompletion:
@@ -592,6 +594,10 @@ public final class EditorIntelligenceController {
             return true
         case .quickDocumentation:
             requestHover(trigger: .manual)
+            return true
+        case .showParameterInfo:
+            guard signatureHelpProvider != nil else { return false }
+            requestSignatureHelp(isManual: true)
             return true
         case .showContextActions:
             guard codeActionProvider != nil else { return false }
@@ -1117,11 +1123,13 @@ public final class EditorIntelligenceController {
     public func searchProject(
         _ query: String,
         in root: URL,
+        isCaseSensitive: Bool = false,
         matchWholeWord: Bool = false,
         useRegularExpression: Bool = false
     ) async -> [ProjectSearchResult] {
         let searchQuery = WorkspaceSearchQuery(
             text: query,
+            isCaseSensitive: isCaseSensitive,
             matchWholeWord: matchWholeWord,
             useRegularExpression: useRegularExpression
         )
@@ -1522,9 +1530,17 @@ public final class EditorIntelligenceController {
             return "No implementations found"
         case .superMethod:
             return "No super method found"
+        case .typeDefinition:
+            return "No type declaration found"
         case .references:
             return "No usages found"
         }
+    }
+
+    /// Shows `text` next to the caret for a moment, in the completion panel's empty state, for a
+    /// host action that found nothing to do (e.g. "No more problems").
+    public func showHint(_ text: String) {
+        showTransientHint(text)
     }
 
     /// Shows `text` next to the caret for a moment, in the completion panel's empty state.
@@ -1891,16 +1907,23 @@ public final class EditorIntelligenceController {
         updateOverlayVisibility()
     }
 
-    private func requestSignatureHelp() {
+    /// Asks the provider for the signatures around the caret. A manual request (Parameter Info)
+    /// says so when there is no call to show; the automatic one after `(` and `,` stays silent.
+    private func requestSignatureHelp(isManual: Bool = false) {
         guard let signatureHelpProvider, let document = makeLiveDocument() else {
             return
         }
         signatureHelpTask?.cancel()
         signatureHelpTask = Task { [weak self] in
             guard let self else { return }
-            if let model = await signatureHelpProvider.signatureHelp(for: document, at: document.cursor.position) {
-                await MainActor.run {
+            let model = await signatureHelpProvider.signatureHelp(for: document, at: document.cursor.position)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if let model {
                     self.showParameterHints(model)
+                } else if isManual {
+                    self.hideParameterHints()
+                    self.showTransientHint("No parameter info here")
                 }
             }
         }
