@@ -78,6 +78,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord(code: 0x31, .control)), to: .triggerCompletion)
         map.bind(KeyStroke(KeyChord(code: 0x31, [.control, .shift])), to: .triggerSmartCompletion)
         map.bind(KeyStroke(KeyChord("/", .command)), to: .toggleComment)
+        map.bind(KeyStroke(KeyChord("u", [.command, .shift])), to: .toggleCase)
         // Return is always a key-code chord, like Space above — 0x24 is kVK_Return.
         map.bind(KeyStroke(KeyChord(code: 0x24, .command)), to: .insertLineBelow)
         map.bind(KeyStroke(KeyChord(code: 0x24, [.command, .shift])), to: .insertLineAbove)

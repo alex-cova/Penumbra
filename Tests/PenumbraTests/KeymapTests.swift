@@ -72,6 +72,13 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("d", .command))), .duplicateLines)
     }
 
+    func testToggleCaseShortcutOnShippedPresets() {
+        let stroke = KeyStroke(KeyChord("u", [.command, .shift]))
+        XCTAssertEqual(Keymap.default_.action(for: stroke), .toggleCase)
+        XCTAssertEqual(Keymap.intelliJ.action(for: stroke), .toggleCase)
+        XCTAssertEqual(Keymap.sublime.action(for: stroke), .toggleCase)
+    }
+
     func testContextActionsAndOptimizeImportsShortcuts() {
         let optionReturn = KeyStroke(KeyChord(code: 0x24, .option))
         XCTAssertEqual(Keymap.default_.action(for: optionReturn), .showContextActions)

@@ -1887,6 +1887,12 @@ public struct DocumentTextExport: Sendable {
         textInputView.sortSelectedLines(descending: true)
     }
 
+    /// Cycles selected text (or the word at each caret when the selection is empty) through
+    /// lower → UPPER → Title case, one undo step (⌘⇧U). Multi-caret aware.
+    public func toggleCase() {
+        textInputView.toggleCase()
+    }
+
     /// Attempts to detect the indent strategy used in the document. This may return an unknown strategy even
     /// when the document contains indentation.
     public func detectIndentStrategy() -> DetectedIndentStrategy {

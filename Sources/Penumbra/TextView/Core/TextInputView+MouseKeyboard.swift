@@ -519,6 +519,9 @@ extension TextInputView {
         case .sortLinesDescending:
             guard isEditable else { return true }
             sortSelectedLines(descending: true)
+        case .toggleCase:
+            guard isEditable else { return true }
+            toggleCase()
         case .collapseRegion:
             performCollapseRegion()
         case .expandRegion:

@@ -71,6 +71,8 @@ public extension EditorActionID {
     static let startNewLine = EditorActionID("startNewLine")
     static let sortLinesAscending = EditorActionID("sortLinesAscending")
     static let sortLinesDescending = EditorActionID("sortLinesDescending")
+    /// Cycles selected text (or the word at each caret) lower → UPPER → Title. Bound to ⌘⇧U.
+    static let toggleCase = EditorActionID("toggleCase")
 
     // View
     static let toggleMethodSeparators = EditorActionID("toggleMethodSeparators")
@@ -174,6 +176,7 @@ public extension EditorActionID {
         .startNewLine: "Start New Line",
         .sortLinesAscending: "Sort Lines Ascending",
         .sortLinesDescending: "Sort Lines Descending",
+        .toggleCase: "Toggle Case",
         .toggleMethodSeparators: "Method Separators",
         .toggleOccurrenceHighlighting: "Highlight Occurrences of Selection",
         .collapseRegion: "Collapse",

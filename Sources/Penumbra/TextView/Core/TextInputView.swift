@@ -3902,6 +3902,58 @@ extension TextInputView {
         }
     }
 
+    /// Cycles each selection (or the word at an empty caret) through lower → UPPER → Title case.
+    /// Multi-caret aware, one undo step.
+    func toggleCase() {
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else { return }
+
+        var replacements: [(range: NSRange, text: String)] = []
+        for selection in originalSelections {
+            let range: NSRange?
+            if selection.length > 0 {
+                range = selection
+            } else {
+                range = SelectNextOccurrence.wordRange(
+                    at: selection.location,
+                    documentLength: stringView.length,
+                    tokenizer: tokenizer
+                )
+            }
+            guard let range, range.length > 0,
+                  let source = stringView.substring(in: range),
+                  !source.isEmpty else {
+                continue
+            }
+            let transformed = CaseToggleService.toggled(source)
+            guard transformed != source else { continue }
+            replacements.append((range, transformed))
+        }
+        guard !replacements.isEmpty,
+              replacements.allSatisfy({ shouldChangeText(in: $0.range, replacementText: $0.text) }) else {
+            return
+        }
+
+        let primaryIndex = multiSelectionController.hasMultipleSelections ? multiSelectionController.primaryIndex : 0
+        timedUndoManager.beginIsolatedUndoGrouping()
+        for replacement in replacements.sorted(by: { $0.range.location > $1.range.location }) {
+            replaceText(
+                in: replacement.range,
+                with: replacement.text,
+                selectedRangesAfterUndo: originalSelections,
+                primaryIndexAfterUndo: primaryIndex,
+                undoActionName: "Toggle Case",
+                updateSelection: false
+            )
+        }
+        timedUndoManager.endUndoGrouping()
+        let newSelections = replacements
+            .sorted { $0.range.location < $1.range.location }
+            .map { NSRange(location: $0.range.location, length: ($0.text as NSString).length) }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        applySelectedRanges(newSelections)
+    }
+
     /// Sorts every contiguous block of rows touched by the current selection(s), independently,
     /// one undo step. A block of one row is left alone (nothing to reorder). The sorted block(s)
     /// become the new selection, since the original carets' positions no longer correspond to
