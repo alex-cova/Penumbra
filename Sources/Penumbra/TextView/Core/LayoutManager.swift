@@ -39,6 +39,8 @@ final class LayoutManager {
                 gutterDecorationView.needsDisplay = true
                 lineMarkerView.lineManager = lineManager
                 lineMarkerView.needsDisplay = true
+                gutterAnnotationView.lineManager = lineManager
+                gutterAnnotationView.needsDisplay = true
                 setNeedsLayout()
             }
         }
@@ -71,6 +73,7 @@ final class LayoutManager {
                     width: pageGuideView?.hairlineWidth ?? 0
                 )
                 applyFoldRibbonTheme()
+                applyGutterAnnotationTheme()
                 for lineController in lineControllerStorage {
                     lineController.theme = theme
                     lineController.estimatedLineFragmentHeight = theme.font.totalLineHeight
@@ -225,8 +228,57 @@ final class LayoutManager {
     var gutterDecorationHandler: ((Int) -> Void)? {
         didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
     }
+    private let gutterAnnotationView = GutterAnnotationView()
+    var hasGutterAnnotations: Bool {
+        !gutterAnnotationView.store.isEmpty
+    }
+
+    /// Replaces the annotation column's rows (`annotations[0]` is line 1); see ``GutterAnnotation``.
+    func setGutterAnnotations(_ annotations: [GutterAnnotation?], edited: GutterAnnotation?) {
+        guard !(annotations.isEmpty && !hasGutterAnnotations) else { return }
+        gutterAnnotationView.store.replace(with: annotations, edited: edited)
+        gutterAnnotationsDidChange()
+    }
+
+    /// Test hook: the annotation shown for a 0-based row.
+    func gutterAnnotation(atRow row: Int) -> GutterAnnotation? {
+        gutterAnnotationView.store.annotation(atRow: row)
+    }
+
+    func clearGutterAnnotations() {
+        guard hasGutterAnnotations else { return }
+        gutterAnnotationView.store.clear()
+        gutterAnnotationsDidChange()
+    }
+
+    /// Moves the annotations through an edit; see ``GutterAnnotationStore/applyEdit(_:)``.
+    func applyGutterAnnotationEdit(_ edit: GutterLineMarkerEdit) {
+        if gutterAnnotationView.store.applyEdit(edit) {
+            gutterAnnotationView.needsDisplay = true
+        }
+    }
+
+    private func gutterAnnotationsDidChange() {
+        gutterAnnotationView.needsDisplay = true
+        gutterAnnotationView.isHidden = !hasGutterAnnotations
+        updateGutterAnnotationColumnWidth()
+        setNeedsLayout()
+    }
+
+    private func updateGutterAnnotationColumnWidth() {
+        gutterWidthService.annotationColumnWidth = GutterAnnotationView.columnWidth(
+            for: gutterAnnotationView.store.distinctAnnotations, font: gutterAnnotationView.font)
+    }
+
+    private func applyGutterAnnotationTheme() {
+        let font = theme.lineNumberFont
+        gutterAnnotationView.font = font
+        gutterAnnotationView.textColor = theme.lineNumberColor
+        if hasGutterAnnotations { updateGutterAnnotationColumnWidth() }
+    }
     private let lineMarkerView = GutterLineMarkerView()
     private var lineMarkerContentHeight: CGFloat = 0
+    private var gutterAnnotationContentHeight: CGFloat = 0
     private var lineMarkerStore: GutterLineMarkerStore {
         lineMarkerView.store
     }
@@ -368,6 +420,7 @@ final class LayoutManager {
         self.foldRibbonView.lineManager = lineManager
         self.gutterDecorationView.lineManager = lineManager
         self.lineMarkerView.lineManager = lineManager
+        self.gutterAnnotationView.lineManager = lineManager
         self.methodSeparatorView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
@@ -841,6 +894,20 @@ extension LayoutManager {
             gutterDecorationView.textContainerInsetTop = textContainerInset.top
         }
         var interactive: CGRect?
+        let annotationWidth = gutterWidthService.annotationColumnWidth
+        if annotationWidth > 0 {
+            // Only the visible part of the column, like the line markers.
+            let annotationFrame = CGRect(x: safeAreaInsets.left + decorationWidth, y: viewport.minY,
+                                         width: annotationWidth, height: viewport.height)
+            if gutterAnnotationView.frame != annotationFrame || gutterAnnotationContentHeight != contentSize.height {
+                gutterAnnotationView.frame = annotationFrame
+                gutterAnnotationContentHeight = contentSize.height
+                gutterAnnotationView.needsDisplay = true
+            }
+            gutterAnnotationView.textContainerInsetTop = textContainerInset.top
+            gutterAnnotationView.rowHeight = theme.font.lineHeight * lineHeightMultiplier
+            interactive = annotationFrame
+        }
         let markerWidth = gutterWidthService.lineMarkerColumnWidth
         if markerWidth > 0 {
             let ribbonWidth = showFoldingRibbon ? gutterWidthService.foldingRibbonWidth : 0
@@ -856,7 +923,7 @@ extension LayoutManager {
             }
             lineMarkerView.textContainerInsetTop = textContainerInset.top
             lineMarkerView.rowHeight = theme.font.lineHeight * lineHeightMultiplier
-            interactive = markerFrame
+            interactive = interactive.map { $0.union(markerFrame) } ?? markerFrame
         }
         if showFoldingRibbon {
             let ribbonWidth = gutterWidthService.foldingRibbonWidth
@@ -1149,6 +1216,7 @@ extension LayoutManager {
         let fontLineHeight = theme.lineNumberFont.lineHeight
         let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
         let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
+            + gutterWidthService.annotationColumnWidth
         var yPosition = textContainerInset.top + (lineYPosition ?? line.yPosition)
         if lineController.numberOfLineFragments > 1 {
             // There are more than one line fragments, so we align the line number at the top.
@@ -1370,6 +1438,7 @@ extension LayoutManager {
         foldRibbonView.removeFromSuperview()
         gutterDecorationView.removeFromSuperview()
         lineMarkerView.removeFromSuperview()
+        gutterAnnotationView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
         // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
         // views (which paint the glyphs). When Metal is active it is a viewport-sized overlay on
@@ -1391,6 +1460,7 @@ extension LayoutManager {
         gutterContainerView.addSubview(gutterBackgroundView)
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
         gutterContainerView.addSubview(gutterDecorationView)
+        gutterContainerView.addSubview(gutterAnnotationView)
         gutterContainerView.addSubview(lineNumbersContainerView)
         gutterContainerView.addSubview(lineMarkerView)
         gutterContainerView.addSubview(foldRibbonView)
@@ -1424,6 +1494,7 @@ extension LayoutManager {
         foldRibbonView.isHidden = !showFoldingRibbon
         gutterDecorationView.isHidden = gutterDecorations.isEmpty
         lineMarkerView.isHidden = !hasLineMarkers
+        gutterAnnotationView.isHidden = !hasGutterAnnotations
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing

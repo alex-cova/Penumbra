@@ -153,6 +153,8 @@ struct UmbraApp: App {
                 Button("Show History for File", action: workspace.showFileHistory)
                     .menuShortcut(.gitFileHistory, in: preset)
                     .disabled(!workspace.gitStatus.isRepository)
+                Button(workspace.isBlameShownForActiveFile ? "Hide Git Blame" : "Show Git Blame", action: workspace.toggleGitBlame)
+                    .disabled(!workspace.gitStatus.isRepository)
                 Button("Revert File…", action: workspace.revertActiveFile)
                     .menuShortcut(.gitRevert, in: preset)
                     .disabled(!workspace.gitStatus.isRepository)

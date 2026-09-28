@@ -46,6 +46,14 @@ final class GutterWidthService {
             }
         }
     }
+    /// Width of the annotation column between the decorations and the line numbers; 0 hides it.
+    var annotationColumnWidth: CGFloat = 0 {
+        didSet {
+            if annotationColumnWidth != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
     /// Width of the line-marker column between the line numbers and the folding ribbon; 0 hides it.
     var lineMarkerColumnWidth: CGFloat = 0 {
         didSet {
@@ -71,6 +79,7 @@ final class GutterWidthService {
         if showGutterDecorations {
             width += gutterDecorationColumnWidth
         }
+        width += annotationColumnWidth
         width += lineMarkerColumnWidth
         if showFoldingRibbon {
             width += foldingRibbonWidth

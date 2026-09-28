@@ -91,6 +91,8 @@ public final class IDEWorkspace {
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
     let gitStatus = IDEGitStatusModel()
+    /// Git blame in the editor gutter, per file.
+    let blame = IDEBlameController()
     let problems = IDEProblemsStore()
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
@@ -115,6 +117,9 @@ public final class IDEWorkspace {
         }
         gitStatus.onWorkingTreeChanged = { [weak self] in
             self?.reloadOpenEditorsAfterGitChange()
+        }
+        gitStatus.onRefreshed = { [weak self] in
+            self?.refreshBlameInOpenEditors()
         }
     }
 
@@ -697,6 +702,7 @@ public final class IDEWorkspace {
             applyLanguageInferredFromURL(destination!, document: document, in: pane)
             recordRecentFile(destination!)
             gitStatus.refresh()
+            refreshBlame(in: pane, force: true)
             refreshPresentation()
             recheckJavaAfterSave(of: destination)
         } catch {
@@ -1550,6 +1556,41 @@ public final class IDEWorkspace {
         }
         gitStatus.showFileHistory(path: url.path)
         showSourceControl()
+    }
+
+    /// Whether the active file shows the blame column (drives the menu title).
+    var isBlameShownForActiveFile: Bool {
+        blame.isEnabled(for: workbench.activePane.selectedDocument?.url)
+    }
+
+    /// Shows or hides the blame column for the active file (Git ▸ Show Git Blame).
+    func toggleGitBlame() {
+        guard let url = activeFileInRepository() else {
+            showGitNotice("No Git Blame", "The active file is not in a git repository.")
+            return
+        }
+        blame.toggle(for: url)
+        refreshBlame(in: workbench.activePane, force: true)
+    }
+
+    /// Re-blames the editor of `pane` after a save, or hides the column after a toggle off.
+    private func refreshBlame(in pane: EditorPane, force: Bool = false) {
+        guard pane.selectedDocument?.contentKind == .text else { return }
+        let url = pane.selectedDocument?.url
+        blame.refresh(textView: host(for: pane.id).textView, url: url, git: gitStatus, force: force) { [weak self] in
+            self?.showGitNotice(
+                "No Git Blame",
+                "\(url?.lastPathComponent ?? "This file") has no committed history yet, so there is nothing to annotate."
+            )
+        }
+    }
+
+    /// The repository changed (a commit, a pull, another tool): refresh the columns that are showing.
+    private func refreshBlameInOpenEditors() {
+        guard !blame.enabledPaths.isEmpty else { return }
+        for pane in workbench.panes where blame.isEnabled(for: pane.selectedDocument?.url) {
+            refreshBlame(in: pane)
+        }
     }
 
     /// Puts the active file back to its last commit (⌥⌘Z in the IntelliJ keymap), after asking.
@@ -3577,6 +3618,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.pushProject() }),
             EditorCommand(id: "app.git.fileHistory", title: "Git: Show History for File", group: "Git",
                           action: { [weak self] in self?.showFileHistory() }),
+            EditorCommand(id: "app.git.blame", title: "Git: Toggle Blame (Annotate)", group: "Git",
+                          action: { [weak self] in self?.toggleGitBlame() }),
             EditorCommand(id: "app.git.revert", title: "Git: Revert File…", group: "Git",
                           action: { [weak self] in self?.revertActiveFile() }),
             EditorCommand(id: "app.view.nextTab", title: "View: Next Tab", group: "View",
@@ -4440,6 +4483,8 @@ public final class IDEWorkspace {
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier)
         scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
+        // `setState` cleared the blame column; bring it back for a file that has blame on.
+        blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()

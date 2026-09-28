@@ -1346,6 +1346,7 @@ final class TextInputView: EditorView {
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
         if !inlayHints.isEmpty { inlayHints = [] }
         if layoutManager.hasLineMarkers { lineMarkers = [] }
+        layoutManager.clearGutterAnnotations()
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
         syntaxParsePolicy = state.parsePolicy
@@ -1665,6 +1666,22 @@ final class TextInputView: EditorView {
     var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
         get { layoutManager.lineMarkerHandler }
         set { layoutManager.lineMarkerHandler = newValue }
+    }
+
+    var hasGutterAnnotations: Bool {
+        layoutManager.hasGutterAnnotations
+    }
+
+    func setGutterAnnotations(_ annotations: [GutterAnnotation?], edited: GutterAnnotation?) {
+        layoutManager.setGutterAnnotations(annotations, edited: edited)
+    }
+
+    func clearGutterAnnotations() {
+        layoutManager.clearGutterAnnotations()
+    }
+
+    func gutterAnnotation(atRow row: Int) -> GutterAnnotation? {
+        layoutManager.gutterAnnotation(atRow: row)
     }
 
     override func didMoveToWindow() {
@@ -2901,7 +2918,10 @@ extension TextInputView {
         // edit is described in rows up front: a few lookups, however many markers there are.
         var markerEdit: GutterLineMarkerEdit?
         let lineCountBeforeEdit = lineManager.lineCount
-        if layoutManager.hasLineMarkers, Self.containsLineBreak(newString) || Self.containsLineBreak(currentText) {
+        let hasLineBreak = layoutManager.hasLineMarkers || layoutManager.hasGutterAnnotations
+            ? Self.containsLineBreak(newString) || Self.containsLineBreak(currentText)
+            : false
+        if layoutManager.hasGutterAnnotations || (layoutManager.hasLineMarkers && hasLineBreak) {
             let lastRow = max(lineCountBeforeEdit - 1, 0)
             let startRow = lineManager.row(containingCharacterAt: range.location) ?? lastRow
             let endRow = max(lineManager.row(containingCharacterAt: range.upperBound) ?? lastRow, startRow)
@@ -2911,7 +2931,8 @@ extension TextInputView {
                 lineDelta: 0,
                 startsAtLineStart: lineManager.location(ofRow: startRow) == range.location,
                 endsAtLineStart: endRow > startRow && lineManager.location(ofRow: endRow) == range.upperBound,
-                isInsertion: range.length == 0
+                isInsertion: range.length == 0,
+                insertedTextEndsWithLineBreak: newString.last?.isNewline ?? false
             )
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
@@ -2925,7 +2946,12 @@ extension TextInputView {
         let lineChangeSet = textEditResult.lineChangeSet
         if var markerEdit {
             markerEdit.lineDelta = lineManager.lineCount - lineCountBeforeEdit
-            layoutManager.applyLineMarkerEdit(markerEdit)
+            if layoutManager.hasLineMarkers, hasLineBreak {
+                layoutManager.applyLineMarkerEdit(markerEdit)
+            }
+            if layoutManager.hasGutterAnnotations {
+                layoutManager.applyGutterAnnotationEdit(markerEdit)
+            }
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
         let languageModeLineChangeSet = EditorPerformanceTrace.shared.measure(.incrementalParse) {

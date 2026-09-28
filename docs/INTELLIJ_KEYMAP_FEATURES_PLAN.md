@@ -18,25 +18,24 @@ Origin: a JetBrains Fleet keymap cheat sheet (`~/Desktop/keymap.pdf`) was compar
 | 1 | Done | (Editor actions are tested; the menu-level shortcuts were not run in the app.) 1.1 block comment (`BlockCommentService`, `BlockCommentDelimiters`, ⌥⌘/), 1.2 matching brace (`BracketNavigation`, `goToMatchingBracket`), 1.3 folding commands (landed upstream before this work), 1.4 `unselectLastOccurrence`, 1.5 complete statement (`StatementCompletionService`, ⇧⌘↵), 1.6 IntelliJ line-insert keys (⇧↵, ⌥⌘↵; ⌘↵ unbound), 1.7 `findNext`/`findPrevious`. |
 | 2 | Done | (Tested; the Umbra wiring and the bare F2 menu shortcut were not run in the app.) 2.1 next/prev problem (`ProblemNavigator`, `goToNextProblem`/`goToPreviousProblem`, F2 / ⇧F2), 2.2 go to type declaration (`NavigationKind.typeDefinition`, `JavaGoToTypeDefinition`, `LSPTypeDefinitionProvider`, ⌃⇧B), 2.3 parameter info (`showParameterInfo`, ⌘P), 2.4 symbol scopes (`goToFileSymbol` ⌘F12 / `goToSymbol` ⌥⌘O, `FileSymbolsPaletteProvider`). |
 | 3 | Partly done | Done: 3.1 step into/out, 3.2 pause, 3.5 Run menu and IntelliJ keys, plus the adapter fixes below that debugging needed before any of it could work. Verified against a real JVM by `JavaDebugAdapterTests`; the Swift session, panel, stop-line reveal and menu were built but not run in the app. Open: 3.3 evaluate, 3.4 run in context. |
-| 4 | Partly done | Done: 4.2 file history, 4.3 revert, 4.4 pull/push keys and a Git menu; the git side is tested against real repositories, the Umbra UI (panel header, dialogs, menu) was built but not run. Open: 4.1 blame. |
+| 4 | Done (UI not run) | 4.1 blame, 4.2 file history, 4.3 revert, 4.4 pull/push keys and a Git menu; the git side is tested against real repositories, the blame column is tested in Penumbra and rendered to a bitmap in a test, but the Umbra wiring (menu, toggle, refresh on save/commit) and the panel header and dialogs were built, not run. |
 | H | Built, not seen on screen | `play.fill` gutter button per request in `.http` files (`HTTPRequestParser.requestLocations`, `IDEWorkspace.refreshHTTPGutter`). Parser tests pass; the app launches with an `.http` file without crashing, but I could not take a screenshot here, so the icons have not been looked at. |
 | 5 | Done (UI not run) | `ProjectReplacePlanner` + `IDEReplaceInFilesGuard`, the drawer's replace row and options, ⇧⌘R in the IntelliJ column. Planner, guard and the write-to-disk path are tested; the drawer and the live-editor path were built but not run in the app. |
 | 6 | Done (not run in the app) | 6.1 next/prev tab, 6.2 next/prev split, 6.3 tool-window keys (⌘1/⌘5/⌘6/⌘7/⌘9/⌥F12 and Hide All ⇧⌘F12), 6.4 zoom, 6.5 Clear Terminal, 6.6 Go to Tool Window, 6.7 emoji (checked in code only, no change needed). Differences from the plan below. |
 | 7 | Needs a decision | Generate Code with AI |
 
-Last full test run: 2730 tests, 0 failures (4 skipped). Phase 0 went first because every later menu-level action needs it.
+Last full test run: 2747 tests, 0 failures (4 skipped). Phase 0 went first because every later menu-level action needs it.
 
 ## Open work and unverified items
 
 **Not built**
 
-- **4.1 Git blame.** Needs a new display-only text-annotation API in the gutter (today's gutter draws icons only). `GitRepository.blame` already exists and nothing in Umbra calls it.
 - **3.3 Evaluate Expression / Quick Evaluate.** Limited to variable and field paths and `toString()`, because JDI has no expression evaluator.
 - **3.4 Run / Debug in Context.**
 - **7 Generate Code with AI.** Blocked on decisions: provider, credential storage, first-use disclosure, diff-preview UX, and a key.
 - **Smaller gaps:** revert is active-file only; Replace in Files has no file mask or scope; workspace Go to Symbol covers open files only (no project-wide Java members); Go to Type Declaration from a *use* of a type-variable value reaches its bound, not the parameter; the debugger ignores the adapter's `output` events.
 
-**Built and tested, but never run in the running app** (no way to launch or screenshot it while building): the HTTP play buttons (H); F2 / ⇧F2, ⌘P and the bare function-key menu shortcuts F2 / F7 / F8 (SwiftUI may ignore a key with no modifier); block comment and complete statement through the app; the debugger panel, stop-line reveal and Run menu (the adapter itself *was* run against real JVMs); next/prev tab and split, Hide All, zoom, Clear Terminal (including whether ⌘K reaches the terminal); the Git menu, file-history header and Revert dialog; the Replace in Files drawer and its open-editor apply path.
+**Built and tested, but never run in the running app** (no way to launch or screenshot it while building): Git blame's menu item, per-file toggle and refresh after save, commit or pull (the column itself was drawn in a test bitmap); the HTTP play buttons (H); F2 / ⇧F2, ⌘P and the bare function-key menu shortcuts F2 / F7 / F8 (SwiftUI may ignore a key with no modifier); block comment and complete statement through the app; the debugger panel, stop-line reveal and Run menu (the adapter itself *was* run against real JVMs); next/prev tab and split, Hide All, zoom, Clear Terminal (including whether ⌘K reaches the terminal); the Git menu, file-history header and Revert dialog; the Replace in Files drawer and its open-editor apply path.
 
 **Risks and loose ends**
 
@@ -250,6 +249,14 @@ Facts found while planning: `GitRepository.blame(relativePath:contents:)` **alre
 - Drawing cost is bounded by visible rows. Edits shift the line entries and mark edited lines "uncommitted".
 - Menu item under a new **Git** menu, plus Find Action. The toggle is per document and not persisted at first.
 
+### 4.1 as built
+
+- **Penumbra:** `TextView.setGutterAnnotations(_:edited:)` fills a display-only **annotation column** (`GutterAnnotation`: `id`, `text`, `tooltip`; `GutterAnnotationView`, `GutterAnnotationStore`) between the gutter decorations and the line numbers. `annotations[0]` is line 1, `nil` leaves a line blank, and consecutive lines with one `id` are a block whose first line shows the text. The column has no git types, hides for an empty array, is cleared by `setState`, and is as wide as the longest of the 24 longest distinct texts (capped at 280 pt, truncated with an ellipsis). The view covers only the viewport, so a redraw is bounded by the visible rows.
+- **Edits:** the store keeps one `Int32` per row (an index into the table of distinct annotations), so an edit that changes the line count is one array splice, not a per-row lookup. A line an edit touches, and every line it adds, shows the `edited` annotation ("Not Committed Yet") until the host sends new ones. A line break typed at a line's start pushes that line down untouched. `TextInputView.replaceText` now computes the row description for every edit while the column is showing (a few line-manager lookups), and only for line-break edits otherwise, as before.
+- **Umbra:** `IDEBlameController` (`Example/Umbra/IDEGitBlame.swift`) keeps the files with blame on (per file, for the session, not persisted) and runs `GitRepository.blame` off the main actor against the live buffer, so unsaved text reads as uncommitted. One request per editor: a result computed for text that has since changed is dropped and computed again after 400 ms. `IDEBlamePresentation` turns `GitBlameLine`s into annotations (`Author, 3 days ago`; tooltip with the short hash, summary and date). The column returns after `setState` (a tab switch), and is refreshed on save and on every git refresh (commit, pull, app activation) when the buffer or the file's status changed. Git menu "Show Git Blame" / "Hide Git Blame" and Find Action "Git: Toggle Blame (Annotate)"; no key. A file with no committed history says so and turns blame off again.
+- **Not built:** clicking a line to open its commit (the tooltip is the only detail), per-author colours and a caret-line end-of-line annotation.
+- **Cost:** with the column off nothing changed on the typing path apart from a boolean check. `PerfHarness enter-session` was not run for this change.
+
 ### Phase 4 as built
 
 - **`GitRepository`** gained `log(… path:)` (`git log --follow -- <path>`), `existsInHead(relativePath:)` and `revertToHead(paths:)` (`git restore --source=HEAD --staged --worktree`), with real-git tests including a rename and a deleted file.
@@ -405,7 +412,7 @@ If settled: an `AITextModel` conformance in Umbra, a Settings pane (provider, mo
 | 11 | 4.2 File history, 4.3 Revert, 4.4 Push/pull keys | M | 0 | Done (UI not run) |
 | 12 | 5 Replace in Files | M | 0 (for the ⇧⌘R menu key) | Done (UI not run) |
 | 13 | 3.3 Evaluate, 3.4 Run in Context | M–L | 3.1 | **Open** |
-| 14 | 4.1 Git blame (gutter annotations) | L | new gutter text-annotation API | **Open** |
+| 14 | 4.1 Git blame (gutter annotations) | L | new gutter text-annotation API | Done (UI not run) |
 | 15 | 6.6 Go to Tool | S | none | Done |
 | 16 | 7 Generate Code with AI | L | decision | **Open** (needs a decision) |
 

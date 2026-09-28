@@ -481,6 +481,32 @@ public struct DocumentTextExport: Sendable {
         lineMarkers = markers
     }
 
+    /// Whether the annotation column is showing.
+    public var hasGutterAnnotations: Bool {
+        textInputView.hasGutterAnnotations
+    }
+
+    /// Fills the display-only annotation column between the gutter decorations and the line
+    /// numbers, for example with version-control blame. `annotations[0]` belongs to line 1 and
+    /// `nil` leaves a line blank; consecutive lines with the same ``GutterAnnotation/id`` show
+    /// their text once. The annotations follow edits: a line an edit touched, and every line it
+    /// adds, shows `edited` (or stays blank when that is `nil`) until the host sends fresh
+    /// annotations. Passing an empty array hides the column, and
+    /// ``setState(_:addUndoAction:)`` clears it. Drawing is bounded by the visible rows.
+    public func setGutterAnnotations(_ annotations: [GutterAnnotation?], edited: GutterAnnotation? = nil) {
+        textInputView.setGutterAnnotations(annotations, edited: edited)
+    }
+
+    /// Test hook: the annotation shown for a 0-based row.
+    func gutterAnnotationForTesting(atRow row: Int) -> GutterAnnotation? {
+        textInputView.gutterAnnotation(atRow: row)
+    }
+
+    /// Hides the annotation column.
+    public func clearGutterAnnotations() {
+        textInputView.clearGutterAnnotations()
+    }
+
     /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
     /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
     /// simply take up zero height, so scrolling and hit-testing already skip them for free — with

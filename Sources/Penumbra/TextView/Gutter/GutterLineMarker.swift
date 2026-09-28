@@ -51,6 +51,8 @@ struct GutterLineMarkerEdit: Equatable {
     var endsAtLineStart: Bool
     /// Whether nothing was replaced (a pure insertion).
     var isInsertion: Bool
+    /// Whether the inserted text ends with a line break. Only the annotation column reads it.
+    var insertedTextEndsWithLineBreak = false
 
     /// Rows the replacement text spans beyond `startRow`.
     var insertedRows: Int {

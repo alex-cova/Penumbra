@@ -68,6 +68,8 @@ final class IDEGitStatusModel {
     @ObservationIgnored var hasUnsavedEditors: (@MainActor () -> Bool)?
     /// Reloads clean editor buffers after a switch or pull has changed files on disk.
     @ObservationIgnored var onWorkingTreeChanged: (@MainActor () -> Void)?
+    /// Called after every status refresh has been applied (saves, app activation, watcher batches).
+    @ObservationIgnored var onRefreshed: (@MainActor () -> Void)?
 
     private var repositoryRoot: String?
 
@@ -139,6 +141,7 @@ final class IDEGitStatusModel {
             }
             self.refreshTask = nil
             self.loadHistory()
+            self.onRefreshed?()
             if self.needsAnotherPass {
                 self.needsAnotherPass = false
                 self.refresh()
@@ -153,6 +156,14 @@ final class IDEGitStatusModel {
         selectCommit(nil)
         commits = []
         loadHistory()
+    }
+
+    /// `git blame` of the file at `path` (absolute) against `contents`, the editor's live text, so
+    /// unsaved edits come back as uncommitted lines. Nil when the file is outside the repository or
+    /// git has no blame for it (untracked, or a repository without commits).
+    func blame(path: String, contents: Data) async -> [GitBlameLine]? {
+        guard let rootURL, let relative = relativePath(for: path) else { return nil }
+        return await Self.loadBlame(root: rootURL, existing: repository, relativePath: relative, contents: contents)
     }
 
     /// Back to the history of the whole repository.
@@ -483,6 +494,11 @@ final class IDEGitStatusModel {
 
     /// The commit, or with `filePath` just that file's change in it. A file's diff can be empty
     /// for a commit that changed it under an older name; the whole commit is shown then.
+    nonisolated private static func loadBlame(root: URL, existing: GitRepository?, relativePath: String, contents: Data) async -> [GitBlameLine]? {
+        guard let repo = try? await repository(for: root, existing: existing) else { return nil }
+        return try? await repo.blame(relativePath: relativePath, contents: contents)
+    }
+
     nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String, filePath: String?) async -> String {
         guard let repo = try? await repository(for: root, existing: existing) else {
             return "Could not load commit."
