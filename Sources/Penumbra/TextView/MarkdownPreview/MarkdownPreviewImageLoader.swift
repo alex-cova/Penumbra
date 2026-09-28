@@ -4,10 +4,22 @@ import Foundation
 /// Resolves local markdown image references for the preview. Blocks remote `http(s)` URLs by default.
 enum MarkdownPreviewImageLoader {
     static func loadImage(at reference: String, baseURL: URL?) -> CGImage? {
-        guard let url = resolveURL(reference, baseURL: baseURL) else { return nil }
-        guard url.isFileURL else { return nil }
+        guard let url = fileURL(for: reference, baseURL: baseURL) else { return nil }
+        return loadImage(at: url)
+    }
+
+    /// The local file a reference points at; `nil` for remote or unresolvable references.
+    static func fileURL(for reference: String, baseURL: URL?) -> URL? {
+        guard let url = resolveURL(reference, baseURL: baseURL), url.isFileURL else { return nil }
+        return url
+    }
+
+    /// Decodes eagerly, so the first draw of the image (on the main thread, or a tile raster)
+    /// doesn't pay for decompression.
+    static func loadImage(at url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+        return CGImageSourceCreateImageAtIndex(source, 0, options)
     }
 
     /// A loaded image's natural size, in points — treats one pixel as one point (there is no

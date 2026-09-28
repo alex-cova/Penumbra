@@ -162,6 +162,84 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     @MainActor
+    func testUnchangedRelayoutDoesNotRemeasureOrRepaint() {
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        preview.document = MarkdownPreviewDocument.parse("# Title\n\nBody")
+        preview.layoutSubtreeIfNeeded()
+        let applied = preview.debugAppliedLayoutCount
+
+        preview.needsLayout = true
+        preview.layoutSubtreeIfNeeded()
+        let sameStyle = preview.style
+        preview.style = sameStyle
+        preview.layoutSubtreeIfNeeded()
+        XCTAssertEqual(preview.debugAppliedLayoutCount, applied)
+
+        preview.document = MarkdownPreviewDocument.parse("# Title\n\nBody, edited")
+        preview.layoutSubtreeIfNeeded()
+        XCTAssertEqual(preview.debugAppliedLayoutCount, applied + 1)
+        XCTAssertEqual(preview.debugMeasureMisses, 1)
+    }
+
+    @MainActor
+    func testMetalRelayoutKeepsTilesTheChangeDoesNotTouch() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let paragraphs = (0 ..< 200).map { "Paragraph \($0) with enough words to wrap once or twice in the preview." }
+        let style = MarkdownPreviewStyle()
+        // As in `MarkdownPreviewView`: one measure cache across layouts, so unchanged blocks keep
+        // their typeset text.
+        let cache = MarkdownPreviewMeasureCache()
+        func layout(_ texts: [String]) -> MarkdownPreviewLayout {
+            MarkdownPreviewLayout.layout(document: .parse(texts.joined(separator: "\n\n")), style: style, width: 320, cache: cache)
+        }
+        let renderer = MarkdownPreviewMetalRenderer()
+        let original = layout(paragraphs)
+        XCTAssertTrue(renderer.update(layout: original, style: style, rasterImages: [:]))
+        renderer.setVisibleRect(CGRect(x: 0, y: 0, width: 320, height: 2000))
+        let resident = renderer.residentTileCount
+        XCTAssertGreaterThan(resident, 1)
+
+        XCTAssertTrue(renderer.update(layout: original, style: style, rasterImages: [:]))
+        XCTAssertEqual(renderer.residentTileCount, resident, "An identical layout keeps every tile")
+
+        var edited = paragraphs
+        edited[199] = "Last paragraph, edited."
+        XCTAssertTrue(renderer.update(layout: layout(edited), style: style, rasterImages: [:]))
+        // Only the tile(s) holding the edited last paragraph go.
+        XCTAssertGreaterThanOrEqual(renderer.residentTileCount, resident - 2, "An edit far below the viewport keeps the other tiles")
+
+        var top = paragraphs
+        top[0] = "First paragraph, now long enough to wrap onto more lines than it did before, pushing everything down."
+        let beforeTopEdit = renderer.residentTileCount
+        renderer.update(layout: layout(top), style: style, rasterImages: [:])
+        XCTAssertEqual(renderer.residentTileCount, renderer.lastRequestedTileCount,
+                       "A height change at the top invalidates every tile below it (only the visible ones are re-rasterized)")
+        XCTAssertLessThanOrEqual(renderer.residentTileCount, beforeTopEdit)
+    }
+
+    @MainActor
+    func testControllerReusesRenderedDiagramAfterProseEdit() async {
+        let diagram = "```mermaid\npie title Share\n    \"A\" : 1\n    \"B\" : 2\n```"
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.setState(TextViewState(text: "Intro\n\n\(diagram)", theme: DefaultTheme()))
+        textView.languageIdentifier = "markdown"
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.parseDebounceNanoseconds = 1_000_000
+        XCTAssertTrue(controller.toggle())
+        await controller.waitForPendingWork()
+        guard let image = controller.previewView.rasterImages[1] else {
+            return XCTFail("Expected the diagram to render")
+        }
+
+        textView.text = "Intro, edited\n\n\(diagram)"
+        controller.noteTextDidChange()
+        await controller.waitForPendingWork()
+        XCTAssertTrue(controller.previewView.rasterImages[1] === image, "The diagram is reused, not re-rendered")
+    }
+
+    @MainActor
     func testMetalPreviewFallsBackWhenDocumentIsTooWideToTile() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")

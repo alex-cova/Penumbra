@@ -22,11 +22,18 @@ enum MarkdownPreviewCGRenderer {
             drawQuoteDecoration(decoration, style: style, in: context)
         }
 
-        for (index, blockLayout) in layout.blockLayouts.enumerated() {
+        let blocks = layout.blockLayouts
+        // Blocks are laid out top to bottom, so start at the first one that can reach the clip
+        // and stop past its bottom instead of testing every block of a long document per tile.
+        let first = clip.map { firstBlock(in: blocks, reaching: $0.minY - 8) } ?? 0
+        for index in first ..< blocks.count {
+            let blockLayout = blocks[index]
             // Decorations (e.g. the checkbox glyph) can extend a few points outside `frame`;
             // inflate before testing so a block right at the tile/dirty-rect edge still paints.
-            if let clip, !blockLayout.frame.insetBy(dx: -8, dy: -8).intersects(clip) {
-                continue
+            if let clip {
+                let inflated = blockLayout.frame.insetBy(dx: -8, dy: -8)
+                if inflated.minY > clip.maxY { break }
+                if !inflated.intersects(clip) { continue }
             }
             drawBlock(
                 blockLayout: blockLayout,
@@ -37,6 +44,22 @@ enum MarkdownPreviewCGRenderer {
             )
         }
         context.restoreGState()
+    }
+
+    /// Index of the first block whose bottom is at or below `y` (binary search; frames are
+    /// sorted by `minY`, and `maxY` grows with it).
+    private static func firstBlock(in blocks: [MarkdownPreviewBlockLayout], reaching y: CGFloat) -> Int {
+        var low = 0
+        var high = blocks.count
+        while low < high {
+            let mid = (low + high) / 2
+            if blocks[mid].frame.maxY < y {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private static func drawQuoteDecoration(
@@ -70,20 +93,28 @@ enum MarkdownPreviewCGRenderer {
         in context: CGContext
     ) {
         let frame = blockLayout.frame
+        let typeset = blockLayout.text
         switch blockLayout.block.kind {
         case .heading(let level, let text):
-            let font = headingFont(level: level, style: style)
-            drawText(text, font: font, style: style, in: context, frame: frame)
+            if let ctFrame = typeset?.frames.first {
+                drawFrame(ctFrame, in: context, at: frame)
+            } else {
+                drawText(text, font: headingFont(level: level, style: style), style: style, in: context, frame: frame)
+            }
 
         case .paragraph(let text):
-            drawText(text, font: style.bodyFont, style: style, in: context, frame: frame)
+            if let ctFrame = typeset?.frames.first {
+                drawFrame(ctFrame, in: context, at: frame)
+            } else {
+                drawText(text, font: style.bodyFont, style: style, in: context, frame: frame)
+            }
 
         case .list(let list):
             drawList(list, layout: blockLayout, style: style, in: context)
 
         case .table(let table):
             if let geometry = blockLayout.table {
-                drawTable(table, geometry: geometry, origin: frame.origin, style: style, in: context)
+                drawTable(table, geometry: geometry, cells: typeset?.cells, origin: frame.origin, style: style, in: context)
             }
 
         case .thematicBreak:
@@ -97,7 +128,9 @@ enum MarkdownPreviewCGRenderer {
             context.setFillColor(style.codeBackgroundColor.cgColor)
             context.fill(frame)
             let textRect = frame.insetBy(dx: style.codePadding, dy: style.codePadding)
-            if let highlightedCode {
+            if let ctFrame = typeset?.frames.first {
+                drawFrame(ctFrame, in: context, at: textRect)
+            } else if let highlightedCode {
                 drawAttributed(highlightedCode, in: context, frame: textRect)
             } else {
                 drawPlain(source, font: style.codeFont, color: style.bodyColor, in: context, frame: textRect)
@@ -122,11 +155,12 @@ enum MarkdownPreviewCGRenderer {
         case .mermaidError(let source, let message):
             context.setFillColor(style.codeBackgroundColor.cgColor)
             context.fill(frame)
-            let text = "\(source)\n\n\(message)"
-            drawPlain(
-                text, font: style.codeFont, color: .systemRed, in: context,
-                frame: frame.insetBy(dx: style.codePadding, dy: style.codePadding)
-            )
+            let textRect = frame.insetBy(dx: style.codePadding, dy: style.codePadding)
+            if let ctFrame = typeset?.frames.first {
+                drawFrame(ctFrame, in: context, at: textRect)
+            } else {
+                drawPlain("\(source)\n\n\(message)", font: style.codeFont, color: .systemRed, in: context, frame: textRect)
+            }
 
         case .footnotes(let footnotes):
             drawFootnotes(footnotes, layout: blockLayout, style: style, in: context)
@@ -147,6 +181,12 @@ enum MarkdownPreviewCGRenderer {
             guard entryIndex < layout.textFrames.count, entryIndex < layout.markerFrames.count else { continue }
             let textFrame = layout.textFrames[entryIndex]
             let markerFrame = layout.markerFrames[entryIndex]
+            if let typeset = layout.text, entryIndex < typeset.frames.count, entryIndex < typeset.markers.count,
+               let marker = typeset.markers[entryIndex] {
+                drawFrame(marker, in: context, at: markerFrame)
+                drawFrame(typeset.frames[entryIndex], in: context, at: textFrame)
+                continue
+            }
             drawPlain("\(entry.number).", font: footnoteFont, color: markerColor, in: context, frame: markerFrame)
             drawText(entry.text, font: footnoteFont, style: style, in: context, frame: textFrame)
         }
@@ -155,6 +195,10 @@ enum MarkdownPreviewCGRenderer {
     // MARK: - Lists
 
     private static let bulletGlyphs = ["•", "◦", "▪"]
+
+    static func bulletGlyph(level: Int) -> String {
+        bulletGlyphs[min(max(level, 0), bulletGlyphs.count - 1)]
+    }
 
     private static func drawList(
         _ list: MarkdownPreviewList,
@@ -167,9 +211,19 @@ enum MarkdownPreviewCGRenderer {
             let textFrame = layout.textFrames[itemIndex]
             let markerFrame = layout.markerFrames[itemIndex]
 
+            if let typeset = layout.text, itemIndex < typeset.frames.count, itemIndex < typeset.markers.count {
+                if let marker = typeset.markers[itemIndex] {
+                    drawFrame(marker, in: context, at: markerFrame)
+                } else if case .task(let checked) = item.marker {
+                    drawCheckbox(checked: checked, style: style, in: context, frame: markerFrame)
+                }
+                drawFrame(typeset.frames[itemIndex], in: context, at: textFrame)
+                continue
+            }
+
             switch item.marker {
             case .bullet:
-                let glyph = bulletGlyphs[min(item.level, bulletGlyphs.count - 1)]
+                let glyph = bulletGlyph(level: item.level)
                 drawPlain(glyph, font: style.bodyFont, color: style.bodyColor, in: context, frame: markerFrame)
             case .ordered(let n):
                 drawPlain("\(n).", font: style.bodyFont, color: style.bodyColor, in: context, frame: markerFrame)
@@ -220,6 +274,7 @@ enum MarkdownPreviewCGRenderer {
     private static func drawTable(
         _ table: MarkdownPreviewTable,
         geometry: MarkdownPreviewTableGeometry,
+        cells: [[CTFrame]]?,
         origin: CGPoint,
         style: MarkdownPreviewStyle,
         in context: CGContext
@@ -235,13 +290,28 @@ enum MarkdownPreviewCGRenderer {
             context.fill(absolute(headerFrame))
         }
 
-        for (index, cellFrame) in geometry.headerCellFrames.enumerated() where index < table.header.count {
+        if let cells {
+            var rows = cells[...]
+            if !geometry.headerCellFrames.isEmpty, let header = rows.popFirst() {
+                for (column, ctFrame) in header.enumerated() where column < geometry.headerCellFrames.count {
+                    let rect = absolute(geometry.headerCellFrames[column]).insetBy(dx: style.tableCellPadding, dy: style.tableCellPadding)
+                    drawFrame(ctFrame, in: context, at: rect)
+                }
+            }
+            for (rowIndex, row) in rows.enumerated() where rowIndex < geometry.cellFrames.count {
+                for (column, ctFrame) in row.enumerated() where column < geometry.cellFrames[rowIndex].count {
+                    let rect = absolute(geometry.cellFrames[rowIndex][column]).insetBy(dx: style.tableCellPadding, dy: style.tableCellPadding)
+                    drawFrame(ctFrame, in: context, at: rect)
+                }
+            }
+        }
+        for (index, cellFrame) in geometry.headerCellFrames.enumerated() where cells == nil && index < table.header.count {
             drawCellText(
                 table.header[index], bold: true, alignment: textAlignment(for: table, column: index),
                 style: style, in: context, frame: absolute(cellFrame).insetBy(dx: style.tableCellPadding, dy: style.tableCellPadding)
             )
         }
-        for (rowIndex, row) in table.rows.enumerated() where rowIndex < geometry.cellFrames.count {
+        for (rowIndex, row) in table.rows.enumerated() where cells == nil && rowIndex < geometry.cellFrames.count {
             for (columnIndex, cellFrame) in geometry.cellFrames[rowIndex].enumerated() {
                 let text = columnIndex < row.count ? row[columnIndex] : AttributedString()
                 drawCellText(
@@ -273,7 +343,7 @@ enum MarkdownPreviewCGRenderer {
         context.strokePath()
     }
 
-    private static func textAlignment(for table: MarkdownPreviewTable, column: Int) -> NSTextAlignment {
+    static func textAlignment(for table: MarkdownPreviewTable, column: Int) -> NSTextAlignment {
         guard column < table.columns.count else { return .natural }
         switch table.columns[column].alignment {
         case .leading: return .left
@@ -331,6 +401,16 @@ enum MarkdownPreviewCGRenderer {
         ])
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
         drawFramesetter(framesetter, in: context, frame: frame)
+    }
+
+    /// Draws a `CTFrame` typeset at the origin (see ``MarkdownPreviewLayout``) into `rect` of a
+    /// top-down context.
+    private static func drawFrame(_ ctFrame: CTFrame, in context: CGContext, at rect: CGRect) {
+        context.saveGState()
+        context.translateBy(x: rect.minX, y: rect.maxY)
+        context.scaleBy(x: 1, y: -1)
+        CTFrameDraw(ctFrame, context)
+        context.restoreGState()
     }
 
     private static func drawFramesetter(_ framesetter: CTFramesetter, in context: CGContext, frame: CGRect) {

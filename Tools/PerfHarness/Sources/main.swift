@@ -37,6 +37,7 @@ func printUsageAndExit() -> Never {
       snapshot-metal <path|synthetic> [--out DIR]
       java-completion synthetic
       enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
+      markdown-preview <path|synthetic> [--sections N] [--samples N]
 
     scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
     manual / nightly (print numbers, never fail on frame time). Use `synthetic` for a
@@ -72,7 +73,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion"
-    || command == "enter-session"
+    || command == "enter-session" || command == "markdown-preview"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -95,6 +96,12 @@ do {
             EnterSessionProfile.run(pathOrSynthetic: path, lines: lines, samples: samples,
                                     holdSeconds: Double(flagValue("--hold-seconds", in: rest) ?? "") ?? 0,
                                     enterOnly: rest.contains("--enter-only"))
+        }
+    case "markdown-preview":
+        let sections = Int(flagValue("--sections", in: rest) ?? "") ?? 200
+        let samples = Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        MainActor.assumeIsolated {
+            MarkdownPreviewProfile.run(pathOrSynthetic: path, sections: sections, samples: samples)
         }
     case "open":
         try Commands.open(path: path, options: options)

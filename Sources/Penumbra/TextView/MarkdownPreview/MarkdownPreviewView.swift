@@ -8,13 +8,27 @@ public final class MarkdownPreviewView: NSView {
     private let metalRenderer = MarkdownPreviewMetalRenderer()
     private var prefersMetal = false
     private var useMetal = false
+    /// Measured blocks of the last layout, so a relayout only measures blocks that changed.
+    private let measureCache = MarkdownPreviewMeasureCache()
+    /// Bumped by every input that affects layout; `layout()` does nothing while it and the
+    /// width are unchanged since the last applied layout.
+    private var inputGeneration = 0
+    private var appliedLayoutKey: (generation: Int, width: CGFloat)?
 
     public var document: MarkdownPreviewDocument? {
-        didSet { scheduleRelayout() }
+        didSet {
+            if let document {
+                setAccessibilityValue(document.accessibilityDescriptions.joined(separator: "\n\n"))
+            }
+            scheduleRelayout()
+        }
     }
 
     public var style: MarkdownPreviewStyle = .init() {
-        didSet { scheduleRelayout() }
+        didSet {
+            guard style != oldValue else { return }
+            scheduleRelayout()
+        }
     }
 
     public var rasterImages: [Int: CGImage] = [:] {
@@ -119,6 +133,29 @@ public final class MarkdownPreviewView: NSView {
     var debugMetalRequestedTileCount: Int { metalRenderer.lastRequestedTileCount }
     var debugDocumentView: NSView? { scrollView.documentView }
 
+    /// Benchmarks only (`@_spi(Benchmarks) import Penumbra`): scrolls the preview so its visible
+    /// rect starts at `y` and presents synchronously, as a scroll-wheel event would.
+    @_spi(Benchmarks)
+    public func benchmarkScroll(toY y: CGFloat) {
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        metalRenderer.presentIfNeeded()
+    }
+
+    /// Benchmarks only: forces a layout pass with unchanged inputs.
+    @_spi(Benchmarks)
+    public func benchmarkForceLayout() {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    @_spi(Benchmarks)
+    public var benchmarkIsMetalActive: Bool { useMetal }
+
+    /// Benchmarks only: blocks the last layout had to measure (not found in the measure cache).
+    @_spi(Benchmarks)
+    public var benchmarkMeasureMisses: Int { measureCache.lastMissCount }
+
     func applyLayout(_ layout: MarkdownPreviewLayout) {
         guard let documentView = scrollView.documentView else { return }
         let size = layout.contentSize
@@ -130,10 +167,6 @@ public final class MarkdownPreviewView: NSView {
         contentView.highlightedCode = highlightedCode
         contentView.needsDisplay = true
         layoutMetalCanvasFrame()
-
-        if let document = document {
-            setAccessibilityValue(document.accessibilityDescriptions.joined(separator: "\n\n"))
-        }
 
         let shouldUseMetal = prefersMetal && MetalContext.isAvailable
         useMetal = shouldUseMetal
@@ -169,14 +202,20 @@ public final class MarkdownPreviewView: NSView {
     }
 
     private func scheduleRelayout() {
+        inputGeneration += 1
         needsLayout = true
     }
+
+    /// Layout passes that measured and applied a new layout (not skipped as unchanged).
+    private(set) var debugAppliedLayoutCount = 0
+    var debugMeasureMisses: Int { measureCache.lastMissCount }
 
     public override func layout() {
         super.layout()
         layer?.backgroundColor = style.backgroundColor.cgColor
         layoutMetalCanvasFrame()
         guard let document = document else {
+            appliedLayoutKey = nil
             contentView.layout = MarkdownPreviewLayout(blockLayouts: [], contentSize: .zero)
             contentView.isHidden = false
             useMetal = false
@@ -185,8 +224,14 @@ public final class MarkdownPreviewView: NSView {
             return
         }
         let width = max(bounds.width, 1)
+        if let applied = appliedLayoutKey, applied.generation == inputGeneration, applied.width == width {
+            metalRenderer.presentIfNeeded()
+            return
+        }
         let layout = computeLayout(document: document, width: width)
         applyLayout(layout)
+        appliedLayoutKey = (inputGeneration, width)
+        debugAppliedLayoutCount += 1
         // `layerContentsRedrawPolicy = .never` on the Metal canvas means `setNeedsDisplay` alone
         // (from `applyLayout`/`metalRenderer.update`) never reaches `updateLayer()`. This layout
         // pass is the reliable synchronous trigger; scroll/async-raster updates outside of layout
@@ -196,9 +241,18 @@ public final class MarkdownPreviewView: NSView {
 
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        metalRenderer.invalidateForScaleChange()
+        metalRenderer.invalidateAllTiles()
         metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
         metalRenderer.presentIfNeeded()
+    }
+
+    /// Semantic colors (label, link, separator) resolve differently in light and dark mode, and
+    /// the cached typeset text and tiles carry resolved colors.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        measureCache.removeAll()
+        metalRenderer.invalidateAllTiles()
+        scheduleRelayout()
     }
 
     /// Renders the full (unclipped) document into a single-page PDF via the same CG drawing path
@@ -230,7 +284,8 @@ public final class MarkdownPreviewView: NSView {
             width: width,
             mermaidHeights: heights.mermaid,
             imageHeights: heights.images,
-            highlightedCode: highlightedCode
+            highlightedCode: highlightedCode,
+            cache: measureCache
         )
     }
 

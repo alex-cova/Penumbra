@@ -25,9 +25,15 @@ enum MetalTextureUpload {
 /// full document — so documents of any height stay on the Metal path.
 @MainActor
 final class MarkdownPreviewMetalRenderer {
-    /// Resident tile texture budget. At a typical ~525pt-wide preview, 2× scale, 4096px tiles
-    /// cost ~17 MB each, so this keeps 3–4 tiles (a viewport plus margin) resident.
+    /// Resident tile texture budget. At a typical ~525pt-wide preview, 2× scale, 1024px tiles
+    /// cost ~4 MB each, so this keeps about 15 tiles (a viewport plus prefetched neighbors).
     private static let tileByteBudget = 64 * 1024 * 1024
+    /// Tile height in device pixels: 512pt at 2×. Small enough that rasterizing one tile on
+    /// the main thread doesn't drop a frame; the viewport needs two or three.
+    static let tilePixelHeight = 1024
+    /// Tiles above and below the viewport rasterized ahead of scrolling, one per main-queue
+    /// turn so input events interleave.
+    private static let prefetchMargin = 2
 
     private let metalView = MarkdownPreviewMetalCanvasView()
 
@@ -54,23 +60,34 @@ final class MarkdownPreviewMetalRenderer {
     }
 
     /// Rebuilds the tile grid for a new layout/style/raster set and re-rasterizes whatever is
-    /// currently visible. Returns `false` only for a real failure (no Metal device, a document
-    /// too wide to tile, or a texture/context allocation failure) — never for tall documents.
+    /// currently visible. Tiles the change doesn't touch are kept (see `dropTiles(changedFrom:)`).
+    /// Returns `false` only for a real failure (no Metal device, a document too wide to tile, or a
+    /// texture/context allocation failure) — never for tall documents.
     @discardableResult
     func update(
         layout: MarkdownPreviewLayout,
         style: MarkdownPreviewStyle,
         rasterImages: [Int: CGImage],
-        highlightedCode: [Int: NSAttributedString] = [:]
+        highlightedCode: [Int: NSAttributedString] = [:],
+        keepingUnchangedTiles: Bool = true
     ) -> Bool {
+        let newGrid = MetalContext.shared.device == nil
+            ? nil
+            : MarkdownPreviewTileGrid(
+                contentSize: layout.contentSize, scale: metalView.backingScaleFactor, maxTilePixelHeight: Self.tilePixelHeight
+            )
+        if keepingUnchangedTiles, let oldGrid = grid, let newGrid, style == self.style {
+            dropTiles(changedFrom: oldGrid, to: newGrid, oldLayout: self.layout, newLayout: layout,
+                      oldImages: self.rasterImages, newImages: rasterImages)
+        } else {
+            dropAllTiles()
+        }
         self.layout = layout
         self.style = style
         self.rasterImages = rasterImages
         self.highlightedCode = highlightedCode
-        dropAllTiles()
 
-        guard let device = MetalContext.shared.device,
-              let grid = MarkdownPreviewTileGrid(contentSize: layout.contentSize, scale: metalView.backingScaleFactor) else {
+        guard let device = MetalContext.shared.device, let grid = newGrid else {
             grid = nil
             presentFailure()
             return false
@@ -124,11 +141,16 @@ final class MarkdownPreviewMetalRenderer {
         metalView.presentIfDirty()
     }
 
-    /// Drops all cached tiles and re-derives the grid — call when `backingScaleFactor` changes.
-    func invalidateForScaleChange() {
+    /// Drops all cached tiles and re-derives the grid — call when `backingScaleFactor` or the
+    /// effective appearance (semantic colors) changes.
+    func invalidateAllTiles() {
         guard layout.contentSize != .zero else { return }
-        _ = update(layout: layout, style: style, rasterImages: rasterImages, highlightedCode: highlightedCode)
+        _ = update(layout: layout, style: style, rasterImages: rasterImages, highlightedCode: highlightedCode,
+                   keepingUnchangedTiles: false)
     }
+
+    /// Tiles currently resident. Tests use it to check that an unchanged relayout keeps them.
+    var residentTileCount: Int { tiles.count }
 
     func clear() {
         dropAllTiles()
@@ -147,10 +169,82 @@ final class MarkdownPreviewMetalRenderer {
         tileLRU.removeAll()
     }
 
+    /// Drops the tiles whose pixels may differ between two layouts: those overlapping a block
+    /// (or quote band) that moved, resized or changed content or raster image, plus any tile
+    /// whose own extent changed with the content height. With the same width and scale, tile
+    /// `i` covers the same document rect in both grids, so every other tile is still valid.
+    private func dropTiles(
+        changedFrom oldGrid: MarkdownPreviewTileGrid,
+        to newGrid: MarkdownPreviewTileGrid,
+        oldLayout: MarkdownPreviewLayout,
+        newLayout: MarkdownPreviewLayout,
+        oldImages: [Int: CGImage],
+        newImages: [Int: CGImage]
+    ) {
+        guard !tiles.isEmpty else { return }
+        guard oldGrid.pixelWidth == newGrid.pixelWidth, oldGrid.scale == newGrid.scale,
+              oldGrid.tilePixelHeight == newGrid.tilePixelHeight else {
+            dropAllTiles()
+            return
+        }
+        var dirty: [CGRect] = []
+        let oldBlocks = oldLayout.blockLayouts
+        let newBlocks = newLayout.blockLayouts
+        for index in 0 ..< max(oldBlocks.count, newBlocks.count) {
+            let old = index < oldBlocks.count ? oldBlocks[index] : nil
+            let new = index < newBlocks.count ? newBlocks[index] : nil
+            if let old, let new, Self.paintsTheSame(old, new), oldImages[index] === newImages[index] {
+                continue
+            }
+            // Past the first shifted block everything below usually moved too; one rect to the
+            // end of the document covers it without walking the rest.
+            let top = min(old?.frame.minY ?? .greatestFiniteMagnitude, new?.frame.minY ?? .greatestFiniteMagnitude)
+            if let old, let new, old.frame.minY == new.frame.minY, old.frame.height == new.frame.height {
+                dirty.append(old.frame.union(new.frame))
+            } else {
+                dirty.append(CGRect(x: 0, y: top, width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
+                break
+            }
+        }
+        if oldLayout.quoteDecorations != newLayout.quoteDecorations {
+            for band in oldLayout.quoteDecorations.map(\.band) + newLayout.quoteDecorations.map(\.band) {
+                dirty.append(band)
+            }
+        }
+        // The last old tile may have been shorter than the new one at the same index.
+        let firstResized = min(oldGrid.tileCount, newGrid.tileCount) - 1
+        for index in Array(tiles.keys) {
+            let rect = newGrid.contentRect(for: index).insetBy(dx: 0, dy: -8)
+            let changed = index >= firstResized && oldGrid.contentRect(for: index) != newGrid.contentRect(for: index)
+            if index >= newGrid.tileCount || changed || dirty.contains(where: { $0.intersects(rect) }) {
+                tiles[index] = nil
+                tileLRU.removeAll { $0 == index }
+            }
+        }
+    }
+
+    /// Same frames and same content. Typeset text is compared by identity: the layout's measure
+    /// cache hands back the same object exactly when the block's content and width are unchanged.
+    private static func paintsTheSame(_ lhs: MarkdownPreviewBlockLayout, _ rhs: MarkdownPreviewBlockLayout) -> Bool {
+        guard lhs.frame == rhs.frame, lhs.textFrames == rhs.textFrames, lhs.markerFrames == rhs.markerFrames else {
+            return false
+        }
+        if let left = lhs.text, let right = rhs.text {
+            return left === right
+        }
+        return lhs.block == rhs.block && lhs.table == rhs.table
+    }
+
+    /// Bumped whenever the grid or its contents change, so a queued prefetch of a stale tile is
+    /// dropped.
+    private var tileGeneration = 0
+    private var prefetchScheduled = false
+
     @discardableResult
     private func rasterizeAndPresent(device: MTLDevice) -> Bool {
         guard let grid else { return false }
-        let required = grid.indices(intersecting: visibleRect)
+        tileGeneration += 1
+        let required = grid.indices(intersecting: visibleRect, margin: 0)
 
         for index in required where tiles[index] == nil {
             guard let texture = makeTileTexture(index: index, grid: grid, device: device) else {
@@ -160,6 +254,7 @@ final class MarkdownPreviewMetalRenderer {
         }
         touchLRU(with: required)
         evictIfNeeded(protecting: Set(required))
+        schedulePrefetch()
 
         let scale = metalView.backingScaleFactor
         var presented: [MarkdownPreviewMetalCanvasView.Tile] = []
@@ -176,6 +271,33 @@ final class MarkdownPreviewMetalRenderer {
         metalView.setTiles(presented, backgroundColor: style.backgroundColor)
         metalView.setNeedsDisplay()
         return true
+    }
+
+    /// Rasterizes the nearest missing tile around the viewport on a later main-queue turn, then
+    /// reschedules itself until the margin is filled. Tiles are never presented from here: the
+    /// next scroll finds them resident.
+    private func schedulePrefetch() {
+        guard !prefetchScheduled else { return }
+        prefetchScheduled = true
+        let generation = tileGeneration
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.prefetchScheduled = false
+                guard generation == self.tileGeneration, !self.metalView.isHidden,
+                      let grid = self.grid, let device = MetalContext.shared.device else { return }
+                let visible = Set(grid.indices(intersecting: self.visibleRect, margin: 0))
+                let wanted = grid.indices(intersecting: self.visibleRect, margin: Self.prefetchMargin)
+                let center = visible.isEmpty ? 0 : Double(visible.reduce(0, +)) / Double(visible.count)
+                guard let next = wanted.filter({ self.tiles[$0] == nil })
+                    .min(by: { abs(Double($0) - center) < abs(Double($1) - center) }),
+                      let texture = self.makeTileTexture(index: next, grid: grid, device: device) else { return }
+                self.tiles[next] = texture
+                self.touchLRU(with: [next])
+                self.evictIfNeeded(protecting: Set(wanted))
+                self.schedulePrefetch()
+            }
+        }
     }
 
     private func touchLRU(with indices: [Int]) {
@@ -203,8 +325,25 @@ final class MarkdownPreviewMetalRenderer {
     }
 
     private func makeTileTexture(index: Int, grid: MarkdownPreviewTileGrid, device: MTLDevice) -> MTLTexture? {
-        guard let image = makeTileImage(index: index, grid: grid) else { return nil }
-        return uploadTexture(from: image, device: device)
+        guard let context = makeTileContext(index: index, grid: grid), let data = context.data else { return nil }
+        guard MetalTextureUpload.canAllocate(width: context.width, height: context.height, device: device) else {
+            return nil
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: context.width,
+            height: context.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead]
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        texture.replace(
+            region: MTLRegionMake2D(0, 0, context.width, context.height),
+            mipmapLevel: 0,
+            withBytes: data,
+            bytesPerRow: context.bytesPerRow
+        )
+        return texture
     }
 
     /// Rasterizes one tile's slice of the document into a `pixelSize(for:)`-sized bitmap.
@@ -220,6 +359,12 @@ final class MarkdownPreviewMetalRenderer {
     /// Not `private`: unit-tested directly (no `MTLDevice` required) to guard the flip math
     /// against regressing back to the mirrored/upside-down rendering it replaced.
     func makeTileImage(index: Int, grid: MarkdownPreviewTileGrid) -> CGImage? {
+        makeTileContext(index: index, grid: grid)?.makeImage()
+    }
+
+    /// Paints one tile into a bitmap already in the texture's layout (BGRA, premultiplied, row 0
+    /// at the top), so its bytes upload with no conversion.
+    private func makeTileContext(index: Int, grid: MarkdownPreviewTileGrid) -> CGContext? {
         let (pixelWidth, pixelHeight) = grid.pixelSize(for: index)
         guard pixelWidth > 0, pixelHeight > 0,
               let context = CGContext(
@@ -227,9 +372,9 @@ final class MarkdownPreviewMetalRenderer {
                   width: pixelWidth,
                   height: pixelHeight,
                   bitsPerComponent: 8,
-                  bytesPerRow: 0,
+                  bytesPerRow: pixelWidth * 4,
                   space: CGColorSpaceCreateDeviceRGB(),
-                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               ) else {
             return nil
         }
@@ -249,44 +394,7 @@ final class MarkdownPreviewMetalRenderer {
             clip: tileRect
         )
 
-        return context.makeImage()
-    }
-
-    private func uploadTexture(from image: CGImage, device: MTLDevice) -> MTLTexture? {
-        let width = image.width
-        let height = image.height
-        guard MetalTextureUpload.canAllocate(width: width, height: height, device: device) else {
-            return nil
-        }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        descriptor.usage = [.shaderRead]
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-
-        let bytesPerRow = width * 4
-        var data = [UInt8](repeating: 0, count: bytesPerRow * height)
-        guard let context = CGContext(
-            data: &data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else { return nil }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: data,
-            bytesPerRow: bytesPerRow
-        )
-        return texture
+        return context
     }
 }
 
@@ -356,7 +464,10 @@ final class MarkdownPreviewMetalCanvasView: NSView {
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
         super.setFrameSize(newSize)
+        // Every preview layout re-assigns the canvas frame; only a real resize needs a new frame.
+        guard changed else { return }
         updateMetalLayerGeometry()
         setNeedsDisplay()
     }

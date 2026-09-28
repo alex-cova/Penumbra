@@ -68,7 +68,11 @@ enum MarkdownPreviewIntentWalker {
 
         func closeSpan() {
             guard let start = spanStart, let end = spanEnd else { return }
-            spans.append(LeafSpan(chain: currentChain, text: AttributedString(attributed[start..<end])))
+            var text = AttributedString(attributed[start..<end])
+            // The block structure is read from `chain`; left on every run, the intent makes each
+            // later hash, comparison and styling pass over the text several times slower.
+            text.presentationIntent = nil
+            spans.append(LeafSpan(chain: currentChain, text: text))
             spanStart = nil
         }
 

@@ -15,10 +15,13 @@ public final class MarkdownPreviewController: NSObject {
     private var isPreviewVisible = false
     private var parseGeneration = 0
     private var parseTask: Task<Void, Never>?
-    private var mermaidGeneration = 0
     private var mermaidTask: Task<Void, Never>?
-    private var rasterImages: [Int: CGImage] = [:]
-    private var highlightedCode: [Int: NSAttributedString] = [:]
+    private var mermaidWorkTask: Task<MarkdownPreviewRasterResult, Never>?
+    /// Rendered diagrams, highlighted fences and decoded images, reused across edits and
+    /// document switches.
+    private let rasterCache = MarkdownPreviewRasterCache()
+    /// Parsed prose chunks of the last parse, so an edit re-parses only what changed.
+    private let parseCache = MarkdownPreviewParseCache()
     private var previewDelegate: PreviewTextViewDelegate?
     private var chainedTextViewDelegate: ChainedTextViewDelegate?
     private var editorWasSelectableBeforePreview = true
@@ -40,6 +43,18 @@ public final class MarkdownPreviewController: NSObject {
     func waitForPendingWork() async {
         await parseTask?.value
         await mermaidTask?.value
+    }
+
+    /// Benchmarks only (`@_spi(Benchmarks) import Penumbra`).
+    @_spi(Benchmarks)
+    public func benchmarkWaitForPendingWork() async {
+        await waitForPendingWork()
+    }
+
+    @_spi(Benchmarks)
+    public var benchmarkParseDebounceNanoseconds: UInt64 {
+        get { parseDebounceNanoseconds }
+        set { parseDebounceNanoseconds = newValue }
     }
 
     public var isVisible: Bool { isPreviewVisible }
@@ -126,7 +141,7 @@ public final class MarkdownPreviewController: NSObject {
         guard let textView else { return }
         previewView.style = MarkdownPreviewStyle.from(textView: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
-        scheduleParse()
+        scheduleParse(immediate: true)
     }
 
     /// Re-parses the current buffer when the preview is visible. Document text installed via
@@ -135,7 +150,7 @@ public final class MarkdownPreviewController: NSObject {
     /// otherwise the preview keeps showing the previous file's content until the next keystroke.
     public func refresh() {
         guard isPreviewVisible else { return }
-        scheduleParse()
+        scheduleParse(immediate: true)
     }
 
     private func showPreview() {
@@ -149,7 +164,6 @@ public final class MarkdownPreviewController: NSObject {
         }
         previewView.isHidden = false
         refreshStyle()
-        scheduleParse()
     }
 
     private func hidePreview() {
@@ -157,7 +171,7 @@ public final class MarkdownPreviewController: NSObject {
         previewView.isHidden = true
         textView?.isSelectable = editorWasSelectableBeforePreview
         parseTask?.cancel()
-        mermaidTask?.cancel()
+        cancelMermaidWork()
     }
 
     func noteTextDidChange() {
@@ -176,180 +190,125 @@ public final class MarkdownPreviewController: NSObject {
         try await Task.sleep(for: .nanoseconds(Int64(nanoseconds)))
     }
 
-    private func scheduleParse() {
-        guard isPreviewVisible, let textView else { return }
+    /// Parses the buffer and shows it. Edits are debounced; showing the preview or switching
+    /// documents (`immediate`) is not. The buffer is read once the debounce has elapsed, never per
+    /// keystroke. Parsing and every cheap raster (cached diagrams, code fences, images) happen in
+    /// one detached step and land in one layout; only uncached mermaid diagrams follow later.
+    private func scheduleParse(immediate: Bool = false) {
+        guard isPreviewVisible, textView != nil else { return }
         parseGeneration += 1
         let generation = parseGeneration
-        let source = textView.text
-        let style = MarkdownPreviewStyle.from(textView: textView)
-        previewView.style = style
-        previewView.usesMetalRendering = textView.isMetalRenderingActive
-
         parseTask?.cancel()
-        let debounce = parseDebounceNanoseconds
+        cancelMermaidWork()
+
+        let debounce = immediate ? 0 : parseDebounceNanoseconds
         parseTask = Task { [weak self] in
-            try? await Self.sleepForDebounce(debounce)
-            guard !Task.isCancelled else { return }
-            let document = await Task.detached(priority: .userInitiated) {
-                MarkdownPreviewDocument.parse(source)
+            if debounce > 0 {
+                try? await Self.sleepForDebounce(debounce)
+            }
+            guard !Task.isCancelled, let self, self.parseGeneration == generation, let textView = self.textView else { return }
+            let source = textView.text
+            let style = MarkdownPreviewStyle.from(textView: textView)
+            let inputs = self.rasterInputs(style: style)
+            let cache = self.rasterCache
+            let parseCache = self.parseCache
+            let parsed = await Task.detached(priority: .userInitiated) {
+                let document = MarkdownPreviewDocument.parse(source, cache: parseCache)
+                let pass = MarkdownPreviewRasterWorker.resolve(document: document, inputs: inputs, cache: cache)
+                return ParsedPreview(document: document, pass: pass)
             }.value
-            guard let self, parseGeneration == generation else { return }
-            previewView.document = document
-            scheduleRasterLayout(document: document, style: style, generation: generation)
+            guard self.parseGeneration == generation else { return }
+            self.show(parsed, style: style)
+            if !parsed.pass.pendingMermaid.isEmpty {
+                self.scheduleMermaid(parsed.pass.pendingMermaid, document: parsed.document, inputs: inputs, generation: generation)
+            }
         }
     }
 
-    private func scheduleRasterLayout(
+    private func rasterInputs(style: MarkdownPreviewStyle) -> MarkdownPreviewRasterInputs {
+        MarkdownPreviewRasterInputs(
+            baseURL: documentBaseURL,
+            mermaidContext: style.mermaidRenderingContext,
+            contentWidth: max(previewView.bounds.width - style.contentInset * 2, 200),
+            syntaxTheme: textView?.theme ?? DefaultTheme(),
+            languageResolver: codeBlockLanguageResolver,
+            languageProvider: codeBlockLanguageProvider
+        )
+    }
+
+    /// Installs a parse and its resolved rasters in one go (a single relayout). A diagram still
+    /// being rendered keeps the previous parse's image for the same block, so editing inside a
+    /// fence doesn't collapse it to a placeholder and back.
+    private func show(_ parsed: ParsedPreview, style: MarkdownPreviewStyle) {
+        var result = parsed.pass.result
+        if let previous = previewView.document {
+            for (index, _) in parsed.pass.pendingMermaid where index < previous.blocks.count {
+                guard case .mermaid = previous.blocks[index].kind, let image = previewView.rasterImages[index] else { continue }
+                result.images[index] = image
+                result.naturalSizes[index] = previewView.rasterNaturalSizes[index]
+            }
+        }
+        previewView.style = style
+        previewView.usesMetalRendering = textView?.isMetalRenderingActive ?? false
+        previewView.document = Self.markingErrors(result.errors, in: parsed.document)
+        previewView.rasterImages = result.images
+        previewView.rasterNaturalSizes = result.naturalSizes
+        previewView.highlightedCode = result.highlightedCode
+    }
+
+    private func scheduleMermaid(
+        _ pending: [(index: Int, source: String)],
         document: MarkdownPreviewDocument,
-        style: MarkdownPreviewStyle,
+        inputs: MarkdownPreviewRasterInputs,
         generation: Int
     ) {
-        mermaidGeneration += 1
-        let rasterGen = mermaidGeneration
-        mermaidTask?.cancel()
-
-        let mermaidBlocks: [(Int, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .mermaid(let source) = block.kind { return (index, source) }
-            return nil
+        let cache = rasterCache
+        let work = Task.detached(priority: .userInitiated) {
+            await MarkdownPreviewRasterWorker.renderMermaid(pending, inputs: inputs, cache: cache)
         }
-        let imageBlocks: [(Int, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .image(_, let reference) = block.kind { return (index, reference) }
-            return nil
-        }
-        let codeBlocks: [(Int, String?, String)] = document.blocks.enumerated().compactMap { index, block in
-            if case .codeBlock(let language, let source) = block.kind { return (index, language, source) }
-            return nil
-        }
-
-        if mermaidBlocks.isEmpty, imageBlocks.isEmpty, codeBlocks.isEmpty {
-            mermaidTask = nil
-            rasterImages = [:]
-            highlightedCode = [:]
-            previewView.rasterImages = [:]
-            previewView.rasterNaturalSizes = [:]
-            previewView.highlightedCode = [:]
-            previewView.needsLayout = true
-            return
-        }
-
-        let contentWidth = max(previewView.bounds.width - style.contentInset * 2, 200)
-        let baseURL = documentBaseURL
-        let mermaidStyle = style.mermaidRenderingContext
-        let work = MarkdownPreviewRasterWork(
-            imageBlocks: imageBlocks,
-            codeBlocks: codeBlocks,
-            mermaidBlocks: mermaidBlocks,
-            baseURL: baseURL,
-            mermaidStyle: mermaidStyle,
-            contentWidth: contentWidth,
-            syntaxTheme: UncheckedSendableTheme(value: textView?.theme ?? DefaultTheme()),
-            languageResolver: codeBlockLanguageResolver.map(UncheckedLanguageResolver.init),
-            languageProvider: UncheckedLanguageProvider(value: codeBlockLanguageProvider)
-        )
-        // The raster work runs detached; this main-actor task only awaits it, so `self` never
-        // crosses into nonisolated code (Swift 6 `SendingRisksDataRace`).
+        mermaidWorkTask = work
+        // This main-actor task only awaits the detached work, so `self` never crosses into
+        // nonisolated code (Swift 6 `SendingRisksDataRace`).
         mermaidTask = Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
-                await MarkdownPreviewRasterWorker.perform(work)
-            }.value
-            guard let self, self.mermaidGeneration == rasterGen, self.parseGeneration == generation else { return }
-            self.rasterImages = result.images
-            self.highlightedCode = result.highlightedCode
-            self.previewView.rasterImages = result.images
-            self.previewView.rasterNaturalSizes = result.naturalSizes
-            self.previewView.highlightedCode = result.highlightedCode
-            if !result.errors.isEmpty {
-                var blocks = document.blocks
-                for (index, message) in result.errors {
-                    if case .mermaid(let source) = blocks[index].kind {
-                        blocks[index].kind = .mermaidError(source: source, message: message)
-                    }
-                }
-                self.previewView.document = MarkdownPreviewDocument(blocks: blocks)
+            let rendered = await work.value
+            guard let self, self.parseGeneration == generation else { return }
+            var images = self.previewView.rasterImages
+            var sizes = self.previewView.rasterNaturalSizes
+            for (index, _) in pending {
+                images[index] = nil
+                sizes[index] = nil
             }
-            self.previewView.needsLayout = true
+            images.merge(rendered.images) { $1 }
+            sizes.merge(rendered.naturalSizes) { $1 }
+            if !rendered.errors.isEmpty {
+                self.previewView.document = Self.markingErrors(rendered.errors, in: self.previewView.document ?? document)
+            }
+            self.previewView.rasterImages = images
+            self.previewView.rasterNaturalSizes = sizes
         }
+    }
+
+    private func cancelMermaidWork() {
+        mermaidWorkTask?.cancel()
+        mermaidWorkTask = nil
+        mermaidTask?.cancel()
+    }
+
+    private static func markingErrors(_ errors: [Int: String], in document: MarkdownPreviewDocument) -> MarkdownPreviewDocument {
+        guard !errors.isEmpty else { return document }
+        var blocks = document.blocks
+        for (index, message) in errors where index < blocks.count {
+            if case .mermaid(let source) = blocks[index].kind {
+                blocks[index].kind = .mermaidError(source: source, message: message)
+            }
+        }
+        return MarkdownPreviewDocument(blocks: blocks)
     }
 }
 
-private struct RasterWorkResult: @unchecked Sendable {
-    let images: [Int: CGImage]
-    let naturalSizes: [Int: CGSize]
-    let highlightedCode: [Int: NSAttributedString]
-    let errors: [Int: String]
-}
-
-private struct MarkdownPreviewRasterWork: Sendable {
-    let imageBlocks: [(Int, String)]
-    let codeBlocks: [(Int, String?, String)]
-    let mermaidBlocks: [(Int, String)]
-    let baseURL: URL?
-    let mermaidStyle: MarkdownPreviewStyle.MermaidRenderingContext
-    let contentWidth: CGFloat
-    let syntaxTheme: UncheckedSendableTheme
-    let languageResolver: UncheckedLanguageResolver?
-    let languageProvider: UncheckedLanguageProvider
-}
-
-/// Read-only `Theme` handle for off-main syntax highlighting.
-private struct UncheckedSendableTheme: @unchecked Sendable {
-    let value: Theme
-}
-
-private struct UncheckedLanguageResolver: @unchecked Sendable {
-    let value: (String) -> TreeSitterLanguage?
-
-    init(_ value: @escaping (String) -> TreeSitterLanguage?) {
-        self.value = value
-    }
-}
-
-private struct UncheckedLanguageProvider: @unchecked Sendable {
-    let value: TreeSitterLanguageProvider?
-}
-
-private enum MarkdownPreviewRasterWorker {
-    nonisolated static func perform(_ work: MarkdownPreviewRasterWork) async -> RasterWorkResult {
-        var images: [Int: CGImage] = [:]
-        var naturalSizes: [Int: CGSize] = [:]
-        var highlightedCode: [Int: NSAttributedString] = [:]
-        var errors: [Int: String] = [:]
-
-        for (index, reference) in work.imageBlocks {
-            if let image = MarkdownPreviewImageLoader.loadImage(at: reference, baseURL: work.baseURL) {
-                images[index] = image
-                naturalSizes[index] = MarkdownPreviewImageLoader.naturalSize(of: image)
-            }
-        }
-        if let languageResolver = work.languageResolver {
-            for (index, language, source) in work.codeBlocks {
-                if let highlighted = MarkdownPreviewCodeHighlighter.highlight(
-                    source: source,
-                    languageHint: language,
-                    theme: work.syntaxTheme.value,
-                    languageResolver: languageResolver.value,
-                    languageProvider: work.languageProvider.value
-                ) {
-                    highlightedCode[index] = highlighted
-                }
-            }
-        }
-        for (index, source) in work.mermaidBlocks {
-            let result = await MermaidPaintAdapter.render(
-                source: source,
-                mermaidStyle: work.mermaidStyle,
-                contentWidth: work.contentWidth
-            )
-            if let image = result.image {
-                images[index] = image
-                naturalSizes[index] = result.naturalSize
-            } else if let message = result.errorMessage {
-                errors[index] = message
-            }
-        }
-
-        return RasterWorkResult(images: images, naturalSizes: naturalSizes, highlightedCode: highlightedCode, errors: errors)
-    }
+private struct ParsedPreview: @unchecked Sendable {
+    let document: MarkdownPreviewDocument
+    let pass: MarkdownPreviewRasterPass
 }
 
 @MainActor

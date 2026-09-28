@@ -5,17 +5,42 @@ import Foundation
 /// Nesting (blockquote depth, list item depth) is carried as data on the block/item rather than
 /// as recursive structure, so `MarkdownPreviewMetalRenderer`'s tiling — which clips against
 /// absolute block frames keyed by array index — keeps working unmodified.
-public struct MarkdownPreviewBlock: Sendable, Equatable {
-    public var kind: Kind
+public struct MarkdownPreviewBlock: Sendable, Hashable {
+    public var kind: Kind {
+        didSet { contentHash = nil }
+    }
     /// `0` when the block is not inside a blockquote; `2` for a block inside `>>`, etc.
     public var quoteDepth: Int
+
+    /// `kind.hashValue`, computed once off the main actor by ``MarkdownPreviewDocument/parse(_:)``.
+    /// Hashing the attributed text is slow (Unicode normalization of every character), so the
+    /// layout's per-block measure cache is keyed by this instead. `nil` until computed, and
+    /// again after `kind` changes.
+    var contentHash: Int?
 
     public init(kind: Kind, quoteDepth: Int = 0) {
         self.kind = kind
         self.quoteDepth = quoteDepth
     }
 
-    public enum Kind: Sendable, Equatable {
+    /// `contentHash`, or the hash computed now for a block that didn't come from `parse`.
+    var resolvedContentHash: Int {
+        contentHash ?? kind.hashValue
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        if let left = lhs.contentHash, let right = rhs.contentHash, left != right {
+            return false
+        }
+        return lhs.quoteDepth == rhs.quoteDepth && lhs.kind == rhs.kind
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(resolvedContentHash)
+        hasher.combine(quoteDepth)
+    }
+
+    public enum Kind: Sendable, Hashable {
         case heading(level: Int, text: AttributedString)
         case paragraph(AttributedString)
         case list(MarkdownPreviewList)
@@ -31,14 +56,14 @@ public struct MarkdownPreviewBlock: Sendable, Equatable {
 
 /// A flat, possibly-nested list. `Item.level` (0-based) carries nesting depth instead of the list
 /// recursing into sub-lists, matching `MarkdownPreviewBlock`'s flat-block design.
-public struct MarkdownPreviewList: Sendable, Equatable {
+public struct MarkdownPreviewList: Sendable, Hashable {
     public var items: [Item]
 
     public init(items: [Item] = []) {
         self.items = items
     }
 
-    public struct Item: Sendable, Equatable {
+    public struct Item: Sendable, Hashable {
         public var text: AttributedString
         public var level: Int
         public var marker: Marker
@@ -50,7 +75,7 @@ public struct MarkdownPreviewList: Sendable, Equatable {
         }
     }
 
-    public enum Marker: Sendable, Equatable {
+    public enum Marker: Sendable, Hashable {
         case bullet
         case ordered(Int)
         case task(checked: Bool)
@@ -61,7 +86,7 @@ public struct MarkdownPreviewList: Sendable, Equatable {
 /// display number (not necessarily the source order of `[^label]:` definitions), `label` is the
 /// original `[^label]` text for diagnostics, and `text` is the parsed, inline-styled body with any
 /// footnote references it itself contains already substituted.
-public struct MarkdownPreviewFootnote: Sendable, Equatable {
+public struct MarkdownPreviewFootnote: Sendable, Hashable {
     public var number: Int
     public var label: String
     public var text: AttributedString
@@ -75,7 +100,7 @@ public struct MarkdownPreviewFootnote: Sendable, Equatable {
 
 /// A GFM pipe table with per-column alignment. Rows are padded to `columns.count` so a ragged
 /// source row never produces an out-of-bounds cell lookup at layout/paint time.
-public struct MarkdownPreviewTable: Sendable, Equatable {
+public struct MarkdownPreviewTable: Sendable, Hashable {
     public var columns: [Column]
     public var header: [AttributedString]
     public var rows: [[AttributedString]]
@@ -86,8 +111,8 @@ public struct MarkdownPreviewTable: Sendable, Equatable {
         self.rows = rows
     }
 
-    public struct Column: Sendable, Equatable {
-        public enum Alignment: Sendable, Equatable {
+    public struct Column: Sendable, Hashable {
+        public enum Alignment: Sendable, Hashable {
             case leading, center, trailing
         }
 
@@ -100,7 +125,7 @@ public struct MarkdownPreviewTable: Sendable, Equatable {
 }
 
 /// Parsed markdown ready for layout and painting.
-public struct MarkdownPreviewDocument: Sendable, Equatable {
+public struct MarkdownPreviewDocument: Sendable, Hashable {
     public var blocks: [MarkdownPreviewBlock]
 
     public init(blocks: [MarkdownPreviewBlock] = []) {
@@ -115,14 +140,22 @@ public struct MarkdownPreviewDocument: Sendable, Equatable {
     /// `PresentationIntent` tree by ``MarkdownPreviewIntentWalker``. Once every block is built,
     /// inline `[^1]` references are renumbered by first-reference order and a trailing
     /// `.footnotes` block is appended if any definitions were found.
-    public static func parse(_ source: String) -> MarkdownPreviewDocument {
+    ///
+    /// Pass the same `cache` to successive parses of an edited buffer to re-parse only the
+    /// prose that changed (see ``MarkdownPreviewParseCache``).
+    public static func parse(_ source: String, cache: MarkdownPreviewParseCache? = nil) -> MarkdownPreviewDocument {
+        let cache = cache ?? MarkdownPreviewParseCache()
+        cache.begin()
+        defer { cache.end() }
         let (strippedSource, footnoteDefinitions) = MarkdownPreviewFootnotes.extract(from: source)
         let linkDefinitions = MarkdownPreviewIntentWalker.linkReferenceDefinitions(in: strippedSource)
         var blocks: [MarkdownPreviewBlock] = []
         for segment in MermaidFenceExtractor.segments(in: strippedSource) {
             switch segment {
             case .prose(let prose):
-                blocks.append(contentsOf: MarkdownPreviewIntentWalker.blocks(in: prose, linkDefinitions: linkDefinitions))
+                for chunk in MarkdownPreviewParseCache.chunks(of: prose) {
+                    blocks.append(contentsOf: cache.blocks(forChunk: chunk, linkDefinitions: linkDefinitions))
+                }
             case .fencedCode(let language, let body):
                 if MermaidFenceExtractor.isMermaidFence(language) {
                     blocks.append(MarkdownPreviewBlock(kind: .mermaid(source: body)))
@@ -137,6 +170,11 @@ public struct MarkdownPreviewDocument: Sendable, Equatable {
         if !footnotes.isEmpty {
             blocks.append(MarkdownPreviewBlock(kind: .thematicBreak))
             blocks.append(MarkdownPreviewBlock(kind: .footnotes(footnotes)))
+        }
+        // Chunk blocks come hashed; this covers fences, footnotes and blocks whose text footnote
+        // numbering rewrote.
+        for index in blocks.indices where blocks[index].contentHash == nil {
+            blocks[index].contentHash = blocks[index].kind.hashValue
         }
         return MarkdownPreviewDocument(blocks: blocks)
     }

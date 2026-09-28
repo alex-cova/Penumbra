@@ -515,6 +515,50 @@ was unaffected because folding is off above `maxFoldRecomputeLineCount`. It came
 In this session mid-file Enter is ~21 ms, not the ~12 ms recorded on 2026-09-25, for both
 commits. Phase 1 (the Enter indent scan) is still the largest typing cost.
 
+### Markdown preview and Mermaid (2026-09-27)
+
+`swift run -c release PerfHarness markdown-preview synthetic` (new): 200 sections, 1048 blocks,
+~200 KB, 29 code fences, 10 realistic Mermaid diagrams (24-node flowcharts, 18-message
+sequence diagrams); hosted 800×900 window, Metal on. Medians, M1 Pro, Release.
+
+| metric | before | after |
+|---|---:|---:|
+| parse (cold, off main) | 138 ms | 170 ms |
+| parse after a one-paragraph edit | 138 ms | 7 ms |
+| raster after an edit (mermaid + code) | 200 ms | 3 ms |
+| layout, main thread | 177 ms | 8 ms |
+| layout with unchanged inputs | 176 ms | 0.00 ms |
+| scroll step p95 / max | 27 ms / 54 ms | 6 ms / 38 ms |
+| edit to present (controller, no debounce) | 587 ms | 12 ms |
+
+- **Every edit re-rendered every diagram and re-highlighted every fence.** Results were keyed by
+  block index. `MarkdownPreviewRasterCache` keys them by content (diagram source + colors, fence
+  text + theme, image path + mtime), bounded by entries and bytes. The controller resolves hits
+  and code fences in the same detached step as the parse, so they land in the first layout; only
+  uncached diagrams render afterwards, and a diagram being edited keeps its previous image until
+  the new one arrives. Diagrams still render one at a time: BeautifulMermaid shares one ELK
+  layout engine across calls.
+- **Measuring every block on every layout.** `MarkdownPreviewMeasureCache` keeps each block's
+  size and typeset `CTFrame`s by content and width, and painting (screen, Metal tiles, PDF) draws
+  those frames instead of re-styling and re-typesetting. Keying by the `AttributedString` itself
+  cost as much as measuring (Swift string hashing normalizes Unicode), so `parse` stores
+  `MarkdownPreviewBlock.contentHash` once, off the main thread.
+- **Whole-document parse per edit.** `MarkdownPreviewParseCache` splits prose before each ATX
+  heading that follows a blank line (a block boundary in CommonMark; not split when an HTML
+  comment/`<pre>`/`<script>`/`<style>` block could span it) and re-parses only changed chunks.
+- **No-op layouts** re-measured and dropped every Metal tile, and re-presented because the
+  canvas frame was re-assigned. `MarkdownPreviewView` skips a layout whose inputs didn't change;
+  the Metal renderer keeps tiles a change doesn't touch; the canvas only redisplays on a real
+  resize.
+- **Scrolling** rasterized 4096-px-tall tiles on the main thread. Tiles are 1024 px, only visible
+  tiles are painted synchronously, neighbors are prefetched one per main-queue turn, and tiles are
+  painted straight into the texture's BGRA layout (no second draw on upload).
+- The buffer is read after the debounce instead of on every keystroke; showing the preview and
+  switching documents skip the debounce.
+
+Remaining: the cold parse (Foundation's markdown parser, ~140 ms here) and the first render of
+each diagram (~20 ms per large diagram). The largest scroll step (38 ms) is a one-off first tile.
+
 ## Next
 
 0. **Phase 1, Enter indent scan.** With the harness fixed, mid-file Enter is ~12 ms in Release

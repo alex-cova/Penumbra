@@ -67,9 +67,8 @@ enum MermaidPaintAdapter {
             // diagram's own point width, only shrinking (not growing) to fit `contentWidth`.
             let displayWidth = min(contentWidth, bounds.width)
             let displayHeight = displayWidth * (bounds.height / bounds.width)
-            let image = try await Task.detached {
-                try rasterize(prepared: prepared, scale: scale, theme: theme)
-            }.value
+            // `render` is nonisolated async, so this already runs off the main actor.
+            let image = try rasterize(prepared: prepared, scale: scale, theme: theme)
 
             return MermaidPaintResult(
                 height: max(displayHeight, 80),
