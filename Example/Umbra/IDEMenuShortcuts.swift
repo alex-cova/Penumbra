@@ -97,7 +97,7 @@ enum IDEMenuShortcuts {
         .quickEvaluate: nil,
         .runInContext: nil,
         .debugInContext: nil,
-        .fileStructure: nil,
+        .fileStructure: KeyboardShortcut(functionKey12, modifiers: .command),
         .nextProblem: nil,
         .previousProblem: nil,
         .goToTypeDefinition: nil,
@@ -138,7 +138,6 @@ enum IDEMenuShortcuts {
         .openFolder: nil,
         .goToFile: KeyboardShortcut("o", modifiers: [.command, .shift]),
         .goToSymbol: KeyboardShortcut("o", modifiers: [.command, .option]),
-        .fileStructure: KeyboardShortcut(functionKey12, modifiers: .command),
         .parameterInfo: KeyboardShortcut("p"),
         // ⌘= / ⌘- fold and unfold in IntelliJ, and it has no zoom key.
         .zoomIn: nil,

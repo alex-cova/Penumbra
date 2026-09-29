@@ -144,6 +144,13 @@ final class IDEMenuShortcutsTests: XCTestCase {
         }
     }
 
+    func testFileStructureMenuUsesCommandF12InEveryPreset() {
+        let commandF12 = KeyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!)), modifiers: .command)
+        for preset in KeymapPreset.allCases {
+            XCTAssertEqual(shortcut(.fileStructure, preset), commandF12, "\(preset)")
+        }
+    }
+
     func testIntelliJKeymapBindsFindInFilesAndFileStructure() {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("f", [.command, .shift]))), .findInFiles)
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x6F, .command))), .goToFileSymbol)

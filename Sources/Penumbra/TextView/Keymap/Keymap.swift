@@ -85,6 +85,8 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
         map.bind(KeyStroke(KeyChord(code: 0x24, .option)), to: .showContextActions)
         map.bind(KeyStroke(KeyChord(code: 0x7A /* F1 */)), to: .quickDocumentation)
+        // File Structure lists the current file's declarations; Go to Symbol searches every open one.
+        map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */, .command)), to: .goToFileSymbol)
         return map
     }()
 
@@ -101,8 +103,6 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("f", [.command, .shift])), to: .findInFiles)
         map.bind(KeyStroke(KeyChord("g", .command)), to: .findNext)
         map.bind(KeyStroke(KeyChord("g", [.command, .shift])), to: .findPrevious)
-        // File Structure lists the current file's declarations; Go to Symbol searches every open one.
-        map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */, .command)), to: .goToFileSymbol)
         map.bind(KeyStroke(KeyChord("o", [.command, .option])), to: .goToSymbol)
 
         // Navigation

@@ -126,7 +126,14 @@ final class FileStructurePaletteTests: XCTestCase {
 
     func testOtherPresetsKeepTheirSymbolKeys() {
         XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("r", .command))), .goToSymbol)
-        XCTAssertNil(Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x6F, .command))))
+        XCTAssertNil(Keymap.default_.action(for: KeyStroke(KeyChord("r", .command))))
+    }
+
+    func testEveryPresetBindsCommandF12ToFileStructure() {
+        let commandF12 = KeyStroke(KeyChord(code: 0x6F, .command))
+        for keymap in [Keymap.default_, Keymap.sublime, Keymap.intelliJ] {
+            XCTAssertEqual(keymap.action(for: commandF12), .goToFileSymbol)
+        }
     }
 
     func testTheActionHasATitleAndIsListedInFindAction() {
