@@ -94,6 +94,8 @@ public final class IDEWorkspace {
     /// Git blame in the editor gutter, per file.
     let blame = IDEBlameController()
     let problems = IDEProblemsStore()
+    /// The bell's list and the toast that announces finished Gradle and git work.
+    let notifications = IDENotificationCenter()
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// The Structure tool window's member tree for the Java type at the caret.
@@ -191,7 +193,6 @@ public final class IDEWorkspace {
     var pendingTerminalCommand: String?
     var isMarkdownPreviewVisible = false
     var statusSelectionLength = 0
-    var statusRenderer = "Core Graphics"
     var tabsByPane: [UUID: [IDETabRow]] = [:]
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
     private(set) var openDocumentPaths: Set<String> = []
@@ -348,6 +349,18 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onGradleSyncFailed = { [weak self] in
             self?.showGradleOutput()
         }
+        intelligenceServices.javaSupport.onGradleSyncFinished = { [weak self] outcome in
+            self?.notifyGradleSync(outcome)
+        }
+        gitStatus.onActionReport = { [weak self] message, isFailure in
+            self?.notifications.post(
+                isFailure ? "Git action failed" : "Git",
+                detail: message,
+                category: .git,
+                severity: isFailure ? .error : .success,
+                action: .showSourceControl
+            )
+        }
         intelligenceServices.javaSupport.onGradleModelChanged = { [weak self] model in
             self?.fileIndexer.setGradleModel(model)
         }
@@ -359,6 +372,7 @@ public final class IDEWorkspace {
         }
         intelligenceServices.javaSupport.onGradleTasksFinished = { [weak self] tasks, root, result in
             self?.applyGradleBuildOutput(result, projectRoot: root, tasks: tasks)
+            self?.notifyGradleTasks(tasks, result: result)
             self?.applyGradleTestOutput(tasks: tasks, projectRoot: root, result: result)
             self?.continueAfterClassesBuild(tasks: tasks, exitCode: result.exitCode)
         }
@@ -3053,7 +3067,13 @@ public final class IDEWorkspace {
         }
         // Same path as Open Folder, so a restored Gradle project syncs instead of only rebuilding
         // the sidebar. `restoreRoot` alone never reached `javaSupport.setProjectRoot`.
-        applyProjectRoot(project.rootURL(from: session.projectRootBookmark))
+        // A bookmark that no longer resolves falls back to the most recent project. No bookmark
+        // means the folder was closed, so nothing is reopened.
+        var restoredRoot = project.rootURL(from: session.projectRootBookmark)
+        if restoredRoot == nil, session.projectRootBookmark != nil {
+            restoredRoot = session.recentProjects.first { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        applyProjectRoot(restoredRoot)
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
@@ -3078,7 +3098,6 @@ public final class IDEWorkspace {
         let pane = workbench.layout.findPane(id: paneID) ?? EditorPane(id: paneID)
         let host = IDEEditorPaneHost(pane: pane, preferences: preferences)
         host.textView.onMetalRenderingFailure = { [weak self] reason in
-            self?.statusRenderer = "Core Graphics (Metal unavailable)"
             NSLog("Umbra: Metal disabled: %@", reason)
             self?.presentMetalFailureOnce(reason: reason)
         }
@@ -3364,6 +3383,62 @@ public final class IDEWorkspace {
     /// A Gradle run ended: list the compiler errors in its output as Problems, for files open or
     /// not, and surface the tab when there are errors. Each stream is parsed on its own so a
     /// compiler message and its caret line are never split by interleaved task output.
+    // MARK: Notifications
+
+    /// Runs what clicking a notification (or its toast) points at, then closes the bell's list.
+    func activate(_ notification: IDENotification) {
+        notifications.setPanelPresented(false)
+        notifications.dismissToast()
+        switch notification.action {
+        case .showGradleOutput: showGradleOutput()
+        case .showSourceControl: showSourceControl()
+        case .showProblems: showProblems()
+        case nil: break
+        }
+    }
+
+    func showNotifications() {
+        notifications.setPanelPresented(true)
+    }
+
+    private func notifyGradleSync(_ outcome: IDEJavaSupport.GradleSyncOutcome) {
+        switch outcome {
+        case .synced(let subprojects, let jars):
+            notifications.post(
+                "Gradle sync finished",
+                detail: "\(subprojects) module\(subprojects == 1 ? "" : "s"), \(jars) dependenc\(jars == 1 ? "y" : "ies")",
+                category: .gradle,
+                severity: .success,
+                action: .showGradleOutput
+            )
+        case .failed(let summary):
+            notifications.post("Gradle sync failed", detail: summary, category: .gradle, severity: .error, action: .showGradleOutput)
+        case .cancelled:
+            notifications.post("Gradle sync cancelled", category: .gradle, severity: .info, action: .showGradleOutput)
+        }
+    }
+
+    /// Run and test tasks have their own panels; only builds and the like are announced.
+    private func notifyGradleTasks(_ tasks: [String], result: GradleCommandResult) {
+        func isRunTask(_ task: String) -> Bool {
+            let name = task.split(separator: ":").last.map(String.init) ?? task
+            return name == "run" || name == "bootRun"
+        }
+        guard !tasks.contains(where: { JavaTestRunner.isTestTask($0) || isRunTask($0) }) else { return }
+        let label = tasks.joined(separator: " ")
+        if result.exitCode == 0 {
+            notifications.post("Gradle \(label) finished", category: .gradle, severity: .success, action: .showGradleOutput)
+        } else {
+            notifications.post(
+                "Gradle \(label) failed",
+                detail: "Exit code \(result.exitCode)",
+                category: .gradle,
+                severity: .error,
+                action: problems.errorCount > 0 ? .showProblems : .showGradleOutput
+            )
+        }
+    }
+
     private func applyGradleBuildOutput(_ result: GradleCommandResult, projectRoot: URL, tasks: [String] = []) {
         let messages = JavacOutputParser.parse(result.stderr) + JavacOutputParser.parse(result.stdout)
         let javacByFile = JavacDiagnosticsMapper.diagnostics(
@@ -3840,6 +3915,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleDistractionFreeMode() }),
             EditorCommand(id: "app.toggleFocusMode", title: "Toggle Focus Mode", group: "View",
                           action: { [weak self] in self?.toggleFocusMode() }),
+            EditorCommand(id: "app.showNotifications", title: "Show Notifications", group: "View",
+                          action: { [weak self] in self?.showNotifications() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",
                           action: { [weak self] in self?.toggleMetalRendering() }),
             EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
@@ -4425,7 +4502,6 @@ public final class IDEWorkspace {
             statusColumn = 1
             statusLanguage = "Image"
             statusSelectionLength = 0
-            statusRenderer = ""
             javaFileCanRun = false
             javaRunFileURL = nil
             return
@@ -4440,7 +4516,6 @@ public final class IDEWorkspace {
         }
         statusLanguage = workbench.activePane.selectedDocument?.languageIdentifier ?? ""
         statusSelectionLength = range.length
-        statusRenderer = textView.isMetalRenderingActive ? "Metal" : "Core Graphics"
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
     }

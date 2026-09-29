@@ -1,12 +1,11 @@
-import EditorIntelligence
 import SwiftUI
 
 /// The window's titlebar row, drawn on the window frame above the floating panels. Leading: the
 /// traffic-light gutter (`Spacing.trafficLightsInset`, reserved only here), the left / bottom /
-/// right panel toggles and a path-and-symbol breadcrumb for the active document. Center: the
-/// project name and git branch. Trailing: document actions (build, run, preview) and the global
-/// ones (Go to File, Actions, Settings). The two sides share the width equally so the title
-/// stays centered in the window; the breadcrumb truncates first.
+/// right panel toggles. Center: the project name and git branch. Trailing: document actions
+/// (build, run, preview) and the global ones (Go to File, Actions, Settings). The two sides share
+/// the width equally so the title stays centered in the window. The path-and-symbol breadcrumb
+/// lives in the status bar.
 struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -23,14 +22,6 @@ struct IDEToolbarPanel: View {
                     toggleBottomPanel: workspace.toggleTerminal,
                     toggleRightPanel: workspace.toggleGradleSidebar
                 )
-
-                IDETitlebarSeparator()
-
-                IDEToolbarBreadcrumb(
-                    headerContext: workspace.headerContext,
-                    onSelect: workspace.selectBreadcrumb
-                )
-                .padding(.leading, IDEAppearance.Spacing.xs)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -63,8 +54,11 @@ struct IDEToolbarPanel: View {
 
                 IDETitlebarGlobalActions(
                     showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
+                    hasNotifications: !workspace.notifications.items.isEmpty,
+                    isNotificationsOpen: workspace.notifications.isPanelPresented,
                     showQuickOpen: workspace.showQuickOpen,
-                    showCommandPalette: workspace.showCommandPalette
+                    showCommandPalette: workspace.showCommandPalette,
+                    toggleNotifications: workspace.notifications.togglePanel
                 )
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -118,16 +112,6 @@ private struct IDETitlebarPanelToggles: View {
     }
 }
 
-private struct IDETitlebarSeparator: View {
-    var body: some View {
-        Rectangle()
-            .fill(IDEAppearance.ColorToken.border)
-            .frame(width: 1, height: 16)
-            .padding(.horizontal, IDEAppearance.Spacing.xs)
-            .accessibilityHidden(true)
-    }
-}
-
 /// Centered `project ⑂ branch` title; the branch opens Source Control.
 private struct IDETitlebarProjectTitle: View {
     let title: String
@@ -174,8 +158,11 @@ private struct IDETitlebarProjectTitle: View {
 /// The always-available actions at the trailing end of the titlebar.
 private struct IDETitlebarGlobalActions: View {
     let showsGoToFile: Bool
+    let hasNotifications: Bool
+    let isNotificationsOpen: Bool
     let showQuickOpen: () -> Void
     let showCommandPalette: () -> Void
+    let toggleNotifications: () -> Void
 
     @State private var isHoveringSettings = false
 
@@ -195,6 +182,14 @@ private struct IDETitlebarGlobalActions: View {
                 )
             }
 
+            IDEToolbarIconButton(
+                systemName: hasNotifications ? "bell.badge" : "bell",
+                isActive: isNotificationsOpen,
+                tint: hasNotifications && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
+                help: "Notifications",
+                action: toggleNotifications
+            )
+
             SettingsLink {
                 IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)
             }
@@ -203,74 +198,6 @@ private struct IDETitlebarGlobalActions: View {
             .help("Settings")
             .accessibilityLabel("Settings")
             .focusable(false)
-        }
-    }
-}
-
-private struct IDEToolbarBreadcrumb: View {
-    let headerContext: IDEHeaderContext
-    let onSelect: (IDEBreadcrumbItem) -> Void
-
-    var body: some View {
-        let items = headerContext.items
-        if !items.isEmpty {
-            HStack(spacing: IDEAppearance.Spacing.xs) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 {
-                        Image(systemName: "chevron.compact.right")
-                            .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .medium))
-                            .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(0.6))
-                            .accessibilityHidden(true)
-                    }
-                    IDEToolbarBreadcrumbSegment(
-                        item: item,
-                        isLast: index == items.count - 1,
-                        action: { onSelect(item) }
-                    )
-                }
-                if headerContext.isDirty {
-                    Circle()
-                        .fill(IDEAppearance.ColorToken.accent)
-                        .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)
-                        .accessibilityHidden(true)
-                }
-            }
-            .lineLimit(1)
-            .truncationMode(.head)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Breadcrumb")
-        }
-    }
-}
-
-private struct IDEToolbarBreadcrumbSegment: View {
-    let item: IDEBreadcrumbItem
-    let isLast: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(item.title)
-                .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
-                .foregroundStyle(isLast || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(item.title)
-        .accessibilityHint(help)
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var help: String {
-        switch item.target {
-        case .folder:
-            "Reveal \(item.title) in Explorer"
-        case .symbol:
-            "Go to \(item.title)"
         }
     }
 }
@@ -421,23 +348,6 @@ private struct IDEToolbarIconLabel: View {
                     IDETabRow(id: UUID(), title: "Editor.swift", isDirty: true, isSelected: true)
                 ]
             ]
-            workspace.headerContext = IDEHeaderContext(
-                pathItems: [
-                    IDEBreadcrumbItem(id: "folder:src", title: "src", target: .folder(URL(fileURLWithPath: "/src"))),
-                    IDEBreadcrumbItem(id: "folder:ui", title: "ui", target: .folder(URL(fileURLWithPath: "/src/ui")))
-                ],
-                symbolItems: [
-                    IDEBreadcrumbItem(
-                        id: "symbol:Editor",
-                        title: "IDEToolbarPanel",
-                        target: .symbol(EditorIntelligence.TextRange(
-                            start: EditorIntelligence.TextPosition(line: 0, column: 0, utf16Offset: 0),
-                            end: EditorIntelligence.TextPosition(line: 0, column: 0, utf16Offset: 0)
-                        ))
-                    )
-                ],
-                isDirty: true
-            )
             return workspace
         }())
         .frame(width: 720, height: IDEAppearance.Spacing.titlebarMinHeight)

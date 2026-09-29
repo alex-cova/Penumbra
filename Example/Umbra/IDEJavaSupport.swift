@@ -176,6 +176,13 @@ final class IDEJavaSupport {
     /// Called when a sync ends in `.failed` (not on a user-initiated cancel) so `IDEWorkspace` can
     /// surface the Gradle console automatically.
     var onGradleSyncFailed: (@MainActor () -> Void)?
+    /// How a user-visible (non-silent) Gradle sync ended, so the host can post a notification.
+    enum GradleSyncOutcome: Equatable {
+        case synced(subprojects: Int, jars: Int)
+        case failed(summary: String)
+        case cancelled
+    }
+    @ObservationIgnored var onGradleSyncFinished: (@MainActor (GradleSyncOutcome) -> Void)?
     /// A Gradle task run ended (finished, timed out or cancelled), with whatever output it
     /// produced, so the host can pull compiler errors out of it.
     @ObservationIgnored var onGradleTasksFinished: (@MainActor (_ tasks: [String], _ projectRoot: URL, _ result: GradleCommandResult) -> Void)?
@@ -796,6 +803,9 @@ final class IDEJavaSupport {
                     gradleConsole.appendNote("Sync finished")
                 }
                 gradleConsole.markFinished()
+                if !silent {
+                    onGradleSyncFinished?(.synced(subprojects: model.subprojects.count, jars: model.classpathJars.count))
+                }
             } catch {
                 guard isCurrent(generation) else { return }
                 if silent {
@@ -815,6 +825,7 @@ final class IDEJavaSupport {
                 gradleConsole.appendNote(summary)
                 gradleConsole.markFinished()
                 onGradleSyncFailed?()
+                onGradleSyncFinished?(.failed(summary: summary))
             }
         }
     }
@@ -1018,6 +1029,7 @@ final class IDEJavaSupport {
         gradleSync = .failed(summary: "Gradle sync was cancelled")
         gradleConsole.appendNote("Sync cancelled")
         gradleConsole.markFinished()
+        onGradleSyncFinished?(.cancelled)
     }
 
     /// Re-indexes the JDK only when the project's language level would select a different

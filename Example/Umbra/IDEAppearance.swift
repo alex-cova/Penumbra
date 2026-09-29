@@ -16,10 +16,10 @@ enum IDEAppearance {
         static let sidebarMinWidth = 160.0
         static let sidebarMaxWidth = 420.0
         /// Floor for the titlebar row, which otherwise matches the system titlebar's height.
-        static let titlebarMinHeight = 28.0
+        static let titlebarMinHeight = 36.0
         static let tabHeight = 32.0
         static let iconButton = 26.0
-        static let statusBarHeight = 24.0
+        static let statusBarHeight = 36.0
         static let terminalDefaultHeight = 220.0
         static let terminalMinHeight = 120.0
         static let terminalMaxHeight = 600.0

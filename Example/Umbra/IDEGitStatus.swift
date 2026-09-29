@@ -65,6 +65,9 @@ final class IDEGitStatusModel {
     var historySearch = ""
     private(set) var isBusy = false
     private(set) var actionStatus = ""
+    /// Called with each git action's outcome line (`true` when it failed), so the host can post a
+    /// notification.
+    @ObservationIgnored var onActionReport: (@MainActor (_ message: String, _ isFailure: Bool) -> Void)?
     /// False when `actionStatus` is a successful git report rather than a failure.
     private(set) var actionFailed = false
     var commitMessage = ""
@@ -396,6 +399,7 @@ final class IDEGitStatusModel {
     private func fail(_ message: String) {
         actionStatus = message
         actionFailed = true
+        onActionReport?(message, true)
     }
 
     private func loadDiff(for path: String?) {
@@ -436,6 +440,7 @@ final class IDEGitStatusModel {
                 if !line.isEmpty {
                     self.actionStatus = line
                     self.actionFailed = false
+                    onActionReport?(line, false)
                 }
                 onSuccess?()
                 self.refresh()
@@ -443,6 +448,7 @@ final class IDEGitStatusModel {
                 guard !Task.isCancelled else { return }
                 self.actionStatus = Self.describe(error)
                 self.actionFailed = true
+                onActionReport?(self.actionStatus, true)
                 onFailure?(self.actionStatus)
             }
         }

@@ -5,24 +5,32 @@ struct IDEStatusBarPanel: View {
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
+            IDEStatusBarBreadcrumb(
+                headerContext: workspace.headerContext,
+                onSelect: workspace.selectBreadcrumb
+            )
+            // Takes whatever the row has left, so the trailing items never truncate.
+            .layoutPriority(-1)
+            Spacer(minLength: IDEAppearance.Spacing.md)
+            httpStatus
+            problemsStatus
+            if workspace.statusSelectionLength > 0 {
+                Text("\(workspace.statusSelectionLength) selected  ·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
             Text(leadingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("·")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
             if !workspace.showsWelcome {
+                syntaxPicker
                 Text("·")
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                syntaxPicker
             }
-            javaStatus
-            httpStatus
-            if workspace.statusSelectionLength > 0 {
-                Text("·  \(workspace.statusSelectionLength) selected")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-            Spacer()
-            problemsStatus
             Text(trailingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -99,112 +107,31 @@ struct IDEStatusBarPanel: View {
     }
 
     @ViewBuilder
-    private var javaStatus: some View {
-        switch workspace.javaSupport.gradleSync {
-        case .failed(let summary):
-            Text("·")
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Button("Gradle sync failed") {
-                workspace.showGradleOutput()
-            }
-            .buttonStyle(.borderless)
-            .font(IDEAppearance.Typography.monoSmall)
-            .foregroundStyle(IDEAppearance.ColorToken.error)
-            .fixedSize()
-            .help(summary)
-            .accessibilityLabel("Gradle sync failed")
-            .accessibilityHint(summary)
-        case .syncing:
-            if let message = workspace.javaSupport.statusMessage {
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Button {
-                    workspace.showGradleOutput()
-                } label: {
-                    HStack(spacing: IDEAppearance.Spacing.sm) {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.65)
-                            .frame(width: 12, height: 12)
-                            .accessibilityHidden(true)
-                        TimelineView(.periodic(from: workspace.javaSupport.gradleConsole.startedAt ?? .now, by: 1)) { context in
-                            Text(syncingSummary(message, now: context.date))
-                                .font(IDEAppearance.Typography.monoSmall)
-                                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                }
-                .buttonStyle(.borderless)
-                // Takes whatever the row has left, so the rest of the status bar never truncates.
-                .layoutPriority(-1)
-                .help("Show Gradle output")
-                .accessibilityLabel("Gradle sync in progress")
-                .accessibilityHint(message)
-            }
-        default:
-            if let message = workspace.javaSupport.statusMessage {
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.65)
-                    .frame(width: 12, height: 12)
-                    .accessibilityHidden(true)
-                Text(message)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(-1)
-            }
-        }
-    }
-
-    @ViewBuilder
     private var httpStatus: some View {
         if workspace.statusLanguage == "http" {
             if workspace.httpSupport.isSending {
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Button("Sending HTTP request…") {
                     workspace.showHTTPResponse()
                 }
                 .buttonStyle(.borderless)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else if let statusCode = workspace.httpSupport.lastStatusCode,
-                      let duration = workspace.httpSupport.lastDuration {
                 Text("·")
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else if let statusCode = workspace.httpSupport.lastStatusCode,
+                      let duration = workspace.httpSupport.lastDuration {
                 Button("HTTP \(statusCode) (\(Int(duration * 1000)) ms)") {
                     workspace.showHTTPResponse()
                 }
                 .buttonStyle(.borderless)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
-    }
-
-    /// "Resolving Gradle project · 0:42 · > Task :app:umbraProjectModelFragment" -- the status
-    /// message plus elapsed time plus the latest console line, all in the one truncating label.
-    private func syncingSummary(_ message: String, now: Date) -> String {
-        var parts = [message]
-        if let startedAt = workspace.javaSupport.gradleConsole.startedAt {
-            let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
-            parts.append(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
-        }
-        if let latest = workspace.javaSupport.gradleConsole.latestLine {
-            parts.append(latest)
-        }
-        return parts.joined(separator: "  ·  ")
     }
 
     private var leadingSummary: String {
@@ -216,9 +143,75 @@ struct IDEStatusBarPanel: View {
         if workspace.isTerminalVisible {
             parts.append("Terminal")
         }
-        parts.append(workspace.statusRenderer)
-        parts.append("Umbra")
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+private struct IDEStatusBarBreadcrumb: View {
+    let headerContext: IDEHeaderContext
+    let onSelect: (IDEBreadcrumbItem) -> Void
+
+    var body: some View {
+        let items = headerContext.items
+        if !items.isEmpty {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 {
+                        Image(systemName: "chevron.compact.right")
+                            .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .medium))
+                            .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(0.6))
+                            .accessibilityHidden(true)
+                    }
+                    IDEStatusBarBreadcrumbSegment(
+                        item: item,
+                        isLast: index == items.count - 1,
+                        action: { onSelect(item) }
+                    )
+                }
+                if headerContext.isDirty {
+                    Circle()
+                        .fill(IDEAppearance.ColorToken.accent)
+                        .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)
+                        .accessibilityHidden(true)
+                }
+            }
+            .lineLimit(1)
+            .truncationMode(.head)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Breadcrumb")
+        }
+    }
+}
+
+private struct IDEStatusBarBreadcrumbSegment: View {
+    let item: IDEBreadcrumbItem
+    let isLast: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(item.title)
+                .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
+                .foregroundStyle(isLast || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(item.title)
+        .accessibilityHint(help)
+        .accessibilityAddTraits(.isButton)
+        .focusable(false)
+    }
+
+    private var help: String {
+        switch item.target {
+        case .folder:
+            "Reveal \(item.title) in Explorer"
+        case .symbol:
+            "Go to \(item.title)"
+        }
     }
 }
 

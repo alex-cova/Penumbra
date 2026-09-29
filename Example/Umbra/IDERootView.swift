@@ -120,6 +120,31 @@ public struct IDERootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(true)
         }
+        .overlay(alignment: .topTrailing) {
+            IDEStatusToast()
+                .padding(.top, titlebarHeight + IDEAppearance.Spacing.xs)
+                .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
+                .opacity(workspace.chromeOpacity)
+                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+        }
+        .overlay(alignment: .topTrailing) {
+            if workspace.notifications.isPanelPresented {
+                ZStack(alignment: .topTrailing) {
+                    // Any click outside the card closes it.
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { workspace.notifications.setPanelPresented(false) }
+                    IDENotificationPanel()
+                        .padding(.top, titlebarHeight + IDEAppearance.Spacing.xs)
+                        .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                .opacity(workspace.chromeOpacity)
+                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                .onExitCommand { workspace.notifications.setPanelPresented(false) }
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: workspace.notifications.isPanelPresented)
         .overlay {
             if workspace.showsFirstRunGuide {
                 IDEFirstRunGuideOverlay()
@@ -336,9 +361,61 @@ final class IDEWindowConfiguratorView: NSView {
     var title: String = "Umbra"
     var closeGuard: IDEWindowCloseGuard?
 
+    private var observers: [NSObjectProtocol] = []
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         apply(activate: true)
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        guard let window else { return }
+        // AppKit lays the traffic lights out again on resize and when leaving full screen.
+        let names: [Notification.Name] = [
+            NSWindow.didResizeNotification,
+            NSWindow.didExitFullScreenNotification,
+            NSWindow.didEndLiveResizeNotification
+        ]
+        observers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.centerTrafficLights() }
+            }
+        }
+        // ...and it moves the buttons itself after those notifications, so follow their frames too.
+        if let titlebar = window.standardWindowButton(.closeButton)?.superview {
+            titlebar.postsFrameChangedNotifications = true
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: titlebar, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.centerTrafficLights() }
+            })
+        }
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = window.standardWindowButton(type) else { continue }
+            button.postsFrameChangedNotifications = true
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: button, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.centerTrafficLights() }
+            })
+        }
+    }
+
+    /// The titlebar row is taller than the system titlebar, and AppKit keeps the titlebar view at
+    /// its own height, so the traffic lights are placed by their distance from the window's top
+    /// edge rather than by growing the titlebar: their centers sit on the row's center line, in
+    /// line with the toolbar's controls.
+    private func centerTrafficLights() {
+        guard let window, !window.styleMask.contains(.fullScreen),
+              let close = window.standardWindowButton(.closeButton),
+              let titlebar = close.superview else { return }
+        let centerFromTop = IDEAppearance.Spacing.titlebarMinHeight / 2
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = window.standardWindowButton(type), button.superview === titlebar else { continue }
+            let y = (titlebar.bounds.height - centerFromTop - button.frame.height / 2).rounded()
+            if abs(button.frame.origin.y - y) > 0.5 {
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: y))
+            }
+        }
     }
 
     func apply(activate: Bool) {
@@ -355,6 +432,7 @@ final class IDEWindowConfiguratorView: NSView {
                 closeGuard.install(on: window)
             }
         }
+        centerTrafficLights()
         if activate {
             window.makeKeyAndOrderFront(nil)
         }
