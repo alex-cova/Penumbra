@@ -70,12 +70,25 @@ final class IDEJDKSelection {
 
     /// The JDK to use now. With no explicit choice, `minimumFeatureVersion` picks the closest
     /// installation at or above it, and `nil` the newest (what Gradle wants).
-    func resolve(minimumFeatureVersion: Int?) async -> JDKResolution? {
+    func resolve(minimumFeatureVersion: Int?, maximumFeatureVersion: Int? = nil) async -> JDKResolution? {
         let selection = store.selection(forProject: projectRoot)
         let added = store.customJDKs
         return await Task.detached(priority: .utility) {
-            JDKLocator().resolve(selection: selection, minimumFeatureVersion: minimumFeatureVersion, additionalHomes: added)
+            JDKLocator().resolve(
+                selection: selection,
+                minimumFeatureVersion: minimumFeatureVersion,
+                maximumFeatureVersion: maximumFeatureVersion,
+                additionalHomes: added
+            )
         }.value
+    }
+
+    /// The JDK to launch Gradle on: the newest one the project's wrapper supports. Gradle's Groovy
+    /// cannot compile build scripts on a newer JDK (`Unsupported class file major version`). An
+    /// explicit choice still wins.
+    func resolveForGradle() async -> JDKResolution? {
+        let cap = projectRoot.flatMap(GradleJDKCompatibility.maximumJavaVersion(forProject:))
+        return await resolve(minimumFeatureVersion: nil, maximumFeatureVersion: cap)
     }
 
     /// Re-resolves ``current`` with the project's language level.

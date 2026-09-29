@@ -113,6 +113,7 @@ public struct JDKLocator: Sendable {
     public func resolve(
         selection: JDKSelection,
         minimumFeatureVersion: Int? = nil,
+        maximumFeatureVersion: Int? = nil,
         additionalHomes: [URL] = []
     ) -> JDKResolution? {
         var stale: URL?
@@ -129,7 +130,9 @@ public struct JDKLocator: Sendable {
             stale = stale ?? global
         }
         guard let automatic = Self.pick(
-            from: discoverAll(additionalHomes: additionalHomes), minimumFeatureVersion: minimumFeatureVersion
+            from: discoverAll(additionalHomes: additionalHomes),
+            minimumFeatureVersion: minimumFeatureVersion,
+            maximumFeatureVersion: maximumFeatureVersion
         ) else { return nil }
         return JDKResolution(installation: automatic, source: .automatic, staleSelection: stale)
     }
@@ -137,7 +140,16 @@ public struct JDKLocator: Sendable {
     /// The selection algorithm, factored out as a pure function so it's testable against synthetic
     /// installation lists without touching disk: the closest installation at or above
     /// `minimumFeatureVersion`, or the newest installation if none qualifies (or none was given).
-    static func pick(from installations: [JDKInstallation], minimumFeatureVersion: Int?) -> JDKInstallation? {
+    /// A `maximumFeatureVersion` drops newer installations first (a tool that cannot run on them),
+    /// unless every installation is newer, in which case they all stay.
+    static func pick(
+        from allInstallations: [JDKInstallation], minimumFeatureVersion: Int?, maximumFeatureVersion: Int? = nil
+    ) -> JDKInstallation? {
+        var installations = allInstallations
+        if let maximumFeatureVersion {
+            let capped = installations.filter { $0.featureVersion <= maximumFeatureVersion }
+            if !capped.isEmpty { installations = capped }
+        }
         guard let minimumFeatureVersion else {
             return installations.max { $0.featureVersion < $1.featureVersion }
         }

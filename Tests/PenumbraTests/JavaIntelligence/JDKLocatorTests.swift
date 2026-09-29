@@ -74,6 +74,17 @@ final class JDKLocatorTests: XCTestCase {
         XCTAssertEqual(picked?.featureVersion, 21)
     }
 
+    func testPickSkipsInstallationsAboveMaximum() {
+        let installations = [8, 17, 21, 26].map { synthetic(featureVersion: $0) }
+        XCTAssertEqual(JDKLocator.pick(from: installations, minimumFeatureVersion: nil, maximumFeatureVersion: 21)?.featureVersion, 21)
+        XCTAssertEqual(JDKLocator.pick(from: installations, minimumFeatureVersion: 17, maximumFeatureVersion: 21)?.featureVersion, 17)
+    }
+
+    func testPickKeepsEverythingWhenAllExceedMaximum() {
+        let installations = [21, 26].map { synthetic(featureVersion: $0) }
+        XCTAssertEqual(JDKLocator.pick(from: installations, minimumFeatureVersion: nil, maximumFeatureVersion: 17)?.featureVersion, 26)
+    }
+
     func testPickReturnsNilForEmptyList() {
         XCTAssertNil(JDKLocator.pick(from: [], minimumFeatureVersion: nil))
         XCTAssertNil(JDKLocator.pick(from: [], minimumFeatureVersion: 17))

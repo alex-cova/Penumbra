@@ -509,7 +509,7 @@ final class IDEJavaSupport {
             gradleConsole.appendNote("Project: \(url.path)")
             gradleConsole.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
 
-            let javaHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home
+            let javaHome = await jdk.resolveForGradle()?.installation.home
             if let javaHome {
                 gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
             }
@@ -754,7 +754,7 @@ final class IDEJavaSupport {
             // Gradle itself (9.x) needs a modern JDK to launch, independent of the project's
             // source level, so with no explicit choice this is the newest installation rather than
             // the one selected for `maxLanguageLevel`.
-            let javaHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home
+            let javaHome = await jdk.resolveForGradle()?.installation.home
             guard isCurrent(generation) else { return }
             gradleJavaHomePath = javaHome?.resolvingSymlinksInPath().path
 
@@ -1081,7 +1081,7 @@ final class IDEJavaSupport {
 
             guard let url = projectRootURL, isGradleProject, IDEPreferences.shared.javaGradleAutoSync,
                   gradleTrustStore.isTrusted(url), !gradleSync.isSyncing, !isRunningGradleTasks else { return }
-            let gradleHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home.resolvingSymlinksInPath().path
+            let gradleHome = await jdk.resolveForGradle()?.installation.home.resolvingSymlinksInPath().path
             guard isCurrent(generation), gradleHome != gradleJavaHomePath else { return }
             syncGradleProject(
                 url,
