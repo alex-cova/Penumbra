@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
-    @State private var structureSidebarWidth = IDESessionStore.load().structureSidebarWidth
     @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
     @State private var didBootstrap = false
     /// The system titlebar's height (the top safe-area inset). The titlebar row takes exactly
@@ -30,23 +29,13 @@ public struct IDERootView: View {
                 Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
 
                 if workspace.showsSidebar {
-                    IDESidebarPanel()
+                    IDELeftSidebar()
                         .frame(width: sidebarWidth)
                         .idePanel()
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
 
                     IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
-                }
-
-                if workspace.showsStructureSidebar {
-                    IDEJavaStructurePanel()
-                        .frame(width: structureSidebarWidth)
-                        .idePanel()
-                        .opacity(workspace.chromeOpacity)
-                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
-
-                    IDESidebarResizeHandle(width: $structureSidebarWidth, edge: .leading)
                 }
 
                 VStack(spacing: 0) {
@@ -200,20 +189,15 @@ public struct IDERootView: View {
             workspace.focusActiveEditor()
         }
         .onChange(of: sidebarWidth) { _, newWidth in
-            workspace.saveSession(sidebarWidth: newWidth, structureSidebarWidth: structureSidebarWidth, gradleSidebarWidth: gradleSidebarWidth)
-        }
-        .onChange(of: structureSidebarWidth) { _, newWidth in
-            workspace.structureSidebarWidth = newWidth
-            workspace.saveSession(sidebarWidth: sidebarWidth, structureSidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
+            workspace.saveSession(sidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
         }
         .onChange(of: gradleSidebarWidth) { _, newWidth in
             workspace.gradleSidebarWidth = newWidth
-            workspace.saveSession(sidebarWidth: sidebarWidth, structureSidebarWidth: structureSidebarWidth, gradleSidebarWidth: newWidth)
+            workspace.saveSession(sidebarWidth: sidebarWidth, gradleSidebarWidth: newWidth)
         }
         .onChange(of: workspace.terminalHeight) { _, newHeight in
             workspace.saveSession(
                 sidebarWidth: sidebarWidth,
-                structureSidebarWidth: structureSidebarWidth,
                 gradleSidebarWidth: gradleSidebarWidth,
                 terminalHeight: newHeight
             )

@@ -76,9 +76,7 @@ struct IDETerminalTabsBar: View {
                 }
                 if workspace.showsSourceControlTab {
                     IDESourceControlTabItem(
-                        branch: workspace.gitStatus.currentBranch,
                         isSelected: workspace.isSourceControlSelected,
-                        changeCount: workspace.gitStatus.changes.count,
                         onSelect: { workspace.selectSourceControlTab() }
                     )
                 }
@@ -273,22 +271,21 @@ private struct IDEHTTPTabItem: View {
     }
 }
 
+/// The bottom panel's History tab (the commit graph); the working tree's changes are in the sidebar.
 private struct IDESourceControlTabItem: View {
-    let branch: String?
     let isSelected: Bool
-    let changeCount: Int
     let onSelect: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "arrow.triangle.branch")
+            Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(width: 12)
 
-            Text(tabTitle)
+            Text("History")
                 .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
                 .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
@@ -309,26 +306,9 @@ private struct IDESourceControlTabItem: View {
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityTitle)
+        .accessibilityLabel("Git History")
         .accessibilityAddTraits(.isButton)
         .focusable(false)
-    }
-
-    private var tabTitle: String {
-        if let branch, !branch.isEmpty {
-            return changeCount > 0 ? "Source Control · \(changeCount)" : branch
-        }
-        return "Source Control"
-    }
-
-    private var accessibilityTitle: String {
-        if changeCount > 0 {
-            return "Source Control, \(changeCount) changed files"
-        }
-        if let branch, !branch.isEmpty {
-            return "Source Control on \(branch)"
-        }
-        return "Source Control"
     }
 
     private var backgroundColor: Color {

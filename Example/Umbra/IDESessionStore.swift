@@ -11,8 +11,9 @@ struct AppSession: Codable {
     var preferences: IDEPreferencesSnapshot
     var sidebarWidth: Double
     var isSidebarVisible: Bool
-    var structureSidebarWidth: Double
-    var isStructureSidebarVisible: Bool
+    /// The left sidebar's selected tab and the tabs closed with ×. Optional so older sessions load.
+    var sidebarTab: IDESidebarTab?
+    var closedSidebarTabs: [IDESidebarTab]?
     var gradleSidebarWidth: Double
     var isGradleSidebarVisible: Bool
     var isTerminalVisible: Bool
@@ -40,8 +41,6 @@ struct AppSession: Codable {
         ),
         sidebarWidth: IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: false,
-        structureSidebarWidth: IDEAppearance.Spacing.sidebarWidth,
-        isStructureSidebarVisible: false,
         gradleSidebarWidth: IDEAppearance.Spacing.sidebarWidth,
         isGradleSidebarVisible: true,
         isTerminalVisible: false,
@@ -59,14 +58,14 @@ struct AppSession: Codable {
         preferences: IDEPreferencesSnapshot,
         sidebarWidth: Double,
         isSidebarVisible: Bool,
-        structureSidebarWidth: Double,
-        isStructureSidebarVisible: Bool,
         gradleSidebarWidth: Double,
         isGradleSidebarVisible: Bool,
         isTerminalVisible: Bool,
         terminalHeight: Double,
         terminalTabs: [IDETerminalTab]? = nil,
-        selectedTerminalTabID: UUID? = nil
+        selectedTerminalTabID: UUID? = nil,
+        sidebarTab: IDESidebarTab? = nil,
+        closedSidebarTabs: [IDESidebarTab]? = nil
     ) {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
@@ -76,8 +75,8 @@ struct AppSession: Codable {
         self.preferences = preferences
         self.sidebarWidth = sidebarWidth
         self.isSidebarVisible = isSidebarVisible
-        self.structureSidebarWidth = structureSidebarWidth
-        self.isStructureSidebarVisible = isStructureSidebarVisible
+        self.sidebarTab = sidebarTab
+        self.closedSidebarTabs = closedSidebarTabs
         self.gradleSidebarWidth = gradleSidebarWidth
         self.isGradleSidebarVisible = isGradleSidebarVisible
         self.isTerminalVisible = isTerminalVisible
@@ -96,9 +95,8 @@ struct AppSession: Codable {
         preferences = try container.decode(IDEPreferencesSnapshot.self, forKey: .preferences)
         sidebarWidth = try container.decode(Double.self, forKey: .sidebarWidth)
         isSidebarVisible = try container.decode(Bool.self, forKey: .isSidebarVisible)
-        structureSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .structureSidebarWidth)
-            ?? IDEAppearance.Spacing.sidebarWidth
-        isStructureSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isStructureSidebarVisible) ?? false
+        sidebarTab = try? container.decodeIfPresent(IDESidebarTab.self, forKey: .sidebarTab)
+        closedSidebarTabs = try? container.decodeIfPresent([IDESidebarTab].self, forKey: .closedSidebarTabs)
         gradleSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .gradleSidebarWidth)
             ?? IDEAppearance.Spacing.sidebarWidth
         isGradleSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isGradleSidebarVisible) ?? true

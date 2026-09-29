@@ -253,7 +253,9 @@ struct UmbraApp: App {
                     .menuShortcut(.toggleSidebar, in: preset)
                 Button("Toggle Structure", systemImage: "list.bullet.indent", action: workspace.toggleStructureSidebar)
                     .menuShortcut(.toggleStructure, in: preset)
-                    .disabled(!workspace.showsJavaStructureButton)
+                Button("Toggle Breakpoints", systemImage: "circle.fill") {
+                    workspace.toggleSidebarTab(.breakpoints)
+                }
                 Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: workspace.toggleGradleSidebar)
                     .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Reveal Active File in Explorer", systemImage: "scope", action: workspace.revealActiveFileInExplorer)
@@ -269,7 +271,7 @@ struct UmbraApp: App {
                     .menuShortcut(.hideAllToolWindows, in: preset)
                 Button("Toggle Problems", systemImage: "exclamationmark.triangle", action: workspace.toggleProblems)
                     .menuShortcut(.toggleProblems, in: preset)
-                Button("Toggle Source Control", systemImage: "arrow.triangle.branch", action: workspace.toggleSourceControl)
+                Button("Toggle Changes", systemImage: "arrow.triangle.branch", action: workspace.toggleSourceControl)
                     .disabled(!workspace.showsSourceControlTab)
                     .menuShortcut(.toggleSourceControl, in: preset)
                 Button("New Terminal Tab", systemImage: "plus.rectangle.on.rectangle") {

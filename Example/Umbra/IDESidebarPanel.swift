@@ -11,9 +11,7 @@ struct IDESidebarPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
-                IDEPanelTitle("Explorer")
-                    .fixedSize()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
 
                 if workspace.project.rootNode != nil {
                     IDEExplorerToolbarButton(
@@ -45,9 +43,8 @@ struct IDESidebarPanel: View {
                     action: toggleSearch
                 )
             }
-            .padding(.leading, IDEAppearance.Spacing.sm)
-            .padding(.trailing, IDEAppearance.Spacing.xs)
-            .frame(height: IDEAppearance.Spacing.tabHeight + 2)
+            .padding(.horizontal, IDEAppearance.Spacing.xs)
+            .frame(height: IDEAppearance.Spacing.iconButton + 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
@@ -128,7 +125,8 @@ struct IDESidebarPanel: View {
     }
 }
 
-private struct IDEExplorerToolbarButton: View {
+/// A small icon button for a sidebar tab's toolbar row.
+struct IDEExplorerToolbarButton: View {
     let systemImage: String
     let help: String
     var isActive = false

@@ -129,8 +129,13 @@ public final class IDEWorkspace {
     }
 
     var isSidebarVisible = false
-    var isStructureSidebarVisible = false
-    var structureSidebarWidth = IDEAppearance.Spacing.sidebarWidth
+    /// The left sidebar's tab. Read `activeSidebarTab`: this may name a tab that is unavailable now.
+    var selectedSidebarTab = IDESidebarTab.explorer
+    /// Tabs the user closed with ×; the sidebar's + menu brings them back.
+    private(set) var closedSidebarTabs: Set<IDESidebarTab> = []
+    /// The project's breakpoints, mirrored from `breakpointStore` (which is not observable) for the
+    /// Breakpoints tab. Refreshed by `refreshBreakpoints()` after every change to the store.
+    private(set) var breakpoints: [JavaBreakpoint] = []
     var isGradleSidebarVisible = true
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
@@ -336,9 +341,31 @@ public final class IDEWorkspace {
     /// What `IDERootView` should actually render: the user's sidebar toggle, once a folder or a
     /// document is open (the stripe offers no Explorer button before that).
     var showsSidebar: Bool { isSidebarVisible && (hasOpenProject || hasOpenDocuments) }
-    /// Left-hand Structure panel — members of the Java type at the caret.
-    var showsJavaStructureButton: Bool { statusLanguage == "java" && (hasOpenProject || hasOpenDocuments) }
-    var showsStructureSidebar: Bool { isStructureSidebarVisible && showsJavaStructureButton }
+    /// A tab is offered when it has something to show: Changes needs a git repository. Structure
+    /// stays offered for any file (it explains itself outside Java) so the tab does not come and
+    /// go as the active file changes.
+    func isSidebarTabAvailable(_ tab: IDESidebarTab) -> Bool {
+        tab != .changes || showsSourceControlTab
+    }
+
+    /// The tabs the sidebar's tab bar shows, in order.
+    var sidebarTabs: [IDESidebarTab] {
+        IDESidebarTab.allCases.filter { isSidebarTabAvailable($0) && !closedSidebarTabs.contains($0) }
+    }
+
+    /// Closed tabs the + menu can bring back.
+    var reopenableSidebarTabs: [IDESidebarTab] {
+        IDESidebarTab.allCases.filter { isSidebarTabAvailable($0) && closedSidebarTabs.contains($0) }
+    }
+
+    /// The tab the sidebar is actually showing: the selected one, or the Explorer when that tab is
+    /// closed or gone (the repository was removed).
+    var activeSidebarTab: IDESidebarTab {
+        sidebarTabs.contains(selectedSidebarTab) ? selectedSidebarTab : .explorer
+    }
+
+    /// Left-hand Structure tab — members of the Java type at the caret.
+    var showsStructureSidebar: Bool { showsSidebar && activeSidebarTab == .structure }
     /// Right-hand Gradle panel — modules and dependencies — only for Gradle project folders.
     var showsGradleSidebar: Bool { isGradleSidebarVisible && javaSupport.isGradleProject }
 
@@ -938,16 +965,12 @@ public final class IDEWorkspace {
         func add(_ id: String, _ title: String, _ action: @escaping @MainActor @Sendable () -> Void) {
             entries.append(ToolWindowEntry(id: id, title: title, action: action))
         }
-        add("explorer", "Project") { [weak self] in
-            guard let self, !self.isSidebarVisible else { return }
-            self.toggleSidebar()
+        add("explorer", "Project") { [weak self] in self?.showSidebarTab(.explorer) }
+        add("structure", "Structure") { [weak self] in self?.showSidebarTab(.structure) }
+        if showsSourceControlTab {
+            add("changes", "Changes") { [weak self] in self?.showSidebarTab(.changes) }
         }
-        if showsJavaStructureButton {
-            add("structure", "Structure") { [weak self] in
-                guard let self, !self.isStructureSidebarVisible else { return }
-                self.toggleStructureSidebar()
-            }
-        }
+        add("breakpoints", "Breakpoints") { [weak self] in self?.showSidebarTab(.breakpoints) }
         if javaSupport.isGradleProject {
             add("gradle", "Gradle") { [weak self] in
                 guard let self, !self.isGradleSidebarVisible else { return }
@@ -960,7 +983,7 @@ public final class IDEWorkspace {
         }
         add("problems", "Problems") { [weak self] in self?.selectProblemsTab() }
         if showsSourceControlTab {
-            add("sourceControl", "Source Control") { [weak self] in self?.selectSourceControlTab() }
+            add("sourceControl", "History") { [weak self] in self?.selectSourceControlTab() }
         }
         if showsDebugTab {
             add("debug", "Debug") { [weak self] in self?.selectDebugTab() }
@@ -1381,7 +1404,7 @@ public final class IDEWorkspace {
     }
 
     /// Opens the file the program stopped in and selects the stopped line.
-    private func revealDebugStop(file: URL, line: Int) {
+    func revealDebugStop(file: URL, line: Int) {
         let text = openBufferText(for: file) ?? (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         let start = TextPosition(line: max(0, line - 1), column: 0, utf16Offset: 0)
         let end = TextPosition(line: max(0, line - 1), column: Int.max / 2, utf16Offset: 0)
@@ -1427,8 +1450,48 @@ public final class IDEWorkspace {
         guard let url = workbench.activePane.selectedDocument?.url else { return }
         let textView = host(for: workbench.activePaneID).textView
         let lineNumber = (textView.textLocation(at: textView.selectedRange.location)?.lineNumber ?? 0) + 1
-        _ = breakpointStore.toggle(atLine: lineNumber, file: url, project: project.rootURL)
+        toggleBreakpoint(atLine: lineNumber, file: url)
         Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: url.pathExtension.lowercased() == "java") }
+    }
+
+    private func toggleBreakpoint(atLine line: Int, file url: URL) {
+        _ = breakpointStore.toggle(atLine: line, file: url, project: project.rootURL)
+        refreshBreakpoints()
+    }
+
+    func refreshBreakpoints() {
+        breakpoints = breakpointStore.breakpoints(forProject: project.rootURL)
+    }
+
+    func setBreakpointEnabled(_ breakpoint: JavaBreakpoint, enabled: Bool) {
+        breakpointStore.setEnabled(enabled, breakpointID: breakpoint.id, project: project.rootURL)
+        refreshBreakpoints()
+        refreshBreakpointGutters()
+    }
+
+    func removeBreakpoint(_ breakpoint: JavaBreakpoint) {
+        breakpointStore.remove(breakpointID: breakpoint.id, project: project.rootURL)
+        refreshBreakpoints()
+        refreshBreakpointGutters()
+    }
+
+    func removeAllBreakpoints() {
+        breakpointStore.removeAll(project: project.rootURL)
+        refreshBreakpoints()
+        refreshBreakpointGutters()
+    }
+
+    func openBreakpoint(_ breakpoint: JavaBreakpoint) {
+        revealDebugStop(file: URL(fileURLWithPath: breakpoint.filePath), line: breakpoint.line)
+    }
+
+    /// Redraws the breakpoint dots of every open Java file after the Breakpoints tab changed them.
+    private func refreshBreakpointGutters() {
+        for pane in workbench.panes {
+            guard let url = pane.selectedDocument?.url, url.pathExtension.lowercased() == "java",
+                  let textView = hostCache.peek(pane.id)?.textView else { continue }
+            Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: true) }
+        }
     }
 
     func selectDebugTab() {
@@ -1691,6 +1754,8 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Selects the bottom panel's History tab (the commit graph and a commit's diff). The working
+    /// tree's changes live in the sidebar's Changes tab.
     func selectSourceControlTab() {
         isSourceControlSelected = true
         isGradleConsoleSelected = false
@@ -1702,8 +1767,9 @@ public final class IDEWorkspace {
         gitStatus.refresh()
     }
 
+    /// Shows the Changes tab of the left sidebar (branch, commit and the changed files).
     func showSourceControl() {
-        selectSourceControlTab()
+        showSidebarTab(.changes)
     }
 
     /// The file behind the active editor, when it is inside the open git repository.
@@ -1722,14 +1788,14 @@ public final class IDEWorkspace {
         alert.runModal()
     }
 
-    /// Lists the commits that touched the active file, in the Source Control tab.
+    /// Lists the commits that touched the active file, in the bottom panel's History tab.
     func showFileHistory() {
         guard let url = activeFileInRepository() else {
             showGitNotice("No File History", "The active file is not in a git repository.")
             return
         }
         gitStatus.showFileHistory(path: url.path)
-        showSourceControl()
+        selectSourceControlTab()
     }
 
     /// Whether the active file shows the blame column (drives the menu title).
@@ -1864,14 +1930,14 @@ public final class IDEWorkspace {
     }
 
     /// Fast-forwards the current branch from its remote (⌘T in the IntelliJ keymap). The outcome
-    /// shows in the Source Control tab.
+    /// shows in the sidebar's Changes tab.
     func pullProject() {
         guard gitStatus.isRepository else { return }
         gitStatus.pull()
         showSourceControl()
     }
 
-    /// Pushes the current branch (⇧⌘K in the IntelliJ keymap). The outcome shows in the Source Control tab.
+    /// Pushes the current branch (⇧⌘K in the IntelliJ keymap). The outcome shows in the sidebar's Changes tab.
     func pushProject() {
         guard gitStatus.isRepository else { return }
         gitStatus.push()
@@ -1963,11 +2029,7 @@ public final class IDEWorkspace {
     }
 
     func toggleSourceControl() {
-        if isTerminalVisible && isSourceControlSelected {
-            hideTerminal()
-        } else {
-            showSourceControl()
-        }
+        toggleSidebarTab(.changes)
     }
 
     func selectProblemsTab() {
@@ -2630,7 +2692,6 @@ public final class IDEWorkspace {
 
     private struct HiddenToolWindows {
         var sidebar: Bool
-        var structure: Bool
         var gradle: Bool
         var bottomPanel: Bool
     }
@@ -2642,7 +2703,6 @@ public final class IDEWorkspace {
     func toggleAllToolWindows() {
         if let saved = hiddenToolWindows {
             isSidebarVisible = saved.sidebar
-            isStructureSidebarVisible = saved.structure
             isGradleSidebarVisible = saved.gradle
             isTerminalVisible = saved.bottomPanel
             hiddenToolWindows = nil
@@ -2651,14 +2711,12 @@ public final class IDEWorkspace {
         }
         let saved = HiddenToolWindows(
             sidebar: isSidebarVisible,
-            structure: isStructureSidebarVisible,
             gradle: isGradleSidebarVisible,
             bottomPanel: isTerminalVisible
         )
-        guard saved.sidebar || saved.structure || saved.gradle || saved.bottomPanel else { return }
+        guard saved.sidebar || saved.gradle || saved.bottomPanel else { return }
         hiddenToolWindows = saved
         isSidebarVisible = false
-        isStructureSidebarVisible = false
         isGradleSidebarVisible = false
         isTerminalVisible = false
         isBottomPanelExpanded = false
@@ -2692,11 +2750,45 @@ public final class IDEWorkspace {
     }
 
     public func toggleStructureSidebar() {
-        isStructureSidebarVisible.toggle()
-        focusActiveEditor()
-        if isStructureSidebarVisible {
-            refreshJavaStructure()
+        toggleSidebarTab(.structure)
+    }
+
+    /// Shows the sidebar on `tab`, reopening it if it was closed.
+    func showSidebarTab(_ tab: IDESidebarTab) {
+        guard isSidebarTabAvailable(tab) else { return }
+        closedSidebarTabs.remove(tab)
+        selectedSidebarTab = tab
+        isSidebarVisible = true
+        switch tab {
+        case .structure: refreshJavaStructure()
+        case .changes: gitStatus.refresh()
+        case .explorer, .breakpoints: break
         }
+        saveSession()
+    }
+
+    /// Tool-window behavior (IntelliJ): the shortcut of the tab being shown hides the sidebar, the
+    /// shortcut of any other tab switches to it.
+    func toggleSidebarTab(_ tab: IDESidebarTab) {
+        if showsSidebar && activeSidebarTab == tab {
+            isSidebarVisible = false
+            saveSession()
+        } else {
+            showSidebarTab(tab)
+        }
+        focusActiveEditor()
+    }
+
+    /// Reveal and create commands act on the Explorer, whatever tab the sidebar was on.
+    private func showExplorer() {
+        selectedSidebarTab = .explorer
+        isSidebarVisible = true
+    }
+
+    func closeSidebarTab(_ tab: IDESidebarTab) {
+        guard tab.isClosable else { return }
+        closedSidebarTabs.insert(tab)
+        if selectedSidebarTab == tab { selectedSidebarTab = .explorer }
         saveSession()
     }
 
@@ -2761,7 +2853,7 @@ public final class IDEWorkspace {
             NSWorkspace.shared.activateFileViewerSelecting([url])
             return
         }
-        isSidebarVisible = true
+        showExplorer()
         project.revealAndSelect(url: url, centered: false)
     }
 
@@ -3023,7 +3115,6 @@ public final class IDEWorkspace {
 
     func makeSession(
         sidebarWidth: Double,
-        structureSidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> AppSession {
@@ -3036,26 +3127,24 @@ public final class IDEWorkspace {
             preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
-            structureSidebarWidth: structureSidebarWidth ?? self.structureSidebarWidth,
-            isStructureSidebarVisible: isStructureSidebarVisible,
             gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
             isGradleSidebarVisible: isGradleSidebarVisible,
             isTerminalVisible: isTerminalVisible,
             terminalHeight: terminalHeight ?? self.terminalHeight,
             terminalTabs: terminalTabs.isEmpty ? nil : terminalTabs,
-            selectedTerminalTabID: selectedTerminalTabID
+            selectedTerminalTabID: selectedTerminalTabID,
+            sidebarTab: selectedSidebarTab,
+            closedSidebarTabs: closedSidebarTabs.sorted { $0.rawValue < $1.rawValue }
         )
     }
 
     func saveSession(
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
-        structureSidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
         IDESessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
-            structureSidebarWidth: structureSidebarWidth,
             gradleSidebarWidth: gradleSidebarWidth,
             terminalHeight: terminalHeight
         ))
@@ -3084,8 +3173,8 @@ public final class IDEWorkspace {
         recentProjects = session.recentProjects
         // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
-        structureSidebarWidth = session.structureSidebarWidth
-        isStructureSidebarVisible = session.isStructureSidebarVisible
+        selectedSidebarTab = session.sidebarTab ?? .explorer
+        closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
         gradleSidebarWidth = session.gradleSidebarWidth
         isGradleSidebarVisible = session.isGradleSidebarVisible
         isTerminalVisible = session.isTerminalVisible
@@ -4073,6 +4162,7 @@ public final class IDEWorkspace {
         syncTerminalWorkingDirectory()
         intelligenceServices.javaSupport.setProjectRoot(url)
         refreshLastRunConfiguration()
+        refreshBreakpoints()
         paletteController?.workspaceRoot = url
     }
 
@@ -4241,14 +4331,14 @@ public final class IDEWorkspace {
     /// Creates a new file in the Explorer and starts inline rename. Shows the sidebar when hidden.
     func createExplorerFile(in directory: URL? = nil) {
         guard let directory = directory ?? explorerCreationDirectory() else { return }
-        isSidebarVisible = true
+        showExplorer()
         createExplorerItem(in: directory, isDirectory: false)
     }
 
     /// Creates a new folder in the Explorer and starts inline rename. Shows the sidebar when hidden.
     func createExplorerFolder(in directory: URL? = nil) {
         guard let directory = directory ?? explorerCreationDirectory() else { return }
-        isSidebarVisible = true
+        showExplorer()
         createExplorerItem(in: directory, isDirectory: true)
     }
 
@@ -4438,7 +4528,7 @@ public final class IDEWorkspace {
             NSWorkspace.shared.activateFileViewerSelecting([url])
             return
         }
-        isSidebarVisible = true
+        showExplorer()
         project.revealAndSelect(url: url, centered: true)
     }
 
@@ -4453,7 +4543,7 @@ public final class IDEWorkspace {
 
     private func revealInSidebar(_ url: URL) {
         if project.rootURL != nil {
-            isSidebarVisible = true
+            showExplorer()
             project.reveal(url: url)
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -4634,7 +4724,11 @@ public final class IDEWorkspace {
             return
         }
         let breakpoints = breakpointStore.breakpoints(forFile: fileURL, project: project.rootURL).map {
-            GutterDecoration(line: $0.line, symbolName: "circle.fill", accessibilityLabel: "Breakpoint")
+            GutterDecoration(
+                line: $0.line,
+                symbolName: $0.isEnabled ? "circle.fill" : "circle",
+                accessibilityLabel: $0.isEnabled ? "Breakpoint" : "Disabled breakpoint"
+            )
         }
         guard await javaSupport.isTestSource(file: fileURL) else {
             javaFileCanTest = false
@@ -4642,7 +4736,7 @@ public final class IDEWorkspace {
             textView.setGutterDecorations(breakpoints)
             textView.gutterDecorationHandler = { [weak self] line in
                 guard let self else { return }
-                _ = self.breakpointStore.toggle(atLine: line, file: fileURL, project: self.project.rootURL)
+                self.toggleBreakpoint(atLine: line, file: fileURL)
                 Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
             }
             return
@@ -4660,7 +4754,7 @@ public final class IDEWorkspace {
         textView.gutterDecorationHandler = { [weak self] line in
             guard let self else { return }
             if self.breakpointStore.breakpoints(forFile: fileURL, project: self.project.rootURL).contains(where: { $0.line == line }) {
-                _ = self.breakpointStore.toggle(atLine: line, file: fileURL, project: self.project.rootURL)
+                self.toggleBreakpoint(atLine: line, file: fileURL)
                 Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
                 return
             }

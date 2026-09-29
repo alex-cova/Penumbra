@@ -17,6 +17,25 @@ public struct GitRef: Sendable, Hashable {
     }
 }
 
+/// How the current branch stands against its upstream: the commits only here (`outgoing`, what a
+/// push sends) and only there (`incoming`, what a pull brings). The lists are capped; `ahead` and
+/// `behind` are the true counts.
+public struct GitSyncStatus: Sendable, Equatable {
+    public let upstream: String
+    public let ahead: Int
+    public let behind: Int
+    public let outgoing: [GitCommit]
+    public let incoming: [GitCommit]
+
+    public init(upstream: String, ahead: Int, behind: Int, outgoing: [GitCommit], incoming: [GitCommit]) {
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.outgoing = outgoing
+        self.incoming = incoming
+    }
+}
+
 public struct GitCommit: Sendable, Hashable, Identifiable {
     public let hash: String
     public let parents: [String]

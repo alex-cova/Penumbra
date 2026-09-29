@@ -27,24 +27,16 @@ extension IDEWorkspace {
         var windows: [IDEToolWindow] = []
         // The whole leading stripe stays hidden until a folder or a file is open.
         if hasOpenProject || hasOpenDocuments {
-            windows.append(IDEToolWindow(
-                id: "explorer", systemImage: "folder", title: "Explorer", shortcut: "⌘0", tint: .blue,
-                placement: .leadingTop, isOpen: showsSidebar, toggle: toggleSidebar
-            ))
+            for tab in sidebarTabs {
+                windows.append(sidebarToolWindow(tab))
+            }
             windows.append(IDEToolWindow(
                 id: "find", systemImage: "magnifyingglass", title: "Find in Files", shortcut: "⌘⇧F",
                 tint: .secondary, placement: .leadingTop, isOpen: isFindInFilesVisible, toggle: toggleFindInFiles
             ))
-            if showsJavaStructureButton {
-                windows.append(IDEToolWindow(
-                    id: "structure", systemImage: "list.bullet.indent", title: "Structure", shortcut: "⌘7",
-                    tint: .secondary, placement: .leadingTop, isOpen: showsStructureSidebar,
-                    toggle: toggleStructureSidebar
-                ))
-            }
             if showsSourceControlTab {
                 windows.append(bottomToolWindow(
-                    .sourceControl, "arrow.triangle.branch", "Source Control", "⌃⌘G", .green, .leadingTop
+                    .sourceControl, "clock.arrow.circlepath", "History", nil, .green, .leadingBottom
                 ))
             }
             if showsDebugTab {
@@ -89,6 +81,22 @@ extension IDEWorkspace {
     func setToolWindow(_ id: String, open: Bool) {
         guard let window = toolWindows.first(where: { $0.id == id }), window.isOpen != open else { return }
         window.toggle()
+    }
+
+    /// The sidebar's tabs are tool windows too: open while the sidebar is showing that tab.
+    private func sidebarToolWindow(_ tab: IDESidebarTab) -> IDEToolWindow {
+        let details: (shortcut: String?, tint: PaletteIcon.Tint) = switch tab {
+        case .explorer: ("⌘0", .blue)
+        case .structure: ("⌘7", .secondary)
+        case .changes: ("⌃⌘G", .green)
+        case .breakpoints: (nil, .red)
+        }
+        return IDEToolWindow(
+            id: tab == .explorer ? "explorer" : tab.rawValue, systemImage: tab.systemImage, title: tab.title,
+            shortcut: details.shortcut, tint: details.tint, placement: .leadingTop,
+            isOpen: showsSidebar && activeSidebarTab == tab,
+            toggle: { [weak self] in self?.toggleSidebarTab(tab) }
+        )
     }
 
     private func bottomToolWindow(

@@ -75,6 +75,23 @@ final class JavaBreakpointStore: @unchecked Sendable {
         persist()
     }
 
+    func remove(breakpointID: UUID, project root: URL?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var entry = projects[key(for: root)] else { return }
+        entry.breakpoints.removeAll { $0.id == breakpointID }
+        projects[key(for: root)] = entry
+        persist()
+    }
+
+    func removeAll(project root: URL?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard projects[key(for: root)] != nil else { return }
+        projects[key(for: root)] = File()
+        persist()
+    }
+
     static var defaultStoreURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("com.umbra.editor", isDirectory: true)

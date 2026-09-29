@@ -1,7 +1,7 @@
 import JavaIntelligence
 import SwiftUI
 
-/// Left tool window listing the Java type at the caret and its members.
+/// The sidebar's Structure tab, listing the Java type at the caret and its members.
 struct IDEJavaStructurePanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var isFocused: Bool
@@ -9,8 +9,6 @@ struct IDEJavaStructurePanel: View {
     var body: some View {
         let store = workspace.javaStructure
         VStack(alignment: .leading, spacing: 0) {
-            header
-
             if let root = store.root {
                 tree(store, root: root)
             } else {
@@ -19,13 +17,6 @@ struct IDEJavaStructurePanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
-    }
-
-    private var header: some View {
-        IDEPanelTitle("Structure")
-            .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .frame(height: IDEAppearance.Spacing.tabHeight + 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func tree(_ store: IDEJavaStructureStore, root: JavaStructureNode) -> some View {

@@ -61,6 +61,32 @@ public struct GitRepository: Sendable {
         return nil
     }
 
+    /// The current branch against its upstream, from the remote-tracking ref as last fetched (nothing
+    /// touches the network). Nil when the branch has no upstream.
+    public func syncStatus(commitLimit: Int = 50) async -> GitSyncStatus? {
+        guard let upstreamOut = try? await readOnly(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]),
+              case let upstream = upstreamOut.text.trimmingCharacters(in: .whitespacesAndNewlines),
+              !upstream.isEmpty,
+              let countsOut = try? await readOnly(["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        else { return nil }
+        let counts = countsOut.text.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
+        guard counts.count == 2 else { return nil }
+        let (ahead, behind) = (counts[0], counts[1])
+        var outgoing: [GitCommit] = []
+        var incoming: [GitCommit] = []
+        if ahead > 0 || behind > 0 {
+            let remotes = await remotes()
+            func commits(_ range: String) async -> [GitCommit] {
+                let args = ["log", "--date-order", "--format=" + GitLogParser.format, "-n", "\(commitLimit)", range, "--"]
+                guard let out = try? await readOnly(args) else { return [] }
+                return GitLogParser.parse(out.text, remotes: remotes)
+            }
+            if ahead > 0 { outgoing = await commits("@{u}..HEAD") }
+            if behind > 0 { incoming = await commits("HEAD..@{u}") }
+        }
+        return GitSyncStatus(upstream: upstream, ahead: ahead, behind: behind, outgoing: outgoing, incoming: incoming)
+    }
+
     /// Porcelain status. `includingIgnored` adds `--ignored`, which the default omits.
     public func status(includingIgnored: Bool = false) async throws -> [GitStatusEntry] {
         var args = ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]

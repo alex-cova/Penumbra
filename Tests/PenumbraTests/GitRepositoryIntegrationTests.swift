@@ -423,4 +423,47 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         let status = try await repo.status()
         XCTAssertEqual(status.map(\.path), ["extra.txt"])
     }
+
+    func testSyncStatusCountsCommitsOnEachSideOfTheUpstream() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "a\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        let noUpstream = await repo.syncStatus()
+        XCTAssertNil(noUpstream)
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("git-sync-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let remote = scratch.appendingPathComponent("remote.git")
+        let other = scratch.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        _ = try await runner.run(["init", "-q", "--bare", "-b", "main", remote.path], in: scratch)
+        _ = try await runner.run(["remote", "add", "origin", remote.path], in: directory)
+        _ = try await runner.run(["push", "-q", "-u", "origin", "main"], in: directory)
+
+        let synced = await repo.syncStatus()
+        XCTAssertEqual(synced, GitSyncStatus(upstream: "origin/main", ahead: 0, behind: 0, outgoing: [], incoming: []))
+
+        try write("b.txt", "b\n")
+        _ = try await repo.commit(message: "local", paths: [], untrackedPaths: ["b.txt"], amend: false)
+
+        _ = try await runner.run(["clone", "-q", remote.path, other.path], in: scratch)
+        for args in [["config", "user.name", "Other"], ["config", "user.email", "o@example.com"], ["config", "commit.gpgsign", "false"]] {
+            _ = try await runner.run(args, in: other)
+        }
+        try "c\n".write(to: other.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        for args in [["add", "c.txt"], ["commit", "-q", "-m", "remote"], ["push", "-q"]] {
+            _ = try await runner.run(args, in: other)
+        }
+        _ = try await runner.run(["fetch", "-q"], in: directory)
+
+        let divergedStatus = await repo.syncStatus()
+        let diverged = try XCTUnwrap(divergedStatus)
+        XCTAssertEqual(diverged.upstream, "origin/main")
+        XCTAssertEqual(diverged.ahead, 1)
+        XCTAssertEqual(diverged.behind, 1)
+        XCTAssertEqual(diverged.outgoing.map(\.subject), ["local"])
+        XCTAssertEqual(diverged.incoming.map(\.subject), ["remote"])
+    }
 }

@@ -57,6 +57,8 @@ final class IDEGitStatusModel {
     private(set) var commitDetailText: String?
     private(set) var branches: [String] = []
     private(set) var localBranches: [String] = []
+    /// The current branch against its upstream; nil without one (a branch never pushed).
+    private(set) var sync: GitSyncStatus?
     private(set) var authors: [String] = []
     var historyBranch: String?
     var historyAuthor: String?
@@ -355,6 +357,17 @@ final class IDEGitStatusModel {
         runGitAction { try await $0.push() }
     }
 
+    /// Pull (fast-forward only), then push what is left: the "Pull & Push" button of the sync section.
+    func pullAndPush() {
+        guard !refuseUnsaved(before: "pulling") else { return }
+        runGitAction({
+            _ = try await $0.pull()
+            return try await $0.push()
+        }) { [weak self] in
+            self?.onWorkingTreeChanged?()
+        }
+    }
+
     func pull() {
         guard !refuseUnsaved(before: "pulling") else { return }
         runGitAction({ try await $0.pull() }) { [weak self] in
@@ -388,6 +401,7 @@ final class IDEGitStatusModel {
         if snapshot.currentBranch != currentBranch { currentBranch = snapshot.currentBranch }
         if snapshot.localBranches != localBranches { localBranches = snapshot.localBranches }
         if snapshot.changes != changes { changes = snapshot.changes }
+        if snapshot.sync != sync { sync = snapshot.sync }
     }
 
     private func refuseUnsaved(before action: String) -> Bool {
@@ -470,6 +484,7 @@ final class IDEGitStatusModel {
         var currentBranch: String?
         var localBranches: [String] = []
         var changes: [IDEGitChange] = []
+        var sync: GitSyncStatus?
     }
 
     struct HistoryLoad: Sendable {
@@ -526,6 +541,7 @@ final class IDEGitStatusModel {
         snapshot.localBranches = ((try? await repo.branches()) ?? [])
             .compactMap { $0.kind == .localBranch ? $0.name : nil }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        snapshot.sync = await repo.syncStatus()
         return (repo, snapshot)
     }
 

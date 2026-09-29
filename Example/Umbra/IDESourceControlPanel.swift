@@ -2,133 +2,22 @@ import AppKit
 import GitIntelligence
 import SwiftUI
 
+/// The bottom panel's History tab: the commit graph beside a commit's (or one file's) diff. The
+/// working tree's changes live in the sidebar (`IDEChangesPanel`).
 struct IDESourceControlPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @Bindable private var gitStatus: IDEGitStatusModel
-    @State private var mode = Mode.changes
-    @State private var creatingBranch = false
-    @State private var newBranchName = ""
-
-    private enum Mode: String, CaseIterable, Identifiable {
-        case changes = "Changes"
-        case history = "History"
-
-        var id: String { rawValue }
-    }
 
     init(gitStatus: IDEGitStatusModel) {
         self._gitStatus = Bindable(wrappedValue: gitStatus)
     }
 
-    private var stagedChanges: [IDEGitChange] {
-        gitStatus.changes.filter { $0.staged != nil }
-    }
-
-    private var unstagedChanges: [IDEGitChange] {
-        gitStatus.changes.filter { $0.unstaged != nil }
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $mode) {
-                ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(width: 180)
-            .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.top, IDEAppearance.Spacing.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            switch mode {
-            case .changes: changesContent
-            case .history: historyContent
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(IDEAppearance.ColorToken.editor)
-        .clipped()
-        .onAppear { gitStatus.loadHistory() }
-        // A request for one file's history (Git ▸ Show History for File) opens the History tab.
-        .onChange(of: gitStatus.historyFilePath) { _, path in
-            if path != nil { mode = .history }
-        }
-    }
-
-    private var changesContent: some View {
-        VStack(spacing: 0) {
-            branchBar
-            commitBar
-            if !gitStatus.actionStatus.isEmpty {
-                Text(gitStatus.actionStatus)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(gitStatus.actionFailed ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, IDEAppearance.Spacing.md)
-                    .padding(.bottom, IDEAppearance.Spacing.xs)
-            }
-            splitContent(
-                list: changeList,
-                text: gitStatus.diffText ?? "Select a changed file to preview its diff."
-            )
-        }
-    }
-
-    private var branchBar: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            Menu {
-                ForEach(gitStatus.localBranches, id: \.self) { branch in
-                    Button {
-                        gitStatus.switchBranch(branch)
-                    } label: {
-                        if branch == gitStatus.currentBranch {
-                            Label(branch, systemImage: "checkmark")
-                        } else {
-                            Text(branch)
-                        }
-                    }
-                }
-                if !gitStatus.localBranches.isEmpty {
-                    Divider()
-                }
-                Button("New Branch…") {
-                    newBranchName = ""
-                    creatingBranch = true
-                }
-            } label: {
-                Label(gitStatus.currentBranch ?? "Branch", systemImage: "arrow.triangle.branch")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(gitStatus.isBusy)
-            .help("Switch branch")
-            .accessibilityLabel("Current branch \(gitStatus.currentBranch ?? "none")")
-
-            Spacer(minLength: 0)
-
-            Button("Pull") { gitStatus.pull() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(gitStatus.isBusy)
-                .help("Pull, fast-forward only")
-            Button("Push") { gitStatus.push() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(gitStatus.isBusy)
-                .help("Push the current branch")
-        }
-        .font(IDEAppearance.Typography.caption)
-        .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.top, IDEAppearance.Spacing.sm)
-        .alert("New Branch", isPresented: $creatingBranch) {
-            TextField("Branch name", text: $newBranchName)
-            Button("Create") { gitStatus.createBranch(newBranchName) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Create a branch at the current commit and switch to it.")
-        }
+        historyContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(IDEAppearance.ColorToken.editor)
+            .clipped()
+            .onAppear { gitStatus.loadHistory() }
     }
 
     private var historyContent: some View {
@@ -271,33 +160,246 @@ struct IDESourceControlPanel: View {
             .padding(.vertical, IDEAppearance.Spacing.xs)
         }
     }
+}
 
-    private var commitBar: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            TextField("Commit message", text: $gitStatus.commitMessage, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .lineLimit(1...3)
-                .padding(.horizontal, IDEAppearance.Spacing.sm)
-                .padding(.vertical, IDEAppearance.Spacing.xs)
-                .background(IDEAppearance.ColorToken.tabActive)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .onSubmit { gitStatus.commit() }
+/// The sidebar's Changes tab, top to bottom: the commit message, Commit with an options menu, the
+/// collapsible list of changed files (the selected file's diff opens under it), and at the bottom
+/// the unsynced commits against the upstream with Pull and Push. Double-clicking a file opens it.
+struct IDEChangesPanel: View {
+    @Environment(IDEWorkspace.self) private var workspace
+    @Bindable private var gitStatus: IDEGitStatusModel
+    @State private var creatingBranch = false
+    @State private var newBranchName = ""
+    @State private var changedFilesExpanded = true
+    @FocusState private var messageFocused: Bool
 
-            Button("Commit") {
-                gitStatus.commit()
+    init(gitStatus: IDEGitStatusModel) {
+        self._gitStatus = Bindable(wrappedValue: gitStatus)
+    }
+
+    private var stagedChanges: [IDEGitChange] {
+        gitStatus.changes.filter { $0.staged != nil }
+    }
+
+    private var unstagedChanges: [IDEGitChange] {
+        gitStatus.changes.filter { $0.unstaged != nil }
+    }
+
+    private var canCommit: Bool {
+        !gitStatus.isBusy
+            && !gitStatus.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !stagedChanges.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            messageField
+            commitRow
+            changedFilesHeader
+            if changedFilesExpanded {
+                changesArea
+            } else {
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(
-                gitStatus.isBusy
-                    || gitStatus.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || stagedChanges.isEmpty
-            )
+            if !gitStatus.actionStatus.isEmpty {
+                Text(gitStatus.actionStatus)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(gitStatus.actionFailed ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, IDEAppearance.Spacing.md)
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
+            }
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+            IDEUnsyncedCommitsSection(gitStatus: gitStatus)
         }
-        .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, IDEAppearance.Spacing.sm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(IDEAppearance.ColorToken.panel)
+        .clipped()
+        .alert("New Branch", isPresented: $creatingBranch) {
+            TextField("Branch name", text: $newBranchName)
+            Button("Create") { gitStatus.createBranch(newBranchName) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Create a branch at the current commit and switch to it.")
+        }
+    }
+
+    private var messageField: some View {
+        TextField(
+            "Commit message",
+            text: $gitStatus.commitMessage,
+            prompt: Text("Commit message, press ⌘↩ to commit"),
+            axis: .vertical
+        )
+        .textFieldStyle(.plain)
+        .font(IDEAppearance.Typography.body)
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .lineLimit(1...5)
+        .focused($messageFocused)
+        .onKeyPress(keys: [.return], phases: .down) { press in
+            guard press.modifiers.contains(.command) else { return .ignored }
+            if canCommit { gitStatus.commit() }
+            return .handled
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, 6)
+        .background(IDEAppearance.ColorToken.editor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                .strokeBorder(
+                    messageFocused ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.border,
+                    lineWidth: 1
+                )
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.top, IDEAppearance.Spacing.xs)
+        .padding(.bottom, IDEAppearance.Spacing.sm)
+        .accessibilityLabel("Commit message")
+    }
+
+    private var commitRow: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Button("Commit") { gitStatus.commit() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!canCommit)
+                .help(stagedChanges.isEmpty ? "Stage files to commit them" : "Commit the staged files (⌘↩)")
+
+            optionsMenu
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.bottom, IDEAppearance.Spacing.sm)
+    }
+
+    /// Everything that is not the common path: staging in bulk, revert, refresh and the branch.
+    private var optionsMenu: some View {
+        Menu {
+            Button("Stage All") { gitStatus.stageAll() }
+            Button("Unstage All") { gitStatus.unstageAll() }
+            Button("Revert All…") {
+                workspace.revertChanges(gitStatus.changes.filter { $0.unstaged != nil }.map(\.path))
+            }
+            .disabled(gitStatus.changes.allSatisfy { $0.unstaged == nil })
+            Divider()
+            Menu("Switch Branch") {
+                ForEach(gitStatus.localBranches, id: \.self) { branch in
+                    Button {
+                        gitStatus.switchBranch(branch)
+                    } label: {
+                        if branch == gitStatus.currentBranch {
+                            Label(branch, systemImage: "checkmark")
+                        } else {
+                            Text(branch)
+                        }
+                    }
+                }
+            }
+            Button("New Branch…") {
+                newBranchName = ""
+                creatingBranch = true
+            }
+            Divider()
+            Button("Refresh") { gitStatus.refresh() }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(gitStatus.isBusy)
+        .help("Stage, revert and branch actions")
+        .accessibilityLabel("Changes options")
+    }
+
+    private var changedFilesHeader: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.12)) { changedFilesExpanded.toggle() }
+        } label: {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                Image(systemName: changedFilesExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(width: 10)
+                Text("Changed files")
+                    .font(IDEAppearance.Typography.tabLabel.weight(.medium))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                Text("\(gitStatus.changes.count)")
+                    .font(IDEAppearance.Typography.tabLabel)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .frame(height: 24)
+            .background(IDEAppearance.ColorToken.card)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .accessibilityLabel("Changed files, \(gitStatus.changes.count)")
+        .accessibilityValue(changedFilesExpanded ? "Expanded" : "Collapsed")
+        .focusable(false)
+    }
+
+    /// The file list, with the selected file's diff under it. `SplitPanes`, not `VSplitView`: see
+    /// `IDESourceControlPanel.splitContent`.
+    @ViewBuilder
+    private var changesArea: some View {
+        if gitStatus.selectedChangePath != nil {
+            SplitPanes(
+                axis: .vertical,
+                minPrimary: 80,
+                minSecondary: 90,
+                storageKey: "umbra.changes.diffSplit"
+            ) {
+                changeList
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } secondary: {
+                VStack(spacing: 0) {
+                    diffHeader
+                    IDESourceControlDiffView(
+                        text: gitStatus.diffText ?? "Loading diff…",
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } divider: {
+                Splitter.rule()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            changeList
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var diffHeader: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Text(gitStatus.selectedChangePath.map { ($0 as NSString).lastPathComponent } ?? "")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+            IDEExplorerToolbarButton(systemImage: "xmark", help: "Close Diff") {
+                gitStatus.selectChange(nil)
+            }
+        }
+        .padding(.leading, IDEAppearance.Spacing.sm)
+        .padding(.trailing, IDEAppearance.Spacing.xs)
+        .frame(height: IDEAppearance.Spacing.iconButton)
+        .background(IDEAppearance.ColorToken.editor)
     }
 
     private var changeList: some View {
@@ -374,6 +476,165 @@ struct IDESourceControlPanel: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.top, IDEAppearance.Spacing.xs)
+    }
+}
+
+/// The bottom of the Changes tab: the current branch and its upstream, each with the number of
+/// commits not on the other side and the button that sends (Push) or fetches (Pull) them. A row
+/// expands to list its commits.
+private struct IDEUnsyncedCommitsSection: View {
+    let gitStatus: IDEGitStatusModel
+    @State private var outgoingExpanded = false
+    @State private var incomingExpanded = false
+
+    var body: some View {
+        let sync = gitStatus.sync
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                Text("Unsynced commits")
+                    .font(IDEAppearance.Typography.tabLabel.weight(.semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(1)
+                if let sync {
+                    Text("↑\(sync.ahead) ↓\(sync.behind)")
+                        .font(IDEAppearance.Typography.tabLabel)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let sync {
+                    Button("Pull & Push") { gitStatus.pullAndPush() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(gitStatus.isBusy || (sync.ahead == 0 && sync.behind == 0))
+                        .help("Pull (fast-forward only), then push")
+                }
+            }
+
+            if let branch = gitStatus.currentBranch {
+                IDEUnsyncedRow(
+                    name: branch,
+                    tint: .blue,
+                    count: sync?.ahead,
+                    countHint: "not pushed",
+                    commits: sync?.outgoing ?? [],
+                    isExpanded: $outgoingExpanded,
+                    buttonTitle: "Push",
+                    buttonHelp: sync == nil ? "Publish the branch to origin" : "Push the current branch",
+                    isButtonEnabled: !gitStatus.isBusy && (sync == nil || (sync?.ahead ?? 0) > 0),
+                    action: { gitStatus.push() }
+                )
+            }
+            if let sync {
+                IDEUnsyncedRow(
+                    name: sync.upstream,
+                    tint: .purple,
+                    count: sync.behind,
+                    countHint: "not pulled",
+                    commits: sync.incoming,
+                    isExpanded: $incomingExpanded,
+                    buttonTitle: "Pull",
+                    buttonHelp: "Pull, fast-forward only",
+                    isButtonEnabled: !gitStatus.isBusy && sync.behind > 0,
+                    action: { gitStatus.pull() }
+                )
+            }
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct IDEUnsyncedRow: View {
+    let name: String
+    let tint: Color
+    /// Nil for a branch without an upstream: there is nothing to count against.
+    let count: Int?
+    let countHint: String
+    let commits: [GitCommit]
+    @Binding var isExpanded: Bool
+    let buttonTitle: String
+    let buttonHelp: String
+    let isButtonEnabled: Bool
+    let action: () -> Void
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private var canExpand: Bool { !commits.isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                Button {
+                    if canExpand { withAnimation(.easeOut(duration: 0.12)) { isExpanded.toggle() } }
+                } label: {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
+                        Image(systemName: isExpanded && canExpand ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .opacity(canExpand ? 1 : 0.35)
+                            .frame(width: 10)
+                        Text(name)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(tint)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .strokeBorder(tint.opacity(0.85), lineWidth: 1)
+                            }
+                        Text(count.map(String.init) ?? "no upstream")
+                            .font(IDEAppearance.Typography.tabLabel)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .lineLimit(1)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(count.map { "\($0) \(countHint)" } ?? "This branch has no upstream yet")
+                .accessibilityLabel(count.map { "\(name), \($0) \(countHint)" } ?? "\(name), no upstream")
+
+                Spacer(minLength: 0)
+
+                Button(buttonTitle, action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!isButtonEnabled)
+                    .help(buttonHelp)
+            }
+
+            if isExpanded && canExpand {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(commits) { commit in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(commit.subject)
+                                    .font(IDEAppearance.Typography.tabLabel)
+                                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                                    .lineLimit(1)
+                                Text("\(commit.shortHash)  \(commit.author) · \(Self.relativeFormatter.localizedString(for: commit.date, relativeTo: Date()))")
+                                    .font(IDEAppearance.Typography.caption)
+                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    .lineLimit(1)
+                            }
+                            .padding(.vertical, 3)
+                            .padding(.leading, 14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 
@@ -710,41 +971,14 @@ struct IDESourceControlControls: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button("Stage All") {
-                workspace.gitStatus.stageAll()
-            }
-            .buttonStyle(.borderless)
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .disabled(workspace.gitStatus.isBusy)
-
-            Button("Revert All…") {
-                let tracked = workspace.gitStatus.changes.filter { $0.unstaged != nil }.map(\.path)
-                workspace.revertChanges(tracked)
-            }
-            .buttonStyle(.borderless)
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .disabled(workspace.gitStatus.isBusy || workspace.gitStatus.changes.allSatisfy { $0.unstaged == nil })
-
-            Button("Unstage All") {
-                workspace.gitStatus.unstageAll()
-            }
-            .buttonStyle(.borderless)
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .disabled(workspace.gitStatus.isBusy)
-
-            Button(action: { workspace.gitStatus.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Refresh")
-            .accessibilityLabel("Refresh Source Control")
-            .disabled(workspace.gitStatus.isBusy)
+        Button(action: { workspace.gitStatus.refresh(); workspace.gitStatus.loadHistory() }) {
+            Image(systemName: "arrow.clockwise")
         }
+        .buttonStyle(.borderless)
+        .foregroundStyle(IDEAppearance.ColorToken.muted)
+        .help("Refresh")
+        .accessibilityLabel("Refresh History")
+        .disabled(workspace.gitStatus.isBusy)
     }
 }
 
