@@ -930,6 +930,7 @@ extension LayoutManager {
             let ribbonFrame = CGRect(x: totalGutterWidth - ribbonWidth, y: 0, width: ribbonWidth, height: contentSize.height)
             foldRibbonView.frame = ribbonFrame
             foldRibbonView.textContainerInsetTop = textContainerInset.top
+            foldRibbonView.rowHeight = theme.font.lineHeight * lineHeightMultiplier
             interactive = interactive.map { $0.union(ribbonFrame) } ?? ribbonFrame
         }
         if gutterWidthService.showGutterDecorations {
@@ -1502,9 +1503,7 @@ extension LayoutManager {
     }
 
     private func applyFoldRibbonTheme() {
-        foldRibbonView.markerColor = theme.lineNumberColor
-        foldRibbonView.collapsedMarkerColor = theme.selectedLinesGutterBackgroundColor.withAlphaComponent(1)
-        foldRibbonView.chevronColor = theme.textColor
+        foldRibbonView.chevronColor = theme.lineNumberColor
     }
 
     /// The line-number gutter uses the editor fill, not ``Theme/gutterBackgroundColor``, so it

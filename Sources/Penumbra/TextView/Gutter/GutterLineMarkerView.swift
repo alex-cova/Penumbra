@@ -10,8 +10,8 @@ import Foundation
 /// binary search into the ``GutterLineMarkerStore``, without line handles.
 final class GutterLineMarkerView: EditorView {
     nonisolated static let maximumSlots = 2
-    static let slotWidth: CGFloat = 14
-    static let iconSize: CGFloat = 12
+    static let slotWidth: CGFloat = 18
+    static let iconSize: CGFloat = 15
 
     weak var lineManager: LineManager?
     var textContainerInsetTop: CGFloat = 0

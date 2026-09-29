@@ -1,38 +1,59 @@
 @preconcurrency import AppKit
 import Foundation
 
-/// Shows a hover preview of the lines hidden inside a collapsed fold region.
+/// One line of a fold preview: its 1-based line number and the highlighted text.
+struct FoldPreviewLine {
+    let number: Int
+    let text: NSAttributedString
+}
+
+/// What the fold preview shows: the header line, the lines a collapsed fold hides and the closing
+/// bracket line, highlighted like the editor.
+struct FoldPreviewContent {
+    var lines: [FoldPreviewLine]
+    var isTruncated: Bool
+    var rowHeight: CGFloat
+    var textBackgroundColor: NSColor
+    var textColor: NSColor
+    var lineNumberColor: NSColor
+    var lineNumberFont: NSFont
+    var borderColor: NSColor
+    /// The header line's full-width rect in the text input's coordinates. The panel opens just below it.
+    var anchorRect: CGRect
+}
+
+/// Shows a hover preview of the code a collapsed fold region hides, like a tooltip under the
+/// `{...}` chip: the header line and the folded lines with their line numbers, in the editor's
+/// colours. The panel ignores the mouse, so moving onto it reaches the text view and dismisses it.
 @MainActor
 final class FoldPreviewController {
     weak var textInputView: TextInputView?
-    weak var foldingModel: FoldingModel?
-    weak var lineManager: LineManager?
-    weak var stringView: StringView?
 
     private var hoverTask: Task<Void, Never>?
     private var previewPanel: NSPanel?
-    private var previewTextView: NSTextView?
     private var hoveredRegionID: UUID?
 
     private let maxPreviewLines = 20
     private let hoverDelayNanoseconds: UInt64 = 300_000_000
 
     func mouseMoved(at pointInTextInput: CGPoint, placeholderRect: CGRect?, region: FoldRegion?) {
+        guard let region, let placeholderRect, placeholderRect.contains(pointInTextInput), region.isCollapsed else {
+            dismiss()
+            return
+        }
+        // Still over the chip that is pending or showing.
+        guard hoveredRegionID != region.id else {
+            return
+        }
         hoverTask?.cancel()
-        if let region, let placeholderRect, placeholderRect.contains(pointInTextInput), region.isCollapsed {
-            hoveredRegionID = region.id
-            hoverTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: self?.hoverDelayNanoseconds ?? 300_000_000)
-                guard !Task.isCancelled else {
-                    return
-                }
-                await MainActor.run {
-                    self?.showPreview(for: region)
-                }
+        hidePreview()
+        hoveredRegionID = region.id
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: self?.hoverDelayNanoseconds ?? 300_000_000)
+            guard !Task.isCancelled else {
+                return
             }
-        } else {
-            hoveredRegionID = nil
-            hidePreview()
+            self?.showPreview(for: region)
         }
     }
 
@@ -43,80 +64,125 @@ final class FoldPreviewController {
     }
 
     private func showPreview(for region: FoldRegion) {
-        guard let hiddenLineRange = region.hiddenLineRange,
-              let lineManager,
-              let stringView,
-              let textInputView else {
+        guard let textInputView, let window = textInputView.window,
+              let content = textInputView.foldPreviewContent(for: region, maximumLines: maxPreviewLines) else {
             return
         }
-        let startRow = hiddenLineRange.lowerBound
-        let endRow = min(hiddenLineRange.upperBound, startRow + maxPreviewLines - 1)
-        guard startRow < lineManager.lineCount else {
-            return
-        }
-        let startLocation = lineManager.location(ofRow: startRow)
-        let endLocation = lineManager.contentRange(atRow: endRow).upperBound
-        guard endLocation > startLocation else {
-            return
-        }
-        var previewText = stringView.substring(in: NSRange(location: startLocation, length: endLocation - startLocation)) ?? ""
-        if hiddenLineRange.upperBound > endRow {
-            previewText += "\n…"
+        let contentView = FoldPreviewContentView(content: content)
+        let size = contentView.fittingSize(maximumWidth: max(240, content.anchorRect.width - 16))
+        contentView.frame = CGRect(origin: .zero, size: size)
+        contentView.applyAppearance(from: textInputView)
+
+        let anchor = window.convertToScreen(textInputView.convert(content.anchorRect, to: nil))
+        var origin = CGPoint(x: anchor.minX + 8, y: anchor.minY - size.height)
+        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            if origin.y < visibleFrame.minY {
+                origin.y = anchor.maxY
+            }
+            origin.x = min(max(origin.x, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - size.width))
         }
 
         let panel = previewPanel ?? makePanel()
         previewPanel = panel
-        previewTextView?.string = previewText
-        previewTextView?.sizeToFit()
-
-        let padding: CGFloat = 10
-        let width = min(640, max(240, (previewTextView?.bounds.width ?? 200) + padding * 2))
-        let height = min(360, (previewTextView?.bounds.height ?? 120) + padding * 2)
-        let origin = textInputView.convert(
-            NSPoint(x: 0, y: 0),
-            to: nil
-        )
-        panel.setFrame(
-            NSRect(x: origin.x + 24, y: origin.y - height - 8, width: width, height: height),
-            display: true
-        )
-        if !panel.isVisible {
-            panel.orderFront(nil)
+        panel.contentView = contentView
+        panel.setFrame(CGRect(origin: origin, size: size), display: true)
+        if panel.parent == nil {
+            window.addChildWindow(panel, ordered: .above)
         }
+        panel.orderFront(nil)
     }
 
     private func hidePreview() {
-        previewPanel?.orderOut(nil)
+        guard let panel = previewPanel else {
+            return
+        }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
     }
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 180),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
         )
         panel.isFloatingPanel = true
-        panel.level = .popUpMenu
-        panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96)
-        panel.hasShadow = true
+        panel.backgroundColor = .clear
         panel.isOpaque = false
-
-        let scrollView = NSScrollView(frame: panel.contentView!.bounds)
-        scrollView.autoresizingMask = [.width, .height]
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-
-        let textView = NSTextView(frame: scrollView.bounds)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        textView.textContainerInset = NSSize(width: 8, height: 8)
-        scrollView.documentView = textView
-        panel.contentView?.addSubview(scrollView)
-        previewTextView = textView
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = true
         return panel
+    }
+}
+
+/// Draws the preview rows: a right-aligned line-number column and the highlighted text.
+private final class FoldPreviewContentView: NSView {
+    private let content: FoldPreviewContent
+    private let padding = CGSize(width: 10, height: 6)
+    private let numberGap: CGFloat = 12
+    private let numberColumnWidth: CGFloat
+
+    override var isFlipped: Bool { true }
+
+    init(content: FoldPreviewContent) {
+        self.content = content
+        let digits = String(content.lines.map(\.number).max() ?? 0).count
+        let sample = String(repeating: "8", count: max(digits, 2)) as NSString
+        numberColumnWidth = ceil(sample.size(withAttributes: [.font: content.lineNumberFont]).width)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func fittingSize(maximumWidth: CGFloat) -> CGSize {
+        let textWidth = content.lines.map { ceil($0.text.size().width) }.max() ?? 0
+        let width = padding.width * 2 + numberColumnWidth + numberGap + textWidth
+        let rowCount = content.lines.count + (content.isTruncated ? 1 : 0)
+        return CGSize(
+            width: min(maximumWidth, max(240, width)),
+            height: padding.height * 2 + CGFloat(rowCount) * content.rowHeight
+        )
+    }
+
+    /// Resolves the dynamic colours against the editor's appearance; a layer keeps a baked `CGColor`.
+    func applyAppearance(from view: NSView) {
+        appearance = view.effectiveAppearance
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = content.textBackgroundColor.cgColor
+            layer?.borderColor = content.borderColor.cgColor
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let textX = padding.width + numberColumnWidth + numberGap
+        for (index, line) in content.lines.enumerated() {
+            let rowY = padding.height + CGFloat(index) * content.rowHeight
+            let number = NSAttributedString(string: String(line.number), attributes: [
+                .font: content.lineNumberFont,
+                .foregroundColor: content.lineNumberColor
+            ])
+            let numberSize = number.size()
+            number.draw(at: CGPoint(x: padding.width + numberColumnWidth - numberSize.width,
+                                    y: rowY + (content.rowHeight - numberSize.height) / 2))
+            let textHeight = line.text.size().height
+            line.text.draw(at: CGPoint(x: textX, y: rowY + (content.rowHeight - textHeight) / 2))
+        }
+        if content.isTruncated {
+            let ellipsis = NSAttributedString(string: "…", attributes: [
+                .font: content.lineNumberFont,
+                .foregroundColor: content.lineNumberColor
+            ])
+            let rowY = padding.height + CGFloat(content.lines.count) * content.rowHeight
+            ellipsis.draw(at: CGPoint(x: textX, y: rowY + (content.rowHeight - ellipsis.size().height) / 2))
+        }
     }
 }

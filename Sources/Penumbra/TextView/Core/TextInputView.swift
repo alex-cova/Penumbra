@@ -938,6 +938,13 @@ final class TextInputView: EditorView {
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { foldingModel.regions.map(\.lineRange) }
     var methodSeparatorRowsForTesting: [Int] { methodSeparatorController.separatorRows }
+    /// Test hook — the hover-preview content of the fold whose header is at `row`.
+    func foldPreviewContentForTesting(headerRow row: Int, maximumLines: Int = 20) -> FoldPreviewContent? {
+        guard let region = foldingModel.regions.first(where: { $0.lineRange.lowerBound == row }) else {
+            return nil
+        }
+        return foldPreviewContent(for: region, maximumLines: maximumLines)
+    }
     /// Test hook — rows of the lines laid out for the current viewport, ascending.
     var visibleRowsForTesting: [Int] {
         layoutManager.visibleLineIDsForTesting.compactMap { lineControllerStorage[$0]?.line.index }.sorted()
@@ -1137,9 +1144,6 @@ final class TextInputView: EditorView {
         caretRectService.foldingModel = foldingModel
         customTokenizer.foldingModel = foldingModel
         foldPreviewController.textInputView = self
-        foldPreviewController.foldingModel = foldingModel
-        foldPreviewController.lineManager = lineManager
-        foldPreviewController.stringView = stringView
         selectionOverlayController = SelectionOverlayController(textInputView: self,
                                                                 caretRectService: caretRectService,
                                                                 selectionRectService: selectionRectService)
@@ -2114,6 +2118,77 @@ extension TextInputView {
 
     func dismissFoldPreview() {
         foldPreviewController.dismiss()
+    }
+
+    /// The header line, the lines `region` hides and its closing bracket line, highlighted like the
+    /// editor, for the hover preview (at most `maximumLines` rows; a hover-only path).
+    func foldPreviewContent(for region: FoldRegion, maximumLines: Int) -> FoldPreviewContent? {
+        let headerRow = region.lineRange.lowerBound
+        guard headerRow < lineManager.lineCount else {
+            return nil
+        }
+        var rows = Array(headerRow ... min(region.lineRange.upperBound, lineManager.lineCount - 1))
+        // The fold ends before its closing bracket line, which stays visible under the chip.
+        let closingRow = region.lineRange.upperBound + 1
+        if closingRow < lineManager.lineCount, isClosingBracketLine(atRow: closingRow) {
+            rows.append(closingRow)
+        }
+        let isTruncated = rows.count > maximumLines
+        if isTruncated {
+            rows = Array(rows.prefix(maximumLines))
+        }
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        (highlighter as? TreeSitterSyntaxHighlighter)?.semanticHighlights = semanticHighlights
+        highlighter.theme = theme
+        let defaultAttributes = DefaultStringAttributes(textColor: theme.textColor, font: theme.font, kern: kern,
+                                                        tabWidth: indentController.tabWidth)
+        let lines: [FoldPreviewLine] = rows.compactMap { row in
+            let line = lineManager.line(atRow: row)
+            let range = NSRange(location: line.location, length: line.data.totalLength)
+            guard let string = stringView.substring(in: range) else {
+                return nil
+            }
+            let attributed = NSMutableAttributedString(string: string)
+            defaultAttributes.apply(to: attributed)
+            if highlighter.canHighlight {
+                highlighter.syntaxHighlight(LineSyntaxHighlighterInput(attributedString: attributed,
+                                                                       byteRange: line.data.totalByteRange,
+                                                                       hasOnlyDefaultAttributes: true))
+            }
+            let delimiterLength = string.reversed().prefix { $0.isNewline }.map { String($0).utf16.count }.reduce(0, +)
+            attributed.deleteCharacters(in: NSRange(location: attributed.length - delimiterLength, length: delimiterLength))
+            return FoldPreviewLine(number: row + 1, text: attributed)
+        }
+        guard !lines.isEmpty else {
+            return nil
+        }
+        let visible = visibleRect
+        let header = lineManager.lineInfo(atRow: headerRow)
+        return FoldPreviewContent(
+            lines: lines,
+            isTruncated: isTruncated,
+            rowHeight: theme.font.lineHeight * lineHeightMultiplier,
+            textBackgroundColor: backgroundColor ?? .textBackgroundColor,
+            textColor: theme.textColor,
+            lineNumberColor: theme.lineNumberColor,
+            lineNumberFont: theme.lineNumberFont,
+            borderColor: theme.gutterHairlineColor,
+            anchorRect: CGRect(x: visible.minX,
+                               y: textContainerInset.top + lineManager.yPosition(ofRow: headerRow),
+                               width: visible.width,
+                               height: header.lineHeight)
+        )
+    }
+
+    private func isClosingBracketLine(atRow row: Int) -> Bool {
+        let range = lineManager.contentRange(atRow: row)
+        guard range.length > 0, let text = stringView.substring(in: range) else {
+            return false
+        }
+        guard let first = text.first(where: { !$0.isWhitespace }) else {
+            return false
+        }
+        return "})]".contains(first)
     }
 
     func performCollapseRegion() {

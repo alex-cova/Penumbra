@@ -13,7 +13,7 @@ final class GutterDecorationView: EditorView {
         didSet { needsDisplay = true }
     }
 
-    private let iconSize: CGFloat = 12
+    private let iconSize: CGFloat = 15
 
     override init(frame: CGRect) {
         super.init(frame: frame)

@@ -1184,6 +1184,10 @@ public struct DocumentTextExport: Sendable {
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { textInputView.foldLineRangesForTesting }
     var methodSeparatorRowsForTesting: [Int] { textInputView.methodSeparatorRowsForTesting }
+
+    func foldPreviewContentForTesting(headerRow row: Int, maximumLines: Int = 20) -> FoldPreviewContent? {
+        textInputView.foldPreviewContentForTesting(headerRow: row, maximumLines: maximumLines)
+    }
     /// Test hook — rows of the lines laid out for the current viewport, ascending.
     var visibleRowsForTesting: [Int] { textInputView.visibleRowsForTesting }
     /// Test hook — the attributed string and height a line is currently displayed with.
@@ -1417,7 +1421,7 @@ public struct DocumentTextExport: Sendable {
         }
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -1434,9 +1438,15 @@ public struct DocumentTextExport: Sendable {
         distractionFreeController.mouseDidMove()
         let point = convert(event.locationInWindow, from: nil)
         scrollerOverlay.mouseMoved(to: point)
-        textInputView.updateFoldPreview(at: point)
+        // The fold hit test works in the text input's (document) coordinates, not the scroll view's.
+        textInputView.updateFoldPreview(at: textInputView.convert(event.locationInWindow, from: nil))
         onHoverEvent?(event)
         super.mouseMoved(with: event)
+    }
+
+    override open func mouseExited(with event: NSEvent) {
+        textInputView.dismissFoldPreview()
+        super.mouseExited(with: event)
     }
 
     /// Clicks land on the text input, which sits above this scroll view. A gesture recognizer

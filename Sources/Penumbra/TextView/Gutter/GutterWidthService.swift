@@ -39,7 +39,7 @@ final class GutterWidthService {
             }
         }
     }
-    var gutterDecorationColumnWidth: CGFloat = 16 {
+    var gutterDecorationColumnWidth: CGFloat = 20 {
         didSet {
             if gutterDecorationColumnWidth != oldValue {
                 sendGutterWidthUpdatedIfNeeded()
@@ -62,7 +62,7 @@ final class GutterWidthService {
             }
         }
     }
-    var foldingRibbonWidth: CGFloat = 9 {
+    var foldingRibbonWidth: CGFloat = 14 {
         didSet {
             if foldingRibbonWidth != oldValue {
                 sendGutterWidthUpdatedIfNeeded()
