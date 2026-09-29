@@ -16,6 +16,10 @@ struct UmbraApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             let preset = workspace.preferences.keymapPreset
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…", systemImage: "gearshape", action: workspace.showSettings)
+                    .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New File", systemImage: "doc.badge.plus", action: workspace.newFile)
                     .menuShortcut(.newFile, in: preset)
@@ -322,9 +326,5 @@ struct UmbraApp: App {
             }
         }
 
-        Settings {
-            IDEPreferencesView(preferences: workspace.preferences)
-                .environment(workspace)
-        }
     }
 }

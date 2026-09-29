@@ -369,6 +369,15 @@ struct IDETerminalPanel: View {
                     .help("Restart shell")
                     .accessibilityLabel("Restart shell")
                 }
+                Button(action: workspace.toggleBottomPanelExpanded) {
+                    Image(systemName: workspace.isBottomPanelExpanded
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.forward.square")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .help(workspace.isBottomPanelExpanded ? "Restore Panel Size" : "Expand Over the Editor")
+                .accessibilityLabel(workspace.isBottomPanelExpanded ? "Restore Panel Size" : "Expand Over the Editor")
                 Button(action: workspace.hideTerminal) {
                     Image(systemName: "xmark")
                 }

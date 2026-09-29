@@ -7,72 +7,73 @@ struct IDEPreferencesJavaPane: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        Form {
-            IDEPreferencesJDKSection()
+        IDEPreferencesJDKSection()
 
-            Section {
-                Toggle("Sync Gradle Projects", isOn: $preferences.javaGradleAutoSync)
+        IDESettingsSection(
+            "Gradle",
+            footer: "Resolves modules and dependencies when a Gradle project opens. Build scripts still run only after you trust the project. A first sync may download a Gradle distribution."
+        ) {
+            IDESettingsToggle("Sync Gradle Projects", isOn: $preferences.javaGradleAutoSync)
 
-                IDEPreferencesIntStepper(
-                    title: "Gradle Sync Timeout",
-                    value: $preferences.javaGradleSyncTimeoutSeconds,
-                    range: 30...3600,
-                    step: 30,
-                    valueWidth: 48,
-                    valueSuffix: "s"
-                )
-            } header: {
-                Text("Gradle")
-            } footer: {
-                Text("Resolves modules and dependencies when a Gradle project opens. Build scripts still run only after you trust the project. A first sync may download a Gradle distribution.")
+            IDEPreferencesIntStepper(
+                title: "Sync Timeout",
+                value: $preferences.javaGradleSyncTimeoutSeconds,
+                range: 30...3600,
+                step: 30,
+                valueWidth: 48,
+                valueSuffix: "s"
+            )
+        }
+
+        IDESettingsSection("Analysis") {
+            IDESettingsToggle(
+                "Compiler Diagnostics",
+                isOn: $preferences.javaCompilerDiagnostics,
+                detail: "Checks open Java files with the JDK javac and lists errors under Problems."
+            )
+            .onChange(of: preferences.javaCompilerDiagnostics) {
+                workspace.javaCompilerDiagnosticsPreferenceChanged()
             }
 
-            Section {
-                Toggle("Compiler Diagnostics", isOn: $preferences.javaCompilerDiagnostics)
-                    .onChange(of: preferences.javaCompilerDiagnostics) {
-                        workspace.javaCompilerDiagnosticsPreferenceChanged()
-                    }
-
-                Toggle("Semantic Highlighting", isOn: $preferences.semanticHighlighting)
-                    .onChange(of: preferences.semanticHighlighting) {
-                        workspace.semanticHighlightingPreferenceChanged()
-                    }
-
-                Toggle("Parameter Name Hints", isOn: $preferences.javaInlayHints)
-                    .onChange(of: preferences.javaInlayHints) {
-                        workspace.javaInlayHintsPreferenceChanged()
-                    }
-            } header: {
-                Text("Analysis")
-            } footer: {
-                Text("Compiler diagnostics check open Java files with the JDK javac and list errors under Problems. Semantic highlighting colours types, methods, fields, parameters, and locals by role.")
+            IDESettingsToggle(
+                "Semantic Highlighting",
+                isOn: $preferences.semanticHighlighting,
+                detail: "Colours types, methods, fields, parameters, and locals by role."
+            )
+            .onChange(of: preferences.semanticHighlighting) {
+                workspace.semanticHighlightingPreferenceChanged()
             }
 
-            Section {
-                ForEach(JavaLineMarkerKind.allCases.sorted { $0.preferenceTitle < $1.preferenceTitle }, id: \.self) { kind in
-                    Toggle(isOn: gutterIconBinding(kind)) {
-                        Label {
-                            Text(kind.preferenceTitle)
-                        } icon: {
-                            Image(nsImage: GutterLineMarkerGlyphs.image(for: kind.gutterIcon, pointSize: 14))
-                        }
+            IDESettingsToggle("Parameter Name Hints", isOn: $preferences.javaInlayHints)
+                .onChange(of: preferences.javaInlayHints) {
+                    workspace.javaInlayHintsPreferenceChanged()
+                }
+        }
+
+        IDESettingsSection(
+            "Gutter Icons",
+            footer: "Icons beside the line numbers for methods that implement or override another, types and methods that project subclasses implement or override, and recursive calls. Click an arrow to jump to the related declarations."
+        ) {
+            ForEach(JavaLineMarkerKind.allCases.sorted { $0.preferenceTitle < $1.preferenceTitle }, id: \.self) { kind in
+                Toggle(isOn: gutterIconBinding(kind)) {
+                    Label {
+                        Text(kind.preferenceTitle)
+                            .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    } icon: {
+                        Image(nsImage: GutterLineMarkerGlyphs.image(for: kind.gutterIcon, pointSize: 14))
                     }
                 }
-            } header: {
-                Text("Gutter Icons")
-            } footer: {
-                Text("Icons beside the line numbers for methods that implement or override another, types and methods that project subclasses implement or override, and recursive calls. Click an arrow to jump to the related declarations.")
-            }
-
-            Section {
-                Toggle("Optimize Imports on Save", isOn: $preferences.javaOptimizeImportsOnSave)
-            } header: {
-                Text("Editing")
-            } footer: {
-                Text("Removes unused imports from a Java file each time you save it. Java > Optimize Imports does the same on demand.")
+                .toggleStyle(.checkbox)
             }
         }
-        .formStyle(.grouped)
+
+        IDESettingsSection("Editing") {
+            IDESettingsToggle(
+                "Optimize Imports on Save",
+                isOn: $preferences.javaOptimizeImportsOnSave,
+                detail: "Removes unused imports each time you save a Java file. Java > Optimize Imports does the same on demand."
+            )
+        }
     }
 
     private func gutterIconBinding(_ kind: JavaLineMarkerKind) -> Binding<Bool> {

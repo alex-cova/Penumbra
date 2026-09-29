@@ -137,6 +137,23 @@ public final class IDEWorkspace {
     /// not observable, so this stored flag is what refreshes the welcome-vs-editor switch.
     private(set) var showsWelcome = true
     var showsFirstRunGuide = false
+    /// Settings open over the editor area, like a tab, instead of in their own window. The editor
+    /// underneath stays mounted so its carets and scroll positions survive.
+    private(set) var isSettingsVisible = false
+
+    func showSettings() {
+        guard !isSettingsVisible else { return }
+        isBottomPanelExpanded = false
+        isSettingsVisible = true
+        // Otherwise keystrokes keep going to the editor hidden under the settings.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+
+    func hideSettings() {
+        guard isSettingsVisible else { return }
+        isSettingsVisible = false
+        focusActiveEditor()
+    }
 
     var windowTitle = "Umbra"
     var headerContext = IDEHeaderContext()
@@ -211,6 +228,9 @@ public final class IDEWorkspace {
     var findInFilesHits: [ProjectSearchResult] = []
     var findInFilesStatus = ""
     var isTerminalVisible = false
+    /// The bottom panel covers the whole editor area instead of sitting under it. The editor stays
+    /// mounted underneath, so its layout and scroll positions are untouched. Not persisted.
+    private(set) var isBottomPanelExpanded = false
     var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
     var terminalFocusRequestID: UInt64 = 0
     var terminalTabs: [IDETerminalTab] = []
@@ -487,6 +507,7 @@ public final class IDEWorkspace {
             language: nil,
             languageIdentifier: nil
         )
+        isSettingsVisible = false
         workbench.openDocument(document)
         showsWelcome = false
         // Layout is unchanged — only the active pane's selected document is. Reloading every
@@ -1544,8 +1565,19 @@ public final class IDEWorkspace {
         terminalCommandTicket += 1
     }
 
+    func toggleBottomPanelExpanded() {
+        guard isTerminalVisible else { return }
+        isBottomPanelExpanded.toggle()
+        if isBottomPanelExpanded {
+            // Otherwise keystrokes keep going to the editor hidden under the panel.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            requestTerminalFocus()
+        }
+    }
+
     public func toggleTerminal() {
         isTerminalVisible.toggle()
+        if !isTerminalVisible { isBottomPanelExpanded = false }
         if isTerminalVisible {
             // Leave the Gradle console showing if that's what's already selected; only a shell
             // toggle (no tabs at all yet) needs a fresh tab created for it.
@@ -2626,6 +2658,7 @@ public final class IDEWorkspace {
         isStructureSidebarVisible = false
         isGradleSidebarVisible = false
         isTerminalVisible = false
+        isBottomPanelExpanded = false
         focusActiveEditor()
         saveSession()
     }
@@ -2877,6 +2910,7 @@ public final class IDEWorkspace {
     }
 
     func selectTab(_ id: UUID, in paneID: UUID? = nil) {
+        isSettingsVisible = false
         let pane: EditorPane
         if let paneID, let found = workbench.layout.findPane(id: paneID) {
             pane = found
@@ -3245,6 +3279,7 @@ public final class IDEWorkspace {
                 selected.selectedRange = range
             }
             recordRecentFile(url)
+            isSettingsVisible = false
             showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)

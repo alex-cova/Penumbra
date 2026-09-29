@@ -164,6 +164,7 @@ private struct IDETitlebarGlobalActions: View {
     let showCommandPalette: () -> Void
     let toggleNotifications: () -> Void
 
+    @Environment(IDEWorkspace.self) private var workspace
     @State private var isHoveringSettings = false
 
     var body: some View {
@@ -190,8 +191,8 @@ private struct IDETitlebarGlobalActions: View {
                 action: toggleNotifications
             )
 
-            SettingsLink {
-                IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)
+            Button(action: workspace.showSettings) {
+                IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings || workspace.isSettingsVisible)
             }
             .buttonStyle(.plain)
             .onHover { isHoveringSettings = $0 }

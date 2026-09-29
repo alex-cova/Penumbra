@@ -71,19 +71,41 @@ public struct IDERootView: View {
                                 IDEWelcomeView()
                             }
                         }
+                        .allowsHitTesting(!workspace.isSettingsVisible)
+                        .accessibilityHidden(workspace.isSettingsVisible)
+                        .overlay {
+                            if workspace.isSettingsVisible {
+                                IDEPreferencesView(preferences: workspace.preferences)
+                                    .transition(.opacity)
+                            }
+                        }
                         .frame(maxHeight: .infinity)
                         .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
                     }
                     .idePanel()
+                    .allowsHitTesting(!workspace.isBottomPanelExpanded)
+                    .accessibilityHidden(workspace.isBottomPanelExpanded)
 
                     if workspace.isTerminalVisible {
                         IDETerminalResizeHandle(height: Binding(
                             get: { workspace.terminalHeight },
                             set: { workspace.terminalHeight = $0 }
                         ))
+                        .allowsHitTesting(!workspace.isBottomPanelExpanded)
 
+                        // The panel itself is drawn by the overlay below, so it can grow over the
+                        // editor without resizing it; this only keeps its space.
+                        Color.clear.frame(height: workspace.terminalHeight)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if workspace.isTerminalVisible {
+                        let expanded = workspace.isBottomPanelExpanded
                         IDETerminalPanel()
-                            .frame(height: workspace.terminalHeight)
+                            .frame(
+                                minHeight: expanded ? 0 : workspace.terminalHeight,
+                                maxHeight: expanded ? .infinity : workspace.terminalHeight
+                            )
                             .idePanel()
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)

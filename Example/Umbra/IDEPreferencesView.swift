@@ -4,42 +4,115 @@ import SwiftUI
 public struct IDEPreferencesView: View {
     @Bindable var preferences: IDEPreferences
     @Environment(IDEWorkspace.self) private var workspace
-    @State private var selectedDomain: IDEPreferencesDomain? = .editor
+    @State private var selectedDomain: IDEPreferencesDomain = .editor
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
 
     public init(preferences: IDEPreferences) {
         self.preferences = preferences
     }
 
+    private var visibleDomains: [IDEPreferencesDomain] {
+        IDEPreferencesDomain.allCases.filter { $0.matches(query) }
+    }
+
+    /// The selected domain, or the first match when a search has filtered it out of the sidebar.
+    private var shownDomain: IDEPreferencesDomain {
+        visibleDomains.contains(selectedDomain) ? selectedDomain : (visibleDomains.first ?? selectedDomain)
+    }
+
     public var body: some View {
-        NavigationSplitView {
-            List(IDEPreferencesDomain.allCases, selection: $selectedDomain) { domain in
-                Label(domain.title, systemImage: domain.symbol)
-                    .tag(domain)
+        VStack(spacing: 0) {
+            IDESettingsTabHeader(onClose: workspace.hideSettings)
+            searchField
+            HStack(spacing: 0) {
+                sidebar
+                    .frame(width: 190)
+                Rectangle()
+                    .fill(IDEAppearance.ColorToken.border)
+                    .frame(width: 1)
+                detail
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-        } detail: {
-            detailContent
         }
-        .frame(
-            minWidth: IDEAppearance.Spacing.settingsWidth,
-            idealWidth: IDEAppearance.Spacing.settingsIdealWidth,
-            minHeight: IDEAppearance.Spacing.settingsMinHeight
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.workbench)
+        .onExitCommand(perform: workspace.hideSettings)
         .preferredColorScheme(.dark)
         .tint(IDEAppearance.ColorToken.accent)
         .modifier(IDEPreferencesLiveUpdateModifier(preferences: preferences, workspace: workspace))
     }
 
+    private var searchField: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .accessibilityHidden(true)
+            TextField("Search settings", text: $query)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onSubmit {
+                    if let first = visibleDomains.first { selectedDomain = first }
+                }
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(IDEAppearance.Typography.body)
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .frame(height: 32)
+        .background(
+            IDEAppearance.ColorToken.panel,
+            in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+                .strokeBorder(
+                    searchFocused ? IDEAppearance.ColorToken.accent.opacity(0.7) : IDEAppearance.ColorToken.border,
+                    lineWidth: 1
+                )
+                .allowsHitTesting(false)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.lg)
+        .padding(.vertical, IDEAppearance.Spacing.md)
+    }
+
+    private var sidebar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(visibleDomains) { domain in
+                    IDEPreferencesSidebarRow(domain: domain, isSelected: domain == shownDomain) {
+                        selectedDomain = domain
+                    }
+                }
+                if visibleDomains.isEmpty {
+                    Text("No matching settings")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .padding(IDEAppearance.Spacing.sm)
+                }
+            }
+            .padding(IDEAppearance.Spacing.sm)
+        }
+        .background(IDEAppearance.ColorToken.sidebar)
+    }
+
     @ViewBuilder
-    private var detailContent: some View {
-        let domain = selectedDomain ?? .editor
+    private var detail: some View {
+        let domain = shownDomain
 
         VStack(spacing: 0) {
-            domainPane(for: domain)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(IDEAppearance.Spacing.lg)
+            IDESettingsPage(title: domain.title) {
+                domainPane(for: domain)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if domain.showsTypePreview {
                 IDEPreferencesTypePreview(
@@ -51,7 +124,6 @@ public struct IDEPreferencesView: View {
                 )
             }
         }
-        .navigationTitle(domain.title)
     }
 
     @ViewBuilder
@@ -71,8 +143,86 @@ public struct IDEPreferencesView: View {
     }
 }
 
+/// The strip above the settings, in the place of the editor's tab bar: one tab that closes them.
+private struct IDESettingsTabHeader: View {
+    let onClose: () -> Void
+    @State private var isHoveringClose = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                Image(systemName: "gearshape")
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .accessibilityHidden(true)
+                Text("Settings")
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .semibold))
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .frame(width: 16, height: 16)
+                        .background(
+                            isHoveringClose ? IDEAppearance.ColorToken.controlHover : .clear,
+                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { isHoveringClose = $0 }
+                .help("Close Settings")
+                .accessibilityLabel("Close Settings")
+            }
+            .font(IDEAppearance.Typography.tabLabel)
+            .padding(.horizontal, IDEAppearance.Spacing.md)
+            .frame(maxHeight: .infinity)
+            .background(IDEAppearance.ColorToken.tabActive)
+            Spacer(minLength: 0)
+        }
+        .frame(height: IDEAppearance.Spacing.tabHeight)
+        .background(IDEAppearance.ColorToken.tabBar)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.border)
+                .frame(height: 1)
+        }
+    }
+}
+
+private struct IDEPreferencesSidebarRow: View {
+    let domain: IDEPreferencesDomain
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                Image(systemName: domain.symbol)
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                    .accessibilityHidden(true)
+                Text(domain.title)
+                    .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                Spacer(minLength: 0)
+            }
+            .font(IDEAppearance.Typography.body)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .frame(height: 30)
+            .background(
+                isSelected ? IDEAppearance.ColorToken.tabActive : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear),
+                in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
 #Preview {
     IDEPreferencesView(preferences: IDEPreferences.shared)
         .environment(IDEWorkspace())
+        .frame(width: 880, height: 600)
         .preferredColorScheme(.dark)
 }

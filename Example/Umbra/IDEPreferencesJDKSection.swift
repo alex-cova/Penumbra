@@ -11,8 +11,11 @@ struct IDEPreferencesJDKSection: View {
     private var jdk: IDEJDKSelection { workspace.javaSupport.jdk }
 
     var body: some View {
-        Section {
-            Picker("Default JDK", selection: defaultBinding) {
+        IDESettingsSection(
+            "JDKs",
+            footer: "Found through java_home, /Library/Java/JavaVirtualMachines, SDKMAN, Gradle, Homebrew, asdf, jenv and mise. A project's own choice, made from the JDK item in the status bar, overrides the default. Automatic picks the closest installed JDK at or above the project's Java level."
+        ) {
+            IDESettingsPicker("Default JDK", selection: defaultBinding) {
                 Text("Automatic").tag(String?.none)
                 ForEach(jdk.detected, id: \.home) { installation in
                     Text(installation.displayName).tag(Optional(installation.home.resolvingSymlinksInPath().path))
@@ -21,11 +24,22 @@ struct IDEPreferencesJDKSection: View {
 
             if jdk.detected.isEmpty {
                 Text(jdk.isScanning ? "Looking for JDKs…" : "No JDK found. Add one with Add JDK…")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             } else {
-                ForEach(jdk.detected, id: \.home) { installation in
-                    row(for: installation)
+                VStack(spacing: 0) {
+                    ForEach(Array(jdk.detected.enumerated()), id: \.element.home) { index, installation in
+                        if index > 0 {
+                            Divider().overlay(IDEAppearance.ColorToken.border)
+                        }
+                        row(for: installation)
+                            .padding(.vertical, IDEAppearance.Spacing.sm)
+                    }
                 }
+                .padding(.horizontal, IDEAppearance.Spacing.md)
+                .background(
+                    IDEAppearance.ColorToken.workbench,
+                    in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+                )
             }
 
             HStack {
@@ -42,10 +56,6 @@ struct IDEPreferencesJDKSection: View {
                 }
                 Spacer()
             }
-        } header: {
-            Text("JDKs")
-        } footer: {
-            Text("Found through java_home, /Library/Java/JavaVirtualMachines, SDKMAN, Gradle, Homebrew, asdf, jenv and mise. A project's own choice, made from the JDK item in the status bar, overrides the default. Automatic picks the closest installed JDK at or above the project's Java level.")
         }
         .task { await jdk.refreshDetected() }
         .confirmationDialog(
@@ -68,6 +78,7 @@ struct IDEPreferencesJDKSection: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
                     Text(installation.displayName)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     ForEach(badges(for: installation, missing: missing), id: \.self) { badge in
                         Text(badge)
                             .font(.caption2)

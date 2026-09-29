@@ -10,11 +10,11 @@ struct IDEPreferencesIntStepper: View {
     var valueSuffix = ""
 
     var body: some View {
-        LabeledContent(title) {
+        IDESettingsRow(title) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 Text("\(value)\(valueSuffix)")
                     .font(IDEAppearance.Typography.monoCaption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .monospacedDigit()
                     .frame(width: valueWidth, alignment: .trailing)
                     .accessibilityHidden(true)
@@ -37,11 +37,11 @@ struct IDEPreferencesDoubleStepper: View {
     var valueWidth: Double = 28
 
     var body: some View {
-        LabeledContent(title) {
+        IDESettingsRow(title) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 Text(value, format: .number.precision(.fractionLength(fractionLength)))
                     .font(IDEAppearance.Typography.monoCaption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .monospacedDigit()
                     .frame(width: valueWidth, alignment: .trailing)
                     .accessibilityHidden(true)
@@ -171,5 +171,150 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
 
     private func applyLivePreferences() {
         workspace.applyPreferencesToAllHosts()
+    }
+}
+
+// MARK: - Settings layout
+
+/// One titled group of settings: a heading above a rounded card that holds the rows, with an
+/// optional explanation underneath.
+struct IDESettingsSection<Content: View>: View {
+    let title: String
+    var footer: String?
+    @ViewBuilder var content: Content
+
+    init(_ title: String, footer: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.footer = footer
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            Text(title)
+                .font(IDEAppearance.Typography.titlebarTitle)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .accessibilityAddTraits(.isHeader)
+
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(IDEAppearance.Spacing.lg)
+            .background(
+                IDEAppearance.ColorToken.panel,
+                in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
+                    .strokeBorder(IDEAppearance.ColorToken.border, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+
+            if let footer {
+                Text(footer)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
+            }
+        }
+    }
+}
+
+/// A label on the left and its control on the right of a fixed column, so every row of a card
+/// lines up.
+struct IDESettingsRow<Control: View>: View {
+    static var labelWidth: Double { 150 }
+
+    let title: String
+    @ViewBuilder var control: Control
+
+    init(_ title: String, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.md) {
+            Text(title)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .frame(width: Self.labelWidth, alignment: .leading)
+            control
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// A checkbox with an optional line of explanation under it.
+struct IDESettingsToggle: View {
+    let title: String
+    @Binding var isOn: Bool
+    var detail: String?
+
+    init(_ title: String, isOn: Binding<Bool>, detail: String? = nil) {
+        self.title = title
+        self._isOn = isOn
+        self.detail = detail
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle(title, isOn: $isOn)
+                .toggleStyle(.checkbox)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            if let detail {
+                Text(detail)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 20)
+            }
+        }
+    }
+}
+
+/// A pop-up picker in the settings control column.
+struct IDESettingsPicker<Selection: Hashable, Content: View>: View {
+    let title: String
+    @Binding var selection: Selection
+    @ViewBuilder var content: Content
+
+    init(_ title: String, selection: Binding<Selection>, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self._selection = selection
+        self.content = content()
+    }
+
+    var body: some View {
+        IDESettingsRow(title) {
+            Picker(title, selection: $selection) { content }
+                .labelsHidden()
+                .frame(width: 260, alignment: .leading)
+        }
+    }
+}
+
+/// The page every domain pane sits in: a large title, then its sections.
+struct IDESettingsPage<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {
+                Text(title)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .accessibilityAddTraits(.isHeader)
+                content
+            }
+            .font(IDEAppearance.Typography.body)
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(.horizontal, IDEAppearance.Spacing.xl)
+            .padding(.vertical, IDEAppearance.Spacing.xl)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .scrollIndicators(.automatic)
     }
 }
