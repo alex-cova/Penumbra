@@ -55,6 +55,13 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
     public let markupLinkURL: UInt32?
     public let markupLinkLabel: UInt32?
 
+    /// The color a text selection shows as over ``background`` (e.g. the `SELECTION_BACKGROUND` of a
+    /// JetBrains scheme). The selection overlay is drawn above the text, so ``PaletteTheme`` turns this
+    /// into a translucent fill that blends to this color over the background
+    /// (``overlayColor(forEffectiveSelection:over:)``). `nil` uses the shared blue
+    /// (``selectionHighlightColor(isDark:)``).
+    public let selectionColor: UInt32?
+
     public init(
         id: String,
         name: String,
@@ -88,7 +95,8 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         markupQuote: UInt32? = nil,
         markupRaw: UInt32? = nil,
         markupLinkURL: UInt32? = nil,
-        markupLinkLabel: UInt32? = nil
+        markupLinkLabel: UInt32? = nil,
+        selectionColor: UInt32? = nil
     ) {
         self.id = id
         self.name = name
@@ -123,6 +131,23 @@ public struct ThemePalette: Sendable, Equatable, Identifiable {
         self.markupRaw = markupRaw
         self.markupLinkURL = markupLinkURL
         self.markupLinkLabel = markupLinkLabel
+        self.selectionColor = selectionColor
+    }
+
+    /// Alpha of the selection overlay when a palette supplies ``selectionColor``.
+    static let effectiveSelectionAlpha: CGFloat = 0.6
+
+    /// The overlay fill that, drawn at ``effectiveSelectionAlpha`` over `background`, shows as
+    /// `effective`. Channels are clamped, so a very bright `effective` on a dark background
+    /// degrades to the nearest reachable color.
+    static func overlayColor(forEffectiveSelection effective: UInt32, over background: UInt32) -> NSColor {
+        let alpha = effectiveSelectionAlpha
+        func channel(_ shift: UInt32) -> CGFloat {
+            let target = CGFloat((effective >> shift) & 0xFF) / 255
+            let base = CGFloat((background >> shift) & 0xFF) / 255
+            return min(1, max(0, (target - (1 - alpha) * base) / alpha))
+        }
+        return NSColor(srgbRed: channel(16), green: channel(8), blue: channel(0), alpha: alpha)
     }
 
     /// Text-selection highlight shared by ``PaletteTheme/selectionColor`` and live

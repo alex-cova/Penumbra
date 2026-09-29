@@ -68,7 +68,10 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
     public var markedTextBackgroundColor: NSColor { NSColor(rgb: palette.markedTextBackground) }
     /// Penumbra reapplies this on every `setState` via `theme.selectionColor`.
     public var selectionColor: NSColor {
-        ThemePalette.selectionHighlightColor(isDark: palette.isDark)
+        if let effective = palette.selectionColor {
+            return ThemePalette.overlayColor(forEffectiveSelection: effective, over: palette.background)
+        }
+        return ThemePalette.selectionHighlightColor(isDark: palette.isDark)
     }
 
     public func textColor(for highlightName: String) -> NSColor? {

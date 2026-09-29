@@ -2,7 +2,8 @@ import Foundation
 
 /// The set of syntax themes shipped with Penumbra. `hextech-light` / `hextech-dark` are the
 /// default palettes used by Hextech; the rest are ported from Runestone's original example themes
-/// or well-known published schemes (Solarized, Dracula, Nord, GitHub, Monokai).
+/// or well-known published schemes (Solarized, Dracula, Nord, GitHub, Monokai). Armada Dark is
+/// ported from a JetBrains `.icls` scheme.
 public enum ThemeCatalog {
     public static let defaultLightID = "hextech-light"
     public static let defaultDarkID = "hextech-dark"
@@ -13,7 +14,8 @@ public enum ThemeCatalog {
         solarizedLight, solarizedDark,
         dracula, nord,
         githubLight, githubDark,
-        monokai
+        monokai,
+        armadaDark
     ]
 
     /// Looks up a palette by ID, falling back to the default palette for `fallbackDark`
@@ -58,6 +60,27 @@ public enum ThemeCatalog {
         variableBuiltin: 0x569CD6, punctuation: 0xD4D4D4,
         diffPlus: 0x4FD675, diffMinus: 0xFF6B6B, diffDelta: 0xE8A33D,
         markupHeading: 0x6CB6FF, markupQuote: 0x8B98A5
+    )
+
+    // MARK: - Ported from a JetBrains scheme
+
+    /// From `Armada_Dark.icls`. Gutter uses the editor background (the scheme's `181818` would show a
+    /// 1-step seam); punctuation is uncolored in the scheme, so it takes the text color; diff colors
+    /// come from the `FILESTATUS_*` foregrounds because `DIFF_*` are background tints.
+    fileprivate static let armadaDark = ThemePalette(
+        id: "armada-dark", name: "Armada Dark", isDark: true,
+        background: 0x18191B, text: 0xE0E1E4,
+        gutterBackground: 0x18191B, gutterHairline: 0x353535, lineNumber: 0x6E747B,
+        selectedLineBackground: 0x152538, selectedLinesLineNumber: 0xE0E1E4,
+        selectedLinesGutterBackground: 0x18191B, invisibleCharacters: 0x555558,
+        pageGuideHairline: 0x353535, pageGuideBackground: 0x1C1D1F,
+        markedTextBackground: 0x5C4B00,
+        comment: 0x909194, constant: 0xAF9CFF, type: 0x87C3FF, function: 0xEBC88D,
+        keyword: 0x82D2CE, number: 0xEBC88D, property: 0xAF9CFF, string: 0xE394DC,
+        variableBuiltin: 0x82D2CE, punctuation: 0xE0E1E4,
+        diffPlus: 0x69B090, diffMinus: 0xF87C88, diffDelta: 0x71A3EF,
+        markupHeading: 0xEBC88D, markupLinkURL: 0x4B8DEC, markupLinkLabel: 0x4B8DEC,
+        selectionColor: 0x225090
     )
 
     // MARK: - Ported from Runestone's Example/Themes

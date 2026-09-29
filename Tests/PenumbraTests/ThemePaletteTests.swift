@@ -58,6 +58,20 @@ final class ThemeCatalogTests: XCTestCase {
         XCTAssertEqual(palette.punctuation, 0xD4D4D4)
     }
 
+    func testArmadaDarkIsRegisteredWithSchemeColors() {
+        let palette = ThemeCatalog.palette(id: "armada-dark", fallbackDark: false)
+        XCTAssertEqual(palette.id, "armada-dark")
+        XCTAssertEqual(palette.name, "Armada Dark")
+        XCTAssertTrue(palette.isDark)
+        XCTAssertEqual(palette.background, 0x18191B)
+        XCTAssertEqual(palette.text, 0xE0E1E4)
+        XCTAssertEqual(palette.selectedLineBackground, 0x152538)
+        XCTAssertEqual(palette.keyword, 0x82D2CE)
+        XCTAssertEqual(palette.string, 0xE394DC)
+        XCTAssertEqual(palette.type, 0x87C3FF)
+        XCTAssertEqual(palette.selectionColor, 0x225090)
+    }
+
     func testUnknownIDFallsBackToDefaultForMode() {
         let light = ThemeCatalog.palette(id: "does-not-exist", fallbackDark: false)
         XCTAssertEqual(light.id, ThemeCatalog.defaultLightID)
@@ -77,6 +91,40 @@ final class ThemeCatalogTests: XCTestCase {
 }
 
 final class PaletteThemeTests: XCTestCase {
+    func testPaletteWithoutSelectionColorUsesSharedBlue() {
+        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
+        XCTAssertNil(palette.selectionColor)
+        let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
+        XCTAssertEqual(theme.selectionColor, ThemePalette.selectionHighlightColor(isDark: true))
+    }
+
+    func testArmadaSelectionBlendsToSchemeColorOverBackground() throws {
+        let palette = ThemeCatalog.palette(id: "armada-dark", fallbackDark: true)
+        let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
+        let overlay = try XCTUnwrap(theme.selectionColor.usingColorSpace(.sRGB))
+        XCTAssertEqual(overlay.alphaComponent, ThemePalette.effectiveSelectionAlpha, accuracy: 0.001)
+
+        // Compositing the overlay over the background must give back the scheme's selection color.
+        let background = NSColor(rgb: palette.background).usingColorSpace(.sRGB)!
+        let expected = NSColor(rgb: 0x225090).usingColorSpace(.sRGB)!
+        let alpha = overlay.alphaComponent
+        func blended(_ over: CGFloat, _ base: CGFloat) -> CGFloat { over * alpha + base * (1 - alpha) }
+        XCTAssertEqual(blended(overlay.redComponent, background.redComponent), expected.redComponent, accuracy: 0.005)
+        XCTAssertEqual(blended(overlay.greenComponent, background.greenComponent), expected.greenComponent, accuracy: 0.005)
+        XCTAssertEqual(blended(overlay.blueComponent, background.blueComponent), expected.blueComponent, accuracy: 0.005)
+    }
+
+    func testArmadaRolesResolveThroughHighlightNames() {
+        let palette = ThemeCatalog.palette(id: "armada-dark", fallbackDark: true)
+        let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
+        func rgb(_ name: String) -> [CGFloat]? { theme.textColor(for: name)?.usingColorSpace(.sRGB).map { [$0.redComponent, $0.greenComponent, $0.blueComponent] } }
+        func expected(_ hex: UInt32) -> [CGFloat]? { NSColor(rgb: hex).usingColorSpace(.sRGB).map { [$0.redComponent, $0.greenComponent, $0.blueComponent] } }
+        XCTAssertEqual(rgb("keyword"), expected(0x82D2CE))
+        XCTAssertEqual(rgb("type"), expected(0x87C3FF))
+        XCTAssertEqual(rgb("string"), expected(0xE394DC))
+        XCTAssertEqual(rgb("markup.link.url"), expected(0x4B8DEC))
+    }
+
     func testSyntaxHighlightTokenCategoriesGetDistinctColors() {
         let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
         let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
