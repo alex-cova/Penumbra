@@ -132,4 +132,31 @@ final class ProjectReplacePlannerTests: XCTestCase {
             XCTAssertEqual(planned.map(\.range.start.line), hits.map(\.line), "\(query)")
         }
     }
+
+    /// Replace plans the files the (filtered) search lists, so a filter set on both sides can
+    /// never let Replace reach a file Find did not show.
+    func testAFilterNarrowsTheFilesAReplaceWillPlan() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replace-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("build"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = ["A.java", "B.kt", "build/C.java"]
+        for name in files {
+            try "cat and cat\n".write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let query = WorkspaceSearchQuery(text: "cat")
+        let filter = ProjectSearchFilter(mask: FileMask("*.java, !build/"))
+
+        let hits = await ProjectSearchEngine().search(query, in: directory, filter: filter)
+        var urls: [URL] = []
+        for hit in hits where !urls.contains(hit.url) { urls.append(hit.url) }
+        var entries: [WorkspaceEditPlanEntry] = []
+        for url in urls {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            entries += ProjectReplacePlanner.entries(for: query, replacement: "dog", in: text, url: url)
+        }
+
+        XCTAssertEqual(Set(entries.map { $0.url.lastPathComponent }), ["A.java"])
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.map(\.range.start.utf16Offset), hits.map(\.range.start.utf16Offset))
+    }
 }

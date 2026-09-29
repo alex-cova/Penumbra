@@ -88,6 +88,9 @@ final class JavaDebugSession {
     /// Bumped to ask the panel to focus its Evaluate field.
     private(set) var evaluationFocusRequest = 0
     static let maximumEvaluations = 30
+    /// The program's stdout and stderr and the session's own notes. Cleared when a session starts,
+    /// not when it stops, so the last run's output stays readable.
+    let console = IDEDebugConsoleLog()
 
     private var process: Process?
     private var inputHandle: FileHandle?
@@ -111,6 +114,8 @@ final class JavaDebugSession {
     ///   class's `com/acme/Foo.java` into a file when it stops in code that has no breakpoint.
     func start(launch: JavaManagedLaunch, breakpoints: [JavaBreakpoint], sourceRoots: [URL] = []) async {
         stop()
+        console.reset()
+        console.appendNote("Launching \(launch.mainClass)…")
         state = .launching
         do {
             let javaHome = launch.javaExecutable.deletingLastPathComponent().deletingLastPathComponent()
@@ -155,6 +160,8 @@ final class JavaDebugSession {
     /// Starts the JDI adapter for a Gradle `--debug-jvm` attach session.
     func prepareAdapter(javaHome: URL) async throws {
         stop()
+        console.reset()
+        console.appendNote("The program's output is in the Gradle tab.")
         isGradleAttachSession = true
         state = .launching
         let process = try launcher.startAdapter(javaHome: javaHome)
@@ -299,6 +306,7 @@ final class JavaDebugSession {
     }
 
     func stop() {
+        if process != nil, isActive { console.appendNote("Debug session stopped.") }
         readTask?.cancel()
         readTask = nil
         if let process {
@@ -390,7 +398,20 @@ final class JavaDebugSession {
                 if filePath.hasPrefix("/") {
                     onStopped?(file, line)
                 }
+            case "output":
+                for entry in json["lines"] as? [[String: Any]] ?? [] {
+                    console.append(
+                        stream: entry["stream"] as? String == "err" ? .err : .out,
+                        text: entry["text"] as? String ?? "",
+                        partial: entry["partial"] as? Bool ?? false
+                    )
+                }
             case "terminated":
+                if case .terminated = state {} else if let code = json["exitCode"] as? Int {
+                    console.appendNote("Process finished with exit code \(code)")
+                } else if isActive {
+                    console.appendNote("The debugger disconnected.")
+                }
                 state = .terminated
             default:
                 break

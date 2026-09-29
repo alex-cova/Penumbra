@@ -202,6 +202,9 @@ public final class IDEWorkspace {
     var findInFilesCaseSensitive = false
     var findInFilesWholeWord = false
     var findInFilesRegex = false
+    /// File mask (`*.java, !*Test.java`) and scope of Find and Replace in Files; session-only, like the toggles.
+    var findInFilesMask = ""
+    var findInFilesScope = IDEFindInFilesScope.project
     /// Whether the Find in Files drawer shows its replacement row (⇧⌘R opens it that way).
     var isFindInFilesReplaceVisible = false
     var findInFilesHits: [ProjectSearchResult] = []
@@ -803,9 +806,10 @@ public final class IDEWorkspace {
 
     private func presentWorkspaceEditPreview(
         _ plan: WorkspaceEditPlan,
+        style: IDEWorkspaceEditPreviewStyle = .singleLine,
         apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
     ) {
-        workspaceEditPreview = IDEWorkspaceEditPreviewModel(plan: plan) { [weak self] edit in
+        workspaceEditPreview = IDEWorkspaceEditPreviewModel(plan: plan, style: style) { [weak self] edit in
             let result = await apply(edit)
             self?.refreshAfterWorkspaceEdit(result)
             return result
@@ -988,6 +992,42 @@ public final class IDEWorkspace {
             matchWholeWord: findInFilesWholeWord,
             useRegularExpression: findInFilesRegex
         )
+    }
+
+    /// What the drawer's mask and scope describe, for both Find and Replace so they see the same files.
+    var findInFilesFilter: ProjectSearchFilter {
+        let mask = FileMask(findInFilesMask)
+        switch findInFilesScope {
+        case .project:
+            return ProjectSearchFilter(mask: mask)
+        case .directory(let url):
+            return ProjectSearchFilter(mask: mask, directory: url)
+        case .openFiles:
+            return ProjectSearchFilter(mask: mask, onlyFiles: Set(openDocumentPaths.map { URL(fileURLWithPath: $0) }))
+        case .changedFiles:
+            return ProjectSearchFilter(mask: mask, onlyFiles: Set(gitStatus.changes.map { URL(fileURLWithPath: $0.path) }))
+        }
+    }
+
+    /// Why the mask cannot be used, or nil when it is fine.
+    var findInFilesMaskProblem: String? {
+        let invalid = FileMask(findInFilesMask).invalidPatterns
+        return invalid.isEmpty ? nil : "Invalid file mask: \(invalid.joined(separator: ", "))"
+    }
+
+    /// Limits Find in Files to `directory` (the Explorer's "Find in Files Here") and opens the drawer.
+    func showFindInFiles(in directory: URL) {
+        findInFilesScope = .directory(directory)
+        showFindInFiles()
+        if !findInFilesQuery.isEmpty { runFindInFiles() }
+    }
+
+    /// A scope folder that is no longer inside the project (another folder was opened) falls back to the project.
+    private func resetStaleFindInFilesScope(root: URL) {
+        guard case .directory(let url) = findInFilesScope else { return }
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        if path != rootPath, !path.hasPrefix(rootPath + "/") { findInFilesScope = .project }
     }
 
     func hideFindInFiles() {
@@ -1715,6 +1755,68 @@ public final class IDEWorkspace {
         )
     }
 
+    /// Reverts several changed files (the Source Control panel's selection or "Revert All…") after
+    /// one confirmation that names them. Files with no committed version are listed as skipped and
+    /// left alone; unsaved edits in open editors are discarded with the rest.
+    /// - Parameter paths: absolute paths of rows in `gitStatus.changes`.
+    func revertChanges(_ paths: [String]) {
+        let byPath = Dictionary(gitStatus.changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        var revertable: [IDEGitChange] = []
+        var skipped: [IDEGitChange] = []
+        for path in paths where seen.insert(path).inserted {
+            guard let change = byPath[path] else { continue }
+            if change.unstaged == .untracked || change.staged == .added {
+                skipped.append(change)
+            } else {
+                revertable.append(change)
+            }
+        }
+        guard !revertable.isEmpty else {
+            showGitNotice("Nothing to Revert", skipped.isEmpty
+                ? "The selected files have no changes."
+                : "The selected files are not in the last commit, so there is no earlier version to go back to.")
+            return
+        }
+        let names = Self.nameList(revertable.map(\.relativePath))
+        var detail = "This discards every change to \(revertable.count == 1 ? names : "these files") since the last commit, staged or not. It cannot be undone.\n\n\(revertable.count == 1 ? "" : names)"
+        let revertablePaths = Set(revertable.map(\.path))
+        var seenDocuments = Set<ObjectIdentifier>()
+        let unsaved = workbench.panes.flatMap(\.documents).filter { document in
+            guard document.isDirty, let path = document.url?.standardizedFileURL.path, revertablePaths.contains(path) else { return false }
+            return seenDocuments.insert(ObjectIdentifier(document)).inserted
+        }.count
+        if unsaved > 0 {
+            detail += "\n\n\(unsaved) of them \(unsaved == 1 ? "has" : "have") unsaved edits in an open editor; those are discarded too."
+        }
+        if !skipped.isEmpty {
+            detail += "\n\nNot reverted (not in the last commit): \(Self.nameList(skipped.map(\.relativePath), limit: 5))"
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = revertable.count == 1
+            ? "Revert changes to \(revertable[0].relativePath)?"
+            : "Revert changes to \(revertable.count) files?"
+        alert.informativeText = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cancel first, so it is the default answer to Return.
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Revert")
+        alert.buttons[1].hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        gitStatus.revert(
+            paths: revertable.map(\.path),
+            then: { [weak self] reverted in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: reverted) },
+            onFailure: { [weak self] message in self?.showGitNotice("Could Not Revert", message) }
+        )
+    }
+
+    /// The first `limit` names one per line, then "and N more".
+    private static func nameList(_ names: [String], limit: Int = 10) -> String {
+        var lines = names.prefix(limit).map { "• \($0)" }
+        if names.count > limit { lines.append("and \(names.count - limit) more") }
+        return lines.joined(separator: "\n")
+    }
+
     /// Fast-forwards the current branch from its remote (⌘T in the IntelliJ keymap). The outcome
     /// shows in the Source Control tab.
     func pullProject() {
@@ -2084,6 +2186,13 @@ public final class IDEWorkspace {
             findInFilesStatus = "Not a valid regular expression"
             return
         }
+        if let problem = findInFilesMaskProblem {
+            findInFilesHits = []
+            findInFilesStatus = problem
+            return
+        }
+        resetStaleFindInFilesScope(root: root)
+        let filter = findInFilesFilter
         findInFilesStatus = "Searching…"
         Task {
             let hits = await intelligenceController.searchProject(
@@ -2091,7 +2200,8 @@ public final class IDEWorkspace {
                 in: root,
                 isCaseSensitive: findInFilesCaseSensitive,
                 matchWholeWord: findInFilesWholeWord,
-                useRegularExpression: findInFilesRegex
+                useRegularExpression: findInFilesRegex,
+                filter: filter
             )
             findInFilesHits = hits
             if hits.isEmpty {
@@ -2124,7 +2234,14 @@ public final class IDEWorkspace {
             findInFilesStatus = "Not a valid regular expression"
             return
         }
+        if let problem = findInFilesMaskProblem {
+            findInFilesStatus = problem
+            return
+        }
         guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else { return }
+        resetStaleFindInFilesScope(root: root)
+        // The same filter as the search, so Replace changes exactly the files Find lists.
+        let filter = findInFilesFilter
         let replacement = findInFilesReplacement
         findInFilesStatus = "Preparing the replacement…"
         Task {
@@ -2134,7 +2251,8 @@ public final class IDEWorkspace {
                 in: root,
                 isCaseSensitive: query.isCaseSensitive,
                 matchWholeWord: query.matchWholeWord,
-                useRegularExpression: query.useRegularExpression
+                useRegularExpression: query.useRegularExpression,
+                filter: filter
             )
             var urls: [URL] = []
             var seen = Set<String>()
@@ -2168,6 +2286,9 @@ public final class IDEWorkspace {
             if planned.unreadable > 0 {
                 warnings.append("\(planned.unreadable) file\(planned.unreadable == 1 ? "" : "s") couldn't be read as UTF-8 text and \(planned.unreadable == 1 ? "was" : "were") skipped.")
             }
+            if !filter.isUnrestricted {
+                warnings.append("Limited to \(findInFilesScopeDescription(filter)).")
+            }
             if !live.isEmpty {
                 warnings.append("Files that are open are changed in their editors and left unsaved.")
             }
@@ -2179,10 +2300,22 @@ public final class IDEWorkspace {
             )
             let files = Set(planned.entries.map(\.url)).count
             findInFilesStatus = "\(planned.entries.count) replacement\(planned.entries.count == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s"): review and apply"
-            presentWorkspaceEditPreview(plan) { [weak self] edit in
+            presentWorkspaceEditPreview(plan, style: .diff) { [weak self] edit in
                 await self?.applyReplacement(edit, plan: plan) ?? WorkspaceEditApplyResult()
             }
         }
+    }
+
+    private func findInFilesScopeDescription(_ filter: ProjectSearchFilter) -> String {
+        var parts: [String] = []
+        if !filter.mask.isEmpty { parts.append("files matching \(filter.mask.text.trimmingCharacters(in: .whitespaces))") }
+        switch findInFilesScope {
+        case .project: break
+        case .directory(let url): parts.append("the folder \(url.lastPathComponent)")
+        case .openFiles: parts.append("open files")
+        case .changedFiles: parts.append("files changed in git")
+        }
+        return parts.joined(separator: " in ")
     }
 
     private func applyReplacement(_ edit: WorkspaceEdit, plan: WorkspaceEditPlan) async -> WorkspaceEditApplyResult {
@@ -3113,6 +3246,33 @@ public final class IDEWorkspace {
 
     /// Opens a class's file with its name selected. The index reports the name as UTF-8 byte
     /// offsets; the editor selects in UTF-16, so convert against the file's own text.
+    /// The documents of open `.java` files: their members come from the project index, so the
+    /// Symbols tab leaves their tree-sitter symbols out.
+    private func openJavaDocumentIDs() -> Set<DocumentID> {
+        Set(workbench.allDocuments().compactMap { $0.url?.pathExtension == "java" ? $0.documentID : nil })
+    }
+
+    /// Opens a member found by project-wide Go to Symbol. The index holds no positions, so the file
+    /// as it is now (the editor's text when it is open) is searched by owner, name and parameter
+    /// types; a member that has since gone opens its class instead.
+    private func openJavaMember(_ member: JavaMemberMatch, inRightSplit: Bool) {
+        let live = openBufferText(for: member.url)
+        Task {
+            let range = await Task.detached { Self.memberSelection(member, liveText: live) }.value
+            await openDocument(from: member.url, selecting: range, inRightSplit: inRightSplit)
+        }
+    }
+
+    nonisolated private static func memberSelection(_ member: JavaMemberMatch, liveText: String?) -> NSRange? {
+        guard let source = liveText ?? (try? String(contentsOf: member.url, encoding: .utf8)),
+              let bytes = JavaMemberLocator.nameRange(of: member, in: source) else { return nil }
+        let utf8 = Array(source.utf8)
+        guard bytes.upperBound <= utf8.count else { return nil }
+        let location = String(decoding: utf8[..<bytes.lowerBound], as: UTF8.self).utf16.count
+        let length = String(decoding: utf8[bytes], as: UTF8.self).utf16.count
+        return NSRange(location: location, length: length)
+    }
+
     private func openClassDeclaration(in url: URL, utf8NameRange: Range<Int>, inRightSplit: Bool) {
         Task {
             let range = await Task.detached { Self.utf16Range(fromUTF8: utf8NameRange, in: url) }.value
@@ -3629,6 +3789,13 @@ public final class IDEWorkspace {
             }
         )
         palette.symbolIndex = intelligenceServices.symbolIndex
+        let membersSource = IDEJavaMembersPaletteSource(
+            javaIndex: intelligenceServices.javaSupport.javaIndex,
+            fileIndex: { [weak self] in self?.fileIndexer.index },
+            onOpen: { [weak self] member, inSplit in self?.openJavaMember(member, inRightSplit: inSplit) }
+        )
+        palette.symbolsAdditionalItems = { query, limit in await membersSource.items(matching: query, limit: limit) }
+        palette.symbolsExcludedDocuments = { [weak self] in await MainActor.run { self?.openJavaDocumentIDs() ?? [] } }
         palette.toolWindowEntriesProvider = { [weak self] in self?.toolWindowEntries() ?? [] }
         palette.activeDocumentIDProvider = { [weak self] in self?.workbench.activePane.selectedDocument?.documentID }
         palette.workspaceRoot = project.rootURL

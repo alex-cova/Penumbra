@@ -4,32 +4,110 @@ struct IDEDebugPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var evaluateFieldFocused: Bool
     @State private var handledFocusRequest = 0
+    @State private var pane = Pane.debugger
+
+    private enum Pane: String, CaseIterable, Identifiable {
+        case debugger = "Debugger"
+        case console = "Console"
+
+        var id: String { rawValue }
+    }
 
     var body: some View {
         let session = workspace.debugSession
         VStack(spacing: 0) {
             toolbar(session)
             Divider()
-            SplitPanes(minPrimary: 220, minSecondary: 220, storageKey: "umbra.debug.stackSplit") {
-                stackList(session)
-            } secondary: {
-                SplitPanes(minPrimary: 200, minSecondary: 220, storageKey: "umbra.debug.evaluateSplit") {
-                    variablesList(session)
+            switch pane {
+            case .debugger:
+                SplitPanes(minPrimary: 220, minSecondary: 220, storageKey: "umbra.debug.stackSplit") {
+                    stackList(session)
                 } secondary: {
-                    evaluateSection(session)
+                    SplitPanes(minPrimary: 200, minSecondary: 220, storageKey: "umbra.debug.evaluateSplit") {
+                        variablesList(session)
+                    } secondary: {
+                        evaluateSection(session)
+                    } divider: {
+                        Splitter.rule()
+                    }
                 } divider: {
                     Splitter.rule()
                 }
-            } divider: {
-                Splitter.rule()
+            case .console:
+                consolePane(session)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// The program's output. It never takes focus when output arrives: the Console tab shows a dot
+    /// while something new is waiting and the Debugger tab is up.
+    private func consolePane(_ session: JavaDebugSession) -> some View {
+        let console = session.console
+        return VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("Clear") { console.reset() }
+                    .buttonStyle(.plain)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .disabled(console.isEmpty)
+            }
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, 2)
+            if console.isEmpty {
+                Text("The program's output appears here while it runs under the debugger.")
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                IDEDebugConsoleView(
+                    log: console,
+                    fontName: workspace.preferences.fontName,
+                    fontSize: workspace.preferences.fontSize
+                )
+            }
+            Divider()
+            Text("Read-only: the program's input is not connected.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
+                .padding(.vertical, 3)
+        }
+        .onAppear { console.markRead() }
+        .onChange(of: console.revision) { console.markRead() }
+    }
+
+    private func paneSwitcher(_ session: JavaDebugSession) -> some View {
+        HStack(spacing: 2) {
+            ForEach(Pane.allCases) { candidate in
+                Button {
+                    pane = candidate
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(candidate.rawValue)
+                        if candidate == .console, pane != .console, session.console.hasUnread {
+                            Circle()
+                                .fill(IDEAppearance.ColorToken.accent)
+                                .frame(width: 6, height: 6)
+                                .accessibilityLabel("New output")
+                        }
+                    }
+                    .font(IDEAppearance.Typography.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(pane == candidate ? IDEAppearance.ColorToken.selection : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     @ViewBuilder
     private func toolbar(_ session: JavaDebugSession) -> some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
+            paneSwitcher(session)
             switch session.state {
             case .idle:
                 Text("Not debugging")

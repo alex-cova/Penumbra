@@ -1,6 +1,14 @@
 import EditorIntelligence
 import SwiftUI
 
+/// Which files Find and Replace in Files looks at, on top of the file mask.
+enum IDEFindInFilesScope: Equatable {
+    case project
+    case directory(URL)
+    case openFiles
+    case changedFiles
+}
+
 /// Project-wide search drawer, docked to the top of the editor column (see `IDERootView`) so it
 /// reads as part of the same "find" system as the in-editor bar rather than a separate bottom
 /// panel.
@@ -8,6 +16,7 @@ struct FindInFilesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var queryFocused: Bool
     @FocusState private var replacementFocused: Bool
+    @State private var maskRerun: Task<Void, Never>?
 
     var body: some View {
         @Bindable var workspace = workspace
@@ -71,8 +80,27 @@ struct FindInFilesPanel: View {
                 .padding(.bottom, IDEAppearance.Spacing.sm)
             }
 
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                FindInFilesMaskField(mask: $workspace.findInFilesMask)
+                Menu {
+                    scopeButton("Project", scope: .project)
+                    Button("Directory…", action: chooseScopeDirectory)
+                    scopeButton("Open Files", scope: .openFiles)
+                    scopeButton("Changed Files (git)", scope: .changedFiles)
+                } label: {
+                    Text(scopeTitle)
+                        .font(IDEAppearance.Typography.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Where to search")
+            }
+            .padding(.leading, IDEAppearance.Spacing.md)
+            .padding(.trailing, IDEAppearance.Spacing.md)
+            .padding(.bottom, IDEAppearance.Spacing.sm)
+
             HStack {
-                Text(workspace.findInFilesStatus)
+                Text(workspace.findInFilesMaskProblem ?? workspace.findInFilesStatus)
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Spacer()
@@ -92,7 +120,7 @@ struct FindInFilesPanel: View {
                 .listStyle(.plain)
             }
         }
-        .frame(height: workspace.isFindInFilesReplaceVisible ? 256 : 220)
+        .frame(height: workspace.isFindInFilesReplaceVisible ? 292 : 256)
         .background(IDEAppearance.ColorToken.sidebar)
         .task { queryFocused = true }
         .onExitCommand { workspace.hideFindInFiles() }
@@ -100,6 +128,54 @@ struct FindInFilesPanel: View {
         .onChange(of: workspace.findInFilesCaseSensitive) { rerunIfSearching() }
         .onChange(of: workspace.findInFilesWholeWord) { rerunIfSearching() }
         .onChange(of: workspace.findInFilesRegex) { rerunIfSearching() }
+        .onChange(of: workspace.findInFilesScope) { rerunIfSearching() }
+        .onChange(of: workspace.findInFilesMask) { scheduleMaskRerun() }
+    }
+
+    /// Typing a mask re-runs the search once the typing pauses, not on every character.
+    private func scheduleMaskRerun() {
+        maskRerun?.cancel()
+        maskRerun = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            rerunIfSearching()
+        }
+    }
+
+    private func scopeButton(_ title: String, scope: IDEFindInFilesScope) -> some View {
+        Button {
+            workspace.findInFilesScope = scope
+        } label: {
+            if workspace.findInFilesScope == scope { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
+    }
+
+    private var scopeTitle: String {
+        switch workspace.findInFilesScope {
+        case .project: "Project"
+        case .directory(let url): "Folder: \(url.lastPathComponent)"
+        case .openFiles: "Open Files"
+        case .changedFiles: "Changed Files"
+        }
+    }
+
+    private func chooseScopeDirectory() {
+        guard let root = workspace.project.rootURL else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = root
+        panel.prompt = "Search Here"
+        panel.message = "Choose a folder inside the project to search."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard path == rootPath || path.hasPrefix(rootPath + "/") else {
+            workspace.findInFilesStatus = "Choose a folder inside the project"
+            return
+        }
+        workspace.findInFilesScope = path == rootPath ? .project : .directory(url)
     }
 
     private func rerunIfSearching() {
@@ -129,6 +205,29 @@ struct FindInFilesPanel: View {
             path = hit.url.lastPathComponent
         }
         return "\(path):\(hit.line + 1)"
+    }
+}
+
+/// The file mask field under the query: `*.java, !*Test.java`.
+private struct FindInFilesMaskField: View {
+    @Binding var mask: String
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            TextField("File mask, e.g. *.java, !*Test.java", text: $mask)
+                .textFieldStyle(.plain)
+                .font(IDEAppearance.Typography.body)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .autocorrectionDisabled()
+                .accessibilityLabel("File mask")
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+        .background(IDEAppearance.ColorToken.tabActive)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
     }
 }
 

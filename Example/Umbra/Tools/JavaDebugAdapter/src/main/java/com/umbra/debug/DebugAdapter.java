@@ -34,6 +34,8 @@ public final class DebugAdapter {
 
     private VirtualMachine vm;
     private Process targetProcess;
+    private volatile OutputForwarder outputForwarder;
+    private final List<Thread> outputThreads = new ArrayList<>();
     private volatile ThreadReference currentThread;
     /** True from a stop (breakpoint, step, pause) until the program is resumed or stepped. */
     private volatile boolean stopped;
@@ -140,7 +142,7 @@ public final class DebugAdapter {
                 env.put(String.valueOf(entry.getKey()), String.valueOf(entry.getValue()));
             }
         }
-        pb.redirectErrorStream(true);
+        // stdout and stderr stay separate so the console can tell them apart.
         targetProcess = pb.start();
         drainTargetOutput(targetProcess);
         attachWhenListening(port);
@@ -169,19 +171,191 @@ public final class DebugAdapter {
         throw last != null ? last : new IllegalStateException("could not attach on port " + port);
     }
 
-    /** Reads the target's output so its pipe never fills and blocks it; forwarded as events. */
+    /**
+     * Reads the target's stdout and stderr so their pipes never fill and block it, and forwards
+     * them as batched {@code output} events (see {@link OutputForwarder}).
+     */
     private void drainTargetOutput(Process process) {
+        OutputForwarder forwarder = new OutputForwarder();
+        outputForwarder = forwarder;
+        outputThreads.clear();
+        outputThreads.add(readStream(process.getInputStream(), OutputForwarder.OUT, forwarder));
+        outputThreads.add(readStream(process.getErrorStream(), OutputForwarder.ERR, forwarder));
+    }
+
+    private Thread readStream(InputStream stream, int index, OutputForwarder forwarder) {
         Thread t = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    emitEvent("output", Map.of("text", line));
+            char[] buffer = new char[8192];
+            try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
+                int count;
+                while ((count = reader.read(buffer)) != -1) {
+                    forwarder.accept(index, buffer, count);
                 }
             } catch (IOException ignored) {
             }
-        }, "target-output");
+            forwarder.finish(index);
+        }, index == OutputForwarder.OUT ? "target-stdout" : "target-stderr");
         t.setDaemon(true);
         t.start();
+        return t;
+    }
+
+    /**
+     * Turns the target's output into events without flooding the host. Complete lines are batched
+     * into one {@code output} event, sent every {@link #FLUSH_MILLIS} ms or as soon as
+     * {@link #MAX_BATCH} lines wait. A line still open after {@link #PARTIAL_MILLIS} ms of silence
+     * (a prompt written without a newline) goes out with {@code partial: true}; the host appends
+     * the rest of that line to it when it arrives. Order between the two streams is approximate.
+     */
+    private final class OutputForwarder {
+        static final int OUT = 0;
+        static final int ERR = 1;
+        static final int MAX_BATCH = 200;
+        static final int MAX_PARTIAL = 8192;
+        static final long FLUSH_MILLIS = 50;
+        static final long PARTIAL_MILLIS = 100;
+
+        private final Object lock = new Object();
+        private final List<Map<String, Object>> pending = new ArrayList<>();
+        private final StringBuilder[] open = { new StringBuilder(), new StringBuilder() };
+        private final long[] lastWrite = new long[2];
+        private boolean tickScheduled;
+        private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "target-output-flush");
+            t.setDaemon(true);
+            return t;
+        });
+
+        void accept(int stream, char[] chars, int count) {
+            synchronized (lock) {
+                StringBuilder line = open[stream];
+                for (int i = 0; i < count; i++) {
+                    char c = chars[i];
+                    if (c == '\n') {
+                        int length = line.length();
+                        if (length > 0 && line.charAt(length - 1) == '\r') line.setLength(length - 1);
+                        addLine(stream, line.toString(), false);
+                        line.setLength(0);
+                        // A read can hold many lines; keep every event to MAX_BATCH.
+                        if (pending.size() >= MAX_BATCH) flushLocked();
+                    } else {
+                        line.append(c);
+                        if (line.length() >= MAX_PARTIAL) {
+                            addLine(stream, line.toString(), true);
+                            line.setLength(0);
+                        }
+                    }
+                }
+                lastWrite[stream] = System.nanoTime();
+                if (pending.isEmpty()) {
+                    if (line.length() > 0) scheduleLocked();
+                } else {
+                    scheduleLocked();
+                }
+            }
+        }
+
+        /** The stream ended: an unterminated last line is complete. */
+        void finish(int stream) {
+            synchronized (lock) {
+                if (open[stream].length() > 0) {
+                    addLine(stream, open[stream].toString(), false);
+                    open[stream].setLength(0);
+                }
+                flushLocked();
+            }
+        }
+
+        /** Sends whatever is waiting, including lines still open. */
+        /** Stops the flush timer without sending anything: the session is being replaced or closed. */
+        void discard() {
+            timer.shutdownNow();
+        }
+
+        void flushAll() {
+            synchronized (lock) {
+                for (int stream = OUT; stream <= ERR; stream++) {
+                    if (open[stream].length() > 0) {
+                        addLine(stream, open[stream].toString(), true);
+                        open[stream].setLength(0);
+                    }
+                }
+                flushLocked();
+            }
+            timer.shutdown();
+        }
+
+        private void addLine(int stream, String text, boolean partial) {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("stream", stream == OUT ? "out" : "err");
+            line.put("text", text);
+            line.put("partial", partial);
+            pending.add(line);
+        }
+
+        private void flushLocked() {
+            if (pending.isEmpty()) return;
+            emitEvent("output", Map.of("lines", new ArrayList<Object>(pending)));
+            pending.clear();
+        }
+
+        private void scheduleLocked() {
+            if (tickScheduled || timer.isShutdown()) return;
+            tickScheduled = true;
+            try {
+                timer.schedule(this::tick, FLUSH_MILLIS, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException e) {
+                tickScheduled = false;
+            }
+        }
+
+        private void tick() {
+            synchronized (lock) {
+                tickScheduled = false;
+                long now = System.nanoTime();
+                boolean stillOpen = false;
+                for (int stream = OUT; stream <= ERR; stream++) {
+                    if (open[stream].length() == 0) continue;
+                    if (TimeUnit.NANOSECONDS.toMillis(now - lastWrite[stream]) >= PARTIAL_MILLIS) {
+                        addLine(stream, open[stream].toString(), true);
+                        open[stream].setLength(0);
+                    } else {
+                        stillOpen = true;
+                    }
+                }
+                flushLocked();
+                if (stillOpen) scheduleLocked();
+            }
+        }
+    }
+
+    /**
+     * Ends the session's output and reports {@code terminated} with the program's exit code when
+     * it has one (a launched program that exited; an attach session has no process).
+     */
+    private void emitTerminated() {
+        Process process = targetProcess;
+        Map<String, Object> body = new LinkedHashMap<>();
+        boolean exited = false;
+        if (process != null) {
+            try {
+                exited = process.waitFor(2, TimeUnit.SECONDS);
+                if (exited) body.put("exitCode", process.exitValue());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        OutputForwarder forwarder = outputForwarder;
+        if (forwarder != null) {
+            // Once the program has exited both pipes end, so the readers finish with the last lines.
+            if (exited) {
+                for (Thread reader : outputThreads) {
+                    try { reader.join(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
+            }
+            forwarder.flushAll();
+        }
+        emitEvent("terminated", body);
     }
 
     /** Directories that hold the program's sources, to turn a class's relative source path into a file. */
@@ -219,7 +393,7 @@ public final class DebugAdapter {
                     boolean stop = false;
                     for (Event event : set) {
                         if (event instanceof VMDeathEvent || event instanceof VMDisconnectEvent) {
-                            emitEvent("terminated", Map.of());
+                            emitTerminated();
                             disconnectQuietly();
                             return;
                         }
@@ -238,7 +412,7 @@ public final class DebugAdapter {
                     if (!stop) set.resume();
                 }
             } catch (Exception ignored) {
-                emitEvent("terminated", Map.of());
+                emitTerminated();
             }
         });
     }
@@ -505,6 +679,11 @@ public final class DebugAdapter {
         if (targetProcess != null) {
             targetProcess.destroyForcibly();
             targetProcess = null;
+        }
+        OutputForwarder forwarder = outputForwarder;
+        if (forwarder != null) {
+            forwarder.discard();
+            outputForwarder = null;
         }
         currentThread = null;
         stopped = false;

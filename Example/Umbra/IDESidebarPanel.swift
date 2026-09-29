@@ -79,7 +79,8 @@ struct IDESidebarPanel: View {
                     cancelRename: { workspace.cancelExplorerRename() },
                     duplicate: { workspace.duplicateExplorerItem($0) },
                     trash: { workspace.trashExplorerItem($0) },
-                    copyPath: { workspace.copyExplorerPath($0, relative: $1) }
+                    copyPath: { workspace.copyExplorerPath($0, relative: $1) },
+                    findInFiles: { workspace.showFindInFiles(in: $0) }
                 ),
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )

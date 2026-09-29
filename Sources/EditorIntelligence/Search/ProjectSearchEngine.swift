@@ -44,6 +44,29 @@ public struct FileEnumerationPolicy: Sendable {
     public static let `default` = FileEnumerationPolicy()
 }
 
+/// Narrows a project search or replace. One value feeds both Find and Replace, so the two can
+/// never disagree on the file set.
+public struct ProjectSearchFilter: Sendable, Equatable {
+    /// A file mask, matched against paths relative to the search root.
+    public var mask: FileMask
+    /// Restricts the walk to this folder. It must be inside the search root; a folder outside it
+    /// yields no files.
+    public var directory: URL?
+    /// Searches exactly these files (Open Files, Changed Files) instead of walking. Files outside
+    /// the search root or `directory` are dropped; the mask still applies.
+    public var onlyFiles: Set<URL>?
+
+    public init(mask: FileMask = FileMask(""), directory: URL? = nil, onlyFiles: Set<URL>? = nil) {
+        self.mask = mask
+        self.directory = directory
+        self.onlyFiles = onlyFiles
+    }
+
+    public static let none = ProjectSearchFilter()
+
+    public var isUnrestricted: Bool { mask.isEmpty && directory == nil && onlyFiles == nil }
+}
+
 /// A single match from a disk-wide project search.
 public struct ProjectSearchResult: Sendable, Hashable, Identifiable {
     public var id: String { "\(url.path):\(range.start.utf16Offset):\(range.end.utf16Offset)" }
@@ -69,11 +92,38 @@ public struct ProjectSearchResult: Sendable, Hashable, Identifiable {
 public actor ProjectSearchEngine {
     public init() {}
 
-    /// Recursive listing of text-file candidates under `root`, filtered by `policy`. Directories
-    /// are walked depth-first and sorted case-insensitively.
-    public func files(under root: URL, policy: FileEnumerationPolicy = .default) async -> [URL] {
+    /// Recursive listing of text-file candidates under `root`, filtered by `policy` and `filter`.
+    /// Directories are walked depth-first and sorted case-insensitively. A directory the mask
+    /// excludes is never read, and a file the mask rejects is never opened.
+    public func files(
+        under root: URL,
+        policy: FileEnumerationPolicy = .default,
+        filter: ProjectSearchFilter = .none
+    ) async -> [URL] {
+        guard filter.mask.isValid else { return [] }
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        var scopePath = rootPath
+        if let directory = filter.directory {
+            let path = directory.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path == rootPath || path.hasPrefix(rootPath + "/") else { return [] }
+            scopePath = path
+        }
         var files: [URL] = []
-        enumerateFiles(at: root, policy: policy, into: &files)
+        if let only = filter.onlyFiles {
+            for url in only {
+                let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+                guard path.hasPrefix(scopePath + "/") else { continue }
+                let relative = String(path.dropFirst(rootPath.count + 1))
+                guard filter.mask.matches(relativePath: relative) else { continue }
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+                files.append(url)
+            }
+        } else {
+            let scopeRelative = scopePath == rootPath ? "" : String(scopePath.dropFirst(rootPath.count + 1))
+            let start = scopeRelative.isEmpty ? root : root.appendingPathComponent(scopeRelative, isDirectory: true)
+            enumerateFiles(at: start, relativeDirectory: scopeRelative, policy: policy, mask: filter.mask, into: &files)
+        }
         return files.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
     }
 
@@ -83,12 +133,13 @@ public actor ProjectSearchEngine {
         _ query: WorkspaceSearchQuery,
         in root: URL,
         policy: FileEnumerationPolicy = .default,
+        filter: ProjectSearchFilter = .none,
         maxResults: Int = 2_000
     ) async -> [ProjectSearchResult] {
         guard !isEffectivelyEmpty(query) else {
             return []
         }
-        let files = await files(under: root, policy: policy)
+        let files = await files(under: root, policy: policy, filter: filter)
         return await search(query, files: files, policy: policy, maxResults: maxResults)
     }
 
@@ -114,7 +165,13 @@ public actor ProjectSearchEngine {
         return results
     }
 
-    private func enumerateFiles(at url: URL, policy: FileEnumerationPolicy, into files: inout [URL]) {
+    private func enumerateFiles(
+        at url: URL,
+        relativeDirectory: String,
+        policy: FileEnumerationPolicy,
+        mask: FileMask,
+        into files: inout [URL]
+    ) {
         guard !Task.isCancelled else { return }
         var options: FileManager.DirectoryEnumerationOptions = []
         if policy.skipsHiddenFiles {
@@ -137,9 +194,12 @@ public actor ProjectSearchEngine {
             if values?.isSymbolicLink == true && !policy.followsSymbolicLinks {
                 continue
             }
+            // Built up rather than cut from `entry.path`, which FileManager may report with symlinks resolved.
+            let relative = relativeDirectory.isEmpty ? name : relativeDirectory + "/" + name
             if values?.isDirectory == true {
-                enumerateFiles(at: entry, policy: policy, into: &files)
-            } else {
+                if mask.isExcluded(relativePath: relative) { continue }
+                enumerateFiles(at: entry, relativeDirectory: relative, policy: policy, mask: mask, into: &files)
+            } else if mask.matches(relativePath: relative) {
                 files.append(entry)
             }
         }

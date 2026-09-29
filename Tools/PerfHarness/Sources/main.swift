@@ -36,6 +36,7 @@ func printUsageAndExit() -> Never {
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR]
       java-completion synthetic
+      java-members <java-source-directory>
       enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
       markdown-preview <path|synthetic> [--sections N] [--samples N]
 
@@ -89,6 +90,8 @@ do {
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "java-completion":
         try JavaCompletionProfile.run()
+    case "java-members":
+        JavaMembersProfile.run(root: path)
     case "enter-session":
         let lines = Int(flagValue("--lines", in: rest) ?? "") ?? 120_000
         let samples = Int(flagValue("--samples", in: rest) ?? "") ?? 15

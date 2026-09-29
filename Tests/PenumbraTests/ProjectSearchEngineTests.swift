@@ -171,4 +171,92 @@ final class ProjectSearchEngineTests: XCTestCase {
         XCTAssertEqual(hits.count, 1)
         XCTAssertEqual(hits.first?.line, 0)
     }
+
+    // MARK: - Filter
+
+    /// A tree with `needle` in every file, to see which files a filter lets through.
+    private func makeFilterTree() throws {
+        let files = [
+            "Top.java", "Top.kt", "src/A.java", "src/ATest.java", "src/deep/B.java",
+            "build/Gen.java", "src/build/C.java", "docs/notes.md"
+        ]
+        for file in files {
+            let url = root.appendingPathComponent(file)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "needle in \(file)\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func found(_ filter: ProjectSearchFilter) async -> [String] {
+        let hits = await engine.search(WorkspaceSearchQuery(text: "needle"), in: root, filter: filter)
+        let rootPath = root.resolvingSymlinksInPath().path
+        return hits.map { $0.url.resolvingSymlinksInPath().path.replacingOccurrences(of: rootPath + "/", with: "") }.sorted()
+    }
+
+    func testNoFilterChangesNothing() async throws {
+        try makeFilterTree()
+        let plain = await engine.search(WorkspaceSearchQuery(text: "needle"), in: root)
+        let filtered = await engine.search(WorkspaceSearchQuery(text: "needle"), in: root, filter: .none)
+        XCTAssertEqual(plain.map(\.id), filtered.map(\.id))
+        XCTAssertTrue(ProjectSearchFilter.none.isUnrestricted)
+    }
+
+    func testAMaskNarrowsTheFiles() async throws {
+        try makeFilterTree()
+        let java = await found(ProjectSearchFilter(mask: FileMask("*.java, !*Test.java, !build/**")))
+        XCTAssertEqual(java, ["Top.java", "src/A.java", "src/build/C.java", "src/deep/B.java"])
+    }
+
+    func testANegatedDirectoryIsPrunedFromTheWalk() async throws {
+        try makeFilterTree()
+        let files = await engine.files(under: root, filter: ProjectSearchFilter(mask: FileMask("!build/")))
+        let names = files.map(\.lastPathComponent)
+        XCTAssertFalse(names.contains("Gen.java"))
+        XCTAssertFalse(names.contains("C.java"), "`build/` is a directory of that name at any depth")
+        XCTAssertTrue(names.contains("A.java"))
+    }
+
+    func testADirectoryScopeSearchesOnlyThatFolder() async throws {
+        try makeFilterTree()
+        let scoped = await found(ProjectSearchFilter(directory: root.appendingPathComponent("src")))
+        XCTAssertEqual(scoped, ["src/A.java", "src/ATest.java", "src/build/C.java", "src/deep/B.java", "src/nested/greet.swift"])
+    }
+
+    func testAMaskIsRelativeToTheRootEvenWithADirectoryScope() async throws {
+        try makeFilterTree()
+        let scoped = await found(ProjectSearchFilter(mask: FileMask("src/*.java"), directory: root.appendingPathComponent("src")))
+        XCTAssertEqual(scoped, ["src/A.java", "src/ATest.java"])
+    }
+
+    func testADirectoryOutsideTheRootIsRefused() async throws {
+        try makeFilterTree()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("elsewhere-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try "needle\n".write(to: outside.appendingPathComponent("X.txt"), atomically: true, encoding: .utf8)
+        let escaped = await found(ProjectSearchFilter(directory: outside))
+        XCTAssertEqual(escaped, [])
+        let dotdot = await found(ProjectSearchFilter(directory: root.appendingPathComponent("src/../../")))
+        XCTAssertEqual(dotdot, [])
+    }
+
+    func testOnlyFilesSearchesExactlyThoseFiles() async throws {
+        try makeFilterTree()
+        let chosen: Set<URL> = [
+            root.appendingPathComponent("Top.kt"), root.appendingPathComponent("docs/notes.md"),
+            root.appendingPathComponent("missing.txt"),
+            URL(fileURLWithPath: "/etc/hosts")
+        ]
+        let hits = await found(ProjectSearchFilter(onlyFiles: chosen))
+        XCTAssertEqual(hits, ["Top.kt", "docs/notes.md"], "A missing file and one outside the root are dropped")
+        let masked = await found(ProjectSearchFilter(mask: FileMask("*.md"), onlyFiles: chosen))
+        XCTAssertEqual(masked, ["docs/notes.md"])
+    }
+
+    func testAnInvalidMaskFindsNothing() async throws {
+        try makeFilterTree()
+        let hits = await found(ProjectSearchFilter(mask: FileMask("*.java, a**b")))
+        XCTAssertEqual(hits, [])
+    }
 }
+

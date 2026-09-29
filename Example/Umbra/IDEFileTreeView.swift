@@ -10,6 +10,7 @@ struct IDEFileTreeActions {
     var duplicate: (URL) -> Void
     var trash: (URL) -> Void
     var copyPath: (_ url: URL, _ relative: Bool) -> Void
+    var findInFiles: (_ directory: URL) -> Void
 }
 
 struct IDEFileTreeView: View {
@@ -381,6 +382,9 @@ private struct IDEFileTreeRow: View {
             Divider()
             Button("Copy Path") { selectAndRun { actions.copyPath(node.url, false) } }
             Button("Copy Relative Path") { selectAndRun { actions.copyPath(node.url, true) } }
+            if node.isDirectory {
+                Button("Find in Files Here…") { selectAndRun { actions.findInFiles(node.url) } }
+            }
         }
         Button("Reveal in Finder") {
             selectAndRun {

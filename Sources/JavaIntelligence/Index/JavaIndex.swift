@@ -91,9 +91,59 @@ public actor JavaIndex {
 
     public init() {}
 
+    // MARK: - Member table (Go to Symbol)
+
+    /// Built lazily by ``members(matching:limit:)`` and dropped when the sources change.
+    private var baseMembers: JavaMemberTable?
+    private var baseMembersBuild: Task<JavaMemberTable, Never>?
+    private var sourcesVersion = 0
+    private var overlayMembers: (generation: Int, table: JavaMemberTable)?
+
+    /// The members of every project shard. The build decodes each class once, off the actor, so a
+    /// completion asking the index meanwhile is not held up; a build that a `setSources` overtook
+    /// is discarded and started again.
+    func baseMemberTable() async -> JavaMemberTable {
+        while true {
+            if let baseMembers { return baseMembers }
+            let version = sourcesVersion
+            let task: Task<JavaMemberTable, Never>
+            if let running = baseMembersBuild {
+                task = running
+            } else {
+                let snapshot = sortedSources
+                task = Task.detached(priority: .userInitiated) { JavaMemberTable.build(from: snapshot) }
+                baseMembersBuild = task
+            }
+            let table = await task.value
+            if sourcesVersion == version {
+                baseMembers = table
+                baseMembersBuild = nil
+                return table
+            }
+        }
+    }
+
+    /// The members of the open buffers' classes, rebuilt when anything the index sees changed.
+    func overlayMemberTable() -> JavaMemberTable {
+        if let cached = overlayMembers, cached.generation == generation { return cached.table }
+        var table = JavaMemberTable()
+        for stub in overlay.values { table.add(stub, shardPath: "", precedence: -1) }
+        overlayMembers = (generation, table)
+        return table
+    }
+
+    func overlayStubs() -> [String: JavaClassStub] { overlay }
+
+    func isMemberOwnerVisible(_ owner: JavaMemberTable.Owner) -> Bool {
+        isVisible(shardPath: owner.shardPath, precedence: owner.precedence)
+    }
+
     // MARK: - Mutation
 
     public func setSources(_ sources: [Source]) {
+        baseMembers = nil
+        baseMembersBuild = nil
+        sourcesVersion += 1
         self.sources = sources
         self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
         decodedStubs = [:]

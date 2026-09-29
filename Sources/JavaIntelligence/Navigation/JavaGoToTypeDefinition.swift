@@ -52,6 +52,12 @@ extension JavaNavigationSession {
         let locals = await scopeLocals(atByteOffset: byteOffset)
         guard let typed = await JavaExpressionTyper.typed(node, locals: locals, context: context, index: index),
               typed.packageName == nil else { return [] }
+        // A value of type `T` is typed as `T`'s bound for member lookup; the type declaration is
+        // the parameter itself when the current file declares it.
+        if let name = typed.typeVariable {
+            let parameter = await typeHits(of: .typeVariable(name: name))
+            if !parameter.isEmpty { return parameter }
+        }
         return await typeHits(of: typed.type)
     }
 

@@ -1125,7 +1125,8 @@ public final class EditorIntelligenceController {
         in root: URL,
         isCaseSensitive: Bool = false,
         matchWholeWord: Bool = false,
-        useRegularExpression: Bool = false
+        useRegularExpression: Bool = false,
+        filter: ProjectSearchFilter = .none
     ) async -> [ProjectSearchResult] {
         let searchQuery = WorkspaceSearchQuery(
             text: query,
@@ -1133,7 +1134,7 @@ public final class EditorIntelligenceController {
             matchWholeWord: matchWholeWord,
             useRegularExpression: useRegularExpression
         )
-        return await projectSearchEngine.search(searchQuery, in: root)
+        return await projectSearchEngine.search(searchQuery, in: root, filter: filter)
     }
 
     /// Mount the breadcrumb bar above the text view inside a container.

@@ -33,6 +33,15 @@ struct IDEGitCommit: Identifiable, Equatable, Sendable {
     var id: String { hash }
 }
 
+/// Hands the paths a background revert changed back to the main actor.
+private nonisolated final class RevertOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paths: Set<String> = []
+
+    var value: Set<String> { lock.withLock { paths } }
+    func set(_ newValue: Set<String>) { lock.withLock { paths = newValue } }
+}
+
 /// `git status` for the open project, exposed to the Explorer as per-path statuses. Refreshed on
 /// demand (saves, app activation) and by `IDEProjectWatcher` batches so commits/stages from the
 /// terminal show up too. Silently empty when the folder is not a git repository or git is unavailable.
@@ -59,7 +68,10 @@ final class IDEGitStatusModel {
     /// False when `actionStatus` is a successful git report rather than a failure.
     private(set) var actionFailed = false
     var commitMessage = ""
+    /// The row that drives the diff. It is always a member of `selectedChangePaths` when set.
     var selectedChangePath: String?
+    /// Every selected row, for actions that take several files (Revert…).
+    private(set) var selectedChangePaths: Set<String> = []
     var selectedCommitHash: String?
     var isRepository: Bool { repositoryRoot != nil }
     var repositoryRootPath: String? { repositoryRoot }
@@ -113,6 +125,7 @@ final class IDEGitStatusModel {
         rootURL = url?.standardizedFileURL
         commitMessage = ""
         selectedChangePath = nil
+        selectedChangePaths = []
         diffText = nil
         actionStatus = ""
         actionFailed = false
@@ -133,9 +146,10 @@ final class IDEGitStatusModel {
             guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
             self.repository = loaded.repository
             self.apply(loaded.snapshot)
-            if let selected = self.selectedChangePath,
-               !loaded.snapshot.changes.contains(where: { $0.path == selected }) {
-                self.selectChange(nil)
+            let remaining = Set(loaded.snapshot.changes.map(\.path))
+            self.selectedChangePaths.formIntersection(remaining)
+            if let selected = self.selectedChangePath, !remaining.contains(selected) {
+                self.selectChange(self.selectedChangePaths.sorted().first)
             } else if let selected = self.selectedChangePath {
                 self.loadDiff(for: selected)
             }
@@ -219,6 +233,33 @@ final class IDEGitStatusModel {
 
     func selectChange(_ path: String?) {
         selectedChangePath = path
+        selectedChangePaths = path.map { [$0] } ?? []
+        loadDiff(for: path)
+    }
+
+    /// ⌘-click: adds or removes one row, keeping the others.
+    func toggleChangeSelection(_ path: String) {
+        if selectedChangePaths.remove(path) != nil {
+            if selectedChangePath == path {
+                selectedChangePath = selectedChangePaths.sorted().first
+                loadDiff(for: selectedChangePath)
+            }
+        } else {
+            selectedChangePaths.insert(path)
+            selectedChangePath = path
+            loadDiff(for: path)
+        }
+    }
+
+    /// ⇧-click: selects the rows of `visible` (a list in display order) from the primary row to `path`.
+    func extendChangeSelection(to path: String, in visible: [String]) {
+        guard let anchor = selectedChangePath, let from = visible.firstIndex(of: anchor),
+              let to = visible.firstIndex(of: path) else {
+            selectChange(path)
+            return
+        }
+        selectedChangePaths.formUnion(visible[min(from, to)...max(from, to)])
+        selectedChangePath = path
         loadDiff(for: path)
     }
 
@@ -253,6 +294,7 @@ final class IDEGitStatusModel {
         runGitAction { _ = try await $0.commit(message: message, paths: [], untrackedPaths: [], amend: false); return "" } onSuccess: { [weak self] in
             self?.commitMessage = ""
             self?.selectedChangePath = nil
+            self?.selectedChangePaths = []
             self?.diffText = nil
         }
     }
@@ -274,18 +316,36 @@ final class IDEGitStatusModel {
         runGitAction { try await $0.createBranch(trimmed) }
     }
 
-    /// Puts `path` back to its last committed content, discarding staged and unstaged changes.
-    /// `then` runs after git has done it, to reload the editors that show the file. A file with no
-    /// committed version (untracked, or staged as new) is refused: there is nothing to go back to.
-    func revert(path: String, then: (@MainActor () -> Void)? = nil, onFailure: (@MainActor (String) -> Void)? = nil) {
-        guard let relative = relativePath(for: path) else { return }
+    /// Puts `paths` (absolute) back to their last committed content, discarding staged and unstaged
+    /// changes. Files with no committed version (untracked, or staged as new) are left alone and
+    /// reported as skipped. `then` receives the absolute paths that were reverted, to reload the
+    /// editors that show them; nothing is reverted, and `onFailure` runs, when none qualifies.
+    func revert(
+        paths: [String],
+        then: (@MainActor (Set<String>) -> Void)? = nil,
+        onFailure: (@MainActor (String) -> Void)? = nil
+    ) {
+        let requested = paths.compactMap { path in relativePath(for: path).map { (path, $0) } }
+        guard !requested.isEmpty else { return }
+        let absoluteByRelative = Dictionary(requested.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let outcome = RevertOutcome()
         runGitAction({ repo in
-            guard await repo.existsInHead(relativePath: relative) else {
-                throw GitError.failed(status: 1, stderr: "\(relative) is not in the last commit, so there is nothing to revert to.", stdout: Data())
+            let result = try await repo.revert(paths: requested.map(\.1))
+            outcome.set(Set(result.reverted.compactMap { absoluteByRelative[$0] }))
+            if result.reverted.isEmpty {
+                let what = result.skipped.count == 1 ? "\(result.skipped[0]) is not" : "None of the \(result.skipped.count) files are"
+                throw GitError.failed(status: 1, stderr: "\(what) in the last commit, so there is nothing to revert to.", stdout: Data())
             }
-            try await repo.revertToHead(paths: [relative])
-            return "Reverted \(relative)"
-        }, onSuccess: { then?() }, onFailure: onFailure)
+            var line = result.reverted.count == 1 ? "Reverted \(result.reverted[0])" : "Reverted \(result.reverted.count) files"
+            if !result.skipped.isEmpty {
+                line += "; skipped \(result.skipped.count) not in the last commit"
+            }
+            return line
+        }, onSuccess: { then?(outcome.value) }, onFailure: onFailure)
+    }
+
+    func revert(path: String, then: (@MainActor () -> Void)? = nil, onFailure: (@MainActor (String) -> Void)? = nil) {
+        revert(paths: [path], then: { _ in then?() }, onFailure: onFailure)
     }
 
     func push() {

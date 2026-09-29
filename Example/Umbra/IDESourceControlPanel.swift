@@ -315,12 +315,13 @@ struct IDESourceControlPanel: View {
                         ForEach(stagedChanges) { change in
                             IDESourceControlChangeRow(
                                 change: change,
-                                isSelected: gitStatus.selectedChangePath == change.path,
+                                isSelected: gitStatus.selectedChangePaths.contains(change.path),
                                 showsStage: false,
-                                onSelect: { gitStatus.selectChange(change.path) },
+                                onSelect: { select(change, in: stagedChanges) },
                                 onOpen: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
                                 onStage: {},
-                                onUnstage: { gitStatus.unstage(path: change.path) }
+                                onUnstage: { gitStatus.unstage(path: change.path) },
+                                onRevert: { revert(from: change) }
                             )
                         }
                     }
@@ -329,18 +330,41 @@ struct IDESourceControlPanel: View {
                         ForEach(unstagedChanges) { change in
                             IDESourceControlChangeRow(
                                 change: change,
-                                isSelected: gitStatus.selectedChangePath == change.path,
+                                isSelected: gitStatus.selectedChangePaths.contains(change.path),
                                 showsStage: true,
-                                onSelect: { gitStatus.selectChange(change.path) },
+                                onSelect: { select(change, in: unstagedChanges) },
                                 onOpen: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
                                 onStage: { gitStatus.stage(path: change.path) },
-                                onUnstage: {}
+                                onUnstage: {},
+                                onRevert: { revert(from: change) }
                             )
                         }
                     }
                 }
             }
             .padding(.vertical, IDEAppearance.Spacing.sm)
+        }
+    }
+
+    /// Plain click selects one row, ⌘-click toggles it, ⇧-click extends from the primary row.
+    private func select(_ change: IDEGitChange, in visible: [IDEGitChange]) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) {
+            gitStatus.toggleChangeSelection(change.path)
+        } else if flags.contains(.shift) {
+            gitStatus.extendChangeSelection(to: change.path, in: visible.map(\.path))
+        } else {
+            gitStatus.selectChange(change.path)
+        }
+    }
+
+    /// The context menu acts on the whole selection when the row is part of it, else on that row.
+    private func revert(from change: IDEGitChange) {
+        if gitStatus.selectedChangePaths.contains(change.path) {
+            let selected = gitStatus.selectedChangePaths
+            workspace.revertChanges(gitStatus.changes.map(\.path).filter { selected.contains($0) })
+        } else {
+            workspace.revertChanges([change.path])
         }
     }
 
@@ -452,6 +476,7 @@ private struct IDESourceControlChangeRow: View {
     let onOpen: () -> Void
     let onStage: () -> Void
     let onUnstage: () -> Void
+    let onRevert: () -> Void
 
     @State private var isHovering = false
 
@@ -490,6 +515,9 @@ private struct IDESourceControlChangeRow: View {
         .onTapGesture(perform: onSelect)
         .onTapGesture(count: 2, perform: onOpen)
         .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Revert…", action: onRevert)
+        }
         .padding(.horizontal, IDEAppearance.Spacing.xs)
     }
 
@@ -690,6 +718,15 @@ struct IDESourceControlControls: View {
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .disabled(workspace.gitStatus.isBusy)
+
+            Button("Revert All…") {
+                let tracked = workspace.gitStatus.changes.filter { $0.unstaged != nil }.map(\.path)
+                workspace.revertChanges(tracked)
+            }
+            .buttonStyle(.borderless)
+            .font(IDEAppearance.Typography.caption)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .disabled(workspace.gitStatus.isBusy || workspace.gitStatus.changes.allSatisfy { $0.unstaged == nil })
 
             Button("Unstage All") {
                 workspace.gitStatus.unstageAll()

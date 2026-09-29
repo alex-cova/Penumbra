@@ -6,6 +6,17 @@ public enum GitLogScope: Sendable, Hashable {
     case branch(String)
 }
 
+/// What ``GitRepository/revert(paths:)`` did: `skipped` paths have no committed version and were left alone.
+public struct GitRevertResult: Sendable, Equatable {
+    public let reverted: [String]
+    public let skipped: [String]
+
+    public init(reverted: [String], skipped: [String]) {
+        self.reverted = reverted
+        self.skipped = skipped
+    }
+}
+
 /// Thin, stateless wrapper over the git CLI for one working tree. Every method is one or two git
 /// invocations; nothing runs unless the host calls it.
 public struct GitRepository: Sendable {
@@ -99,6 +110,30 @@ public struct GitRepository: Sendable {
     /// Whether `relativePath` is in the last commit, i.e. has a committed version to go back to.
     public func existsInHead(relativePath: String) async -> Bool {
         (try? await readOnly(["cat-file", "-e", "HEAD:" + relativePath])) != nil
+    }
+
+    /// The members of `relativePaths` that are files in `HEAD`, from one `ls-tree` per chunk rather
+    /// than one process per path. Paths are literal: `*` and `?` in a file name match themselves.
+    public func pathsInHead(_ relativePaths: [String]) async -> Set<String> {
+        let wanted = Set(relativePaths)
+        var found = Set<String>()
+        for chunk in Self.chunks(Array(wanted)) {
+            let args = ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", "HEAD", "--"] + chunk
+            guard let out = try? await readOnly(args) else { continue }
+            for name in out.text.split(separator: "\0") where wanted.contains(String(name)) {
+                found.insert(String(name))
+            }
+        }
+        return found
+    }
+
+    /// Long path lists go to git in pieces so a "revert everything" cannot hit the argument limit.
+    private static let pathsPerInvocation = 200
+
+    private static func chunks(_ paths: [String]) -> [[String]] {
+        stride(from: 0, to: paths.count, by: pathsPerInvocation).map {
+            Array(paths[$0..<min($0 + pathsPerInvocation, paths.count)])
+        }
     }
 
     public func commit(hash: String) async throws -> (commit: GitCommit, body: String)? {
@@ -201,11 +236,27 @@ public struct GitRepository: Sendable {
 
     /// Puts `paths` back to their last committed content, in the index and in the working tree,
     /// discarding both staged and unstaged changes. Every path must exist in `HEAD` (see
-    /// ``existsInHead(relativePath:)``): git refuses a file that was never committed, and this
-    /// changes nothing when it does.
+    /// ``pathsInHead(_:)``): git refuses a file that was never committed, and this changes nothing
+    /// when it does. Use ``revert(paths:)`` to skip such files instead.
     public func revertToHead(paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        _ = try await runner.run(["restore", "--source=HEAD", "--staged", "--worktree", "--"] + paths, in: root, stdin: nil, environment: nil)
+        for chunk in Self.chunks(paths) {
+            _ = try await runner.run(
+                ["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--"] + chunk,
+                in: root, stdin: nil, environment: nil
+            )
+        }
+    }
+
+    /// Reverts the paths that have a committed version and reports the rest as skipped (untracked,
+    /// or staged as new): there is nothing for them to go back to.
+    public func revert(paths: [String]) async throws -> GitRevertResult {
+        let inHead = await pathsInHead(paths)
+        var seen = Set<String>()
+        let unique = paths.filter { seen.insert($0).inserted }
+        let reverted = unique.filter { inHead.contains($0) }
+        let skipped = unique.filter { !inHead.contains($0) }
+        try await revertToHead(paths: reverted)
+        return GitRevertResult(reverted: reverted, skipped: skipped)
     }
 
     public func push() async throws -> String {

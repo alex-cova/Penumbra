@@ -12,6 +12,7 @@ final class JavaDebugAdapterTests: XCTestCase {
         private let condition = NSCondition()
         private var replies: [Int: [String: Any]] = [:]
         private var events: [[String: Any]] = []
+        private var outputEvents: [[String: Any]] = []
         private var nextID = 1
 
         init(java: URL, jar: URL) throws {
@@ -34,7 +35,9 @@ final class JavaDebugAdapterTests: XCTestCase {
                         buffer = Data(buffer[buffer.index(after: newline)...])
                         guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                         condition.lock()
-                        if json["event"] != nil {
+                        if json["event"] as? String == "output" {
+                            outputEvents.append(json)
+                        } else if json["event"] != nil {
                             events.append(json)
                         } else if let id = json["id"] as? Int {
                             replies[id] = json
@@ -75,11 +78,24 @@ final class JavaDebugAdapterTests: XCTestCase {
             defer { condition.unlock() }
             let deadline = Date().addingTimeInterval(timeout)
             while true {
-                while let index = events.firstIndex(where: { $0["event"] as? String != "output" }) {
-                    return events.remove(at: index)
-                }
-                events.removeAll { $0["event"] as? String == "output" }
+                if !events.isEmpty { return events.removeFirst() }
                 if !condition.wait(until: deadline) { return nil }
+            }
+        }
+
+        /// Every `output` event received so far.
+        var output: [[String: Any]] {
+            condition.lock()
+            defer { condition.unlock() }
+            return outputEvents
+        }
+
+        /// The lines of every `output` event received so far, in arrival order.
+        var outputLines: [(stream: String, text: String, partial: Bool)] {
+            output.flatMap { event -> [(stream: String, text: String, partial: Bool)] in
+                (event["lines"] as? [[String: Any]] ?? []).map {
+                    ($0["stream"] as? String ?? "", $0["text"] as? String ?? "", $0["partial"] as? Bool ?? false)
+                }
             }
         }
     }
@@ -88,6 +104,7 @@ final class JavaDebugAdapterTests: XCTestCase {
     private var hello: URL!
     private var util: URL!
     private var probe: URL!
+    private var noise: URL!
     private var java: URL!
     private var adapterJar: URL!
 
@@ -180,11 +197,26 @@ final class JavaDebugAdapterTests: XCTestCase {
         }
         """.write(to: probe, atomically: true, encoding: .utf8)
 
+        noise = sources.appendingPathComponent("Noise.java")
+        try """
+        public class Noise {
+            public static void main(String[] args) throws Exception {
+                for (int i = 0; i < 5000; i++) System.out.println("out " + i);
+                for (int i = 0; i < 200; i++) System.err.println("err " + i);
+                System.out.print("Enter name: ");
+                System.out.flush();
+                Thread.sleep(400);
+                System.out.println("done");
+                System.exit(3);
+            }
+        }
+        """.write(to: noise, atomically: true, encoding: .utf8)
+
         let compile = Process()
         compile.executableURL = javac
         // Java 17 bytecode, so it runs on whichever JDK the test machine has.
         compile.arguments = ["--release", "17", "-g", "-d", directory.appendingPathComponent("classes").path,
-                             hello.path, util.path, probe.path]
+                             hello.path, util.path, probe.path, noise.path]
         compile.standardError = Pipe()
         try compile.run()
         compile.waitUntilExit()
@@ -226,6 +258,38 @@ final class JavaDebugAdapterTests: XCTestCase {
     }
 
     // MARK: - Tests
+
+    func testTargetOutputArrivesBatchedPerStreamInOrderWithTheExitCode() throws {
+        let adapter = try launch(mainClass: "Noise")
+        XCTAssertEqual(adapter.send("resume")["ok"] as? Bool, true)
+        let terminated = try XCTUnwrap(adapter.nextEvent(timeout: 30), "no terminated event")
+        XCTAssertEqual(terminated["event"] as? String, "terminated")
+        XCTAssertEqual(terminated["exitCode"] as? Int, 3)
+
+        let lines = adapter.outputLines
+        let out = lines.filter { $0.stream == "out" && $0.text.hasPrefix("out ") }.map(\.text)
+        let err = lines.filter { $0.stream == "err" }.map(\.text)
+        XCTAssertEqual(out, (0..<5000).map { "out \($0)" }, "no line lost or reordered on stdout")
+        XCTAssertEqual(err, (0..<200).map { "err \($0)" }, "stderr is its own stream, in order")
+        XCTAssertLessThan(adapter.output.count, 300, "5,200 lines must not become 5,200 events")
+        XCTAssertLessThanOrEqual(lines.count, 5_205)
+        for event in adapter.output {
+            XCTAssertLessThanOrEqual((event["lines"] as? [Any])?.count ?? 0, 200, "A batch holds at most 200 lines")
+        }
+    }
+
+    func testALineWithoutANewlineIsFlushedAsPartialAndCompletedLater() throws {
+        let adapter = try launch(mainClass: "Noise")
+        XCTAssertEqual(adapter.send("resume")["ok"] as? Bool, true)
+        _ = try XCTUnwrap(adapter.nextEvent(timeout: 30))
+
+        // The JDWP agent announces its port on stdout; that line is real console output too.
+        let tail = adapter.outputLines.filter {
+            $0.stream == "out" && !$0.text.hasPrefix("out ") && !$0.text.hasPrefix("Listening for transport")
+        }
+        XCTAssertEqual(tail.map(\.text), ["Enter name: ", "done"])
+        XCTAssertEqual(tail.map(\.partial), [true, false], "The prompt goes out open, the rest of its line closes it")
+    }
 
     func testBreakpointBeforeTheClassLoadsThenStepIntoOutAndOver() throws {
         let adapter = try launch()

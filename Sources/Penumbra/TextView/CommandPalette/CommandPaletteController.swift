@@ -50,6 +50,12 @@ public final class CommandPaletteController {
     public var fileIndex: PaletteFileIndex?
     /// Recently used / open files (most recent first) that lead an empty query and win ties.
     public var fileBoostsProvider: (@MainActor @Sendable () -> [URL])?
+    /// Rows the Symbols tab (and the `@` scope) lists ahead of the open documents' symbols, such as
+    /// a host's project-wide members. Pair with ``symbolsExcludedDocuments`` so a document the host
+    /// lists itself is not listed twice.
+    public var symbolsAdditionalItems: (@Sendable (_ query: String, _ limit: Int) async -> [PaletteItem])?
+    /// Documents whose own symbols the Symbols tab leaves out because ``symbolsAdditionalItems`` covers them.
+    public var symbolsExcludedDocuments: (@Sendable () async -> Set<DocumentID>)?
     /// Supplies the Classes tab. When `nil` the tab falls back to type symbols from ``symbolIndex``.
     public var classesProvider: SearchEverywhereProvider?
     /// Opens a file beside the current editor (⇧↩ / "Open In Right Split"). File rows only offer
@@ -524,7 +530,11 @@ public final class CommandPaletteController {
 
     private func makeSymbolsProvider() -> SymbolsPaletteProvider? {
         guard let index = symbolIndex else { return nil }
-        return SymbolsPaletteProvider(index: index) { [weak self] symbol in
+        return SymbolsPaletteProvider(
+            index: index,
+            additionalItems: symbolsAdditionalItems,
+            excludedDocuments: symbolsExcludedDocuments
+        ) { [weak self] symbol in
             self?.onSelectSymbol?(symbol)
         }
     }

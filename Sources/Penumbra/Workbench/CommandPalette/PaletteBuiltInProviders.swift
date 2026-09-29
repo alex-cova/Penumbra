@@ -476,19 +476,30 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
     private let index: SymbolIndex
     private let kinds: Set<SymbolKind>?
     private let onSelect: @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
+    private let additionalItems: (@Sendable (_ query: String, _ limit: Int) async -> [PaletteItem])?
+    private let excludedDocuments: (@Sendable () async -> Set<DocumentID>)?
 
-    /// - Parameter kinds: Restricts results to these kinds (the Classes tab passes `[.type]`).
+    /// - Parameters:
+    ///   - kinds: Restricts results to these kinds (the Classes tab passes `[.type]`).
+    ///   - additionalItems: Rows from a host source (project-wide Java members), listed ahead of
+    ///     the open documents' symbols in this same section.
+    ///   - excludedDocuments: Documents whose symbols the host lists itself through
+    ///     `additionalItems`, so nothing appears twice.
     public init(
         index: SymbolIndex,
         kinds: Set<SymbolKind>? = nil,
         sectionTitle: String = "Symbols",
         sectionOrder: Int = 30,
+        additionalItems: (@Sendable (_ query: String, _ limit: Int) async -> [PaletteItem])? = nil,
+        excludedDocuments: (@Sendable () async -> Set<DocumentID>)? = nil,
         onSelect: @escaping @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
     ) {
         self.index = index
         self.kinds = kinds
         self.sectionTitle = sectionTitle
         self.sectionOrder = sectionOrder
+        self.additionalItems = additionalItems
+        self.excludedDocuments = excludedDocuments
         self.onSelect = onSelect
     }
 
@@ -496,6 +507,15 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
         guard !query.isEmpty else { return [] }
         var all = await index.allSymbols()
         if let kinds { all = all.filter { kinds.contains($0.kind) } }
+        if let excludedDocuments {
+            let excluded = await excludedDocuments()
+            if !excluded.isEmpty { all = all.filter { !excluded.contains($0.documentID) } }
+        }
+        let extra = await additionalItems?(query, limit) ?? []
+        return extra + symbolItems(matching: query, in: all, limit: limit)
+    }
+
+    private func symbolItems(matching query: String, in all: [EditorIntelligence.Symbol], limit: Int) -> [PaletteItem] {
         let ranked = FuzzyMatcher.rankedWithMatches(query: query, items: all, key: { $0.name }, limit: limit)
         return ranked.enumerated().map { rank, entry in
             let onSelect = self.onSelect

@@ -1,19 +1,33 @@
 import EditorIntelligence
 import SwiftUI
 
+/// How the preview sheet draws an entry.
+enum IDEWorkspaceEditPreviewStyle {
+    /// The line as it is, with the matched text highlighted (Rename).
+    case singleLine
+    /// The old line and the new line, each with the changed part tinted (Replace in Files).
+    case diff
+}
+
 /// State behind the workspace edit preview sheet.
 @MainActor
 @Observable
 final class IDEWorkspaceEditPreviewModel: Identifiable {
     let id = UUID()
     let plan: WorkspaceEditPlan
+    let style: IDEWorkspaceEditPreviewStyle
     var selection: Set<WorkspaceEditPlanEntry.ID>
     private(set) var isApplying = false
     private(set) var errorSummary: String?
     private let applyHandler: (WorkspaceEdit) async -> WorkspaceEditApplyResult
 
-    init(plan: WorkspaceEditPlan, apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult) {
+    init(
+        plan: WorkspaceEditPlan,
+        style: IDEWorkspaceEditPreviewStyle = .singleLine,
+        apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
+    ) {
         self.plan = plan
+        self.style = style
         self.selection = Set(plan.entries.filter(\.isSelectedByDefault).map(\.id))
         self.applyHandler = apply
     }
@@ -89,7 +103,7 @@ struct IDEWorkspaceEditPreviewSheet: View {
                     ForEach(model.groups, id: \.url) { group in
                         fileHeader(group.url, count: group.entries.count)
                         ForEach(group.entries) { entry in
-                            IDEWorkspaceEditPreviewRow(entry: entry, isOn: model.selection.contains(entry.id)) {
+                            IDEWorkspaceEditPreviewRow(entry: entry, style: model.style, isOn: model.selection.contains(entry.id)) {
                                 model.toggle(entry)
                             }
                         }
@@ -160,10 +174,67 @@ typealias IDERenamePreviewSheet = IDEWorkspaceEditPreviewSheet
 
 private struct IDEWorkspaceEditPreviewRow: View {
     let entry: WorkspaceEditPlanEntry
+    let style: IDEWorkspaceEditPreviewStyle
     let isOn: Bool
     let onToggle: () -> Void
 
     var body: some View {
+        if style == .diff, let preview = entry.previewLine() {
+            diffBody(preview)
+        } else {
+            singleLineBody
+        }
+    }
+
+    /// Two rows, `−` the old line and `+` the new one, so the result of a replacement is visible
+    /// before it is applied. Only shown when the old and new lines differ.
+    private func diffBody(_ preview: WorkspaceEditPreviewLine) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Toggle("", isOn: Binding(get: { isOn }, set: { _ in onToggle() }))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .disabled(entry.isReadOnly)
+            Text("\(entry.range.start.line + 1)")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(minWidth: 32, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 1) {
+                diffLine(marker: "−", preview.before, preview.removed, preview.after, tint: IDEAppearance.ColorToken.error)
+                diffLine(marker: "+", preview.before, preview.added, preview.after, tint: IDEAppearance.ColorToken.gitAdded)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.leading, IDEAppearance.Spacing.xl)
+        .padding(.trailing, IDEAppearance.Spacing.md)
+        .padding(.vertical, 2)
+        .opacity(isOn ? 1 : 0.5)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Line \(entry.range.start.line + 1): replace \(preview.removed) with \(preview.added.isEmpty ? "nothing" : preview.added)")
+    }
+
+    private func diffLine(marker: String, _ before: String, _ changed: String, _ after: String, tint: Color) -> some View {
+        var text = AttributedString(before)
+        var middle = AttributedString(changed)
+        if !changed.isEmpty {
+            middle.font = IDEAppearance.Typography.monoSmall.bold()
+            middle.foregroundColor = tint
+            middle.backgroundColor = tint.opacity(0.18)
+        }
+        text.append(middle)
+        text.append(AttributedString(after))
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(marker)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(tint)
+            Text(text)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var singleLineBody: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Toggle("", isOn: Binding(get: { isOn }, set: { _ in onToggle() }))
                 .toggleStyle(.checkbox)

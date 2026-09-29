@@ -126,11 +126,66 @@ final class JavaGoToTypeDefinitionTests: XCTestCase {
     }
 
     func testATypeVariableGoesToItsParameterFromTheDeclaration() async throws {
-        // At a use site the expression typer gives a value of type `E` its bound, so only the
-        // declaration reaches the type parameter itself.
         let source = "class Box<E> { E €value; }"
         let location = try single(try await typeDeclaration(source))
         XCTAssertEqual(selected(location, in: source.replacingOccurrences(of: "€", with: "")), "E")
+    }
+
+    // MARK: - A value of a type variable
+
+    /// Asserts the hit is the type parameter written as `<P>` (or `<P extends`) in `source`, not a
+    /// use of `P` or the bound's class.
+    private func assertParameter(_ result: NavigationResult?, _ name: String, in source: String,
+                                 file: StaticString = #filePath, line: UInt = #line) throws {
+        let location = try single(result)
+        let clean = source.replacingOccurrences(of: "€", with: "")
+        let bracket = try XCTUnwrap(clean.range(of: "<\(name)")?.lowerBound, file: file, line: line)
+        let expected = clean.utf16.distance(from: clean.utf16.startIndex, to: bracket.samePosition(in: clean.utf16)!) + 1
+        XCTAssertEqual(location.range.start.utf16Offset, expected, "Should land on the parameter", file: file, line: line)
+        XCTAssertEqual(selected(location, in: clean), name, file: file, line: line)
+    }
+
+    func testAUseOfAValueOfAClassTypeVariableGoesToTheParameter() async throws {
+        let source = "class Box<E> { E value; void m() { Object o = €value; } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testAMethodParameterOfATypeVariableGoesToTheParameter() async throws {
+        let source = "class Box<E> { void put(E item) { €item.toString(); } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testAMethodLevelTypeVariableGoesToItsParameter() async throws {
+        let source = "class T { <U extends Baz> void f(U u) { €u.toString(); } }"
+        try assertParameter(try await typeDeclaration(source), "U", in: source)
+    }
+
+    func testABoundedTypeVariableStillGoesToTheParameterNotTheBound() async throws {
+        let source = "class Box<E extends Baz> { void put(E item) { €item.toString(); } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testACallReturningATypeVariableGoesToTheParameter() async throws {
+        let source = "class Box<E> { E get() { return null; } void m() { Object o = €get(); } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testANestedClassSeesTheOuterTypeVariable() async throws {
+        let source = "class Box<E> { class Inner { void m(E item) { €item.toString(); } } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testAnElementOfATypeVariableArrayGoesToTheParameter() async throws {
+        let source = "class Box<E> { void m(E[] items) { Object o = €items[0]; } }"
+        try assertParameter(try await typeDeclaration(source), "E", in: source)
+    }
+
+    func testAConcreteSubstitutionOfATypeVariableIsUnchanged() async throws {
+        let box = "class Box<E> { E get() { return null; } }"
+        let result = try await typeDeclaration(
+            "class T { void m(Box<Baz> box) { box.€get(); } }", extra: [("Box.java", box)]
+        )
+        XCTAssertEqual(try selected(single(result), in: baz), "Baz")
     }
 
     // MARK: - Nothing to go to

@@ -170,6 +170,9 @@ public enum JavaExpressionTyper {
         let type: JavaTypeRef
         let isTypeReference: Bool
         var packageName: String?
+        /// Set when `type` is the bound standing in for a value of type variable `T`, so callers
+        /// that want the parameter itself (Go to Type Declaration) can still reach it.
+        var typeVariable: String?
 
         static func value(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: false) }
         static func typeReference(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: true) }
@@ -193,7 +196,7 @@ public enum JavaExpressionTyper {
             let bound = context.typeParameterBounds[name] ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
             let resolvedBound = await JavaTypeResolver.resolve(bound, context: context, index: index)
             if case .typeVariable = resolvedBound { return Typed(type: resolvedType, isTypeReference: false) }
-            return Typed(type: resolvedBound, isTypeReference: false)
+            return Typed(type: resolvedBound, isTypeReference: false, typeVariable: name)
         }
         return Typed(type: resolvedType, isTypeReference: raw.isTypeReference)
     }

@@ -328,4 +328,99 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("new.txt"), encoding: .utf8), "mine\n")
     }
+
+    // MARK: - Multi-file revert
+
+    func testPathsInHeadSplitsCommittedFromTheRest() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "1\n", message: "add a", repo)
+        try await commitFile("gone.txt", "1\n", message: "add gone", repo)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("gone.txt"))
+        try write("staged.txt", "s\n")
+        try await repo.stage(paths: ["staged.txt"])
+        try write("untracked.txt", "u\n")
+
+        let found = await repo.pathsInHead(["a.txt", "gone.txt", "staged.txt", "untracked.txt", "nope.txt"])
+
+        XCTAssertEqual(found, ["a.txt", "gone.txt"], "A deleted file is still in HEAD; staged-new and untracked are not")
+    }
+
+    func testPathsInHeadFollowsRenames() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("old.txt", "1\n", message: "add old", repo)
+        _ = try await runner.run(["mv", "old.txt", "new.txt"], in: directory)
+
+        let found = await repo.pathsInHead(["old.txt", "new.txt"])
+
+        XCTAssertEqual(found, ["old.txt"], "The new name of a staged rename has no committed version")
+    }
+
+    func testPathsWithSpacesNonASCIIAndGlobCharactersAreLiteral() async throws {
+        let repo = try await makeRepo()
+        let names = ["with space.txt", "café ☕.txt", "star*.txt", "q?.txt"]
+        for name in names { try await commitFile(name, "1\n", message: "add \(name)", repo) }
+        try write("starX.txt", "x\n")
+        try await repo.stage(paths: ["starX.txt"])
+        for name in names { try write(name, "edited\n") }
+
+        let found = await repo.pathsInHead(names + ["starX.txt"])
+        XCTAssertEqual(found, Set(names), "`star*.txt` must not match starX.txt")
+
+        let result = try await repo.revert(paths: names)
+        XCTAssertEqual(Set(result.reverted), Set(names))
+        for name in names {
+            XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8), "1\n", name)
+        }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("starX.txt"), encoding: .utf8), "x\n")
+    }
+
+    func testRevertOfAStagedAndUnstagedMixSkipsWhatHasNoCommittedVersion() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "a\n", message: "add a", repo)
+        try await commitFile("b.txt", "b\n", message: "add b", repo)
+        try await commitFile("gone.txt", "g\n", message: "add gone", repo)
+        try write("a.txt", "a staged\n")
+        try await repo.stage(paths: ["a.txt"])
+        try write("a.txt", "a staged\nand unstaged\n")
+        try write("b.txt", "b edited\n")
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("gone.txt"))
+        try write("new.txt", "mine\n")
+        try await repo.stage(paths: ["new.txt"])
+        try write("loose.txt", "loose\n")
+
+        let result = try await repo.revert(paths: ["a.txt", "b.txt", "gone.txt", "new.txt", "loose.txt", "a.txt"])
+
+        XCTAssertEqual(result.reverted, ["a.txt", "b.txt", "gone.txt"], "In request order, without the duplicate")
+        XCTAssertEqual(result.skipped, ["new.txt", "loose.txt"])
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "a\n")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("b.txt"), encoding: .utf8), "b\n")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("gone.txt"), encoding: .utf8), "g\n")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("new.txt"), encoding: .utf8), "mine\n")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("loose.txt"), encoding: .utf8), "loose\n")
+        let status = try await repo.status()
+        XCTAssertEqual(Set(status.map(\.path)), ["new.txt", "loose.txt"], "The skipped files keep their state")
+    }
+
+    func testRevertOfNothingRunsNoGit() async throws {
+        let repo = try await makeRepo()
+        try await commitFile("a.txt", "1\n", message: "add a", repo)
+        let result = try await repo.revert(paths: [])
+        XCTAssertEqual(result, GitRevertResult(reverted: [], skipped: []))
+    }
+
+    func testRevertHandlesMoreThanOneChunkOfPaths() async throws {
+        let repo = try await makeRepo()
+        let names = (0..<1000).map { "f\($0).txt" }
+        for name in names { try write(name, "1\n") }
+        _ = try await repo.commit(message: "many", paths: [], untrackedPaths: names, amend: false)
+        for name in names { try write(name, "edited\n") }
+        try write("extra.txt", "x\n")
+
+        let result = try await repo.revert(paths: names + ["extra.txt"])
+
+        XCTAssertEqual(result.reverted.count, 1000)
+        XCTAssertEqual(result.skipped, ["extra.txt"])
+        let status = try await repo.status()
+        XCTAssertEqual(status.map(\.path), ["extra.txt"])
+    }
 }
