@@ -533,31 +533,55 @@ public final class SymbolsPaletteProvider: SearchEverywhereProvider {
     }
 }
 
+/// One row a host contributes to File Structure when it can list the focused file's declarations
+/// better than the generic symbol index (Umbra does this for Java).
+public struct FileStructureEntry: Sendable {
+    public let id: String
+    public let title: String
+    public let subtitle: String?
+    public let action: @MainActor @Sendable () -> Void
+
+    public init(id: String, title: String, subtitle: String? = nil, action: @escaping @MainActor @Sendable () -> Void) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.action = action
+    }
+}
+
 /// The declarations of one document, in the order they appear, for File Structure. Unlike
 /// ``SymbolsPaletteProvider`` an empty query lists everything, so the popup is a table of contents
 /// that typing then narrows.
 public final class FileSymbolsPaletteProvider: SearchEverywhereProvider {
     public let sectionTitle = "File Structure"
     public let sectionOrder = 30
-    private let index: SymbolIndex
-    private let documentID: @MainActor @Sendable () -> DocumentID?
+    private let index: SymbolIndex?
+    private let documentID: (@MainActor @Sendable () -> DocumentID?)?
     private let onSelect: @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
+    private let hostEntries: (@MainActor @Sendable () async -> [FileStructureEntry]?)?
 
     /// Kinds worth listing: declarations, not the bare words, imports and file names the index also holds.
     static let declarationKinds: Set<SymbolKind> = [.function, .type, .variable, .property]
 
+    /// `hostEntries` answers first; it returns `nil` when the host has nothing for the focused file
+    /// and the symbol index is used instead.
     public init(
-        index: SymbolIndex,
-        documentID: @escaping @MainActor @Sendable () -> DocumentID?,
+        index: SymbolIndex?,
+        documentID: (@MainActor @Sendable () -> DocumentID?)?,
+        hostEntries: (@MainActor @Sendable () async -> [FileStructureEntry]?)? = nil,
         onSelect: @escaping @MainActor @Sendable (EditorIntelligence.Symbol) -> Void
     ) {
         self.index = index
         self.documentID = documentID
+        self.hostEntries = hostEntries
         self.onSelect = onSelect
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
-        guard let id = await documentID() else { return [] }
+        if let hostEntries, let entries = await hostEntries() {
+            return hostItems(entries, matching: query, limit: limit)
+        }
+        guard let index, let documentID, let id = await documentID() else { return [] }
         let symbols = await index.symbols(in: id)
             .filter { Self.declarationKinds.contains($0.kind) }
             .sorted { $0.range.start.utf16Offset < $1.range.start.utf16Offset }
@@ -579,6 +603,26 @@ public final class FileSymbolsPaletteProvider: SearchEverywhereProvider {
         return FuzzyMatcher.rankedWithMatches(query: query, items: symbols, key: { $0.name }, limit: limit)
             .enumerated()
             .map { rank, entry in item(entry.item, score: limit - rank, matched: entry.match.matchedIndices) }
+    }
+
+    private func hostItems(_ entries: [FileStructureEntry], matching query: String, limit: Int) -> [PaletteItem] {
+        func item(_ entry: FileStructureEntry, score: Int, matched: [Int] = []) -> PaletteItem {
+            PaletteItem(
+                id: "filestructure:\(entry.id)",
+                title: entry.title,
+                subtitle: entry.subtitle,
+                sectionTitle: sectionTitle,
+                matchedIndices: matched,
+                score: score,
+                action: entry.action
+            )
+        }
+        guard !query.isEmpty else {
+            return entries.prefix(limit).enumerated().map { rank, entry in item(entry, score: limit - rank) }
+        }
+        return FuzzyMatcher.rankedWithMatches(query: query, items: entries, key: { $0.title }, limit: limit)
+            .enumerated()
+            .map { rank, ranked in item(ranked.item, score: limit - rank, matched: ranked.match.matchedIndices) }
     }
 }
 

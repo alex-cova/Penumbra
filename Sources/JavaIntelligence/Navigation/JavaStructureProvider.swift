@@ -57,6 +57,11 @@ public actor JavaStructureProvider {
         return innermostType(at: byteOffset, in: roots) ?? roots.first
     }
 
+    /// Every top-level type of `text`, each with its members as `children`; `nil` when it doesn't parse.
+    public func allStructure(for text: String) -> [JavaStructureNode]? {
+        roots(of: text)
+    }
+
     /// The deepest node whose body contains the caret within `root`.
     public func selectedNode(in root: JavaStructureNode, text: String, atUTF16Offset caretUTF16Offset: Int) -> JavaStructureNode? {
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: caretUTF16Offset, in: text)

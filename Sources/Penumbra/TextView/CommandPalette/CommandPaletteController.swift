@@ -25,6 +25,9 @@ public final class CommandPaletteController {
     /// The document in the focused editor, so File Structure can list its symbols. Needed for
     /// ``presentFileSymbols()``: the symbol index holds every open document's symbols.
     public var activeDocumentIDProvider: (@MainActor @Sendable () -> DocumentID?)?
+    /// Lists the focused file's declarations for File Structure ahead of the symbol index. Return
+    /// `nil` for a file the host has nothing for; the symbol index answers then.
+    public var fileStructureEntriesProvider: (@MainActor @Sendable () async -> [FileStructureEntry]?)?
     /// The host's tool windows (Terminal, Problems, …) for Go to Tool Window. Also searched by
     /// Search Everywhere. Without it ``presentToolWindows()`` does nothing.
     public var toolWindowEntriesProvider: (@MainActor @Sendable () -> [ToolWindowEntry])?
@@ -273,7 +276,7 @@ public final class CommandPaletteController {
     /// Returns `false` without presenting when there is no symbol index or active document to read.
     @discardableResult
     public func presentFileSymbols() -> Bool {
-        guard symbolIndex != nil, activeDocumentIDProvider != nil else { return false }
+        guard fileStructureEntriesProvider != nil || (symbolIndex != nil && activeDocumentIDProvider != nil) else { return false }
         present(mode: .fileSymbols, placeholder: "File Structure")
         return true
     }
@@ -552,8 +555,12 @@ public final class CommandPaletteController {
     }
 
     private func makeFileSymbolsProvider() -> FileSymbolsPaletteProvider? {
-        guard let index = symbolIndex, let documentID = activeDocumentIDProvider else { return nil }
-        return FileSymbolsPaletteProvider(index: index, documentID: documentID) { [weak self] symbol in
+        guard fileStructureEntriesProvider != nil || (symbolIndex != nil && activeDocumentIDProvider != nil) else { return nil }
+        return FileSymbolsPaletteProvider(
+            index: symbolIndex,
+            documentID: activeDocumentIDProvider,
+            hostEntries: fileStructureEntriesProvider
+        ) { [weak self] symbol in
             self?.onSelectSymbol?(symbol)
         }
     }

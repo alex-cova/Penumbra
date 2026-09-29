@@ -3996,6 +3996,7 @@ public final class IDEWorkspace {
         palette.symbolsAdditionalItems = { query, limit in await membersSource.items(matching: query, limit: limit) }
         palette.symbolsExcludedDocuments = { [weak self] in await MainActor.run { self?.openJavaDocumentIDs() ?? [] } }
         palette.toolWindowEntriesProvider = { [weak self] in self?.toolWindowEntries() ?? [] }
+        palette.fileStructureEntriesProvider = { [weak self] in await self?.javaFileStructureEntries() }
         palette.activeDocumentIDProvider = { [weak self] in self?.workbench.activePane.selectedDocument?.documentID }
         palette.workspaceRoot = project.rootURL
         palette.onOpenFile = { [weak self] url in
@@ -4270,6 +4271,28 @@ public final class IDEWorkspace {
         case .symbol(let range):
             jumpToSymbol(range)
         }
+    }
+
+    /// File Structure (⌘F12) rows for the focused Java file: every type and member in source order,
+    /// `nil` for other languages, so the symbol index answers.
+    func javaFileStructureEntries() async -> [FileStructureEntry]? {
+        guard statusLanguage == "java" else { return nil }
+        let textView = host(for: workbench.activePaneID).textView
+        let text = textView.text
+        guard let roots = await javaSupport.structureProvider.allStructure(for: text) else { return nil }
+        var entries: [FileStructureEntry] = []
+        func visit(_ node: JavaStructureNode) {
+            let range = node.nameTextRange(in: text)
+            entries.append(FileStructureEntry(
+                id: node.id,
+                title: node.title,
+                subtitle: String(describing: node.kind),
+                action: { [weak self] in self?.jumpToSymbol(range) }
+            ))
+            for child in node.children { visit(child) }
+        }
+        for root in roots { visit(root) }
+        return entries
     }
 
     func selectStructureNode(_ node: JavaStructureNode) {

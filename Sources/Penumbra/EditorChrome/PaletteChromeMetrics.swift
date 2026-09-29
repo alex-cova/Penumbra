@@ -38,6 +38,8 @@ enum PaletteChromeMetrics {
     static let footerShortcutTitleFontSize: CGFloat = 11
     static let footerShortcutKeyPaddingX: CGFloat = 5
     static let footerShortcutKeyPaddingY: CGFloat = 2
+    static let footerLabelHeight: CGFloat = 16
+    static let footerShortcutBarHeight: CGFloat = 18
     static let footerShortcutKeyCornerRadius: CGFloat = 4
     static let footerShortcutKeyFillAlpha: CGFloat = 0.12
     static let hintFontSize: CGFloat = 12

@@ -630,6 +630,9 @@ public final class CommandPaletteView: NSView {
 
             footerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PaletteChromeMetrics.horizontalInset),
             footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: footerShortcutBar.leadingAnchor, constant: -12),
+            // Pinned: with no height of its own the empty label was stretched to fill the panel
+            // (results list squeezed to 1pt) whenever the first layout ran, i.e. on the first show.
+            footerLabel.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.footerLabelHeight),
             footerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
             footerShortcutBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -PaletteChromeMetrics.horizontalInset),
@@ -1603,7 +1606,8 @@ private final class PaletteFooterShortcutBar: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.footerShortcutBarHeight)
         ])
     }
 
@@ -1659,7 +1663,8 @@ private final class PaletteFooterShortcutChip: NSView {
         let paddingY = PaletteChromeMetrics.footerShortcutKeyPaddingY
         NSLayoutConstraint.activate([
             keysBox.leadingAnchor.constraint(equalTo: leadingAnchor),
-            keysBox.centerYAnchor.constraint(equalTo: centerYAnchor),
+            keysBox.topAnchor.constraint(equalTo: topAnchor),
+            keysBox.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             keysField.leadingAnchor.constraint(equalTo: keysBox.leadingAnchor, constant: paddingX),
             keysField.trailingAnchor.constraint(equalTo: keysBox.trailingAnchor, constant: -paddingX),
