@@ -85,6 +85,10 @@ final class IDEJavaSupport {
     /// finds a project state it may check: a plain folder, or a Gradle project that has synced.
     let compilerDiagnostics = JavaCompilerDiagnosticsService()
 
+    /// Which JDK the project uses (its own choice, the default, or Automatic) and the list to choose
+    /// from. Everything that needs a JDK asks it.
+    let jdk: IDEJDKSelection
+
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
     /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
@@ -114,6 +118,9 @@ final class IDEJavaSupport {
     @ObservationIgnored private var pendingJDKHomePath: String?
     /// Home of the JDK whose reader is installed.
     @ObservationIgnored private var indexedJDKHomePath: String?
+    /// Home of the JDK the last Gradle sync launched on, so a JDK change only re-syncs when Gradle
+    /// would launch on a different one.
+    @ObservationIgnored private var gradleJavaHomePath: String?
     @ObservationIgnored private var projectRootURL: URL?
     /// True from the moment a sync task is scheduled until it finishes, including the trust prompt.
     /// Build-file events in that window are dropped so the save that triggered a reload doesn't
@@ -191,8 +198,10 @@ final class IDEJavaSupport {
 
     init(
         gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL,
-        gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot
+        gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot,
+        jdkSelectionStoreURL: URL = IDEJDKSelection.defaultStoreURL
     ) {
+        jdk = IDEJDKSelection(storeURL: jdkSelectionStoreURL)
         let sharedParseCache = JavaDocumentParseCache()
         overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
         completionProvider = JavaCompletionProvider(index: javaIndex)
@@ -214,6 +223,8 @@ final class IDEJavaSupport {
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
         gradleRunner = runner
         gradleExtractor = GradleProjectModelExtractor(runner: runner)
+        jdk.languageLevel = { [weak self] in self?.gradleModel?.maxLanguageLevel }
+        jdk.onSelectionChanged = { [weak self] in self?.jdkSelectionChanged() }
         Task { [weak self] in await self?.installCompilerResultHandler() }
         Task { [weak self] in await self?.installInspectionResultHandler() }
         Task { [overlayService, testIndex] in
@@ -297,10 +308,7 @@ final class IDEJavaSupport {
                 onCompilerConfigured?()
                 return
             }
-            // `JDKLocator.select()` does synchronous filesystem and process work.
-            let jdk = await Task.detached(priority: .utility) {
-                JDKLocator().select(minimumFeatureVersion: model?.maxLanguageLevel)
-            }.value
+            let jdk = await self.jdk.resolve(minimumFeatureVersion: model?.maxLanguageLevel)?.installation
             guard isCurrent(generation), !Task.isCancelled else { return }
             guard let jdk, jdk.javac != nil else {
                 await compilerDiagnostics.configure(nil)
@@ -368,6 +376,10 @@ final class IDEJavaSupport {
     @discardableResult
     func connect(to workspace: Workspace) async -> Task<Void, Never> {
         let task = await overlayService.connect(to: workspace)
+        Task {
+            await jdk.refreshDetected()
+            await jdk.refreshCurrent()
+        }
         if jdkIndexingTask == nil && indexedJDKHomePath == nil {
             indexJDK(minimumFeatureVersion: nil)
         }
@@ -382,6 +394,13 @@ final class IDEJavaSupport {
     func setProjectRoot(_ url: URL?) {
         projectGeneration += 1
         let generation = projectGeneration
+        jdk.setProjectRoot(url)
+        gradleJavaHomePath = nil
+        Task {
+            await jdk.refreshCurrent()
+            guard isCurrent(generation) else { return }
+            await adoptResolvedJDKIfNeeded(minimumFeatureVersion: nil, generation: generation)
+        }
         projectIndexingTask?.cancel()
         stubRefreshTask?.cancel()
         stubRefreshTask = nil
@@ -490,9 +509,7 @@ final class IDEJavaSupport {
             gradleConsole.appendNote("Project: \(url.path)")
             gradleConsole.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
 
-            let javaHome = await Task.detached(priority: .utility) {
-                JDKLocator().select()?.home
-            }.value
+            let javaHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home
             if let javaHome {
                 gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
             }
@@ -735,12 +752,11 @@ final class IDEJavaSupport {
                 statusMessage = "Resolving Gradle project…"
             }
             // Gradle itself (9.x) needs a modern JDK to launch, independent of the project's
-            // source level, so this is the newest installation rather than the one selected for
-            // `maxLanguageLevel`.
-            let javaHome = await Task.detached(priority: .utility) {
-                JDKLocator().select()?.home
-            }.value
+            // source level, so with no explicit choice this is the newest installation rather than
+            // the one selected for `maxLanguageLevel`.
+            let javaHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home
             guard isCurrent(generation) else { return }
+            gradleJavaHomePath = javaHome?.resolvingSymlinksInPath().path
 
             if silent {
                 gradleConsole.appendNote("Refreshing Gradle project model in the background…")
@@ -1032,16 +1048,50 @@ final class IDEJavaSupport {
         onGradleSyncFinished?(.cancelled)
     }
 
-    /// Re-indexes the JDK only when the project's language level would select a different
-    /// installation than the one already indexed (or in flight).
+    /// Re-indexes the JDK only when the JDK now in effect (the project's choice, or the one its
+    /// language level selects) is a different installation than the one already indexed (or in
+    /// flight).
     private func adoptLanguageLevelIfNeeded(_ maxLevel: Int?, generation: Int) async {
-        guard let maxLevel else { return }
-        let selectedPath = await Task.detached(priority: .utility) {
-            JDKLocator().select(minimumFeatureVersion: maxLevel)?.home.resolvingSymlinksInPath().path
-        }.value
+        await jdk.refreshCurrent()
         guard isCurrent(generation) else { return }
-        guard let selectedPath, selectedPath != (pendingJDKHomePath ?? indexedJDKHomePath) else { return }
-        indexJDK(minimumFeatureVersion: maxLevel)
+        guard maxLevel != nil || jdk.current?.source != .automatic else { return }
+        await adoptResolvedJDKIfNeeded(minimumFeatureVersion: maxLevel, generation: generation)
+    }
+
+    private func adoptResolvedJDKIfNeeded(minimumFeatureVersion: Int?, generation: Int) async {
+        let resolution = await jdk.resolve(minimumFeatureVersion: minimumFeatureVersion)
+        guard isCurrent(generation) else { return }
+        guard let selectedPath = resolution?.installation.home.resolvingSymlinksInPath().path,
+              selectedPath != (pendingJDKHomePath ?? indexedJDKHomePath) else { return }
+        indexJDK(minimumFeatureVersion: minimumFeatureVersion)
+    }
+
+    /// The user chose another JDK (or removed the one in use): re-index against it, re-check open
+    /// files with its `javac`, and re-sync a trusted Gradle project when Gradle would now launch on
+    /// a different JDK. A sync never asks for trust again.
+    private func jdkSelectionChanged() {
+        let generation = projectGeneration
+        let level = gradleModel?.maxLanguageLevel
+        Task {
+            await jdk.refreshCurrent()
+            guard isCurrent(generation) else { return }
+            await adoptResolvedJDKIfNeeded(minimumFeatureVersion: level, generation: generation)
+            guard isCurrent(generation) else { return }
+            refreshCompilerDiagnostics()
+
+            guard let url = projectRootURL, isGradleProject, IDEPreferences.shared.javaGradleAutoSync,
+                  gradleTrustStore.isTrusted(url), !gradleSync.isSyncing, !isRunningGradleTasks else { return }
+            let gradleHome = await jdk.resolve(minimumFeatureVersion: nil)?.installation.home.resolvingSymlinksInPath().path
+            guard isCurrent(generation), gradleHome != gradleJavaHomePath else { return }
+            syncGradleProject(
+                url,
+                forcePrompt: false,
+                generation: generation,
+                silent: false,
+                invalidateCacheBeforeSync: true,
+                bootstrapModel: nil
+            )
+        }
     }
 
     private static func projectModelCommandLine(project: URL, javaHome: URL?) -> String {
@@ -1089,12 +1139,10 @@ final class IDEJavaSupport {
         // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
         let noteToConsole = gradleSync.isSyncing
         jdkIndexingTask = Task { [paths, scheduler] in
-            // JDKLocator.select() does synchronous filesystem/process work (java_home -X, walking
-            // ~/Library/Java/JavaVirtualMachines); hopped off the main actor so it can't stall the
-            // UI during app launch.
-            let installation = await Task.detached(priority: .utility) {
-                JDKLocator().select(minimumFeatureVersion: minimumFeatureVersion)
-            }.value
+            // Resolving does synchronous filesystem/process work (java_home -X, walking
+            // ~/Library/Java/JavaVirtualMachines); `IDEJDKSelection` hops it off the main actor so
+            // it can't stall the UI during app launch.
+            let installation = await jdk.resolve(minimumFeatureVersion: minimumFeatureVersion)?.installation
             guard !Task.isCancelled else { return }
             guard let installation else {
                 return

@@ -9,6 +9,8 @@ import Foundation
 /// 2. `/usr/libexec/java_home -X` (every registered JVM on macOS)
 /// 3. `~/Library/Java/JavaVirtualMachines`, `/Library/Java/JavaVirtualMachines`
 /// 4. `~/.sdkman/candidates/java/*`, `~/.gradle/jdks/*`
+/// 5. Homebrew (`openjdk*` formulae) and the asdf, jenv and mise version managers
+/// 6. Homes the user added by hand (`additionalHomes`)
 public struct JDKLocator: Sendable {
     private var fileManager: FileManager { .default }
     private let environment: [String: String]
@@ -20,7 +22,7 @@ public struct JDKLocator: Sendable {
     }
 
     /// All discovered JDKs, deduplicated by install path, newest first.
-    public func discoverAll() -> [JDKInstallation] {
+    public func discoverAll(additionalHomes: [URL] = []) -> [JDKInstallation] {
         var seen = Set<URL>()
         var result: [JDKInstallation] = []
 
@@ -47,13 +49,30 @@ public struct JDKLocator: Sendable {
             }
         }
 
+        let userHome = fileManager.homeDirectoryForCurrentUser
         for base in [
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".sdkman/candidates/java"),
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".gradle/jdks")
+            userHome.appendingPathComponent(".sdkman/candidates/java"),
+            userHome.appendingPathComponent(".gradle/jdks"),
+            userHome.appendingPathComponent(".asdf/installs/java"),
+            userHome.appendingPathComponent(".jenv/versions"),
+            userHome.appendingPathComponent(".local/share/mise/installs/java")
         ] {
             for entry in directChildDirectories(of: base) {
                 add(entry)
             }
+        }
+
+        // Homebrew's `openjdk*` formulae are linked under `opt/<formula>/libexec/openjdk.jdk`, and
+        // an unlinked one is not registered with `java_home`.
+        for prefix in ["/opt/homebrew/opt", "/usr/local/opt"] {
+            let opt = URL(fileURLWithPath: prefix)
+            for formula in directChildDirectories(of: opt) where formula.lastPathComponent.hasPrefix("openjdk") {
+                add(formula.appendingPathComponent("libexec/openjdk.jdk/Contents/Home"))
+            }
+        }
+
+        for home in additionalHomes {
+            add(home)
         }
 
         return result.sorted { $0.featureVersion > $1.featureVersion }
@@ -68,6 +87,51 @@ public struct JDKLocator: Sendable {
             return installation
         }
         return Self.pick(from: discoverAll(), minimumFeatureVersion: minimumFeatureVersion)
+    }
+
+    /// Validates a folder the user picked and returns the JDK home inside it, or `nil` when it isn't
+    /// one. Accepts the home itself, a `.jdk` bundle (`Contents/Home`), or a home's `bin` folder.
+    public func installation(atUserSelected url: URL) -> JDKInstallation? {
+        var candidates = [url]
+        if url.lastPathComponent == "bin" {
+            candidates.append(url.deletingLastPathComponent())
+        }
+        candidates.append(url.appendingPathComponent("Contents/Home"))
+        for candidate in candidates {
+            if let installation = ReleaseFileParser.parse(candidate.resolvingSymlinksInPath()) {
+                return installation
+            }
+        }
+        return nil
+    }
+
+    /// Applies the resolution order: the project's JDK, then the global default, then
+    /// ``select(preferring:minimumFeatureVersion:)``'s automatic pick. A chosen path that no longer
+    /// holds a JDK is skipped and reported in ``JDKResolution/staleSelection`` (the project's, else
+    /// the default's), so the UI can say the saved JDK is gone. An explicit choice ignores
+    /// `minimumFeatureVersion`.
+    public func resolve(
+        selection: JDKSelection,
+        minimumFeatureVersion: Int? = nil,
+        additionalHomes: [URL] = []
+    ) -> JDKResolution? {
+        var stale: URL?
+        if let project = selection.project {
+            if let installation = installation(atUserSelected: project) {
+                return JDKResolution(installation: installation, source: .project, staleSelection: nil)
+            }
+            stale = project
+        }
+        if let global = selection.global {
+            if let installation = installation(atUserSelected: global) {
+                return JDKResolution(installation: installation, source: .global, staleSelection: stale)
+            }
+            stale = stale ?? global
+        }
+        guard let automatic = Self.pick(
+            from: discoverAll(additionalHomes: additionalHomes), minimumFeatureVersion: minimumFeatureVersion
+        ) else { return nil }
+        return JDKResolution(installation: automatic, source: .automatic, staleSelection: stale)
     }
 
     /// The selection algorithm, factored out as a pure function so it's testable against synthetic
@@ -168,5 +232,38 @@ public struct SystemProcessRunner: ProcessRunning {
             throw ProcessRunError.nonZeroExit(process.terminationStatus, stderr: String(data: errData, encoding: .utf8) ?? "")
         }
         return String(data: outData, encoding: .utf8) ?? ""
+    }
+}
+
+/// The JDKs the user picked: one for the open project and a default for every project. `nil`
+/// means "Automatic".
+public struct JDKSelection: Equatable, Sendable {
+    public var project: URL?
+    public var global: URL?
+
+    public init(project: URL? = nil, global: URL? = nil) {
+        self.project = project
+        self.global = global
+    }
+}
+
+/// The JDK chosen by ``JDKLocator/resolve(selection:minimumFeatureVersion:additionalHomes:)`` and
+/// where the choice came from.
+public struct JDKResolution: Equatable, Sendable {
+    public enum Source: Equatable, Sendable {
+        case project
+        case global
+        case automatic
+    }
+
+    public let installation: JDKInstallation
+    public let source: Source
+    /// A chosen JDK that could not be used because its folder is gone or is no longer a JDK.
+    public let staleSelection: URL?
+
+    public init(installation: JDKInstallation, source: Source, staleSelection: URL?) {
+        self.installation = installation
+        self.source = source
+        self.staleSelection = staleSelection
     }
 }

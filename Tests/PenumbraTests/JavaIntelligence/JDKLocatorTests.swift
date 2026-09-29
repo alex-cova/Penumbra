@@ -106,6 +106,116 @@ final class JDKLocatorTests: XCTestCase {
         XCTAssertTrue(all.contains { $0.home.resolvingSymlinksInPath() == dir.resolvingSymlinksInPath() })
     }
 
+    // MARK: - User-selected homes and resolution
+
+    private func makeTemporaryDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+
+    private func locator(javaHome: URL? = nil) -> JDKLocator {
+        JDKLocator(
+            environment: javaHome.map { ["JAVA_HOME": $0.path] } ?? [:],
+            processRunner: FakeProcessRunner(output: [:])
+        )
+    }
+
+    func testInstallationAtUserSelectedAcceptsHomeBundleAndBinFolder() throws {
+        let base = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let home = base.appendingPathComponent("plain-home")
+        let bundle = base.appendingPathComponent("temurin-21.jdk")
+        try makeFakeJDK(at: home, version: "17.0.9")
+        try makeFakeJDK(at: bundle.appendingPathComponent("Contents/Home"), version: "21.0.1")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("bin"), withIntermediateDirectories: true)
+
+        let locator = locator()
+        XCTAssertEqual(locator.installation(atUserSelected: home)?.featureVersion, 17)
+        XCTAssertEqual(locator.installation(atUserSelected: home.appendingPathComponent("bin"))?.featureVersion, 17)
+        XCTAssertEqual(locator.installation(atUserSelected: bundle)?.featureVersion, 21)
+    }
+
+    func testInstallationAtUserSelectedRejectsAFolderThatIsNotAJDK() throws {
+        let dir = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        XCTAssertNil(locator().installation(atUserSelected: dir))
+        XCTAssertNil(locator().installation(atUserSelected: dir.appendingPathComponent("missing")))
+    }
+
+    func testDiscoverAllIncludesAdditionalHomesWithoutDuplicates() throws {
+        let dir = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeJDK(at: dir, version: "22.0.1")
+        let locator = locator(javaHome: dir)
+        let all = locator.discoverAll(additionalHomes: [dir, dir.appendingPathComponent(".")])
+        let matches = all.filter { $0.home.resolvingSymlinksInPath() == dir.resolvingSymlinksInPath() }
+        XCTAssertEqual(matches.count, 1)
+
+        let other = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: other) }
+        try makeFakeJDK(at: other, version: "19.0.2")
+        XCTAssertTrue(
+            locator.discoverAll(additionalHomes: [other]).contains { $0.home.resolvingSymlinksInPath() == other.resolvingSymlinksInPath() }
+        )
+    }
+
+    func testResolvePrefersProjectThenGlobalThenAutomatic() throws {
+        let project = makeTemporaryDirectory()
+        let global = makeTemporaryDirectory()
+        let automatic = makeTemporaryDirectory()
+        defer { for dir in [project, global, automatic] { try? FileManager.default.removeItem(at: dir) } }
+        try makeFakeJDK(at: project, version: "11.0.1")
+        try makeFakeJDK(at: global, version: "17.0.1")
+        try makeFakeJDK(at: automatic, version: "21.0.1")
+        let locator = locator(javaHome: automatic)
+
+        let withBoth = locator.resolve(selection: JDKSelection(project: project, global: global))
+        XCTAssertEqual(withBoth?.installation.featureVersion, 11)
+        XCTAssertEqual(withBoth?.source, .project)
+
+        let globalOnly = locator.resolve(selection: JDKSelection(project: nil, global: global))
+        XCTAssertEqual(globalOnly?.installation.featureVersion, 17)
+        XCTAssertEqual(globalOnly?.source, .global)
+
+        let neither = locator.resolve(selection: JDKSelection())
+        XCTAssertEqual(neither?.source, .automatic)
+        XCTAssertNil(neither?.staleSelection)
+    }
+
+    func testExplicitChoiceIgnoresTheMinimumFeatureVersion() throws {
+        let project = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: project) }
+        try makeFakeJDK(at: project, version: "11.0.1")
+        let resolution = locator().resolve(selection: JDKSelection(project: project), minimumFeatureVersion: 21)
+        XCTAssertEqual(resolution?.installation.featureVersion, 11)
+    }
+
+    func testResolveReportsAStaleSelectionAndFallsBack() throws {
+        let global = makeTemporaryDirectory()
+        let automatic = makeTemporaryDirectory()
+        defer { for dir in [global, automatic] { try? FileManager.default.removeItem(at: dir) } }
+        try makeFakeJDK(at: global, version: "17.0.1")
+        try makeFakeJDK(at: automatic, version: "21.0.1")
+        let gone = makeTemporaryDirectory()
+        let locator = locator(javaHome: automatic)
+
+        // A missing project JDK falls through to the default, and is still reported.
+        let toGlobal = locator.resolve(selection: JDKSelection(project: gone, global: global))
+        XCTAssertEqual(toGlobal?.source, .global)
+        XCTAssertEqual(toGlobal?.staleSelection, gone)
+
+        let toAutomatic = locator.resolve(selection: JDKSelection(project: gone))
+        XCTAssertEqual(toAutomatic?.source, .automatic)
+        XCTAssertEqual(toAutomatic?.staleSelection, gone)
+    }
+
+    func testDisplayNameShortensKnownVendors() {
+        let temurin = JDKInstallation(home: URL(fileURLWithPath: "/x"), featureVersion: 21, versionString: "21.0.2", vendor: "Eclipse Adoptium")
+        XCTAssertEqual(temurin.displayName, "Temurin 21.0.2")
+        let unknown = JDKInstallation(home: URL(fileURLWithPath: "/x"), featureVersion: 17, versionString: "17.0.1", vendor: nil)
+        XCTAssertEqual(unknown.displayName, "JDK 17.0.1")
+    }
+
     // MARK: - Real installed JDK (opt-in)
 
     func testRealMachineJDKIsDiscoverable() throws {

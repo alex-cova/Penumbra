@@ -25,6 +25,12 @@ struct IDEStatusBarPanel: View {
             Text("·")
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+            if workspace.showsJDKPicker {
+                IDEJDKStatusItem()
+                Text("·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
             if !workspace.showsWelcome {
                 syntaxPicker
                 Text("·")

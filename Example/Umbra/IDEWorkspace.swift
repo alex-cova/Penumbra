@@ -1143,7 +1143,8 @@ public final class IDEWorkspace {
             }
         }
         guard let command = JavaLaunchCommand.make(
-            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper, runtimeClasspath: classpath
+            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper, runtimeClasspath: classpath,
+            javaHome: javaSupport.jdk.current?.installation.home
         ) else {
             reportRunProblem("“\(configuration.displayName)” can't be launched: check its target.")
             return
@@ -1167,9 +1168,7 @@ public final class IDEWorkspace {
             }
             let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
             Task { [self] in
-                let jdk = await Task.detached(priority: .utility) {
-                    JDKLocator().select(minimumFeatureVersion: maxLanguageLevel)
-                }.value
+                let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation
                 guard let jdk else {
                     reportRunProblem("No JDK found for debugging.")
                     return
@@ -1213,9 +1212,7 @@ public final class IDEWorkspace {
             }
             let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
             Task { [self] in
-                let jdk = await Task.detached(priority: .utility) {
-                    JDKLocator().select(minimumFeatureVersion: maxLanguageLevel)
-                }.value
+                let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation
                 guard let jdk else {
                     reportRunProblem("No JDK found for debugging.")
                     return

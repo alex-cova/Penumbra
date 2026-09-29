@@ -207,6 +207,10 @@ struct UmbraApp: App {
                 Divider()
                 Button("Optimize Imports", action: workspace.optimizeImports)
                 Divider()
+                Menu("Project JDK") {
+                    IDEJDKMenuContent()
+                        .environment(workspace)
+                }
                 Button("Build Project", systemImage: "hammer", action: workspace.buildGradleProject)
                     .disabled(!workspace.javaSupport.isGradleProject)
                 Button("Reload Gradle Project", action: workspace.reloadGradleProject)

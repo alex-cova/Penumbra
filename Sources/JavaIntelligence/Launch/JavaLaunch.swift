@@ -87,25 +87,37 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         projectRoot: URL?,
         isGradleProject: Bool,
         model: JavaGradleProjectModel?,
-        gradleWrapperExists: Bool
+        gradleWrapperExists: Bool,
+        javaHome: URL? = nil
     ) -> JavaLaunchCommand? {
         guard let configuration = JavaRunConfiguration.makeDefault(
             file: file, projectRoot: projectRoot, isGradleProject: isGradleProject, model: model
         ) else { return nil }
-        return make(configuration: configuration, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
+        return make(
+            configuration: configuration, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists,
+            javaHome: javaHome
+        )
     }
 
     /// The shell command for `configuration`. Environment variables become a `NAME='value'`
     /// prefix (names that aren't valid identifiers are dropped); a Gradle launch passes the
     /// program arguments as one quoted `--args`, and a single-file launch types the JVM and
     /// program arguments as written.
+    ///
+    /// With a `javaHome`, a single-file or classpath launch runs that JDK's `bin/java`, and a Gradle
+    /// launch gets `JAVA_HOME` and `PATH` for it ahead of the configuration's own environment, so
+    /// a `JAVA_HOME` the user set on the configuration still wins. Without one, `java` and Gradle
+    /// come from the shell's `PATH`.
     public static func make(
         configuration: JavaRunConfiguration,
         projectRoot: URL?,
         gradleWrapperExists: Bool,
-        runtimeClasspath: [URL]? = nil
+        runtimeClasspath: [URL]? = nil,
+        javaHome: URL? = nil
     ) -> JavaLaunchCommand? {
         let environment = environmentPrefix(configuration.environment)
+        let java = javaHome.map { shellQuote($0.appendingPathComponent("bin/java").path) } ?? "java"
+        let jdkEnvironment = javaHome.map(jdkEnvironmentPrefix) ?? ""
         switch configuration.target {
         case .gradleRun(let projectPath):
             guard let projectRoot else { return nil }
@@ -113,14 +125,15 @@ public struct JavaLaunchCommand: Equatable, Sendable {
             let arguments = configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines)
             if !arguments.isEmpty { task += " --args=\(shellQuote(arguments))" }
             return JavaLaunchCommand(shellCommand: gradleInvocation(
-                task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists, environment: environment
+                task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists,
+                environment: jdkEnvironment + environment
             ))
         case .classpathMain(let className, _):
             // The class name goes into a shell command, so only a plain Java name is accepted.
             guard let runtimeClasspath, !runtimeClasspath.isEmpty,
                   className.range(of: #"^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$"#, options: .regularExpression) != nil else { return nil }
             let classpath = runtimeClasspath.map(\.path).joined(separator: ":")
-            var parts = [environment.trimmingCharacters(in: .whitespaces), "java"]
+            var parts = [environment.trimmingCharacters(in: .whitespaces), java]
             parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
             parts.append("-cp")
             parts.append(shellQuote(classpath))
@@ -128,7 +141,7 @@ public struct JavaLaunchCommand: Equatable, Sendable {
             parts.append(configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines))
             return JavaLaunchCommand(shellCommand: parts.filter { !$0.isEmpty }.joined(separator: " "))
         case .singleFile(let path):
-            var parts = [environment.trimmingCharacters(in: .whitespaces), "java"]
+            var parts = [environment.trimmingCharacters(in: .whitespaces), java]
             parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
             parts.append(shellQuote(path))
             parts.append(configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -137,10 +150,19 @@ public struct JavaLaunchCommand: Equatable, Sendable {
     }
 
     /// `./gradlew build` (or `gradle build`) at the project root. Builds every subproject.
-    public static func build(projectRoot: URL, gradleWrapperExists: Bool) -> JavaLaunchCommand {
+    public static func build(projectRoot: URL, gradleWrapperExists: Bool, javaHome: URL? = nil) -> JavaLaunchCommand {
         JavaLaunchCommand(
-            shellCommand: gradleInvocation(task: "build", projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists)
+            shellCommand: gradleInvocation(
+                task: "build", projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists,
+                environment: javaHome.map(jdkEnvironmentPrefix) ?? ""
+            )
         )
+    }
+
+    /// `JAVA_HOME='…' PATH='…/bin':"$PATH" ` (with a trailing space). The path is spelled out
+    /// because a prefix assignment can't see the one before it.
+    private static func jdkEnvironmentPrefix(_ home: URL) -> String {
+        "JAVA_HOME=\(shellQuote(home.path)) PATH=\(shellQuote(home.appendingPathComponent("bin").path)):\"$PATH\" "
     }
 
     private static func gradleInvocation(

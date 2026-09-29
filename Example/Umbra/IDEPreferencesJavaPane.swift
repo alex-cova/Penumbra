@@ -8,6 +8,8 @@ struct IDEPreferencesJavaPane: View {
 
     var body: some View {
         Form {
+            IDEPreferencesJDKSection()
+
             Section {
                 Toggle("Sync Gradle Projects", isOn: $preferences.javaGradleAutoSync)
 

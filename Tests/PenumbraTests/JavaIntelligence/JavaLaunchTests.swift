@@ -27,6 +27,47 @@ final class JavaLaunchTests: XCTestCase {
         XCTAssertEqual(command?.shellCommand, "java '/tmp/Hello World.java'")
     }
 
+    func testJavaHomeMakesASingleFileLaunchUseThatJDKsJava() {
+        let command = JavaLaunchCommand.make(
+            configuration: JavaRunConfiguration(target: .singleFile(path: "/tmp/A.java")),
+            projectRoot: nil,
+            gradleWrapperExists: false,
+            javaHome: URL(fileURLWithPath: "/jdks/temurin 21")
+        )
+        XCTAssertEqual(command?.shellCommand, "'/jdks/temurin 21/bin/java' '/tmp/A.java'")
+    }
+
+    func testJavaHomeMakesAClasspathLaunchUseThatJDKsJava() {
+        let command = JavaLaunchCommand.make(
+            configuration: JavaRunConfiguration(target: .classpathMain(className: "app.Main", sourceFile: "/p/Main.java")),
+            projectRoot: URL(fileURLWithPath: "/p"),
+            gradleWrapperExists: true,
+            runtimeClasspath: [URL(fileURLWithPath: "/p/build/classes")],
+            javaHome: URL(fileURLWithPath: "/jdks/17")
+        )
+        XCTAssertEqual(command?.shellCommand, "'/jdks/17/bin/java' -cp '/p/build/classes' app.Main")
+    }
+
+    func testJavaHomeSetsJavaHomeAndPathAheadOfAGradleLaunchsOwnEnvironment() {
+        let command = JavaLaunchCommand.make(
+            configuration: JavaRunConfiguration(target: .gradleRun(projectPath: ":"), environment: ["JAVA_HOME": "/mine"]),
+            projectRoot: URL(fileURLWithPath: "/p"),
+            gradleWrapperExists: true,
+            javaHome: URL(fileURLWithPath: "/jdks/17")
+        )
+        XCTAssertEqual(
+            command?.shellCommand,
+            "cd '/p' && JAVA_HOME='/jdks/17' PATH='/jdks/17/bin':\"$PATH\" JAVA_HOME='/mine' ./gradlew run"
+        )
+    }
+
+    func testJavaHomeAppliesToGradleBuild() {
+        let command = JavaLaunchCommand.build(
+            projectRoot: URL(fileURLWithPath: "/p"), gradleWrapperExists: false, javaHome: URL(fileURLWithPath: "/jdks/17")
+        )
+        XCTAssertEqual(command.shellCommand, "cd '/p' && JAVA_HOME='/jdks/17' PATH='/jdks/17/bin':\"$PATH\" gradle build")
+    }
+
     func testGradleProjectPrefersWrapperAndSubprojectRunTask() {
         let root = URL(fileURLWithPath: "/proj")
         let file = URL(fileURLWithPath: "/proj/app/src/main/java/com/example/App.java")

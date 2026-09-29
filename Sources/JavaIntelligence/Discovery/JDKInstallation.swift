@@ -30,6 +30,29 @@ public struct JDKInstallation: Hashable, Sendable {
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
     }
 
+    /// `true` when this home ships a compiler; a JRE-only home can run programs but not analyze them.
+    public var isFullJDK: Bool { javac != nil }
+
+    /// "Temurin 21.0.2" style label: the vendor's short name (when the `release` file names one)
+    /// followed by the exact version, e.g. `"Eclipse Adoptium"` becomes `"Temurin 21.0.2"`.
+    public var displayName: String {
+        guard let vendor, !vendor.isEmpty else { return "JDK \(versionString)" }
+        return "\(Self.shortVendorName(vendor)) \(versionString)"
+    }
+
+    static func shortVendorName(_ vendor: String) -> String {
+        switch vendor {
+        case "Eclipse Adoptium", "Eclipse Foundation": "Temurin"
+        case "Oracle Corporation": "Oracle"
+        case "Azul Systems, Inc.": "Zulu"
+        case "Amazon.com Inc.": "Corretto"
+        case "BellSoft": "Liberica"
+        case "GraalVM Community", "Oracle GraalVM": "GraalVM"
+        case "Homebrew": "Homebrew OpenJDK"
+        default: vendor
+        }
+    }
+
     public var hasCtSym: Bool { FileManager.default.fileExists(atPath: ctSym.path) }
     public var hasJmods: Bool { FileManager.default.fileExists(atPath: jmodsDir.path) }
     public var hasSrcZip: Bool { FileManager.default.fileExists(atPath: srcZip.path) }
