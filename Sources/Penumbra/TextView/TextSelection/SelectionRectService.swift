@@ -4,7 +4,7 @@ import Foundation
 final class SelectionRectService {
     var lineManager: LineManager
     var textContainerInset: NSEdgeInsets = .zero
-    var lineHeightMultiplier: CGFloat = 1
+    var lineHeightMultiplier: CGFloat = 1.2
 
     private let contentSizeService: ContentSizeService
     private let gutterWidthService: GutterWidthService

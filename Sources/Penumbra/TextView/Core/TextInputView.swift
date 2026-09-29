@@ -437,7 +437,7 @@ final class TextInputView: EditorView {
     var gutterWidth: CGFloat {
         gutterWidthService.gutterWidth
     }
-    var lineHeightMultiplier: CGFloat = 1 {
+    var lineHeightMultiplier: CGFloat = 1.2 {
         didSet {
             if lineHeightMultiplier != oldValue {
                 selectionRectService.lineHeightMultiplier = lineHeightMultiplier
@@ -1130,6 +1130,9 @@ final class TextInputView: EditorView {
         layoutManager.foldingModel = foldingModel
         layoutManager.codeFoldingManager = codeFoldingManager
         layoutManager.focusModeController = focusModeController
+        focusModeController.blockRangeProvider = { [weak self] location in
+            self?.focusBlockRange(at: location)
+        }
         lineMovementController.foldingModel = foldingModel
         caretRectService.foldingModel = foldingModel
         customTokenizer.foldingModel = foldingModel
@@ -1584,6 +1587,8 @@ final class TextInputView: EditorView {
         applySyntaxColorRefreshAfterParse()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
+        // A block resolved against the previous tree may have moved.
+        updateFocusModeIfNeeded()
         // Every other invalidation path that can flip glyphs from stale to highlighted
         // (backing-scale change, marked-text/invisible-character toggles, …) schedules a
         // deferred flush so a layer-backed/SwiftUI host presents without depending on an
@@ -2220,6 +2225,38 @@ extension TextInputView {
     /// Recomputes Focus Mode's focused ranges for the current selection set and redraws only if
     /// they actually changed — a caret move that stays within the same sentence/paragraph costs
     /// nothing beyond the resolver call.
+    /// The fenced or indented code block of a block-structured language (Markdown) containing
+    /// `location`, from whole first line to end of last line. Reads the root tree on purpose: an
+    /// injected language inside the block (json in a ```json fence) has no such ancestor.
+    private func focusBlockRange(at location: Int) -> NSRange? {
+        guard focusModeController.isEnabled,
+              let mode = languageMode as? TreeSitterInternalLanguageMode,
+              let root = mode.rootSyntaxNode,
+              let row = lineManager.row(containingCharacterAt: location) else {
+            return nil
+        }
+        var node: TreeSitterNode? = root.descendantForRange(from: TreeSitterTextPoint(row: UInt32(row), column: 0),
+                                                            to: TreeSitterTextPoint(row: UInt32(row), column: 0))
+        while let current = node {
+            if current.type == "fenced_code_block" || current.type == "indented_code_block" {
+                let startRow = Int(current.startPoint.row)
+                var endRow = Int(current.endPoint.row)
+                // The block's end point sits at column 0 of the line after its last one.
+                if current.endPoint.column == 0, endRow > startRow {
+                    endRow -= 1
+                }
+                guard startRow <= row, row <= endRow, endRow < lineManager.lineCount else {
+                    return nil
+                }
+                let start = lineManager.contentRange(atRow: startRow).location
+                let end = lineManager.contentRange(atRow: endRow).upperBound
+                return NSRange(location: start, length: end - start)
+            }
+            node = current.parent
+        }
+        return nil
+    }
+
     private func updateFocusModeIfNeeded() {
         guard focusModeController.updateFocusedRanges(for: selectedRanges) else {
             return

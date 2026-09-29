@@ -1,12 +1,12 @@
 import Foundation
 
-/// The set of syntax themes shipped with Penumbra. `hextech-light` / `hextech-dark` are the
-/// default palettes used by Hextech; the rest are ported from Runestone's original example themes
-/// or well-known published schemes (Solarized, Dracula, Nord, GitHub, Monokai). Armada Dark is
-/// ported from a JetBrains `.icls` scheme.
+/// The set of syntax themes shipped with Penumbra. `hextech-light` is the default light palette;
+/// `armada-dark` is the default dark palette. The rest are ported from Runestone's original example
+/// themes or well-known published schemes (Solarized, Dracula, Nord, GitHub, Monokai). Armada Dark is
+/// ported from a JetBrains `.icls` scheme; Hextech Dark remains available as an alternate dark theme.
 public enum ThemeCatalog {
     public static let defaultLightID = "hextech-light"
-    public static let defaultDarkID = "hextech-dark"
+    public static let defaultDarkID = "armada-dark"
 
     public static let all: [ThemePalette] = [
         hextechLight, hextechDark,
@@ -21,7 +21,7 @@ public enum ThemeCatalog {
     /// Looks up a palette by ID, falling back to the default palette for `fallbackDark`
     /// when the ID is unknown (e.g. a theme removed in a later build).
     public static func palette(id: String, fallbackDark: Bool) -> ThemePalette {
-        all.first { $0.id == id } ?? (fallbackDark ? hextechDark : hextechLight)
+        all.first { $0.id == id } ?? (fallbackDark ? armadaDark : hextechLight)
     }
 
     /// All palettes, with those suited to `isDark` listed first. Every palette is still
@@ -48,7 +48,7 @@ public enum ThemeCatalog {
     )
 
     fileprivate static let hextechDark = ThemePalette(
-        id: defaultDarkID, name: "Hextech Dark", isDark: true,
+        id: "hextech-dark", name: "Hextech Dark", isDark: true,
         background: 0x1E1E1E, text: 0xE6E6E6,
         gutterBackground: 0x1E1E1E, gutterHairline: 0x2C2C2C, lineNumber: 0x8E8E93,
         selectedLineBackground: 0x2C2C2E, selectedLinesLineNumber: 0xEBEBF5,
@@ -68,7 +68,7 @@ public enum ThemeCatalog {
     /// 1-step seam); punctuation is uncolored in the scheme, so it takes the text color; diff colors
     /// come from the `FILESTATUS_*` foregrounds because `DIFF_*` are background tints.
     fileprivate static let armadaDark = ThemePalette(
-        id: "armada-dark", name: "Armada Dark", isDark: true,
+        id: defaultDarkID, name: "Armada Dark", isDark: true,
         background: 0x18191B, text: 0xE0E1E4,
         gutterBackground: 0x18191B, gutterHairline: 0x353535, lineNumber: 0x6E747B,
         selectedLineBackground: 0x152538, selectedLinesLineNumber: 0xE0E1E4,

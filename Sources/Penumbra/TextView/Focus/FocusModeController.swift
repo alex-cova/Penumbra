@@ -20,6 +20,9 @@ final class FocusModeController {
     }
     var granularity: FocusGranularity = .paragraph
     var unfocusedAlpha: CGFloat = 0.35
+    /// The structural block (e.g. a Markdown fenced code block) containing a UTF-16 location, or
+    /// `nil`. Such a block is focused whole instead of a paragraph or sentence.
+    var blockRangeProvider: ((Int) -> NSRange?)?
     /// `unfocusedAlpha` when enabled, `1` (no dimming) otherwise. What `LineFragmentRenderer`
     /// should actually draw with.
     var effectiveUnfocusedAlpha: CGFloat {
@@ -70,7 +73,8 @@ final class FocusModeController {
         let newRanges = textSegmenter.focusRanges(for: selections,
                                                   granularity: granularity,
                                                   lineManager: lineManager,
-                                                  stringView: stringView)
+                                                  stringView: stringView,
+                                                  blockRange: blockRangeProvider)
         guard newRanges != focusedRanges else {
             return false
         }

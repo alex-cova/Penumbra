@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// What animates behind the welcome page.
+enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
+    case starfield
+    case deepSpace
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .starfield: "Starfield"
+        case .deepSpace: "Deep Space"
+        case .none: "None"
+        }
+    }
+}
+
 struct IDEWelcomeView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var parallax = IDEWelcomeParallax()
@@ -43,8 +60,25 @@ struct IDEWelcomeView: View {
             }
         }
         .background {
+            IDEWelcomeBackdrop(kind: workspace.preferences.welcomeBackground, parallax: parallax)
+        }
+    }
+}
+
+private struct IDEWelcomeBackdrop: View {
+    let kind: IDEWelcomeBackground
+    let parallax: IDEWelcomeParallax
+
+    var body: some View {
+        switch kind {
+        case .starfield:
             IDEWelcomeStarfield(parallax: parallax)
                 .background(IDEAppearance.ColorToken.editor)
+        case .deepSpace:
+            IDEWelcomeDeepSpace(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .none:
+            IDEAppearance.ColorToken.editor
         }
     }
 }
@@ -260,11 +294,11 @@ private struct IDEWelcomeLinkButtonStyle: ButtonStyle {
     }
 }
 
-/// Pointer position for the starfield's parallax. A plain reference rather than
-/// observed state: the starfield redraws every frame anyway, so a mouse move shouldn't
+/// Pointer position for the welcome backdrops' parallax. A plain reference rather than
+/// observed state: the backdrops redraw every frame anyway, so a mouse move shouldn't
 /// invalidate the welcome view's body.
 @MainActor
-private final class IDEWelcomeParallax {
+final class IDEWelcomeParallax {
     /// Pointer location in the welcome view, `nil` once it leaves.
     var pointer: CGPoint?
     /// Eased pointer position, -1...1 per axis from the center.

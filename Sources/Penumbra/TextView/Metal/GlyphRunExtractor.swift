@@ -91,14 +91,25 @@ struct GlyphRasterBudget {
 /// colored) `CTLine` could otherwise alias a just-freed one and produce a false cache hit that
 /// keeps stale (e.g. pre-syntax-highlight) colors on screen.
 struct GlyphExtractCacheKey: Equatable {
+    /// Focus Mode dimming, which extraction bakes into glyph colors; a caret move that only changes
+    /// the focused ranges must re-extract, or the old dimming stays on screen.
+    struct Focus: Equatable {
+        var unfocusedAlpha: CGFloat
+        var focusedRanges: [NSRange]
+
+        static let none = Focus(unfocusedAlpha: 1, focusedRanges: [])
+    }
+
     var revision: UInt64
     var emitRect: CGRect
     var isPending: Bool
+    var focus: Focus
 
-    init(revision: UInt64, emitRect: CGRect, isPending: Bool = false) {
+    init(revision: UInt64, emitRect: CGRect, isPending: Bool = false, focus: Focus = .none) {
         self.revision = revision
         self.emitRect = emitRect
         self.isPending = isPending
+        self.focus = focus
     }
 
     /// The part of `emitRect` that can decide which of this fragment's glyphs are emitted.
@@ -124,9 +135,10 @@ struct GlyphExtractCacheKey: Equatable {
         previous: GlyphExtractCacheKey?,
         revision: UInt64,
         emitRect: CGRect,
-        isPending: Bool = false
+        isPending: Bool = false,
+        focus: Focus = .none
     ) -> Bool {
-        previous != GlyphExtractCacheKey(revision: revision, emitRect: emitRect, isPending: isPending)
+        previous != GlyphExtractCacheKey(revision: revision, emitRect: emitRect, isPending: isPending, focus: focus)
     }
 }
 

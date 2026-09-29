@@ -74,6 +74,8 @@ public struct DocumentTextExport: Sendable {
         keyDownInterceptors.append(interceptor)
     }
     private var typingObservers: [(TextViewTypingEvent) -> Void] = []
+    /// True while ``applyMirroredEdit(_:replacementText:)`` runs; keeps the edit from scrolling this view.
+    private var isApplyingMirroredEdit = false
 
     /// Registers an observer called after each typed insertion or backward delete has been
     /// applied (``insertText(_:)``, ``deleteBackward()`` and their keyboard equivalents). Unlike
@@ -1605,6 +1607,44 @@ public struct DocumentTextExport: Sendable {
         textInputView.replace(indexedRange, withText: text)
     }
 
+    /// Applies an edit that was made in another view of the same document, so this view keeps
+    /// showing the same text (a split editor on one file).
+    ///
+    /// Unlike ``replace(_:withText:)`` this is not the user's edit: carets and selections stay on
+    /// the text they were on instead of jumping to the end of the replacement, the view does not
+    /// scroll to follow the caret, and the delegate is not told (the host already knows about the
+    /// edit from the view it happened in). The edit is still recorded for undo, so this view's
+    /// undo history matches the document's edit order.
+    /// - Returns: `false` when `range` does not fit this view's text, meaning it has drifted from
+    ///   the original and the host should reload it.
+    @discardableResult
+    public func applyMirroredEdit(_ range: NSRange, replacementText: String) -> Bool {
+        guard range.location >= 0, range.length >= 0, range.upperBound <= documentLength else {
+            return false
+        }
+        let previousSelections = selectedRanges
+        let savedDelegate = editorDelegate
+        editorDelegate = nil
+        isApplyingMirroredEdit = true
+        defer {
+            isApplyingMirroredEdit = false
+            editorDelegate = savedDelegate
+        }
+        textInputView.replaceText(in: range, with: replacementText, updateSelection: false)
+        let newLength = (replacementText as NSString).length
+        let delta = newLength - range.length
+        func map(_ position: Int) -> Int {
+            if position <= range.location { return position }
+            if position >= range.upperBound { return position + delta }
+            return range.location + newLength
+        }
+        selectedRanges = previousSelections.map { selection in
+            let start = map(selection.location)
+            return NSRange(location: start, length: max(0, map(selection.upperBound) - start))
+        }
+        return true
+    }
+
     /// Replaces the text in the specified matches.
     /// - Parameters:
     ///   - batchReplaceSet: Set of ranges to replace with a text.
@@ -2463,7 +2503,7 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidChange(_ view: TextInputView) {
         setNeedsLayout()
-        if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
+        if isAutomaticScrollEnabled, !isApplyingMirroredEdit, let newRange = textInputView.selection, newRange.length == 0 {
             let location = newRange.location
             DispatchQueue.main.async { [weak self] in
                 self?.scrollLocationToVisible(location, animateTypewriter: true)
@@ -2484,7 +2524,7 @@ extension TextView: TextInputViewDelegate {
             navigationHistory.noteCursor(currentNavigationEntry())
         }
         highlightNavigationController.selectedRange = view.selection
-        if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
+        if isAutomaticScrollEnabled, !isApplyingMirroredEdit, let newRange = textInputView.selection, newRange.length == 0 {
             // Never mutate contentOffset synchronously from selection changes —
             // this often fires during layoutSubviews / setState from SwiftUI.
             let location = newRange.location

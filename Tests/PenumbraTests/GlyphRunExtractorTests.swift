@@ -259,6 +259,19 @@ final class GlyphRunExtractorTests: XCTestCase {
         XCTAssertNotEqual(firstOrigins, secondOrigins)
     }
 
+    /// Focus Mode bakes its dimming into extracted glyph colors, so a change of the focused ranges
+    /// alone must invalidate the cached glyphs.
+    func testCacheKeyRebuildsWhenOnlyFocusChanges() {
+        let emitRect = CGRect(x: 0, y: 0, width: 100, height: 20)
+        let unfocused = GlyphExtractCacheKey.Focus(unfocusedAlpha: 0.35, focusedRanges: [])
+        let focused = GlyphExtractCacheKey.Focus(unfocusedAlpha: 0.35, focusedRanges: [NSRange(location: 0, length: 5)])
+        let key = GlyphExtractCacheKey(revision: 1, emitRect: emitRect, focus: unfocused)
+
+        XCTAssertTrue(GlyphExtractCacheKey.shouldRebuild(previous: key, revision: 1, emitRect: emitRect, focus: focused))
+        XCTAssertTrue(GlyphExtractCacheKey.shouldRebuild(previous: key, revision: 1, emitRect: emitRect))
+        XCTAssertFalse(GlyphExtractCacheKey.shouldRebuild(previous: key, revision: 1, emitRect: emitRect, focus: unfocused))
+    }
+
     func testShadowRunFallsBackToOneRunTile() throws {
         let atlas = try makeAtlas()
         let font = makeMenlo(pointSize: 16)

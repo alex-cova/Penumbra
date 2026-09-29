@@ -421,6 +421,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     func upsertFragment(_ spec: LineFragmentPaintSpec) {
         let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
         let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: spec.frame, scale: scale)
+        let keyFocus = GlyphExtractCacheKey.Focus(
+            unfocusedAlpha: spec.decorations.unfocusedAlpha,
+            focusedRanges: spec.decorations.focusedRanges
+        )
         let decorationKey = DecorationBuildKey(
             frameSize: spec.frame.size,
             lineRevision: spec.lineRevision,
@@ -437,7 +441,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                previous: existing.cacheKey,
                revision: spec.lineRevision,
                emitRect: keyEmitRect,
-               isPending: spec.isSyntaxHighlightPending
+               isPending: spec.isSyntaxHighlightPending,
+               focus: keyFocus
            ),
            existing.decorationKey == decorationKey {
             return
@@ -473,7 +478,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             previous: fragment.cacheKey,
             revision: spec.lineRevision,
             emitRect: keyEmitRect,
-            isPending: spec.isSyntaxHighlightPending
+            isPending: spec.isSyntaxHighlightPending,
+            focus: keyFocus
         ) || spec.frame.minX != fragment.glyphsOrigin.x
         if shouldExtract {
             let request = GlyphExtractRequest(
@@ -507,7 +513,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 fragment.cacheKey = GlyphExtractCacheKey(
                     revision: spec.lineRevision,
                     emitRect: keyEmitRect,
-                    isPending: spec.isSyntaxHighlightPending
+                    isPending: spec.isSyntaxHighlightPending,
+                    focus: keyFocus
                 )
             }
             if !spec.isSyntaxHighlightPending {

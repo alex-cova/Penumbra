@@ -144,7 +144,7 @@ final class LayoutManager {
             }
         }
     }
-    var lineHeightMultiplier: CGFloat = 1
+    var lineHeightMultiplier: CGFloat = 1.2
     var constrainingLineWidth: CGFloat {
         if isLineWrappingEnabled {
             return scrollViewWidth - leadingLineSpacing - textContainerInset.right - safeAreaInsets.left - safeAreaInsets.right

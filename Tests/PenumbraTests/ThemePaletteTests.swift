@@ -35,7 +35,7 @@ final class ThemeCatalogTests: XCTestCase {
     }
 
     func testHextechDarkMatchesOriginalHardcodedPalette() {
-        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
+        let palette = ThemeCatalog.palette(id: "hextech-dark", fallbackDark: true)
         XCTAssertEqual(palette.background, 0x1E1E1E)
         XCTAssertEqual(palette.text, 0xE6E6E6)
         XCTAssertEqual(palette.gutterHairline, 0x2C2C2C)
@@ -59,7 +59,7 @@ final class ThemeCatalogTests: XCTestCase {
     }
 
     func testArmadaDarkIsRegisteredWithSchemeColors() {
-        let palette = ThemeCatalog.palette(id: "armada-dark", fallbackDark: false)
+        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: false)
         XCTAssertEqual(palette.id, "armada-dark")
         XCTAssertEqual(palette.name, "Armada Dark")
         XCTAssertTrue(palette.isDark)
@@ -92,7 +92,7 @@ final class ThemeCatalogTests: XCTestCase {
 
 final class PaletteThemeTests: XCTestCase {
     func testPaletteWithoutSelectionColorUsesSharedBlue() {
-        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
+        let palette = ThemeCatalog.palette(id: "hextech-dark", fallbackDark: true)
         XCTAssertNil(palette.selectionColor)
         let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
         XCTAssertEqual(theme.selectionColor, ThemePalette.selectionHighlightColor(isDark: true))
@@ -126,7 +126,7 @@ final class PaletteThemeTests: XCTestCase {
     }
 
     func testSyntaxHighlightTokenCategoriesGetDistinctColors() {
-        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
+        let palette = ThemeCatalog.palette(id: "hextech-dark", fallbackDark: true)
         let theme = PaletteTheme(size: 13, palette: palette, postscriptName: "Menlo-Regular")
         let names = ["comment", "string", "keyword", "type", "number", "function", "property", "punctuation", "variable.builtin"]
         let colors = names.compactMap { theme.textColor(for: $0) }

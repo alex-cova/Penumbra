@@ -1,5 +1,6 @@
 import XCTest
 @testable import Penumbra
+import PenumbraMarkdownLanguage
 
 @MainActor
 final class TextViewFocusModeTests: XCTestCase {
@@ -16,14 +17,18 @@ final class TextViewFocusModeTests: XCTestCase {
         XCTAssertEqual(textView.unfocusedTextAlpha, 1)
     }
 
-    func testParagraphFocusUsesSingleHardLine() {
-        let text = "First line\nSecond line\nThird line"
+    func testParagraphFocusSpansLinesUntilBlankLine() {
+        let text = "First line\nSecond line\n\nThird line"
         let textView = makeFocusedTextView(text: text)
         textView.focusGranularity = .paragraph
         textView.isFocusModeEnabled = true
         textView.selectedRange = NSRange(location: 12, length: 0)
 
-        XCTAssertEqual(textView.focusedRanges, [NSRange(location: 11, length: 11)])
+        XCTAssertEqual(textView.focusedRanges, [NSRange(location: 0, length: 22)])
+        XCTAssertEqual(focusedText(in: textView), "First line\nSecond line")
+
+        textView.selectedRange = NSRange(location: 25, length: 0)
+        XCTAssertEqual(focusedText(in: textView), "Third line")
     }
 
     func testParagraphFocusTreatsCRLFAsOneDelimiter() {
@@ -32,7 +37,90 @@ final class TextViewFocusModeTests: XCTestCase {
         textView.isFocusModeEnabled = true
         textView.selectedRange = NSRange(location: 5, length: 0)
 
-        XCTAssertEqual(textView.focusedRanges, [NSRange(location: 5, length: 3)])
+        XCTAssertEqual(textView.focusedRanges, [NSRange(location: 0, length: 8)])
+    }
+
+    func testParagraphFocusTreatsWhitespaceOnlyLineAsBlank() {
+        let textView = makeFocusedTextView(text: "One\n  \t\nTwo")
+        textView.focusGranularity = .paragraph
+        textView.isFocusModeEnabled = true
+        textView.selectedRange = NSRange(location: 1, length: 0)
+
+        XCTAssertEqual(focusedText(in: textView), "One")
+    }
+
+    func testSelectionAcrossParagraphsFocusesBothAndCollapsesBack() {
+        let text = "One\ntwo\n\nThree\nfour\n\nFive"
+        let textView = makeFocusedTextView(text: text)
+        textView.focusGranularity = .paragraph
+        textView.isFocusModeEnabled = true
+        textView.selectedRange = NSRange(location: 2, length: 10)
+
+        XCTAssertEqual(textView.focusedRanges.count, 1)
+        XCTAssertTrue(focusedText(in: textView).hasPrefix("One\ntwo"))
+        XCTAssertTrue(focusedText(in: textView).hasSuffix("four"))
+    }
+
+    func testParagraphExpansionIsBoundedOnDocumentWithoutBlankLines() {
+        let text = (0..<10_000).map { "line \($0)" }.joined(separator: "\n")
+        let textView = makeFocusedTextView(text: text)
+        textView.focusGranularity = .paragraph
+        textView.isFocusModeEnabled = true
+        textView.selectedRange = NSRange(location: (text as NSString).length / 2, length: 0)
+
+        let lines = focusedText(in: textView).split(separator: "\n").count
+        XCTAssertLessThanOrEqual(lines, 2 * TextSegmenter.maxParagraphLines + 1)
+        XCTAssertGreaterThan(lines, 1)
+    }
+
+    func testSentenceFocusContinuesAcrossHardLineBreaks() {
+        let text = "Intro sentence.\n\nFootnote reference inline, referencing a definition that appears\nbefore this paragraph, and more text. Next one."
+        let textView = makeFocusedTextView(text: text)
+        textView.focusGranularity = .sentence
+        textView.isFocusModeEnabled = true
+
+        textView.selectedRange = NSRange(location: (text as NSString).range(of: "definition").location, length: 0)
+        XCTAssertEqual(
+            focusedText(in: textView),
+            "Footnote reference inline, referencing a definition that appears\nbefore this paragraph, and more text. "
+        )
+        textView.selectedRange = NSRange(location: (text as NSString).range(of: "and more").location, length: 0)
+        XCTAssertTrue(focusedText(in: textView).hasPrefix("Footnote reference"))
+    }
+
+    func testSentenceFocusKeepsUTF16LengthForCRLFParagraph() {
+        let text = "Alpha beta\r\ngamma delta. Second."
+        let textView = makeFocusedTextView(text: text)
+        textView.focusGranularity = .sentence
+        textView.isFocusModeEnabled = true
+        textView.selectedRange = NSRange(location: 2, length: 0)
+
+        XCTAssertEqual(focusedText(in: textView), "Alpha beta\r\ngamma delta. ")
+    }
+
+    func testFencedCodeBlockIsFocusedWholeInMarkdown() throws {
+        let text = "Intro paragraph.\n\n```json\n{\n  \"a\": 1,\n  \"b\": 2\n}\n```\n\nAfter."
+        let textView = makeFocusedTextView(text: text)
+        textView.setState(TextViewState(text: text,
+                                        theme: DefaultTheme(),
+                                        language: .markdown,
+                                        languageProvider: MarkdownLanguageProvider(),
+                                        parsePolicy: .eager))
+        textView.layoutIfNeeded()
+        try XCTSkipUnless(textView.isSyntaxTreeReady, "markdown tree not ready")
+        textView.isFocusModeEnabled = true
+
+        let expected = "```json\n{\n  \"a\": 1,\n  \"b\": 2\n}\n```"
+        for granularity in [FocusGranularity.paragraph, .sentence] {
+            textView.focusGranularity = granularity
+            textView.selectedRange = NSRange(location: (text as NSString).range(of: "\"b\"").location, length: 0)
+            XCTAssertEqual(focusedText(in: textView), expected, "\(granularity)")
+            textView.selectedRange = NSRange(location: (text as NSString).range(of: "```json").location, length: 0)
+            XCTAssertEqual(focusedText(in: textView), expected, "\(granularity) at the opening fence")
+        }
+
+        textView.selectedRange = NSRange(location: (text as NSString).range(of: "After").location, length: 0)
+        XCTAssertEqual(focusedText(in: textView), "After.")
     }
 
     func testSentenceFocusHandlesAbbreviationDecimalAndClosingQuote() {

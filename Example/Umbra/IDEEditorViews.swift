@@ -140,6 +140,7 @@ struct IDEEditorLayoutNode: View {
     let layout: EditorLayout
 
     var body: some View {
+        let _ = workspace.layoutEpoch
         switch layout {
         case .pane(let pane):
             IDEEditorPaneView(paneID: pane.id)
@@ -193,24 +194,27 @@ struct IDEEditorSplitChain: View {
 
     var body: some View {
         let remaining = children.count - start
-        if remaining <= 0 {
-            Color.clear
-        } else if remaining == 1 {
-            IDEEditorLayoutNode(layout: children[start])
-        } else {
-            SplitPanes(
-                axis: axis,
-                minPrimary: IDEAppearance.Spacing.editorPaneMinLength,
-                minSecondary: IDEAppearance.Spacing.editorPaneMinLength * CGFloat(remaining - 1),
-                defaultFraction: 1 / CGFloat(remaining),
-                // Panes scale together with the window rather than one keeping its size.
-                priority: nil
-            ) {
+        Group {
+            if remaining <= 0 {
+                Color.clear
+            } else if remaining == 1 {
                 IDEEditorLayoutNode(layout: children[start])
-            } secondary: {
-                IDEEditorSplitChain(axis: axis, children: children, start: start + 1)
+            } else {
+                SplitPanes(
+                    axis: axis,
+                    minPrimary: IDEAppearance.Spacing.editorPaneMinLength,
+                    minSecondary: IDEAppearance.Spacing.editorPaneMinLength * CGFloat(remaining - 1),
+                    defaultFraction: 1 / CGFloat(remaining),
+                    // Panes scale together with the window rather than one keeping its size.
+                    priority: nil
+                ) {
+                    IDEEditorLayoutNode(layout: children[start])
+                } secondary: {
+                    IDEEditorSplitChain(axis: axis, children: children, start: start + 1)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

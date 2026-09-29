@@ -13,6 +13,9 @@ public final class IDEPreferences {
     private enum Keys {
         static let fontSize = "com.umbra.editor.fontSize"
         static let fontName = "com.umbra.editor.fontName"
+        static let uiFontName = "com.umbra.editor.uiFontName"
+        static let uiFontSize = "com.umbra.editor.uiFontSize"
+        static let welcomeBackground = "com.umbra.editor.welcomeBackground"
         static let themeID = "com.umbra.editor.themeID"
         static let scaleMarkdownHeadings = "com.umbra.editor.scaleMarkdownHeadings"
         static let tabWidth = "com.umbra.editor.tabWidth"
@@ -52,6 +55,25 @@ public final class IDEPreferences {
 
     var fontName: String {
         didSet { UserDefaults.standard.set(fontName, forKey: Keys.fontName); applyTheme() }
+    }
+
+    var uiFontName: String {
+        didSet {
+            UserDefaults.standard.set(uiFontName, forKey: Keys.uiFontName)
+            IDEUIFonts.setCurrentFamilyName(uiFontName)
+        }
+    }
+
+    var uiFontSize: Double {
+        didSet {
+            UserDefaults.standard.set(uiFontSize, forKey: Keys.uiFontSize)
+            IDEUIFonts.setCurrentFontSize(uiFontSize)
+        }
+    }
+
+    /// Animated backdrop of the welcome page.
+    var welcomeBackground: IDEWelcomeBackground {
+        didSet { UserDefaults.standard.set(welcomeBackground.rawValue, forKey: Keys.welcomeBackground) }
     }
 
     var themeID: String {
@@ -216,6 +238,10 @@ public final class IDEPreferences {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
         fontName = defaults.string(forKey: Keys.fontName) ?? IDEEditorFonts.defaultFamilyName
+        uiFontName = defaults.string(forKey: Keys.uiFontName) ?? IDEUIFonts.defaultFamilyName
+        uiFontSize = defaults.object(forKey: Keys.uiFontSize) as? Double ?? IDEUIFonts.defaultFontSize
+        welcomeBackground = defaults.string(forKey: Keys.welcomeBackground)
+            .flatMap(IDEWelcomeBackground.init(rawValue:)) ?? .starfield
         themeID = defaults.string(forKey: Keys.themeID) ?? ThemeCatalog.defaultDarkID
         scaleMarkdownHeadings = defaults.object(forKey: Keys.scaleMarkdownHeadings) as? Bool ?? true
         tabWidth = defaults.object(forKey: Keys.tabWidth) as? Int ?? 4
@@ -235,7 +261,7 @@ public final class IDEPreferences {
         showInvisibleCharacters = defaults.object(forKey: Keys.showInvisibleCharacters) as? Bool ?? false
         showPageGuide = defaults.object(forKey: Keys.showPageGuide) as? Bool ?? false
         pageGuideColumn = defaults.object(forKey: Keys.pageGuideColumn) as? Int ?? 120
-        lineHeightMultiplier = defaults.object(forKey: Keys.lineHeightMultiplier) as? Double ?? 1
+        lineHeightMultiplier = defaults.object(forKey: Keys.lineHeightMultiplier) as? Double ?? 1.2
         isTypewriterScrollingEnabled = defaults.object(forKey: Keys.isTypewriterScrollingEnabled) as? Bool ?? false
         isDistractionFreeModeEnabled = defaults.object(forKey: Keys.isDistractionFreeModeEnabled) as? Bool ?? false
         isFocusModeEnabled = defaults.object(forKey: Keys.isFocusModeEnabled) as? Bool ?? false
@@ -248,6 +274,8 @@ public final class IDEPreferences {
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
+        IDEUIFonts.setCurrentFamilyName(uiFontName)
+        IDEUIFonts.setCurrentFontSize(uiFontSize)
         applyTheme()
     }
 
@@ -313,6 +341,8 @@ public final class IDEPreferences {
         IDEPreferencesSnapshot(
             fontSize: fontSize,
             fontName: fontName,
+            uiFontName: uiFontName,
+            uiFontSize: uiFontSize,
             themeID: themeID,
             scaleMarkdownHeadings: scaleMarkdownHeadings,
             tabWidth: tabWidth,
@@ -340,6 +370,10 @@ public final class IDEPreferences {
     func restore(from snapshot: IDEPreferencesSnapshot) {
         fontSize = snapshot.fontSize
         fontName = snapshot.fontName
+        uiFontName = snapshot.uiFontName
+        uiFontSize = snapshot.uiFontSize
+        IDEUIFonts.setCurrentFamilyName(uiFontName)
+        IDEUIFonts.setCurrentFontSize(uiFontSize)
         themeID = snapshot.themeID
         scaleMarkdownHeadings = snapshot.scaleMarkdownHeadings
         tabWidth = snapshot.tabWidth
@@ -367,6 +401,8 @@ public final class IDEPreferences {
 struct IDEPreferencesSnapshot: Codable, Equatable {
     var fontSize: Double
     var fontName: String
+    var uiFontName: String
+    var uiFontSize: Double
     var themeID: String
     var scaleMarkdownHeadings: Bool
     var tabWidth: Int
@@ -392,6 +428,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     init(
         fontSize: Double,
         fontName: String = IDEEditorFonts.defaultFamilyName,
+        uiFontName: String = IDEUIFonts.defaultFamilyName,
+        uiFontSize: Double = IDEUIFonts.defaultFontSize,
         themeID: String = ThemeCatalog.defaultDarkID,
         scaleMarkdownHeadings: Bool = true,
         tabWidth: Int,
@@ -407,7 +445,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         showInvisibleCharacters: Bool = false,
         showPageGuide: Bool = false,
         pageGuideColumn: Int = 120,
-        lineHeightMultiplier: Double = 1,
+        lineHeightMultiplier: Double = 1.2,
         isTypewriterScrollingEnabled: Bool = false,
         isDistractionFreeModeEnabled: Bool = false,
         isFocusModeEnabled: Bool = false,
@@ -416,6 +454,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
+        self.uiFontName = uiFontName
+        self.uiFontSize = uiFontSize
         self.themeID = themeID
         self.scaleMarkdownHeadings = scaleMarkdownHeadings
         self.tabWidth = tabWidth
@@ -444,6 +484,10 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         fontSize = try container.decode(Double.self, forKey: .fontSize)
         fontName = try container.decodeIfPresent(String.self, forKey: .fontName)
             ?? IDEEditorFonts.defaultFamilyName
+        uiFontName = try container.decodeIfPresent(String.self, forKey: .uiFontName)
+            ?? IDEUIFonts.defaultFamilyName
+        uiFontSize = try container.decodeIfPresent(Double.self, forKey: .uiFontSize)
+            ?? IDEUIFonts.defaultFontSize
         themeID = try container.decodeIfPresent(String.self, forKey: .themeID)
             ?? ThemeCatalog.defaultDarkID
         scaleMarkdownHeadings = try container.decodeIfPresent(Bool.self, forKey: .scaleMarkdownHeadings) ?? true
@@ -460,7 +504,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         showInvisibleCharacters = try container.decodeIfPresent(Bool.self, forKey: .showInvisibleCharacters) ?? false
         showPageGuide = try container.decodeIfPresent(Bool.self, forKey: .showPageGuide) ?? false
         pageGuideColumn = try container.decodeIfPresent(Int.self, forKey: .pageGuideColumn) ?? 120
-        lineHeightMultiplier = try container.decodeIfPresent(Double.self, forKey: .lineHeightMultiplier) ?? 1
+        lineHeightMultiplier = try container.decodeIfPresent(Double.self, forKey: .lineHeightMultiplier) ?? 1.2
         isTypewriterScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isTypewriterScrollingEnabled) ?? false
         isDistractionFreeModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDistractionFreeModeEnabled) ?? false
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false

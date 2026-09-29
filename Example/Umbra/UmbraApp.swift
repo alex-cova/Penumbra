@@ -13,6 +13,9 @@ struct UmbraApp: App {
                 .frame(minWidth: 960, minHeight: 640)
                 .background(IDEWindowReopenBridge())
         }
+        // Every external open (Dock drop, Open With) goes to `IDEAppDelegate.application(_:open:)`
+        // and the one shared workspace; without this SwiftUI opens a new window per URL.
+        .handlesExternalEvents(matching: ["*"])
         .windowStyle(.hiddenTitleBar)
         .commands {
             let preset = workspace.preferences.keymapPreset

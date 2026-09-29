@@ -80,6 +80,9 @@ public final class IDEWorkspace {
     private weak var paletteOverlayContainer: NSView?
     @ObservationIgnored
     private var hostedPaneIDs: Set<UUID> = []
+    /// Ranged edits an editor reported since its last `textViewDidChange`, kept only while another
+    /// pane shows the same document so they can be replayed there.
+    @ObservationIgnored private var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
     private var hasPresentedMetalFailure = false
     private var recentFiles: [URL] = []
     /// Files edited in the editor, most recent first: the ⌘E "Show edited only" list (IntelliJ's
@@ -4693,6 +4696,47 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Keeps the other panes showing this document in step with an edit made in `textView`:
+    /// replays the ranged edits there, or reloads them from this pane when the edit had no single
+    /// range (replace all, undo of a batch) or a pane no longer matches.
+    private func mirrorEdits(from textView: TextView) {
+        let changes = pendingMirrorChanges.removeValue(forKey: ObjectIdentifier(textView)) ?? []
+        guard hostedPaneIDs.count > 1 else { return }
+        let hosts = workbench.panes.compactMap { pane in hostCache.peek(pane.id).map { (pane: pane, host: $0) } }
+        guard let source = hosts.first(where: { $0.host.textView === textView }),
+              let documentID = source.host.loadedDocumentID,
+              let document = source.pane.selectedDocument, document.id == documentID else { return }
+        let siblings = hosts.filter { $0.host !== source.host && $0.host.loadedDocumentID == documentID }
+        guard !siblings.isEmpty else { return }
+
+        var needsReload: [(pane: EditorPane, host: IDEEditorPaneHost)] = []
+        for sibling in siblings {
+            let applied = !changes.isEmpty && changes.allSatisfy {
+                sibling.host.textView.applyMirroredEdit($0.range, replacementText: $0.replacementText)
+            }
+            if applied, sibling.host.textView.documentLength == textView.documentLength {
+                sibling.host.markdownPreviewController.refresh()
+                scheduleSemanticHighlighting(host: sibling.host, languageIdentifier: document.languageIdentifier)
+            } else {
+                needsReload.append(sibling)
+            }
+        }
+        if needsReload.isEmpty {
+            // Every pane holds the same buffer now, so none of them is stale: without this, the
+            // next focus switch would see a newer generation and rebuild the other pane.
+            document.contentGeneration &+= 1
+            for entry in [source] + siblings {
+                entry.host.loadedGeneration = document.contentGeneration
+                entry.host.loadedBufferGeneration = entry.host.textView.contentGeneration
+            }
+            return
+        }
+        syncTextViewToDocument(textView, document: document, from: source.host)
+        for sibling in needsReload {
+            showDocument(in: sibling.pane, host: sibling.host)
+        }
+    }
+
     /// The freshest known text for `document`: the live content of whichever open pane's host is
     /// currently caught up with `document.contentGeneration`, then any host still showing this
     /// document (its buffer is valid even if a sibling just bumped generation), then
@@ -5009,7 +5053,13 @@ extension IDEWorkspace: TextViewDelegate {
         refreshJavaStructure()
     }
 
+    public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
+        guard hostedPaneIDs.count > 1 else { return }
+        pendingMirrorChanges[ObjectIdentifier(textView), default: []].append(change)
+    }
+
     public func textViewDidChange(_ textView: TextView) {
+        mirrorEdits(from: textView)
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)

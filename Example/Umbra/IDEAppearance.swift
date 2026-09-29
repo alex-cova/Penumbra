@@ -55,16 +55,26 @@ enum IDEAppearance {
     }
 
     enum Typography {
-        static let brandTitle = Font.system(.title, design: .default).weight(.semibold)
-        static let sectionHeader = Font.system(.caption, design: .default).weight(.semibold)
-        static let body = Font.system(.subheadline)
-        static let caption = Font.system(.caption)
-        static let monoCaption = Font.system(.caption, design: .monospaced)
-        static let monoSmall = Font.system(size: 11, design: .monospaced)
-        static let tabLabel = Font.system(size: 12)
-        static let sidebarHeader = Font.system(size: 11, weight: .semibold)
-        static let titlebarTitle = Font.system(size: 13, weight: .semibold)
-        static let panelTab = Font.system(size: 12, weight: .medium)
+        private static var family: String { IDEUIFonts.currentFamilyName }
+
+        private static func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            IDEUIFonts.font(familyName: family, size: size, weight: weight)
+        }
+
+        private static func sized(_ base: CGFloat) -> CGFloat {
+            IDEUIFonts.scaledSize(base)
+        }
+
+        static var brandTitle: Font { font(size: sized(28), weight: .semibold) }
+        static var sectionHeader: Font { font(size: sized(12), weight: .semibold) }
+        static var body: Font { font(size: sized(15)) }
+        static var caption: Font { font(size: sized(12)) }
+        static var monoCaption: Font { font(size: sized(12)) }
+        static var monoSmall: Font { font(size: sized(11)) }
+        static var tabLabel: Font { font(size: sized(12)) }
+        static var sidebarHeader: Font { font(size: sized(11), weight: .semibold) }
+        static var titlebarTitle: Font { font(size: sized(13), weight: .semibold) }
+        static var panelTab: Font { font(size: sized(12), weight: .medium) }
     }
 
     enum ColorToken {
@@ -128,6 +138,69 @@ extension Color {
         let green = Double((hex >> 8) & 0xFF) / 255
         let blue = Double(hex & 0xFF) / 255
         self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
+    }
+}
+
+enum IDEUIFonts {
+    static let defaultFamilyName = "SF Compact"
+    static let defaultFontSize: Double = 13
+    private(set) nonisolated(unsafe) static var currentFamilyName = defaultFamilyName
+    private(set) nonisolated(unsafe) static var currentFontSize = defaultFontSize
+
+    static let familyNames: [String] = {
+        NSFontManager.shared.availableFontFamilies
+            .filter { !$0.hasPrefix(".") }
+            .sorted()
+    }()
+
+    static func choices(including current: String) -> [String] {
+        if familyNames.contains(current) {
+            return familyNames
+        }
+        return [current] + familyNames
+    }
+
+    static func setCurrentFamilyName(_ name: String) {
+        currentFamilyName = name
+    }
+
+    static func setCurrentFontSize(_ size: Double) {
+        currentFontSize = size
+    }
+
+    static func scaledSize(_ base: CGFloat) -> CGFloat {
+        base * CGFloat(currentFontSize / defaultFontSize)
+    }
+
+    static func nsFont(familyName: String, size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        let descriptor = NSFontDescriptor(fontAttributes: [
+            .family: familyName,
+            .size: size,
+            .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue]
+        ])
+        if let font = NSFont(descriptor: descriptor, size: size) {
+            return font
+        }
+        return NSFont.systemFont(ofSize: size, weight: weight)
+    }
+
+    static func font(familyName: String, size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font(nsFont(familyName: familyName, size: size, weight: nsWeight(weight)))
+    }
+
+    private static func nsWeight(_ weight: Font.Weight) -> NSFont.Weight {
+        switch weight {
+        case .ultraLight: return .ultraLight
+        case .thin: return .thin
+        case .light: return .light
+        case .regular: return .regular
+        case .medium: return .medium
+        case .semibold: return .semibold
+        case .bold: return .bold
+        case .heavy: return .heavy
+        case .black: return .black
+        default: return .regular
+        }
     }
 }
 

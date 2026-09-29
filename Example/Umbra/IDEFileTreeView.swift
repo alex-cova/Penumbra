@@ -94,7 +94,11 @@ struct IDEFileTreeView: View {
     /// A `LazyVStack` only measures the rows it has realized, so the scrollable width would change
     /// while scrolling and the horizontal scroller would come and go. Size it from every row instead.
     private func contentWidth(of nodes: [FlatNode]) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1, weight: .semibold)
+        let font = IDEUIFonts.nsFont(
+            familyName: IDEUIFonts.currentFamilyName,
+            size: IDEUIFonts.scaledSize(12),
+            weight: .semibold
+        )
         let chrome = CGFloat(12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2)
         return nodes.reduce(0) { widest, item in
             let name = (item.node.displayName ?? item.node.name) as NSString

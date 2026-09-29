@@ -17,6 +17,8 @@ public struct IDERootView: View {
     public var body: some View {
         let _ = workspace.layoutEpoch
         let _ = workspace.showsWelcome
+        let _ = workspace.preferences.uiFontName
+        let _ = workspace.preferences.uiFontSize
         VStack(spacing: 0) {
             IDEToolbarPanel()
                 .frame(height: titlebarHeight)
@@ -66,7 +68,7 @@ public struct IDERootView: View {
                             // pane, so showing it here paints a text editor with no tab and no text.
                             if workspace.hasOpenDocuments {
                                 IDEEditorLayoutNode(layout: workspace.editorLayout)
-                                    .id("editor-layout")
+                                    .id(workspace.layoutEpoch)
                             } else {
                                 IDEWelcomeView()
                             }
@@ -79,7 +81,7 @@ public struct IDERootView: View {
                                     .transition(.opacity)
                             }
                         }
-                        .frame(maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
                     }
                     .idePanel()

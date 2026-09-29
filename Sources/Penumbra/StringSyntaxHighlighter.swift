@@ -20,7 +20,7 @@ public final class StringSyntaxHighlighter {
     /// The default value is 4 meaning that a tab is four spaces wide.
     public var tabLength: Int = 4
     /// The line-height is multiplied with the value.
-    public var lineHeightMultiplier: CGFloat = 1
+    public var lineHeightMultiplier: CGFloat = 1.2
 
     /// Creates an object that can syntax highlight a text.
     /// - Parameters:

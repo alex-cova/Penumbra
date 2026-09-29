@@ -33,9 +33,9 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
     var searchTerms: [String] {
         switch self {
         case .editor:
-            ["font", "font size", "line height", "typography", "tab width", "indent", "spaces", "keymap", "keyboard", "sublime", "intellij", "shortcuts"]
+            ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts"]
         case .appearance:
-            ["theme", "color", "markdown headings", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer"]
+            ["ui font", "ui font size", "interface font", "sf compact", "welcome", "background", "starfield", "deep space", "stars", "animation"]
         case .focus:
             ["typewriter", "distraction free", "focus mode", "writing"]
         case .project:
@@ -54,8 +54,8 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
 
     var showsTypePreview: Bool {
         switch self {
-        case .editor, .appearance: true
-        case .focus, .project, .java: false
+        case .editor: true
+        case .appearance, .focus, .project, .java: false
         }
     }
 }
