@@ -132,6 +132,7 @@ public final class MarkdownPreviewView: NSView {
     var debugMetalPresentedTileCount: Int { metalRenderer.presentedTileCount }
     var debugMetalRequestedTileCount: Int { metalRenderer.lastRequestedTileCount }
     var debugDocumentView: NSView? { scrollView.documentView }
+    var debugContentView: NSView { contentView }
 
     /// Benchmarks only (`@_spi(Benchmarks) import Penumbra`): scrolls the preview so its visible
     /// rect starts at `y` and presents synchronously, as a scroll-wheel event would.
@@ -258,10 +259,41 @@ public final class MarkdownPreviewView: NSView {
     /// Renders the full (unclipped) document into a single-page PDF via the same CG drawing path
     /// used on screen, so this reflects what's currently shown regardless of whether the Metal
     /// path is active for live display. `nil` when nothing has been parsed yet.
+    ///
+    /// Draws straight from the layout into a PDF context: while Metal is active `contentView` is
+    /// hidden, and a hidden view contributes nothing to `dataWithPDF`, which produced a blank page.
     func renderedDocumentPDFData() -> Data? {
         guard document != nil else { return nil }
         layoutSubtreeIfNeeded()
-        return contentView.dataWithPDF(inside: contentView.bounds)
+        let size = contentView.layout.contentSize
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let data = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: size)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+
+        context.beginPDFPage(nil)
+        // The layout is top-down (the on-screen content view is flipped).
+        context.translateBy(x: 0, y: size.height)
+        context.scaleBy(x: 1, y: -1)
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            MarkdownPreviewCGRenderer.draw(
+                layout: contentView.layout,
+                style: style,
+                rasterImages: rasterImages,
+                highlightedCode: highlightedCode,
+                in: context,
+                bounds: mediaBox
+            )
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
     }
 
     /// Natural content size for `document` at `width`, without requiring the view to be laid out

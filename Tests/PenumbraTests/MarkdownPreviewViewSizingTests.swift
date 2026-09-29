@@ -49,4 +49,35 @@ final class MarkdownPreviewViewSizingTests: XCTestCase {
         let size = preview.preferredContentSize(forWidth: 0)
         XCTAssertGreaterThan(size.width, 0)
     }
+
+    /// With Metal active the on-screen content view is hidden, and exporting through it produced a
+    /// blank white page.
+    @MainActor
+    func testPDFExportPaintsBackgroundAndTextWhileContentViewIsHidden() throws {
+        let preview = MarkdownPreviewView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        var style = preview.style
+        style.backgroundColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.1, alpha: 1)
+        preview.style = style
+        preview.document = MarkdownPreviewDocument.parse("# Title\n\nSome body text.")
+        preview.layoutSubtreeIfNeeded()
+        preview.debugContentView.isHidden = true
+
+        let data = try XCTUnwrap(preview.renderedDocumentPDFData())
+        let rep = try XCTUnwrap(NSPDFImageRep(data: data))
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        let corner = try XCTUnwrap(bitmap.colorAt(x: 1, y: 1)?.usingColorSpace(.deviceRGB))
+        XCTAssertLessThan(corner.brightnessComponent, 0.3, "the page background should be the preview's, not white")
+
+        var hasTextPixel = false
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), abs(c.brightnessComponent - corner.brightnessComponent) > 0.15 {
+                    hasTextPixel = true
+                }
+            }
+        }
+        XCTAssertTrue(hasTextPixel, "the text should be drawn")
+    }
 }
