@@ -34,6 +34,11 @@ struct IDEGradleConsoleLog {
     private(set) var startedAt: Date?
     private(set) var finishedAt: Date?
 
+    /// Every line this run has produced, dropped ones included. Line `i` of ``lines`` is number
+    /// `droppedCount + i`, which is what a view follows: a position in ``lines`` shifts whenever
+    /// old lines are dropped, a number never does.
+    var totalLineCount: Int { droppedCount + lines.count }
+
     var latestLine: String? {
         lines.last?.text
     }

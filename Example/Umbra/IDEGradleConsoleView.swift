@@ -61,7 +61,16 @@ struct IDEGradleConsoleView: NSViewRepresentable {
         var lastRunID: UUID?
         var lastFontName: String?
         var lastFontSize: Double?
-        private var renderedLineCount = 0
+        /// How many lines of the run the text has been given, dropped ones included, so the next
+        /// line to draw is number `renderedTotal`. A count of lines *in the log* would stall once the
+        /// log is full: it stays at `maxLines` while old lines fall off the front.
+        private var renderedTotal = 0
+        /// Character counts of the lines in the text, oldest first; `lengths.last` is line
+        /// `renderedTotal - 1`.
+        private var lengths: [Int] = []
+        /// Characters of the "earlier lines not shown" notice at the top of the text, or 0.
+        private var noticeLength = 0
+        private var noticeCount = 0
 
         func render(_ log: IDEGradleConsoleLog, fontName: String, fontSize: Double, fullReplace: Bool) {
             guard let textView, let textStorage = textView.textStorage else { return }
@@ -70,23 +79,50 @@ struct IDEGradleConsoleView: NSViewRepresentable {
 
             if fullReplace {
                 textStorage.setAttributedString(NSAttributedString(string: ""))
-                renderedLineCount = 0
+                lengths = []
+                noticeLength = 0
+                noticeCount = 0
+                renderedTotal = log.droppedCount
                 lastRunID = log.runID
                 lastFontName = fontName
                 lastFontSize = fontSize
             }
 
-            guard renderedLineCount < log.lines.count else { return }
-            let newLines = log.lines[renderedLineCount...]
-            let appended = NSMutableAttributedString()
-            for line in newLines {
-                if appended.length > 0 || textStorage.length > 0 {
-                    appended.append(NSAttributedString(string: "\n"))
+            // Text for lines the log has since dropped goes; a line dropped before it was ever drawn is skipped.
+            let firstRendered = renderedTotal - lengths.count
+            if log.droppedCount > firstRendered {
+                let drop = min(log.droppedCount - firstRendered, lengths.count)
+                if drop > 0 {
+                    let characters = lengths.prefix(drop).reduce(0, +)
+                    textStorage.deleteCharacters(in: NSRange(location: noticeLength, length: characters))
+                    lengths.removeFirst(drop)
                 }
-                appended.append(Self.attributedString(for: line, font: font))
+                renderedTotal = max(renderedTotal, log.droppedCount)
             }
-            textStorage.append(appended)
-            renderedLineCount = log.lines.count
+
+            let start = renderedTotal - log.droppedCount
+            if start < log.lines.count {
+                let appended = NSMutableAttributedString()
+                for line in log.lines[start...] {
+                    let text = line.text + "\n"
+                    appended.append(Self.attributedString(for: text, line: line, font: font))
+                    lengths.append((text as NSString).length)
+                }
+                textStorage.append(appended)
+                renderedTotal = log.totalLineCount
+            }
+
+            if log.droppedCount != noticeCount {
+                let notice = log.droppedCount > 0
+                    ? NSAttributedString(
+                        string: "… \(log.droppedCount) earlier line\(log.droppedCount == 1 ? "" : "s") not shown\n",
+                        attributes: [.font: font, .foregroundColor: IDEAppearance.NSToken.muted]
+                    )
+                    : NSAttributedString(string: "")
+                textStorage.replaceCharacters(in: NSRange(location: 0, length: noticeLength), with: notice)
+                noticeLength = notice.length
+                noticeCount = log.droppedCount
+            }
 
             if wasAtBottom {
                 textView.scrollToEndOfDocument(nil)
@@ -102,7 +138,7 @@ struct IDEGradleConsoleView: NSViewRepresentable {
             return documentHeight - visibleMaxY < 24
         }
 
-        private static func attributedString(for line: IDEGradleConsoleLog.Line, font: NSFont) -> NSAttributedString {
+        private static func attributedString(for text: String, line: IDEGradleConsoleLog.Line, font: NSFont) -> NSAttributedString {
             let color: NSColor
             switch line {
             case .process(let processLine):
@@ -110,7 +146,7 @@ struct IDEGradleConsoleView: NSViewRepresentable {
             case .note:
                 color = IDEAppearance.NSToken.muted
             }
-            return NSAttributedString(string: line.text, attributes: [.font: font, .foregroundColor: color])
+            return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
         }
     }
 }
