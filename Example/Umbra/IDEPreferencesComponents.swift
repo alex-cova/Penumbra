@@ -68,21 +68,42 @@ struct IDEPreferencesTypePreview: View {
         ThemeCatalog.palette(id: themeID, fallbackDark: true)
     }
 
+    @AppStorage("preferencesTypePreviewCollapsed") private var isCollapsed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
-            Text("Preview")
-                .font(IDEAppearance.Typography.sectionHeader)
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                    isCollapsed.toggle()
+                }
+            } label: {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 10)
+                    Text("Preview")
+                        .font(IDEAppearance.Typography.sectionHeader)
+                        .textCase(.uppercase)
+                    Spacer(minLength: 0)
+                }
                 .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .accessibilityHidden(true)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview")
+            .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+            .accessibilityHint("Shows or hides the code preview")
 
-            previewSourceView
-                .font(Font(IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(IDEAppearance.Spacing.md)
-                .background(Color(hex: palette.background))
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .accessibilityLabel(accessibilityPreview)
+            if !isCollapsed {
+                previewSourceView
+                    .font(Font(IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(IDEAppearance.Spacing.md)
+                    .background(Color(hex: palette.background))
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                    .accessibilityLabel(accessibilityPreview)
+            }
         }
         .padding(.horizontal, IDEAppearance.Spacing.lg)
         .padding(.vertical, IDEAppearance.Spacing.md)
