@@ -65,25 +65,29 @@ struct IDEStatusToast: View {
     }
 
     private func notificationCard(_ notification: IDENotification) -> some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
+        HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
             Button {
                 workspace.activate(notification)
             } label: {
-                HStack(spacing: IDEAppearance.Spacing.sm) {
+                HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                     Image(systemName: notification.severity.symbolName)
                         .foregroundStyle(notification.severity.tint)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(notification.title)
                             .foregroundStyle(notification.severity == .error ? notification.severity.tint : IDEAppearance.ColorToken.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         if let detail = notification.detail {
                             Text(detail)
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
                         }
                     }
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(notification.action == nil)
@@ -131,9 +135,10 @@ struct IDEStatusToast: View {
 private extension View {
     /// The card every toast shares.
     func toastChrome() -> some View {
-        padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, IDEAppearance.Spacing.sm)
-            .frame(maxWidth: 420)
+        HuggingWidthLayout(maxWidth: 380) {
+            padding(.horizontal, IDEAppearance.Spacing.md)
+                .padding(.vertical, IDEAppearance.Spacing.sm)
+        }
             .background(
                 IDEAppearance.ColorToken.card,
                 in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
@@ -145,5 +150,31 @@ private extension View {
             }
             .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             .accessibilityElement(children: .contain)
+    }
+}
+
+/// Sizes its one child to its natural width, capped at `maxWidth`, then lets the child wrap and
+/// truncate inside that width. `.frame(maxWidth:)` would grow to the cap whatever the content.
+private struct HuggingWidthLayout: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let width = fittedWidth(proposal: proposal, subview: subview)
+        let height = subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
+
+    private func fittedWidth(proposal: ProposedViewSize, subview: LayoutSubview) -> CGFloat {
+        let natural = subview.sizeThatFits(.unspecified).width
+        let cap = min(maxWidth, proposal.width ?? .infinity)
+        return min(natural, cap)
     }
 }
