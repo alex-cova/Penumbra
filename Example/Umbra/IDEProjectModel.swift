@@ -80,14 +80,20 @@ final class IDEProjectModel {
     func rootURL(from bookmarkData: Data?) -> URL? {
         guard let bookmarkData else { return nil }
         var isStale = false
-        guard let url = try? URL(
+        // An unsandboxed build (`swift run`) can't create or resolve a security-scoped bookmark,
+        // so fall back to a plain one instead of dropping the project.
+        let url = (try? URL(
             resolvingBookmarkData: bookmarkData,
             options: [.withSecurityScope],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
-        ) else {
-            return nil
-        }
+        )) ?? (try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ))
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         _ = url.startAccessingSecurityScopedResource()
         return url
     }
@@ -98,11 +104,15 @@ final class IDEProjectModel {
 
     func makeBookmarkData() -> Data? {
         guard let rootURL else { return nil }
-        return try? rootURL.bookmarkData(
+        return (try? rootURL.bookmarkData(
             options: [.withSecurityScope],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
-        )
+        )) ?? (try? rootURL.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ))
     }
 
     func toggleExpanded(_ node: IDEFileNode) {
