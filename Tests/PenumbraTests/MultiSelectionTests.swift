@@ -15,8 +15,8 @@ final class MultiSelectionTests: XCTestCase {
         XCTAssertEqual(textView.text as String, "Xab Xab Xab")
         XCTAssertEqual(textView.selectedRanges, [
             NSRange(location: 1, length: 0),
-            NSRange(location: 4, length: 0),
-            NSRange(location: 7, length: 0)
+            NSRange(location: 5, length: 0),
+            NSRange(location: 9, length: 0)
         ])
     }
 
@@ -30,7 +30,7 @@ final class MultiSelectionTests: XCTestCase {
         XCTAssertEqual(textView.text as String, "ab")
         XCTAssertEqual(textView.selectedRanges, [
             NSRange(location: 1, length: 0),
-            NSRange(location: 3, length: 0)
+            NSRange(location: 2, length: 0)
         ])
     }
 

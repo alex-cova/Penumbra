@@ -964,7 +964,7 @@ final class TextInputView: EditorView {
     private var selectionOverlayController: SelectionOverlayController!
     private let bracketMatchingController: BracketMatchingController
     private let diagnosticEmphasisController = DiagnosticEmphasisController()
-    private let multiSelectionController = MultiSelectionController()
+    let multiSelectionController = MultiSelectionController()
     let semanticSelectionController = SemanticSelectionController()
     private var isApplyingMultipleSelectionUpdate = false
     private var snippetSession: SnippetSession?
@@ -1039,6 +1039,9 @@ final class TextInputView: EditorView {
     private var preserveUndoStackWhenSettingString = false
     private var cancellables: [AnyCancellable] = []
     var selectionAnchor: Int?
+    /// Per-selection anchor/active ends kept by ``extendAllSelections(_:)``; only valid while they
+    /// still match `selectedRanges`.
+    var multiSelectionEnds: [SelectionEnds] = []
     var isMouseSelecting = false
     /// An Option-click's point, held until `mouseDragged`/`mouseUp` resolve whether it was a
     /// click (add a caret) or a drag (start a block/column selection). See
@@ -2440,10 +2443,13 @@ extension TextInputView {
     }
 
     func moveAllSelections(in direction: EditorTextLayoutDirection) {
+        endBlockSelectionUnlessSticky()
         var newSelections: [NSRange] = []
         for range in selectedRanges {
             if range.length > 0 {
-                newSelections.append(range)
+                // Like a single selection (and NSTextView): collapse to the near edge, don't move on.
+                let edge = direction == .left || direction == .up ? range.location : range.upperBound
+                newSelections.append(NSRange(location: edge, length: 0))
                 continue
             }
             guard let newLocation = lineMovementController.location(from: range.location, in: direction, offset: 1) else {
@@ -3139,7 +3145,7 @@ extension TextInputView {
         var newSelections: [NSRange] = []
         for range in editRanges {
             replaceText(in: range, with: text, selectedRangesAfterUndo: originalSelections, primaryIndexAfterUndo: primaryIndex, updateSelection: false)
-            newSelections.append(NSRange(location: range.location + text.utf16.count, length: 0))
+            appendCaret(at: range.location + text.utf16.count, afterEditChangingLengthBy: text.utf16.count - range.length, to: &newSelections)
         }
         timedUndoManager.endUndoGrouping()
         applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
@@ -3174,9 +3180,9 @@ extension TextInputView {
             indentController.insertLineBreak(in: selection, using: lineEndings)
             // Sites are edited bottom-up, so this edit sits above every caret recorded so far
             // and shifts them all by the text it added.
-            let delta = stringView.length - lengthBefore
-            newSelections = newSelections.map { NSRange(location: $0.location + delta, length: $0.length) }
-            newSelections.append(_selectedRange ?? NSRange(location: selection.location, length: 0))
+            appendCaret(_selectedRange ?? NSRange(location: selection.location, length: 0),
+                        afterEditChangingLengthBy: stringView.length - lengthBefore,
+                        to: &newSelections)
         }
         pendingMultiSelectionUndoRestore = nil
         timedUndoManager.endUndoGrouping()
@@ -3187,6 +3193,21 @@ extension TextInputView {
             guard let self else { return }
             self.delegate?.textInputViewDidChangeSelection(self)
         }
+    }
+
+    /// Records the caret an edit leaves behind while a multi-site edit runs bottom-up (sites in
+    /// descending document order). Every caret recorded so far sits below this edit, so the
+    /// edit's net length change moves it; the new caret is already in final coordinates because
+    /// nothing above it has been edited yet — the edits still to come shift it in turn.
+    private func appendCaret(at location: Int, afterEditChangingLengthBy delta: Int, to carets: inout [NSRange]) {
+        appendCaret(NSRange(location: location, length: 0), afterEditChangingLengthBy: delta, to: &carets)
+    }
+
+    private func appendCaret(_ caret: NSRange, afterEditChangingLengthBy delta: Int, to carets: inout [NSRange]) {
+        if delta != 0 {
+            carets = carets.map { NSRange(location: $0.location + delta, length: $0.length) }
+        }
+        carets.append(caret)
     }
 
     /// Pairs `lines[i]` with the i-th selection in ascending document order (top row gets the
@@ -3213,7 +3234,8 @@ extension TextInputView {
                        selectedRangesAfterUndo: restoreRanges,
                        primaryIndexAfterUndo: primaryIndex,
                        updateSelection: false)
-            newSelections.append(NSRange(location: selection.location + (text as NSString).length, length: 0))
+            let insertedLength = (text as NSString).length
+            appendCaret(at: selection.location + insertedLength, afterEditChangingLengthBy: insertedLength - selection.length, to: &newSelections)
         }
         timedUndoManager.endUndoGrouping()
         applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
@@ -3255,7 +3277,7 @@ extension TextInputView {
                        selectedRangesAfterUndo: selections,
                        primaryIndexAfterUndo: primaryIndex,
                        updateSelection: false)
-            newSelections.append(NSRange(location: operation.caretLocation, length: 0))
+            appendCaret(at: operation.caretLocation, afterEditChangingLengthBy: -operation.deleteRange.length, to: &newSelections)
         }
         for selection in selections where selection.length == 0 && selection.location == 0 {
             newSelections.append(selection)
@@ -3298,7 +3320,7 @@ extension TextInputView {
                        selectedRangesAfterUndo: selections,
                        primaryIndexAfterUndo: primaryIndex,
                        updateSelection: false)
-            newSelections.append(NSRange(location: operation.caretLocation, length: 0))
+            appendCaret(at: operation.caretLocation, afterEditChangingLengthBy: -operation.deleteRange.length, to: &newSelections)
         }
         timedUndoManager.endUndoGrouping()
         applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)

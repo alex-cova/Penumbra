@@ -241,10 +241,10 @@ extension TextInputView {
             moveSelectionForArrowKey(direction: .up, flags: flags)
             return
         case 0x73:
-            moveSelectionToCaretStop(.line, direction: .backward, extending: flags.contains(.shift))
+            moveSelectionsToLineBoundary(.backward, extending: flags.contains(.shift))
             return
         case 0x77:
-            moveSelectionToCaretStop(.line, direction: .forward, extending: flags.contains(.shift))
+            moveSelectionsToLineBoundary(.forward, extending: flags.contains(.shift))
             return
         case 0x33 where isEditable:
             if flags.contains(.option) {
@@ -568,15 +568,29 @@ extension TextInputView {
         }
     }
 
-    private func moveSelectionForArrowKey(direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) {
-        if flags.contains(.shift), isMultiCursorActive {
-            collapseMultiSelectionToPrimary()
+    /// Home/End: every caret when there are several, otherwise the one selection.
+    private func moveSelectionsToLineBoundary(_ direction: EditorTextDirection, extending: Bool) {
+        guard isMultiCursorActive else {
+            moveSelectionToCaretStop(.line, direction: direction, extending: extending)
+            return
         }
+        if extending {
+            extendAllSelections { caretStopLocation(.line, from: $0, direction: direction) }
+        } else {
+            moveAllSelections(to: { caretStopLocation(.line, from: $0, direction: direction) }, direction: direction)
+        }
+    }
+
+    private func moveSelectionForArrowKey(direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) {
         let textDirection = layoutDirectionToTextDirection(direction)
         let stop = caretStop(for: direction, flags: flags)
+        if flags.contains(.shift), isMultiCursorActive {
+            extendAllSelections(in: direction, stop: stop)
+            return
+        }
         if !flags.contains(.shift), isMultiCursorActive {
             if let stop {
-                moveAllSelections { caretStopLocation(stop, from: $0, direction: textDirection) }
+                moveAllSelections(to: { caretStopLocation(stop, from: $0, direction: textDirection) }, direction: textDirection)
             } else {
                 moveAllSelections(in: direction)
             }

@@ -149,4 +149,44 @@ final class BlockSelectionTests: XCTestCase {
         textView.selectedRange = NSRange(location: 0, length: 0)
         XCTAssertFalse(textView.isBlockSelectionActive)
     }
+
+    func testCommandRightThenSpaceAfterAColumnDragAppendsToEveryLine() {
+        let textView = makeFocusedTextView(text: "abcdef\nabcdefgh\nabc\nabcdefg")
+        let rowLocations = [0, 7, 16, 20]
+        textView.beginBlockSelection(at: point(forRow: 0, column: 2, rowLocations: rowLocations, in: textView))
+        textView.extendBlockSelection(to: point(forRow: 3, column: 2, rowLocations: rowLocations, in: textView))
+        XCTAssertEqual(textView.selectedRanges.map(\.length), [0, 0, 0, 0])
+
+        send(keyEvent(keyCode: TestKeyCode.rightArrow, flags: .command), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 6, length: 0),
+            NSRange(location: 15, length: 0),
+            NSRange(location: 19, length: 0),
+            NSRange(location: 27, length: 0)
+        ])
+        textView.insertText(" ")
+        XCTAssertEqual(textView.text as String, "abcdef \nabcdefgh \nabc \nabcdefg ")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 7, length: 0),
+            NSRange(location: 17, length: 0),
+            NSRange(location: 22, length: 0),
+            NSRange(location: 31, length: 0)
+        ])
+    }
+
+    func testCommandRightCollapsesAColumnDragWithWidthToLineEnds() {
+        let textView = makeFocusedTextView(text: "abcdef\nabcdefgh\nabcdefg")
+        let rowLocations = [0, 7, 16]
+        textView.beginBlockSelection(at: point(forRow: 0, column: 1, rowLocations: rowLocations, in: textView))
+        textView.extendBlockSelection(to: point(forRow: 2, column: 3, rowLocations: rowLocations, in: textView))
+        XCTAssertEqual(textView.selectedRanges.map(\.length), [2, 2, 2])
+
+        send(keyEvent(keyCode: TestKeyCode.rightArrow, flags: .command), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 6, length: 0),
+            NSRange(location: 15, length: 0),
+            NSRange(location: 23, length: 0)
+        ])
+        XCTAssertFalse(textView.isBlockSelectionActive)
+    }
 }

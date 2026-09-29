@@ -26,18 +26,28 @@ extension TextInputView {
         }
     }
 
-    /// Moves every caret with `target`, one undo-free selection change. Non-empty selections
-    /// stay put, like ``moveAllSelections(in:)``.
-    func moveAllSelections(to target: (Int) -> Int?) {
+    /// Moves every caret with `target`, one undo-free selection change. A non-empty selection
+    /// first collapses to its edge in `direction`, then moves from there, like the single
+    /// selection does (``moveSelectionToCaretStop``).
+    func moveAllSelections(to target: (Int) -> Int?, direction: EditorTextDirection) {
+        endBlockSelectionUnlessSticky()
+        let forward = direction != .backward
         let newSelections = selectedRanges.map { range -> NSRange in
-            guard range.length == 0, let location = target(range.location) else {
-                return range
-            }
+            let reference = forward ? range.upperBound : range.location
+            let location = target(reference) ?? (range.length > 0 ? reference : range.location)
             return NSRange(location: location, length: 0)
         }
         applySelectedRanges(MultiSelectionController.normalize(newSelections))
         if let primary = selection {
             selectionAnchor = primary.length == 0 ? primary.location : primary.upperBound
+        }
+    }
+
+    /// A keyboard caret move turns a column drag into plain carets, as in IntelliJ outside
+    /// column mode. The rectangle would otherwise linger when the primary caret doesn't move.
+    func endBlockSelectionUnlessSticky() {
+        if blockSelectionController.isActive, !blockSelectionController.isStickyModeEnabled {
+            blockSelectionController.end()
         }
     }
 

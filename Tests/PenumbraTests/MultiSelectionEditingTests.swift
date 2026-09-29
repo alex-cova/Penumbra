@@ -235,4 +235,142 @@ final class MultiSelectionEditingTests: XCTestCase {
         XCTAssertEqual(textView.text as String, "one\ntwo\nthree")
         XCTAssertEqual(textView.selectedRanges, original)
     }
+
+    // MARK: - Caret positions after multi-site edits
+
+    func testTypingAtSeveralSitesLeavesEachCaretAfterItsOwnInsertion() {
+        let textView = makeFocusedTextView(text: "abc\ndefg\nhi")
+        textView.selectedRanges = [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 5, length: 0),
+            NSRange(location: 10, length: 0)
+        ]
+        textView.insertText(" ")
+        XCTAssertEqual(textView.text as String, "a bc\nd efg\nh i")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 2, length: 0),
+            NSRange(location: 7, length: 0),
+            NSRange(location: 13, length: 0)
+        ])
+    }
+
+    func testTypingSeveralCharactersShiftsCaretsByEveryInsertionAbove() {
+        let textView = makeFocusedTextView(text: "a\nb\nc")
+        textView.selectedRanges = [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 3, length: 0),
+            NSRange(location: 5, length: 0)
+        ]
+        textView.insertText("xy")
+        XCTAssertEqual(textView.text as String, "axy\nbxy\ncxy")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 3, length: 0),
+            NSRange(location: 7, length: 0),
+            NSRange(location: 11, length: 0)
+        ])
+        // A second keystroke must land at the same relative spot on every line.
+        textView.insertText("z")
+        XCTAssertEqual(textView.text as String, "axyz\nbxyz\ncxyz")
+    }
+
+    func testCommandRightThenSpaceAppendsASpaceToEveryLine() {
+        let textView = makeFocusedTextView(text: "ab\ncdef\ngh")
+        textView.selectedRanges = [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 4, length: 0),
+            NSRange(location: 9, length: 0)
+        ]
+        send(keyEvent(keyCode: TestKeyCode.rightArrow, flags: .command), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 2, length: 0),
+            NSRange(location: 7, length: 0),
+            NSRange(location: 10, length: 0)
+        ])
+        send(keyEvent(keyCode: 0x31, characters: " "), to: textView)
+        XCTAssertEqual(textView.text as String, "ab \ncdef \ngh ")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 3, length: 0),
+            NSRange(location: 9, length: 0),
+            NSRange(location: 13, length: 0)
+        ])
+    }
+
+    func testReplacingSelectionsOfDifferentLengthsKeepsCaretsAligned() {
+        let textView = makeFocusedTextView(text: "abc d")
+        textView.selectedRanges = [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 4, length: 1)
+        ]
+        textView.insertText("X")
+        XCTAssertEqual(textView.text as String, "X X")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 3, length: 0)
+        ])
+    }
+
+    func testDeleteBackwardAtSeveralSitesKeepsCaretsAtTheirDeletionPoints() {
+        let textView = makeFocusedTextView(text: "abc\ndef\nghi")
+        textView.selectedRanges = [
+            NSRange(location: 2, length: 0),
+            NSRange(location: 6, length: 0),
+            NSRange(location: 10, length: 0)
+        ]
+        textView.deleteBackward()
+        XCTAssertEqual(textView.text as String, "ac\ndf\ngi")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 4, length: 0),
+            NSRange(location: 7, length: 0)
+        ])
+    }
+
+    func testDeleteForwardAtSeveralSitesKeepsCaretsAtTheirDeletionPoints() {
+        let textView = makeFocusedTextView(text: "abc\ndef\nghi")
+        textView.selectedRanges = [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 5, length: 0),
+            NSRange(location: 9, length: 0)
+        ]
+        send(keyEvent(keyCode: 0x75), to: textView)
+        XCTAssertEqual(textView.text as String, "ac\ndf\ngi")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 4, length: 0),
+            NSRange(location: 7, length: 0)
+        ])
+    }
+
+    func testCutAtSeveralSelectionsKeepsCaretsAtTheirCutPoints() {
+        let textView = makeFocusedTextView(text: "abcd efgh ijkl")
+        textView.selectedRanges = [
+            NSRange(location: 1, length: 2),
+            NSRange(location: 6, length: 2),
+            NSRange(location: 11, length: 2)
+        ]
+        performResponderAction("cut:", on: textView)
+        XCTAssertEqual(textView.text as String, "ad eh il")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 4, length: 0),
+            NSRange(location: 7, length: 0)
+        ])
+    }
+
+    func testBlockPasteDistributingOneLinePerCaretKeepsCaretsAfterEachLine() {
+        let textView = makeFocusedTextView(text: "aa\nbb\ncc")
+        textView.selectedRanges = [
+            NSRange(location: 0, length: 0),
+            NSRange(location: 3, length: 0),
+            NSRange(location: 6, length: 0)
+        ]
+        EditorPasteboard.general.string = "1\n2\n3"
+        performResponderAction("paste:", on: textView)
+        XCTAssertEqual(textView.text as String, "1aa\n2bb\n3cc")
+        XCTAssertEqual(textView.selectedRanges, [
+            NSRange(location: 1, length: 0),
+            NSRange(location: 5, length: 0),
+            NSRange(location: 9, length: 0)
+        ])
+    }
 }

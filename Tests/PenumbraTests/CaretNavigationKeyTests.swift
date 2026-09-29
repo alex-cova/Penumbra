@@ -136,6 +136,69 @@ final class CaretNavigationKeyTests: XCTestCase {
         XCTAssertEqual(textView.selectedRanges, [NSRange(location: 5, length: 0), NSRange(location: 11, length: 0)])
     }
 
+    // MARK: - Multi-caret selection extension
+
+    func testOptionShiftRightSelectsAWordAtEveryCaretAndShrinksBack() {
+        let textView = makeFocusedTextView(text: "ab cd\nef gh")
+        textView.selectedRanges = [NSRange(location: 0, length: 0), NSRange(location: 6, length: 0)]
+
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: [.option, .shift]), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 0, length: 2), NSRange(location: 6, length: 2)])
+
+        send(keyEvent(keyCode: KeyCode.leftArrow, flags: [.option, .shift]), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 0, length: 0), NSRange(location: 6, length: 0)])
+    }
+
+    func testShiftRightExtendsEverySelectionFromItsOwnAnchor() {
+        let textView = makeFocusedTextView(text: "abcdef\nghijkl")
+        textView.selectedRanges = [NSRange(location: 2, length: 0), NSRange(location: 9, length: 0)]
+
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: .shift), to: textView)
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: .shift), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 2, length: 2), NSRange(location: 9, length: 2)])
+
+        // Backwards past the anchor flips the selection to the other side.
+        for _ in 0..<3 {
+            send(keyEvent(keyCode: KeyCode.leftArrow, flags: .shift), to: textView)
+        }
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 1, length: 1), NSRange(location: 8, length: 1)])
+    }
+
+    func testCommandShiftRightSelectsToEveryLineEndAndTypingReplacesAll() {
+        let textView = makeFocusedTextView(text: "ab cd\nef gh")
+        textView.selectedRanges = [NSRange(location: 0, length: 0), NSRange(location: 6, length: 0)]
+
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: [.command, .shift]), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 0, length: 5), NSRange(location: 6, length: 5)])
+        textView.insertText("X")
+        XCTAssertEqual(textView.text as String, "X\nX")
+    }
+
+    func testShiftEndExtendsEveryCaretToItsLineEnd() {
+        let textView = makeFocusedTextView(text: "ab cd\nef gh")
+        textView.selectedRanges = [NSRange(location: 1, length: 0), NSRange(location: 7, length: 0)]
+
+        send(keyEvent(keyCode: 0x77, flags: .shift), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 1, length: 4), NSRange(location: 7, length: 4)])
+    }
+
+    func testEndMovesEveryCaretToItsLineEnd() {
+        let textView = makeFocusedTextView(text: "ab cd\nef gh")
+        textView.selectedRanges = [NSRange(location: 1, length: 0), NSRange(location: 7, length: 0)]
+
+        send(keyEvent(keyCode: 0x77), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 5, length: 0), NSRange(location: 11, length: 0)])
+    }
+
+    func testShiftRightMergesSelectionsThatGrowIntoEachOther() {
+        let textView = makeFocusedTextView(text: "abcd")
+        textView.selectedRanges = [NSRange(location: 0, length: 0), NSRange(location: 2, length: 0)]
+
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: .shift), to: textView)
+        send(keyEvent(keyCode: KeyCode.rightArrow, flags: .shift), to: textView)
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 0, length: 4)])
+    }
+
     // MARK: - ⌥⌫
 
     func testOptionDeleteRemovesToPreviousWordStart() {
