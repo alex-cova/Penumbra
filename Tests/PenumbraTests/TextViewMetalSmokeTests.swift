@@ -139,7 +139,9 @@ final class TextViewMetalSmokeTests: XCTestCase {
         textView.layoutIfNeeded()
 
         let extracts = try XCTUnwrap(textView.metalPerformanceStats).glyphExtractCount - extractsBefore
-        XCTAssertLessThan(extracts, 8, "only the edited and new lines (and band edges) re-extract, not the ~36 lines below")
+        // The lines below are ~36; a handful more than the edited and new lines is a line or two
+        // crossing the layout band's edge, which depends on the line height.
+        XCTAssertLessThan(extracts, 12, "only the edited and new lines (and band edges) re-extract, not the ~36 lines below")
         let originsAfter = textView.metalDebugGlyphOrigins(atLocation: probe + 1).sorted { ($0.x, $0.y) < ($1.x, $1.y) }
         XCTAssertEqual(originsAfter.count, originsBefore.count)
         let shift = try XCTUnwrap(originsAfter.first).y - originsBefore[0].y

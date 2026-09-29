@@ -878,6 +878,9 @@ public struct DocumentTextExport: Sendable {
     public var gutterWidth: CGFloat {
         textInputView.gutterWidth
     }
+    /// The line-height multiplier a text view starts with. ``TextViewState`` sizes its line index
+    /// with it too, so unmeasured lines already have the height they get once laid out.
+    nonisolated public static let defaultLineHeightMultiplier: CGFloat = 1.2
     /// The line-height is multiplied with the value.
     public var lineHeightMultiplier: CGFloat {
         get {

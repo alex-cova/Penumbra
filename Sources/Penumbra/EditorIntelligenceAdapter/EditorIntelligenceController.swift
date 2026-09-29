@@ -150,8 +150,6 @@ public final class EditorIntelligenceController {
     private var pendingCompletionUpdate: CompletionUpdate?
     private var resizeObserver: NSObjectProtocol?
     private var completionWindowFrame: NSRect?
-    /// Scrolling lays the text out and can post a window-resize notification for the same frame.
-    private var suppressResizeDismissal = false
     /// The session was opened explicitly (Ctrl+Space) or the user moved the selection, so the
     /// selected item may be committed by `.`, `(` or `;`.
     private var isCompletionSelectionExplicit = false
@@ -260,9 +258,10 @@ public final class EditorIntelligenceController {
             MainActor.assumeIsolated {
                 guard let self, let resizedWindowID,
                       resizedWindowID == self.textView?.window.map(ObjectIdentifier.init),
-                      self.isCompletionVisible, !self.suppressResizeDismissal else { return }
+                      self.isCompletionVisible else { return }
                 guard let frame = self.textView?.window?.frame else { return }
-                // Layout during scrolling can post this without the window frame changing.
+                // Layout during scrolling can post this without the window frame changing. Only a
+                // real frame change dismisses, whatever scrolling the resize itself caused.
                 guard frame != self.completionWindowFrame else { return }
                 self.completionWindowFrame = frame
                 self.dismissCompletion()
@@ -1213,7 +1212,6 @@ public final class EditorIntelligenceController {
         }
         textView.addScrollObserver { [weak self] in
             guard let self else { return }
-            self.suppressResizeDismissal = true
             if textView.isUserInitiatedScroll {
                 self.hideNavigationChoices()
             }
@@ -1221,9 +1219,6 @@ public final class EditorIntelligenceController {
                 self.dismissCompletion()
             } else {
                 self.repositionAnchoredPanels()
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.suppressResizeDismissal = false
             }
         }
     }

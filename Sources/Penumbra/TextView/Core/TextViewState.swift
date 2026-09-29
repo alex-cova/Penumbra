@@ -135,7 +135,7 @@ public final class TextViewState: @unchecked Sendable {
             from: url,
             encoding: encoding,
             io: io,
-            estimatedLineHeight: theme.font.totalLineHeight,
+            estimatedLineHeight: theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier,
             progress: progress
         )
         return TextViewState(
@@ -198,7 +198,7 @@ public final class TextViewState: @unchecked Sendable {
         self.theme = theme
         self.stringView = stringView
         if let packedIndex {
-            packedIndex.estimatedLineHeight = theme.font.totalLineHeight
+            packedIndex.estimatedLineHeight = theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier
             self.lineManager = LineManager(stringView: stringView, packedIndex: packedIndex)
         } else {
             self.lineManager = LineManager(stringView: stringView)
@@ -221,7 +221,7 @@ public final class TextViewState: @unchecked Sendable {
 private extension TextViewState {
     private func prepare(lineMetrics: [LineMetric]?, hasPackedIndex: Bool) {
         PenumbraSignposts.interval("TextViewState.prepare") {
-            lineManager.estimatedLineHeight = theme.font.totalLineHeight
+            lineManager.estimatedLineHeight = theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier
             if hasPackedIndex {
                 lengthOfLongestLine = lineManager.initialLongestLine?.data.totalLength
             } else if let lineMetrics {

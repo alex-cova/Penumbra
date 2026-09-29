@@ -437,7 +437,7 @@ final class TextInputView: EditorView {
     var gutterWidth: CGFloat {
         gutterWidthService.gutterWidth
     }
-    var lineHeightMultiplier: CGFloat = 1.2 {
+    var lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier {
         didSet {
             if lineHeightMultiplier != oldValue {
                 selectionRectService.lineHeightMultiplier = lineHeightMultiplier
