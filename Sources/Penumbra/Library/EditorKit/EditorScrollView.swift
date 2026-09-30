@@ -121,9 +121,12 @@ open class EditorScrollView: EditorView {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             clipView.animator().setBoundsOrigin(offset)
         } completionHandler: { [weak self] in
-            guard let self, self.animatedScrollTarget == offset else { return }
-            self.animatedScrollTarget = nil
-            self.syncClipViewWithContentOffset()
+            // AppKit calls this on the main thread; the closure itself is `@Sendable` and not isolated.
+            MainActor.assumeIsolated {
+                guard let self, self.animatedScrollTarget == offset else { return }
+                self.animatedScrollTarget = nil
+                self.syncClipViewWithContentOffset()
+            }
         }
     }
 
