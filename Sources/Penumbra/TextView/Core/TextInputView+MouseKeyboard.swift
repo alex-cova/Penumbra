@@ -20,7 +20,21 @@ extension TextInputView {
         }
         isMouseSelecting = true
         pendingOptionClickPoint = nil
+        pendingGutterClick = nil
         doubleShiftDetector.noteOtherInput()
+        if let line = gutterLineForClick(at: point) {
+            let isSecondary = event.modifierFlags.contains(.control)
+            let click = GutterLineClick(line: line, isSecondary: isSecondary, event: event)
+            if isSecondary {
+                isMouseSelecting = false
+                if gutterLineClickHandler?(click) == true { return }
+                isMouseSelecting = true
+            } else if event.clickCount == 1, !event.modifierFlags.contains(.shift) {
+                // Decided on mouseUp: a drag turns it back into a line selection from here.
+                pendingGutterClick = (point, click)
+                return
+            }
+        }
         if isPointOnSelectionHandle(point) {
             return
         }
@@ -60,6 +74,13 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        if let pending = pendingGutterClick {
+            pendingGutterClick = nil
+            if let index = characterIndex(at: pending.point) {
+                selectionAnchor = index
+                selection = NSRange(location: index, length: 0)
+            }
+        }
         if let pendingPoint = pendingOptionClickPoint {
             pendingOptionClickPoint = nil
             beginBlockSelection(at: pendingPoint)
@@ -79,6 +100,14 @@ extension TextInputView {
 
     override func mouseUp(with event: NSEvent) {
         isMouseSelecting = false
+        if let pending = pendingGutterClick {
+            pendingGutterClick = nil
+            if gutterLineClickHandler?(pending.click) != true, let index = characterIndex(at: pending.point) {
+                // Not handled: behave like the plain click it was.
+                selectionAnchor = index
+                selection = NSRange(location: index, length: 0)
+            }
+        }
         if let pendingPoint = pendingOptionClickPoint {
             pendingOptionClickPoint = nil
             if let index = characterIndex(at: pendingPoint) {
@@ -98,6 +127,10 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        if let line = gutterLineForClick(at: point),
+           gutterLineClickHandler?(GutterLineClick(line: line, isSecondary: true, event: event)) == true {
+            return
+        }
         // Mirror `mouseDown`: take first responder for editable *and* read-only panes, and
         // switch a read-only pane's selection overlay on. Without this a right-click that
         // lands before any left-click leaves the overlay disabled, so "Select All" (and any

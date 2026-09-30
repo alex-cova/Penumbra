@@ -1,31 +1,45 @@
 import AppKit
 import SwiftUI
 
-/// The menu behind the gutter's play button on a Java `main`: Run, Debug, and Modify Run
-/// Configuration. The Run and Debug items show the Run / Debug in Context keys, which act on the
-/// same `main` when the caret is inside it.
+/// The menu behind a gutter run button (a `main`, a test method, a test class): Run, Debug, and
+/// Modify Run Configuration when there is one to modify. The Run and Debug items show the
+/// Run / Debug in Context keys, which act on the same target when the caret is inside it.
 @MainActor
-enum IDEMainRunMenu {
+enum IDERunGutterMenu {
+    /// - Parameter title: what runs, quoted in the items (`Foo.main()`, `testAdds()`, `FooTest`).
     static func make(
-        methodName: String,
+        title: String,
         keymapPreset: KeymapPreset,
         run: @escaping () -> Void,
         debug: @escaping () -> Void,
-        modify: @escaping () -> Void
+        modify: (() -> Void)? = nil
     ) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let runItem = IDEClosureMenuItem(title: "Run ‘\(methodName)’", handler: run)
-        runItem.image = symbol("play")
-        showShortcut(IDEMenuShortcuts.shortcut(for: .runInContext, in: keymapPreset), on: runItem)
-        menu.addItem(runItem)
-        let debugItem = IDEClosureMenuItem(title: "Debug ‘\(methodName)’", handler: debug)
-        debugItem.image = symbol("ladybug")
-        showShortcut(IDEMenuShortcuts.shortcut(for: .debugInContext, in: keymapPreset), on: debugItem)
-        menu.addItem(debugItem)
-        menu.addItem(.separator())
-        menu.addItem(IDEClosureMenuItem(title: "Modify Run Configuration…", handler: modify))
+        for item in items(title: title, keymapPreset: keymapPreset, run: run, debug: debug) {
+            menu.addItem(item)
+        }
+        if let modify {
+            menu.addItem(.separator())
+            menu.addItem(IDEClosureMenuItem(title: "Modify Run Configuration…", handler: modify))
+        }
         return menu
+    }
+
+    /// Run and Debug items, for menus that hold more (the gutter's right-click menu).
+    static func items(
+        title: String,
+        keymapPreset: KeymapPreset,
+        run: @escaping () -> Void,
+        debug: @escaping () -> Void
+    ) -> [NSMenuItem] {
+        let runItem = IDEClosureMenuItem(title: "Run ‘\(title)’", handler: run)
+        runItem.image = symbol("play", color: .systemGreen)
+        showShortcut(IDEMenuShortcuts.shortcut(for: .runInContext, in: keymapPreset), on: runItem)
+        let debugItem = IDEClosureMenuItem(title: "Debug ‘\(title)’", handler: debug)
+        debugItem.image = symbol("ladybug", color: .systemGreen)
+        showShortcut(IDEMenuShortcuts.shortcut(for: .debugInContext, in: keymapPreset), on: debugItem)
+        return [runItem, debugItem]
     }
 
     /// Opens `menu` at the click that is being handled, since the gutter reports clicks from
@@ -40,14 +54,14 @@ enum IDEMainRunMenu {
         menu.popUp(positioning: nil, at: point, in: view)
     }
 
-    private static func symbol(_ name: String) -> NSImage? {
+    static func symbol(_ name: String, color: NSColor) -> NSImage? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemGreen]))
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
     }
 
     /// Key equivalents on a context menu item are only drawn: the main menu's Run / Debug in
     /// Context items still own the keys.
-    private static func showShortcut(_ shortcut: KeyboardShortcut?, on item: NSMenuItem) {
+    static func showShortcut(_ shortcut: KeyboardShortcut?, on item: NSMenuItem) {
         guard let shortcut else { return }
         item.keyEquivalent = String(shortcut.key.character).lowercased()
         var flags: NSEvent.ModifierFlags = []

@@ -70,59 +70,124 @@ enum IDEEvaluateExpressionScanner {
 }
 
 /// One value of the debugger, with a disclosure arrow when it has fields or elements. Opening one
-/// asks the adapter for that level, so a large object graph is never fetched up front.
+/// asks the adapter for that level, so a large object graph is never fetched up front. Its menu
+/// sets the value (a local, field or element), copies it, or adds it to the watches.
 struct IDEDebugValueRow: View {
     let session: JavaDebugSession
     let value: JavaDebugValue
+    var onAddWatch: ((String) -> Void)?
 
     @State private var isExpanded = false
     @State private var loaded: [JavaDebugValue]?
     @State private var loadError: String?
+    @State private var isEditing = false
+    @State private var draft = ""
+    @State private var editError: String?
+    @State private var shown: JavaDebugValue?
+
+    private var current: JavaDebugValue { shown ?? value }
 
     var body: some View {
-        if value.hasChildren {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                if let children = loaded ?? value.children {
-                    ForEach(children) { IDEDebugValueRow(session: session, value: $0) }
-                } else if let loadError {
-                    Text(loadError).font(IDEAppearance.Typography.caption).foregroundStyle(.red)
-                } else {
-                    ProgressView().controlSize(.small)
+        Group {
+            if current.hasChildren {
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    if let children = loaded ?? current.children {
+                        ForEach(children) { IDEDebugValueRow(session: session, value: $0, onAddWatch: onAddWatch) }
+                    } else if let loadError {
+                        Text(loadError).font(IDEAppearance.Typography.caption).foregroundStyle(.red)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                } label: {
+                    label
                 }
-            } label: {
+                .onChange(of: isExpanded) { _, expanded in
+                    guard expanded, loaded == nil, current.children == nil else { return }
+                    Task { await load() }
+                }
+            } else {
                 label
             }
-            .onChange(of: isExpanded) { _, expanded in
-                guard expanded, loaded == nil, value.children == nil else { return }
-                Task { await load() }
-            }
-        } else {
-            label
         }
+        .onChange(of: value) { _, _ in
+            shown = nil
+            loaded = nil
+        }
+    }
+
+    /// Only a value reached by a plain expression can be assigned: not `#id` or a method result.
+    private var canSetValue: Bool {
+        let expression = current.expression
+        return !expression.isEmpty && !expression.contains("(") && !expression.hasPrefix("#") && expression != "this"
     }
 
     private var label: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            if let name = value.name {
+            if let name = current.name {
                 Text(name).font(IDEAppearance.Typography.body.weight(.medium))
             }
-            if !value.type.isEmpty {
-                Text(value.type)
+            if !current.type.isEmpty {
+                Text(current.type)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             Spacer(minLength: IDEAppearance.Spacing.xs)
-            Text(value.value)
-                .font(IDEAppearance.Typography.monoSmall)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .textSelection(.enabled)
+            if isEditing {
+                VStack(alignment: .trailing, spacing: 1) {
+                    TextField("New value", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .frame(maxWidth: 220)
+                        .onSubmit { Task { await setValue() } }
+                        .onExitCommand { isEditing = false }
+                    if let editError {
+                        Text(editError).font(IDEAppearance.Typography.caption).foregroundStyle(.red).lineLimit(2)
+                    }
+                }
+            } else {
+                Text(current.value)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
+            }
         }
-        .help(value.value)
+        .help(current.value)
+        .contextMenu {
+            if canSetValue {
+                Button("Set Value…") { beginEditing() }
+                    .keyboardShortcut(KeyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: []))
+            }
+            Button("Copy Value") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(current.value, forType: .string)
+            }
+            if let onAddWatch, !current.expression.isEmpty {
+                Button("Add to Watches") { onAddWatch(current.expression) }
+            }
+        }
+    }
+
+    private func beginEditing() {
+        draft = current.value.hasPrefix("@") ? "" : current.value
+        editError = nil
+        isEditing = true
+    }
+
+    private func setValue() async {
+        switch await session.setValue(target: current.expression, value: draft) {
+        case .value(let node):
+            shown = JavaDebugValue(name: current.name, type: current.type, value: node.value, expression: current.expression,
+                                   hasChildren: node.hasChildren, children: nil)
+            loaded = nil
+            isEditing = false
+        case .failure(let message):
+            editError = message
+        }
     }
 
     private func load() async {
-        switch await session.evaluate(value.expression, record: false) {
+        switch await session.evaluate(current.expression, record: false) {
         case .value(let node): loaded = node.children ?? []
         case .failure(let message): loadError = message
         }

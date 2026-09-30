@@ -127,17 +127,68 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
         XCTAssertEqual(session.selectedFrameIndex, 0)
     }
 
-    func testEvaluateReportsAnUnsupportedExpressionAndRefusesWhileRunning() async throws {
+    func testEvaluateReportsAFailureAndRefusesWhileRunning() async throws {
         let session = JavaDebugSession()
         try await start(session)
         defer { session.stop() }
 
-        guard case .failure(let message) = await session.evaluate("box.width + 1") else { return XCTFail("should fail") }
-        XCTAssertTrue(message.hasPrefix("Not supported"), message)
+        guard case .value(let sum) = await session.evaluate("box.width + 1") else { return XCTFail("operators evaluate") }
+        XCTAssertEqual(sum.value, "3")
+        guard case .failure(let message) = await session.evaluate("box.nope") else { return XCTFail("should fail") }
+        XCTAssertTrue(message.contains("no field 'nope'"), message)
 
         session.resume()
         guard case .failure(let running) = await session.evaluate("name") else { return XCTFail("should fail while running") }
         XCTAssertEqual(running, "The program is not paused.")
+    }
+
+    func testVariablesWatchesAndStopDetails() async throws {
+        let session = JavaDebugSession()
+        session.watches = ["name + box.width", "missing"]
+        try await start(session)
+        defer { session.stop() }
+        try await waitFor { session.watchResults.count == 2 }
+
+        XCTAssertEqual(session.stopInfo?.reason, "breakpoint")
+        XCTAssertEqual(session.stopInfo?.threadName, "main")
+        XCTAssertEqual(session.stopInfo?.suspendsAll, true)
+        // Locals are value nodes that open like evaluations.
+        let box = try XCTUnwrap(session.variables.first { $0.name == "box" })
+        XCTAssertTrue(box.hasChildren)
+        XCTAssertEqual(box.expression, "box")
+        guard case .value(let watch)? = session.watchResults["name + box.width"] else { return XCTFail("watch") }
+        XCTAssertEqual(watch.value, "\"umbra2\"")
+        guard case .failure? = session.watchResults["missing"] else { return XCTFail("a watch that fails says so") }
+
+        guard case .value(let assigned) = await session.setValue(target: "box.width", value: "40") else { return XCTFail("set value") }
+        XCTAssertEqual(assigned.value, "40")
+        try await waitFor { if case .value(let value)? = session.watchResults["name + box.width"] { value.value == "\"umbra40\"" } else { false } }
+    }
+
+    func testBreakpointsChangedDuringTheSessionReachTheProgram() async throws {
+        let session = JavaDebugSession()
+        try await start(session)
+        defer { session.stop() }
+        try await waitFor { !session.breakpointVerification.isEmpty }
+
+        // A breakpoint added while stopped, on the next line: resuming stops there.
+        let first = JavaBreakpoint(filePath: source.path, line: breakLine)
+        let next = JavaBreakpoint(filePath: source.path, line: breakLine + 1)
+        await session.sync([first, next], muted: false)
+        session.resume()
+        try await waitFor {
+            if case .stopped(_, let line, _) = session.state { return line == self.breakLine + 1 }
+            return false
+        }
+        XCTAssertEqual(session.stopInfo?.breakpointID, next.id)
+    }
+
+    private func waitFor(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<150 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTFail("timed out")
     }
 
     func testStoppingClearsTheHistory() async throws {

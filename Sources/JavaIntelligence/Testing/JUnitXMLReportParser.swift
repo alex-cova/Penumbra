@@ -17,6 +17,9 @@ public struct JavaTestCaseResult: Sendable, Equatable, Identifiable {
     public let stackTrace: String?
     public let sourceFile: URL?
     public let line: Int?
+    /// What the test printed (`system-out`, then `system-err`): the test case's own when the
+    /// report has it per test, else its class's.
+    public let output: String?
 
     public init(
         className: String,
@@ -26,7 +29,8 @@ public struct JavaTestCaseResult: Sendable, Equatable, Identifiable {
         message: String? = nil,
         stackTrace: String? = nil,
         sourceFile: URL? = nil,
-        line: Int? = nil
+        line: Int? = nil,
+        output: String? = nil
     ) {
         self.className = className
         self.name = name
@@ -36,6 +40,7 @@ public struct JavaTestCaseResult: Sendable, Equatable, Identifiable {
         self.stackTrace = stackTrace
         self.sourceFile = sourceFile
         self.line = line
+        self.output = output
     }
 
     public var id: String { "\(className).\(name)" }
@@ -137,7 +142,8 @@ public enum JUnitXMLReportParser {
                 message: testCase.message,
                 stackTrace: testCase.stackTrace,
                 sourceFile: location?.file,
-                line: location?.line
+                line: location?.line,
+                output: testCase.output ?? suite.output
             )
         }
     }
@@ -152,9 +158,12 @@ private struct XMLTestSuite {
         let status: JavaTestCaseResult.Status
         let message: String?
         let stackTrace: String?
+        let output: String?
     }
 
     let testCases: [Case]
+    /// The suite's own `system-out` / `system-err`.
+    let output: String?
 
     init?(data: Data) {
         let parser = XMLParser(data: data)
@@ -162,6 +171,12 @@ private struct XMLTestSuite {
         parser.delegate = delegate
         guard parser.parse(), let suite = delegate.suite else { return nil }
         self.testCases = suite
+        self.output = Self.joined(delegate.suiteOut, delegate.suiteErr)
+    }
+
+    static func joined(_ out: String?, _ err: String?) -> String? {
+        let parts = [out, err].compactMap { $0?.trimmingCharacters(in: .newlines) }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     private final class Delegate: NSObject, XMLParserDelegate {
@@ -173,6 +188,10 @@ private struct XMLTestSuite {
         private var failureMessage: String?
         private var failureBody: String?
         private var skippedMessage: String?
+        private var caseOut: String?
+        private var caseErr: String?
+        var suiteOut: String?
+        var suiteErr: String?
         private var elementStack: [String] = []
 
         func parser(
@@ -191,6 +210,8 @@ private struct XMLTestSuite {
                 failureMessage = nil
                 failureBody = nil
                 skippedMessage = nil
+                caseOut = nil
+                caseErr = nil
             case "failure", "error":
                 failureMessage = attributeDict["message"]
             case "skipped":
@@ -205,9 +226,21 @@ private struct XMLTestSuite {
             switch top {
             case "failure", "error":
                 failureBody = (failureBody ?? "") + string
+            case "system-out", "system-err":
+                // Inside a test case it is that test's; at suite level, the class's.
+                let inCase = elementStack.dropLast().last == "testcase"
+                if top == "system-out" {
+                    if inCase { caseOut = (caseOut ?? "") + string } else { suiteOut = (suiteOut ?? "") + string }
+                } else {
+                    if inCase { caseErr = (caseErr ?? "") + string } else { suiteErr = (suiteErr ?? "") + string }
+                }
             default:
                 break
             }
+        }
+
+        func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+            self.parser(parser, foundCharacters: String(decoding: CDATABlock, as: UTF8.self))
         }
 
         func parser(
@@ -239,7 +272,8 @@ private struct XMLTestSuite {
                     time: currentTime,
                     status: status,
                     message: message,
-                    stackTrace: stack
+                    stackTrace: stack,
+                    output: XMLTestSuite.joined(caseOut, caseErr)
                 ))
             }
             _ = elementStack.popLast()

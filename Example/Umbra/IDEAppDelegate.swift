@@ -26,6 +26,7 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        IDESecondaryShortcutMonitor.install()
         Task { @MainActor in
             Self.activateAndKeyWindows()
         }

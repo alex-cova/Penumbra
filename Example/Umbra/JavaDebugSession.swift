@@ -7,14 +7,19 @@ struct JavaDebugStackFrame: Identifiable, Equatable, Sendable {
     let className: String
     let filePath: String
     let line: Int
+    /// A JDK frame (`java.*`, `jdk.*`, …), drawn dimmed and hidden by "Hide library frames".
+    var isLibrary = false
     var id: Int { index }
 }
 
-struct JavaDebugVariable: Identifiable, Equatable, Sendable {
+/// One thread of the program, as the Frames pane's thread picker lists it.
+struct JavaDebugThread: Identifiable, Equatable, Sendable {
+    let id: Int
     let name: String
-    let type: String
-    let value: String
-    var id: String { name }
+    let group: String
+    let status: String
+    let isSuspended: Bool
+    let isCurrent: Bool
 }
 
 /// One node of an evaluated value: a result, or a field or array element of one. Children arrive
@@ -64,6 +69,39 @@ struct JavaDebugEvaluation: Identifiable, Equatable, Sendable {
     let outcome: Outcome
 }
 
+/// Why the program stopped, beyond the file and line.
+struct JavaDebugStopInfo: Equatable, Sendable {
+    /// `breakpoint`, `step`, `pause`, `exception`, `method`, `watchpoint`, `runToCursor`,
+    /// `dropFrame` or `conditionError`.
+    let reason: String
+    /// An exception's type and message, or why a condition could not be evaluated.
+    let message: String?
+    let breakpointID: UUID?
+    let threadID: Int
+    let threadName: String
+    /// Whether every thread is held, or only this one (a Suspend: Thread breakpoint).
+    let suspendsAll: Bool
+}
+
+/// A class and how many instances of it the heap holds (the Memory tab).
+struct JavaDebugClassCount: Identifiable, Equatable, Sendable {
+    let className: String
+    let count: Int
+    var id: String { className }
+}
+
+/// What the debugger spent on each breakpoint (the Overhead tab).
+struct JavaDebugOverhead: Equatable, Sendable {
+    struct Entry: Equatable, Sendable {
+        let breakpointID: UUID
+        let hits: Int
+        let milliseconds: Double
+    }
+
+    let breakpoints: [Entry]
+    let steppingMilliseconds: Double
+}
+
 enum JavaDebugSessionState: Equatable, Sendable {
     case idle
     case launching
@@ -78,11 +116,18 @@ enum JavaDebugSessionState: Equatable, Sendable {
 @Observable
 final class JavaDebugSession {
     private(set) var state: JavaDebugSessionState = .idle
+    private(set) var stopInfo: JavaDebugStopInfo?
     private(set) var stackFrames: [JavaDebugStackFrame] = []
-    private(set) var variables: [JavaDebugVariable] = []
+    /// The selected frame's `this` and locals.
+    private(set) var variables: [JavaDebugValue] = []
+    private(set) var threads: [JavaDebugThread] = []
     private(set) var selectedFrameIndex = 0
     /// Expressions evaluated in this session, newest first.
     private(set) var evaluations: [JavaDebugEvaluation] = []
+    /// The watches' values at the current stop, by expression.
+    private(set) var watchResults: [String: JavaDebugEvaluation.Outcome] = [:]
+    /// Whether the adapter placed each breakpoint in a loaded class; absent until it did.
+    private(set) var breakpointVerification: [UUID: Bool] = [:]
     /// The Evaluate field's text. Quick Evaluate and ⌥F8 fill it from the editor.
     var evaluationDraft = ""
     /// Bumped to ask the panel to focus its Evaluate field.
@@ -99,9 +144,26 @@ final class JavaDebugSession {
     private var pending: [Int: CheckedContinuation<[String: Any], Error>] = [:]
     private let launcher = JavaDebugProcessLauncher()
     private(set) var isGradleAttachSession = false
+    /// The breakpoints the adapter holds, as last sent.
+    private var sentBreakpoints: [UUID: JavaBreakpoint] = [:]
+    private var sentMuted = false
+    /// Expressions re-evaluated at every stop; set by the host from the window's watches.
+    var watches: [String] = [] {
+        didSet {
+            if watches != oldValue, case .stopped = state { Task { await refreshWatches() } }
+        }
+    }
     /// Called when the program stops at a source file the adapter could locate on disk, so the
     /// host can show the line. Not called for a stop in code with no source file.
     var onStopped: ((_ file: URL, _ line: Int) -> Void)?
+    /// The adapter placed a breakpoint, or the session ended and none are placed any more.
+    var onBreakpointVerificationChanged: (() -> Void)?
+    /// The selected frame's variables changed: a new stop, another frame, or the program ran on.
+    var onVariablesChanged: (() -> Void)?
+    /// A remove-once-hit breakpoint stopped and the adapter dropped it.
+    var onBreakpointRemovedByHit: ((UUID) -> Void)?
+    /// The source file's imports, for conditions and evaluations that need compiling.
+    var importsProvider: (_ filePath: String) -> [String] = JavaDebugSession.imports(ofFile:)
 
     var isActive: Bool {
         switch state {
@@ -110,9 +172,14 @@ final class JavaDebugSession {
         }
     }
 
+    var isStopped: Bool {
+        if case .stopped = state { return true }
+        return false
+    }
+
     /// - Parameter sourceRoots: directories holding the program's sources, so the adapter can turn a
     ///   class's `com/acme/Foo.java` into a file when it stops in code that has no breakpoint.
-    func start(launch: JavaManagedLaunch, breakpoints: [JavaBreakpoint], sourceRoots: [URL] = []) async {
+    func start(launch: JavaManagedLaunch, breakpoints: [JavaBreakpoint], muted: Bool = false, sourceRoots: [URL] = []) async {
         stop()
         console.reset()
         console.appendNote("Launching \(launch.mainClass)…")
@@ -139,13 +206,7 @@ final class JavaDebugSession {
                 request["environment"] = launch.environment
             }
             _ = try await send(request)
-            for breakpoint in breakpoints where breakpoint.isEnabled {
-                _ = try await send([
-                    "command": "setBreakpoint",
-                    "file": breakpoint.filePath,
-                    "line": breakpoint.line
-                ])
-            }
+            await sync(breakpoints, muted: muted)
             state = .running
             // A JVM started to wait for its debugger holds at the first instruction; breakpoints
             // are in, so let it go.
@@ -171,29 +232,58 @@ final class JavaDebugSession {
     }
 
     /// Attaches to the Gradle-spawned JVM, applies breakpoints, and optionally resumes.
+    /// - Parameter classpath: the program's runtime classpath, for evaluations that need compiling.
     func attachForGradle(
         port: Int = JavaLaunchCommand.gradleDebugJdwpPort,
         suspendOnStart: Bool,
         breakpoints: [JavaBreakpoint],
-        sourceRoots: [URL] = []
+        muted: Bool = false,
+        sourceRoots: [URL] = [],
+        classpath: [URL] = []
     ) async {
         do {
-            try await attachWithRetry(port: port, maxAttempts: 60, sourceRoots: sourceRoots)
-            for breakpoint in breakpoints where breakpoint.isEnabled {
-                _ = try await send([
-                    "command": "setBreakpoint",
-                    "file": breakpoint.filePath,
-                    "line": breakpoint.line
-                ])
-            }
+            try await attachWithRetry(port: port, maxAttempts: 60, sourceRoots: sourceRoots, classpath: classpath)
+            await sync(breakpoints, muted: muted)
             if !suspendOnStart {
-                resume()
+                // The JVM held at startup for the debugger; there is no stop to show.
+                _ = try? await send(["command": "resume"])
             }
             state = .running
         } catch {
             state = .failed(error.localizedDescription)
         }
     }
+
+    // MARK: - Breakpoints
+
+    /// Brings the adapter's breakpoints in line with `breakpoints`: sends what is new or changed,
+    /// clears what was removed or disabled. Does nothing without a connected adapter.
+    func sync(_ breakpoints: [JavaBreakpoint], muted: Bool) async {
+        guard inputHandle != nil else { return }
+        let wanted = Dictionary(breakpoints.filter(\.isEnabled).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for id in sentBreakpoints.keys where wanted[id] == nil {
+            sentBreakpoints[id] = nil
+            breakpointVerification[id] = nil
+            _ = try? await send(["command": "clearBreakpoint", "breakpointId": id.uuidString])
+        }
+        for breakpoint in wanted.values.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where sentBreakpoints[breakpoint.id] != breakpoint {
+            let changedLine = sentBreakpoints[breakpoint.id].map { $0.line != breakpoint.line || $0.kind != breakpoint.kind } ?? true
+            sentBreakpoints[breakpoint.id] = breakpoint
+            if changedLine { breakpointVerification[breakpoint.id] = nil }
+            let imports = breakpoint.isLineBreakpoint ? importsProvider(breakpoint.filePath) : []
+            do {
+                _ = try await send(breakpoint.adapterRequest(imports: imports))
+            } catch {
+                console.appendNote("Breakpoint \(breakpoint.title): \(Self.message(for: error))")
+            }
+        }
+        if muted != sentMuted {
+            sentMuted = muted
+            _ = try? await send(["command": "muteBreakpoints", "muted": muted])
+        }
+    }
+
+    // MARK: - Running and stepping
 
     func resume() {
         run("resume")
@@ -207,8 +297,48 @@ final class JavaDebugSession {
         run("stepInto")
     }
 
+    /// Steps into the next call even when it is in the JDK.
+    func forceStepInto() {
+        run("forceStepInto")
+    }
+
     func stepOut() {
         run("stepOut")
+    }
+
+    /// Steps into the call to `methodName` on the current line, past the calls before it.
+    func smartStepInto(methodName: String) {
+        run("smartStepInto", ["methodName": methodName])
+    }
+
+    /// Runs to `line` of `file`. Other breakpoints still stop on the way unless `force`.
+    func runToCursor(file: String, line: Int, force: Bool) {
+        run("runToCursor", ["file": file, "line": line, "force": force])
+    }
+
+    /// Pops the selected frame and the ones above it, so its call runs again.
+    func dropFrame() {
+        guard isStopped else { return }
+        let index = selectedFrameIndex
+        Task {
+            do {
+                _ = try await send(["command": "dropFrame", "frameIndex": index])
+            } catch {
+                console.appendNote("Drop Frame: \(Self.message(for: error))")
+            }
+        }
+    }
+
+    /// Returns from the current method at once, with `expression`'s value when it returns one.
+    func forceReturn(expression: String) async -> String? {
+        guard isStopped else { return "The program is not paused." }
+        do {
+            _ = try await send(["command": "forceReturn", "expression": expression, "imports": stopImports()])
+            clearStopState()
+            return nil
+        } catch {
+            return Self.message(for: error)
+        }
     }
 
     /// Suspends a running program where it is; the adapter answers with a `stopped` event.
@@ -219,13 +349,30 @@ final class JavaDebugSession {
 
     /// Lets the program run again for `command`. Only from a stop: a stale double press would
     /// otherwise send a step to a program that is already moving.
-    private func run(_ command: String) {
-        guard case .stopped = state else { return }
+    private func run(_ command: String, _ parameters: [String: Any] = [:]) {
+        guard isStopped else { return }
+        clearStopState()
+        var body = parameters
+        body["command"] = command
+        Task {
+            do {
+                _ = try await send(body)
+            } catch {
+                console.appendNote("\(command): \(Self.message(for: error))")
+            }
+        }
+    }
+
+    private func clearStopState() {
         state = .running
+        stopInfo = nil
         stackFrames = []
         variables = []
-        Task { _ = try? await send(["command": command]) }
+        watchResults = [:]
+        onVariablesChanged?()
     }
+
+    // MARK: - Inspecting a stop
 
     func refreshStack() {
         Task {
@@ -237,26 +384,70 @@ final class JavaDebugSession {
                       let className = frame["className"] as? String,
                       let file = frame["file"] as? String,
                       let line = frame["line"] as? Int else { return nil }
-                return JavaDebugStackFrame(index: index, name: name, className: className, filePath: file, line: line)
+                return JavaDebugStackFrame(index: index, name: name, className: className, filePath: file, line: line,
+                                           isLibrary: frame["library"] as? Bool ?? false)
             }
             await refreshVariables()
+            await refreshWatches()
+        }
+    }
+
+    func refreshThreads() async {
+        guard let response = try? await send(["command": "threads"]),
+              let list = response["threads"] as? [[String: Any]] else { return }
+        threads = list.compactMap { entry in
+            guard let id = entry["id"] as? Int, let name = entry["name"] as? String else { return nil }
+            return JavaDebugThread(
+                id: id,
+                name: name,
+                group: entry["group"] as? String ?? "",
+                status: entry["status"] as? String ?? "",
+                isSuspended: entry["suspended"] as? Bool ?? false,
+                isCurrent: entry["current"] as? Bool ?? false
+            )
+        }
+    }
+
+    /// Shows another suspended thread's frames and variables.
+    func selectThread(_ id: Int) {
+        guard isStopped else { return }
+        Task {
+            do {
+                _ = try await send(["command": "selectThread", "threadId": id])
+                selectedFrameIndex = 0
+                await refreshThreads()
+                refreshStack()
+            } catch {
+                console.appendNote("Switch thread: \(Self.message(for: error))")
+            }
         }
     }
 
     func selectFrame(_ index: Int) {
         selectedFrameIndex = index
-        Task { await refreshVariables() }
+        Task {
+            await refreshVariables()
+            await refreshWatches()
+        }
     }
 
     func refreshVariables() async {
         guard let response = try? await send(["command": "localVariables", "frameIndex": selectedFrameIndex]),
               let variables = response["variables"] as? [[String: Any]] else { return }
-        self.variables = variables.compactMap { entry in
-            guard let name = entry["name"] as? String,
-                  let type = entry["type"] as? String,
-                  let value = entry["value"] as? String else { return nil }
-            return JavaDebugVariable(name: name, type: type, value: value)
+        self.variables = variables.compactMap(JavaDebugValue.init(json:))
+        onVariablesChanged?()
+    }
+
+    func refreshWatches() async {
+        guard isStopped else {
+            watchResults = [:]
+            return
         }
+        var results: [String: JavaDebugEvaluation.Outcome] = [:]
+        for watch in watches {
+            results[watch] = await evaluate(watch, record: false)
+        }
+        watchResults = results
     }
 
     /// Evaluates `expression` in the selected stack frame. Works only while the program is paused;
@@ -264,26 +455,47 @@ final class JavaDebugSession {
     @discardableResult
     func evaluate(_ expression: String, record: Bool = true) async -> JavaDebugEvaluation.Outcome {
         let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
-        let outcome: JavaDebugEvaluation.Outcome
-        if case .stopped = state {
-            do {
-                let response = try await send(["command": "evaluate", "expression": trimmed, "frameIndex": selectedFrameIndex])
-                if let node = (response["result"] as? [String: Any]).flatMap(JavaDebugValue.init(json:)) {
-                    outcome = .value(node)
-                } else {
-                    outcome = .failure("The debugger sent no result.")
-                }
-            } catch {
-                outcome = .failure(Self.message(for: error))
-            }
-        } else {
-            outcome = .failure("The program is not paused.")
-        }
+        let outcome = await valueOutcome(["command": "evaluate", "expression": trimmed])
         if record {
             evaluations.insert(JavaDebugEvaluation(expression: trimmed, outcome: outcome), at: 0)
             if evaluations.count > Self.maximumEvaluations { evaluations.removeLast(evaluations.count - Self.maximumEvaluations) }
         }
         return outcome
+    }
+
+    /// Set Value: assigns `value` (an expression) to `target` (a local, field or element).
+    func setValue(target: String, value: String) async -> JavaDebugEvaluation.Outcome {
+        let outcome = await valueOutcome(["command": "setValue", "target": target, "value": value])
+        if case .value = outcome {
+            await refreshVariables()
+            await refreshWatches()
+        }
+        return outcome
+    }
+
+    private func valueOutcome(_ request: [String: Any]) async -> JavaDebugEvaluation.Outcome {
+        guard isStopped else { return .failure("The program is not paused.") }
+        var body = request
+        body["frameIndex"] = selectedFrameIndex
+        let imports = stopImports()
+        if !imports.isEmpty { body["imports"] = imports }
+        do {
+            let response = try await send(body)
+            if let node = (response["result"] as? [String: Any]).flatMap(JavaDebugValue.init(json:)) {
+                return .value(node)
+            }
+            return .failure("The debugger sent no result.")
+        } catch {
+            return .failure(Self.message(for: error))
+        }
+    }
+
+    /// The imports of the selected frame's file.
+    private func stopImports() -> [String] {
+        let path = stackFrames.first { $0.index == selectedFrameIndex }?.filePath
+            ?? { if case .stopped(let file, _, _) = state { return file.path } else { return nil } }()
+        guard let path, path.hasPrefix("/") else { return [] }
+        return importsProvider(path)
     }
 
     func clearEvaluations() {
@@ -296,7 +508,70 @@ final class JavaDebugSession {
         evaluationFocusRequest += 1
     }
 
-    private static func message(for error: Error) -> String {
+    // MARK: - Memory, overhead, streams
+
+    func instanceCounts() async -> Result<[JavaDebugClassCount], JavaDebugProcessError> {
+        do {
+            let response = try await send(["command": "instanceCounts"])
+            let list = response["classes"] as? [[String: Any]] ?? []
+            return .success(list.compactMap { entry in
+                guard let name = entry["className"] as? String, let count = entry["count"] as? Int else { return nil }
+                return JavaDebugClassCount(className: name, count: count)
+            })
+        } catch {
+            return .failure(error as? JavaDebugProcessError ?? .launchFailed(error.localizedDescription))
+        }
+    }
+
+    /// Up to `limit` instances of `className`, each opened by evaluating its `#id` expression.
+    func instances(of className: String, limit: Int = 1000) async -> Result<[JavaDebugValue], JavaDebugProcessError> {
+        do {
+            let response = try await send(["command": "instances", "className": className, "limit": limit])
+            return .success((response["instances"] as? [[String: Any]] ?? []).compactMap(JavaDebugValue.init(json:)))
+        } catch {
+            return .failure(error as? JavaDebugProcessError ?? .launchFailed(error.localizedDescription))
+        }
+    }
+
+    func overhead() async -> JavaDebugOverhead? {
+        guard let response = try? await send(["command": "overhead"]) else { return nil }
+        let entries = (response["breakpoints"] as? [[String: Any]] ?? []).compactMap { entry -> JavaDebugOverhead.Entry? in
+            guard let id = (entry["id"] as? String).flatMap(UUID.init(uuidString:)) else { return nil }
+            return JavaDebugOverhead.Entry(
+                breakpointID: id,
+                hits: entry["hits"] as? Int ?? 0,
+                milliseconds: (entry["millis"] as? NSNumber)?.doubleValue ?? 0
+            )
+        }
+        return JavaDebugOverhead(breakpoints: entries, steppingMilliseconds: (response["steppingMillis"] as? NSNumber)?.doubleValue ?? 0)
+    }
+
+    /// Runs a stream chain rewritten by ``JavaStreamChain/tracedExpression(for:)`` and returns
+    /// what each stage saw, and the terminal result.
+    func traceStream(expression: String) async -> Result<(stages: [[JavaStreamTraceElement]], result: JavaDebugValue?), JavaDebugProcessError> {
+        guard isStopped else { return .failure(.launchFailed("The program is not paused.")) }
+        var body: [String: Any] = ["command": "traceStream", "expression": expression, "frameIndex": selectedFrameIndex]
+        let imports = stopImports()
+        if !imports.isEmpty { body["imports"] = imports }
+        do {
+            let response = try await send(body)
+            let stages = (response["stages"] as? [[String: Any]] ?? []).map { stage in
+                (stage["values"] as? [[String: Any]] ?? []).map { entry in
+                    JavaStreamTraceElement(
+                        time: (entry["time"] as? NSNumber)?.int64Value ?? 0,
+                        value: entry["value"] as? String ?? "",
+                        identity: entry["identity"] as? String ?? ""
+                    )
+                }
+            }
+            let result = (response["result"] as? [String: Any]).flatMap(JavaDebugValue.init(json:))
+            return .success((stages, result))
+        } catch {
+            return .failure(error as? JavaDebugProcessError ?? .launchFailed(error.localizedDescription))
+        }
+    }
+
+    static func message(for error: Error) -> String {
         switch error as? JavaDebugProcessError {
         case .launchFailed(let message): return message
         case .disconnected: return "The debugger is no longer connected."
@@ -304,6 +579,8 @@ final class JavaDebugSession {
         case nil: return error.localizedDescription
         }
     }
+
+    // MARK: - Session
 
     func stop() {
         if process != nil, isActive { console.appendNote("Debug session stopped.") }
@@ -319,18 +596,32 @@ final class JavaDebugSession {
         pending.removeAll()
         stackFrames = []
         variables = []
+        onVariablesChanged?()
+        threads = []
+        stopInfo = nil
+        watchResults = [:]
         selectedFrameIndex = 0
         evaluations = []
+        sentBreakpoints = [:]
+        sentMuted = false
+        let hadVerification = !breakpointVerification.isEmpty
+        breakpointVerification = [:]
+        if hadVerification { onBreakpointVerificationChanged?() }
         isGradleAttachSession = false
         if case .failed = state { return }
         state = .terminated
     }
 
-    private func attachWithRetry(port: Int, maxAttempts: Int, sourceRoots: [URL]) async throws {
+    private func attachWithRetry(port: Int, maxAttempts: Int, sourceRoots: [URL], classpath: [URL]) async throws {
         var lastError: Error = JavaDebugProcessError.launchFailed("could not attach")
         for _ in 0..<maxAttempts {
             do {
-                _ = try await send(["command": "attach", "port": port, "sourceRoots": sourceRoots.map(\.path)])
+                _ = try await send([
+                    "command": "attach",
+                    "port": port,
+                    "sourceRoots": sourceRoots.map(\.path),
+                    "classpath": classpath.map(\.path).joined(separator: ":")
+                ])
                 return
             } catch {
                 lastError = error
@@ -391,20 +682,44 @@ final class JavaDebugSession {
                 let reason = json["reason"] as? String ?? "breakpoint"
                 let file = URL(fileURLWithPath: filePath)
                 state = .stopped(file: file, line: line, reason: reason)
+                stopInfo = JavaDebugStopInfo(
+                    reason: reason,
+                    message: json["message"] as? String,
+                    breakpointID: (json["breakpointId"] as? String).flatMap(UUID.init(uuidString:)),
+                    threadID: json["threadId"] as? Int ?? 0,
+                    threadName: json["threadName"] as? String ?? "",
+                    suspendsAll: json["suspendsAll"] as? Bool ?? true
+                )
+                if let message = json["message"] as? String {
+                    console.appendNote(reason == "conditionError" ? message : "Stopped on \(message)")
+                }
                 // A new stop starts at the innermost frame, whichever one was selected before.
                 selectedFrameIndex = 0
                 refreshStack()
+                Task { await refreshThreads() }
                 // A relative path means no source root held the file; there is nothing to open.
                 if filePath.hasPrefix("/") {
                     onStopped?(file, line)
                 }
             case "output":
                 for entry in json["lines"] as? [[String: Any]] ?? [] {
-                    console.append(
-                        stream: entry["stream"] as? String == "err" ? .err : .out,
-                        text: entry["text"] as? String ?? "",
-                        partial: entry["partial"] as? Bool ?? false
-                    )
+                    let stream: IDEDebugConsoleLog.Stream = switch entry["stream"] as? String {
+                    case "err": .err
+                    case "log": .log
+                    default: .out
+                    }
+                    console.append(stream: stream, text: entry["text"] as? String ?? "", partial: entry["partial"] as? Bool ?? false)
+                }
+            case "breakpointVerified":
+                if let id = (json["id"] as? String).flatMap(UUID.init(uuidString:)) {
+                    breakpointVerification[id] = json["verified"] as? Bool ?? true
+                    onBreakpointVerificationChanged?()
+                }
+            case "breakpointRemoved":
+                if let id = (json["id"] as? String).flatMap(UUID.init(uuidString:)) {
+                    sentBreakpoints[id] = nil
+                    breakpointVerification[id] = nil
+                    onBreakpointRemovedByHit?(id)
                 }
             case "terminated":
                 if case .terminated = state {} else if let code = json["exitCode"] as? Int {
@@ -413,6 +728,9 @@ final class JavaDebugSession {
                     console.appendNote("The debugger disconnected.")
                 }
                 state = .terminated
+                stopInfo = nil
+                variables = []
+                onVariablesChanged?()
             default:
                 break
             }
@@ -451,6 +769,32 @@ final class JavaDebugSession {
             pending[id] = continuation
         }
         return nil
+    }
+
+    // MARK: - Imports
+
+    /// The `import` declarations at the top of a Java file on disk, for the adapter's compiler.
+    nonisolated static func imports(ofFile path: String) -> [String] {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        return imports(inSource: text)
+    }
+
+    /// Reads `import …;` lines until the first type declaration; stops early, it never parses the
+    /// whole file.
+    nonisolated static func imports(inSource text: String) -> [String] {
+        var imports: [String] = []
+        var scanned = 0
+        text.enumerateLines { line, stop in
+            scanned += 1
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("import ") {
+                imports.append(trimmed.hasSuffix(";") ? String(trimmed.dropLast()) : trimmed)
+            } else if trimmed.contains("class ") || trimmed.contains("interface ") || trimmed.contains("enum ")
+                        || trimmed.contains("record ") || scanned > 400 {
+                stop = true
+            }
+        }
+        return imports
     }
 }
 

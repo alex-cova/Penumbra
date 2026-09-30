@@ -69,9 +69,9 @@ private final class NavigationBufferBridge: @unchecked Sendable {
 public final class IDEWorkspace {
     private static let languageProvider = BundledLanguageProvider()
 
-    private let workbench = EditorWorkbench()
+    let workbench = EditorWorkbench()
     private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
-    private let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
+    let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     private let intelligenceServices = IDEIntelligenceServices()
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
@@ -190,6 +190,16 @@ public final class IDEWorkspace {
     /// The project's breakpoints, mirrored from `breakpointStore` (which is not observable) for the
     /// Breakpoints tab. Refreshed by `refreshBreakpoints()` after every change to the store.
     private(set) var breakpoints: [JavaBreakpoint] = []
+    /// Mute Breakpoints: every breakpoint stays, none stops. Mirrors the store, per project.
+    var breakpointsMuted = false
+    /// The breakpoint the Breakpoints tab shows in its detail pane.
+    var selectedBreakpointID: UUID?
+    /// Expressions the Debug tab re-evaluates at every stop, per project (UserDefaults).
+    var watches: [String] = []
+    /// The Frames pane hides JDK frames when set.
+    var hideLibraryFrames = false
+    @ObservationIgnored let breakpointPopover = IDEBreakpointPopover()
+    @ObservationIgnored var streamTraceWindow: IDEStreamTraceWindowController?
     var isGradleSidebarVisible = true
     /// The explorer sidebar's width. `IDERootView` owns the drag and mirrors it here so a save made
     /// from anywhere (`saveSession()`) writes the width on screen, not the default.
@@ -233,7 +243,7 @@ public final class IDEWorkspace {
     /// True when the active editor is a Java test source file with discovered tests.
     var javaFileCanTest = false
     private var javaRunFileURL: URL?
-    private var activeJavaTestClass: JavaTestClass?
+    var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     /// The Java markers shown in each text view, with the buffer generation they were computed
@@ -248,7 +258,7 @@ public final class IDEWorkspace {
     private(set) var runConfigurations: [JavaRunConfiguration] = []
     /// A classpath launch waiting for `classes` to finish building the outputs it runs from.
     private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
-    private var gradleDebugActive = false
+    var gradleDebugActive = false
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
     /// Run or Debug was pressed in a Gradle module with neither `run` nor `bootRun`: the task
@@ -267,7 +277,7 @@ public final class IDEWorkspace {
     /// The app's shared stores (see `IDESharedServices`): every window reads and writes the same
     /// instances, so one window's change is neither lost nor missed by another.
     private let runConfigurationStore = IDESharedServices.shared.runConfigurations
-    private let breakpointStore = IDESharedServices.shared.breakpoints
+    let breakpointStore = IDESharedServices.shared.breakpoints
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
@@ -635,6 +645,9 @@ public final class IDEWorkspace {
     func teardown() {
         guard !isTornDown else { return }
         isTornDown = true
+        breakpointPopover.dismiss()
+        streamTraceWindow?.close()
+        streamTraceWindow = nil
         stopProjectActivity()
         terminateTerminals()
         projectWatcher.onBatch = []
@@ -1592,6 +1605,7 @@ public final class IDEWorkspace {
                 runConfigurationStore.setLast(configuration, forProject: root)
                 refreshLastRunConfiguration()
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
+                let muted = breakpointsMuted
                 selectDebugTab()
                 do {
                     try await debugSession.prepareAdapter(javaHome: jdk.home)
@@ -1601,11 +1615,13 @@ public final class IDEWorkspace {
                 }
                 gradleDebugActive = true
                 configureDebugSession()
+                let roots = debugSourceRoots()
                 Task {
                     await debugSession.attachForGradle(
                         suspendOnStart: configuration.suspendOnStart,
                         breakpoints: breakpoints,
-                        sourceRoots: debugSourceRoots()
+                        muted: muted,
+                        sourceRoots: roots
                     )
                 }
                 showGradleOutput()
@@ -1649,7 +1665,7 @@ public final class IDEWorkspace {
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
                 selectDebugTab()
                 configureDebugSession()
-                await debugSession.start(launch: launch, breakpoints: breakpoints, sourceRoots: debugSourceRoots())
+                await debugSession.start(launch: launch, breakpoints: breakpoints, muted: breakpointsMuted, sourceRoots: debugSourceRoots())
             }
         default:
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
@@ -1686,13 +1702,11 @@ public final class IDEWorkspace {
                 configuration.launchMode = debug ? .debug : .run
                 launch(configuration)
             case .testMethod(let method, let taskPath):
-                guard !debug else { return reportRunProblem("Debugging tests isn't supported yet. Run the test instead.") }
-                runTestMethod(method, taskPath: taskPath)
+                let scope = JavaTestRunScope.testMethod(method, taskPath: taskPath)
+                if debug { debugTests(scope: scope, title: "\(method.methodName)()") } else { runTestMethod(method, taskPath: taskPath) }
             case .testClass(let testClass):
-                guard !debug else { return reportRunProblem("Debugging tests isn't supported yet. Run the test instead.") }
-                testResults.beginRun(label: "Running \(testClass.gradleTaskPath)…")
-                showTestResults()
-                javaSupport.runTests(scope: .testClass(testClass))
+                let title = String(testClass.qualifiedName.split(separator: ".").last ?? "")
+                if debug { debugTests(scope: .testClass(testClass), title: title) } else { runTests(scope: .testClass(testClass), title: title) }
             }
         }
     }
@@ -1728,21 +1742,21 @@ public final class IDEWorkspace {
 
     /// The Run / Debug / Modify menu for the gutter's play button on the `main` at `line`. Parses
     /// fresh at click time: the buttons may be one debounce behind an edit.
-    private func showMainRunMenu(atLine line: Int, file: URL, in textView: TextView) {
+    func showMainRunMenu(atLine line: Int, file: URL, in textView: TextView) {
         let text = textView.text
         guard let location = JavaMainMethod.locations(in: text).first(where: { $0.line == line }),
               let configuration = mainRunConfiguration(for: location, file: file, source: text) else { return }
-        let menu = IDEMainRunMenu.make(
-            methodName: "\(location.simpleClassName).main()",
+        let menu = IDERunGutterMenu.make(
+            title: "\(location.simpleClassName).main()",
             keymapPreset: preferences.keymapPreset,
             run: { [weak self] in self?.launch(configuration, mode: .run) },
             debug: { [weak self] in self?.launch(configuration, mode: .debug) },
             modify: { [weak self] in self?.runConfigurationDraft = configuration }
         )
-        IDEMainRunMenu.popUp(menu, in: textView)
+        IDERunGutterMenu.popUp(menu, in: textView)
     }
 
-    private func launch(_ configuration: JavaRunConfiguration, mode: JavaLaunchMode) {
+    func launch(_ configuration: JavaRunConfiguration, mode: JavaLaunchMode) {
         var configuration = configuration
         configuration.launchMode = mode
         launch(configuration)
@@ -1751,7 +1765,7 @@ public final class IDEWorkspace {
     /// A launch of the class declaring `location`: its own class name on the Gradle classpath, or
     /// the file's default launch (`java File.java`, `gradle run`) otherwise. What was last typed
     /// for the same target is kept.
-    private func mainRunConfiguration(for location: JavaMainMethodLocation, file: URL, source: String) -> JavaRunConfiguration? {
+    func mainRunConfiguration(for location: JavaMainMethodLocation, file: URL, source: String) -> JavaRunConfiguration? {
         let classpathLaunch = JavaRunConfiguration.makeClasspathLaunch(
             file: file, className: location.binaryClassName, model: javaSupport.gradleModel
         )
@@ -1794,7 +1808,7 @@ public final class IDEWorkspace {
 
     /// Directories the debugged program's sources live in: every Gradle source set, then the
     /// project folder.
-    private func debugSourceRoots() -> [URL] {
+    func debugSourceRoots() -> [URL] {
         var roots: [URL] = []
         for subproject in javaSupport.gradleModel?.subprojects ?? [] {
             for sourceSet in subproject.sourceSets {
@@ -1809,9 +1823,29 @@ public final class IDEWorkspace {
         return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
-    private func configureDebugSession() {
+    func configureDebugSession() {
         debugSession.onStopped = { [weak self] file, line in
             self?.revealDebugStop(file: file, line: line)
+        }
+        debugSession.onBreakpointRemovedByHit = { [weak self] id in
+            guard let self else { return }
+            self.breakpointStore.remove(breakpointID: id, project: self.project.rootURL)
+            self.refreshBreakpoints()
+            self.refreshBreakpointGutters()
+        }
+        // An open file's imports come from its buffer, which may be ahead of the disk.
+        debugSession.importsProvider = { [weak self] path in
+            if let text = self?.openBufferText(for: URL(fileURLWithPath: path)) {
+                return JavaDebugSession.imports(inSource: text)
+            }
+            return JavaDebugSession.imports(ofFile: path)
+        }
+        debugSession.watches = watches
+        debugSession.onBreakpointVerificationChanged = { [weak self] in
+            self?.refreshBreakpointGutters()
+        }
+        debugSession.onVariablesChanged = { [weak self] in
+            self?.refreshInlineDebugValues()
         }
     }
 
@@ -1858,21 +1892,15 @@ public final class IDEWorkspace {
         debugSession.stop()
     }
 
-    func toggleBreakpointAtCaret() {
-        guard let url = workbench.activePane.selectedDocument?.url else { return }
-        let textView = host(for: workbench.activePaneID).textView
-        let lineNumber = (textView.textLocation(at: textView.selectedRange.location)?.lineNumber ?? 0) + 1
-        toggleBreakpoint(atLine: lineNumber, file: url)
-        Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: url.pathExtension.lowercased() == "java") }
-    }
-
-    private func toggleBreakpoint(atLine line: Int, file url: URL) {
+    func toggleBreakpoint(atLine line: Int, file url: URL) {
         _ = breakpointStore.toggle(atLine: line, file: url, project: project.rootURL)
         refreshBreakpoints()
     }
 
     func refreshBreakpoints() {
         breakpoints = breakpointStore.breakpoints(forProject: project.rootURL)
+        breakpointsMuted = breakpointStore.isMuted(project: project.rootURL)
+        syncBreakpointsToDebugger()
     }
 
     func setBreakpointEnabled(_ breakpoint: JavaBreakpoint, enabled: Bool) {
@@ -1898,7 +1926,7 @@ public final class IDEWorkspace {
     }
 
     /// Redraws the breakpoint dots of every open Java file after the Breakpoints tab changed them.
-    private func refreshBreakpointGutters() {
+    func refreshBreakpointGutters() {
         for pane in workbench.panes {
             guard let url = pane.selectedDocument?.url, url.pathExtension.lowercased() == "java",
                   let textView = hostCache.peek(pane.id)?.textView else { continue }
@@ -1948,7 +1976,7 @@ public final class IDEWorkspace {
         launch(pending.configuration)
     }
 
-    private func reportRunProblem(_ message: String) {
+    func reportRunProblem(_ message: String) {
         javaSupport.appendGradleConsoleNote(message)
         showGradleOutput()
     }
@@ -3674,6 +3702,11 @@ public final class IDEWorkspace {
             guard kind == .references else { return }
             self?.usages.finishSearch()
         }
+        host.textView.contextMenuItemsProvider = { [weak self] context in
+            guard let self else { return [] }
+            let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
+            return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
+        }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
             self?.sendActiveHTTPRequest()
@@ -4054,15 +4087,11 @@ public final class IDEWorkspace {
 
     func runActiveJavaTests() {
         guard let testClass = activeJavaTestClass else { return }
-        testResults.beginRun(label: "Running \(testClass.gradleTaskPath)…")
-        showTestResults()
-        javaSupport.runTests(scope: .testClass(testClass))
+        runTests(scope: .testClass(testClass), title: String(testClass.qualifiedName.split(separator: ".").last ?? ""))
     }
 
     func runTestMethod(_ method: JavaTestMethod, taskPath: String) {
-        testResults.beginRun(label: "Running \(method.displayName)…")
-        showTestResults()
-        javaSupport.runTests(scope: .testMethod(method, taskPath: taskPath))
+        runTests(scope: .testMethod(method, taskPath: taskPath), title: "\(method.methodName)()")
     }
 
     /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
@@ -4595,6 +4624,7 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.setProjectRoot(url)
         refreshLastRunConfiguration()
         refreshBreakpoints()
+        loadWatches()
         paletteController?.workspaceRoot = url
     }
 
@@ -5183,6 +5213,10 @@ public final class IDEWorkspace {
             guard let self, let textView else { return }
             self.sendHTTPRequest(atLine: line, from: textView, fileURL: fileURL)
         }
+        // A Java file shown here before left its breakpoint handlers; they must not see this file.
+        textView.gutterLineClickHandler = nil
+        textView.gutterDecorationsDidMove = nil
+        textView.alwaysShowGutterDecorationColumn = false
     }
 
     /// Parses fresh at click time: the buttons may be one debounce behind an edit.
@@ -5225,64 +5259,61 @@ public final class IDEWorkspace {
         }
     }
 
-    /// The Java gutter: breakpoints, test run buttons in a test source, and a run button on every
-    /// `main`. A click toggles a breakpoint first, then runs a test, then opens the `main` menu.
-    private func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
+    /// The Java gutter: breakpoints, test run buttons in a test source (one per test method, one on
+    /// the class), and a run button on every `main`. A click on a breakpoint removes it, a click on
+    /// a run button opens its Run / Debug menu, and a click on any other line (or its number) adds
+    /// a breakpoint; a right click opens the breakpoint's properties or the line's menu.
+    func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
         guard isJava, let fileURL else {
             javaFileCanTest = false
             activeJavaTestClass = nil
             textView.setGutterDecorations([])
             textView.gutterDecorationHandler = nil
+            textView.gutterLineClickHandler = nil
+            textView.gutterDecorationsDidMove = nil
+            textView.alwaysShowGutterDecorationColumn = false
             return
-        }
-        let breakpoints = breakpointStore.breakpoints(forFile: fileURL, project: project.rootURL).map {
-            GutterDecoration(
-                line: $0.line,
-                symbolName: $0.isEnabled ? "circle.fill" : "circle",
-                accessibilityLabel: $0.isEnabled ? "Breakpoint" : "Disabled breakpoint"
-            )
         }
         let mains = await mainLocations(in: textView)
         var testClass: JavaTestClass?
+        var classLine: Int?
         if await javaSupport.isTestSource(file: fileURL) {
             testClass = await javaSupport.tests(for: fileURL)
             activeJavaTestClass = testClass
             javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
+            if let testClass, !testClass.methods.isEmpty {
+                classLine = await Self.classDeclarationLine(of: testClass, in: textView.text)
+            }
         } else {
             javaFileCanTest = false
             activeJavaTestClass = nil
         }
-        var decorations = breakpoints
-        if let testClass {
-            decorations.append(contentsOf: testClass.methods.map {
-                GutterDecoration(line: $0.line, symbolName: "play.circle", accessibilityLabel: "Run \($0.displayName)")
-            })
-        }
-        let occupied = Set(decorations.map(\.line))
-        decorations.append(contentsOf: mains.filter { !occupied.contains($0.line) }.map {
-            GutterDecoration(line: $0.line, symbolName: "play.fill", accessibilityLabel: "Run \($0.simpleClassName).main()")
-        })
-        textView.setGutterDecorations(decorations)
-        textView.gutterDecorationHandler = { [weak self, weak textView] line in
-            guard let self, let textView else { return }
-            if self.breakpointStore.breakpoints(forFile: fileURL, project: self.project.rootURL).contains(where: { $0.line == line }) {
-                self.toggleBreakpoint(atLine: line, file: fileURL)
-                Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
-                return
+        let gutter = JavaGutterContent(fileURL: fileURL, testClass: testClass, classLine: classLine, mains: mains)
+        applyJavaGutter(gutter, to: textView)
+    }
+
+    /// The line of `class Name` for a test class, found off the main thread.
+    private static func classDeclarationLine(of testClass: JavaTestClass, in text: String) async -> Int? {
+        let simpleName = String(testClass.qualifiedName.split(separator: ".").last ?? "")
+            .split(separator: "$").last.map(String.init) ?? ""
+        guard !simpleName.isEmpty else { return nil }
+        return await Task.detached(priority: .utility) {
+            var number = 0
+            var found: Int?
+            text.enumerateLines { line, stop in
+                number += 1
+                if line.range(of: "\\bclass\\s+\(simpleName)\\b", options: .regularExpression) != nil {
+                    found = number
+                    stop = true
+                }
             }
-            if let testClass, let method = testClass.methods.first(where: { $0.line == line }) {
-                self.runTestMethod(method, taskPath: testClass.gradleTaskPath)
-                return
-            }
-            if mains.contains(where: { $0.line == line }) {
-                self.showMainRunMenu(atLine: line, file: fileURL, in: textView)
-            }
-        }
+            return found
+        }.value
     }
 
     /// The `main` methods in `textView`'s buffer, parsed off the main thread and reused until the
     /// buffer changes. `containsMain` screens out the common file without one before parsing.
-    private func mainLocations(in textView: TextView) async -> [JavaMainMethodLocation] {
+    func mainLocations(in textView: TextView) async -> [JavaMainMethodLocation] {
         let view = ObjectIdentifier(textView)
         let generation = textView.contentGeneration
         if let cached = javaMainLocations, cached.view == view, cached.generation == generation {

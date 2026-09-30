@@ -443,6 +443,15 @@ public struct DocumentTextExport: Sendable {
         }
     }
 
+    /// Hints from a second source, shown together with ``inlayHints`` (hints at one offset are
+    /// joined): a host can show, say, a debugger's variable values at line ends without replacing
+    /// the parameter-name hints. They follow edits and are cleared with the document, like
+    /// ``inlayHints``.
+    public var supplementaryInlayHints: [InlayHint] {
+        get { textInputView.supplementaryInlayHints }
+        set { textInputView.supplementaryInlayHints = newValue }
+    }
+
     /// Re-syncs gutter visibility and line-number layout after wholesale state changes.
     public func refreshGutterChrome() {
         textInputView.refreshGutterChrome()
@@ -462,6 +471,41 @@ public struct DocumentTextExport: Sendable {
 
     public func setGutterDecorations(_ decorations: [GutterDecoration]) {
         gutterDecorations = decorations
+    }
+
+    /// Called for a click in the line-number column, or in the decoration column where there is no
+    /// decoration. Return `true` when handled; otherwise the click places the caret as usual. A
+    /// plain click is reported on mouse-up and only when the mouse didn't drag (a drag still
+    /// selects lines); a right click or Control-click is reported at once with `isSecondary`.
+    /// Setting a handler is what makes line-number clicks reportable.
+    public var gutterLineClickHandler: ((GutterLineClick) -> Bool)? {
+        get { textInputView.gutterLineClickHandler }
+        set { textInputView.gutterLineClickHandler = newValue }
+    }
+
+    /// Called after an edit that adds or removes line breaks moved or dropped decorations (a
+    /// decoration on a deleted line is dropped), with all of them, so the host can keep its own
+    /// record of their lines (breakpoints) in step.
+    public var gutterDecorationsDidMove: (([GutterDecoration]) -> Void)? {
+        get { textInputView.gutterDecorationsDidMove }
+        set { textInputView.gutterDecorationsDidMove = newValue }
+    }
+
+    /// Keeps the gutter's decoration column while there are no decorations, so the text doesn't
+    /// move sideways when the first one is added.
+    public var alwaysShowGutterDecorationColumn: Bool {
+        get { textInputView.alwaysShowGutterDecorationColumn }
+        set { textInputView.alwaysShowGutterDecorationColumn = newValue }
+    }
+
+    func makeContextMenuForTesting(at location: Int?) -> NSMenu {
+        textInputView.makeContextMenu(at: location)
+    }
+
+    /// Items appended, after a separator, to the editor's context menu each time it opens.
+    public var contextMenuItemsProvider: ((EditorContextMenuContext) -> [NSMenuItem])? {
+        get { textInputView.contextMenuItemsProvider }
+        set { textInputView.contextMenuItemsProvider = newValue }
     }
 
     /// Icons in the line-marker column, between the line numbers and the folding ribbon (for

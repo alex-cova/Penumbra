@@ -14,8 +14,10 @@ protocol EditMenuControllerDelegate: AnyObject {
 @MainActor
 final class EditMenuController: NSObject {
     weak var delegate: EditMenuControllerDelegate?
+    /// Items the host appends after the standard ones.
+    var additionalItemsProvider: ((EditorContextMenuContext) -> [NSMenuItem])?
 
-    func contextMenu(for textInputView: TextInputView) -> NSMenu {
+    func contextMenu(for textInputView: TextInputView, location: Int? = nil) -> NSMenu {
         let menu = NSMenu()
         let isEditable = delegate?.editMenuControllerIsEditable(self) ?? true
         let hasSelection = (delegate?.selectedRange(for: self)?.length ?? 0) > 0
@@ -47,11 +49,19 @@ final class EditMenuController: NSObject {
             menu.addItem(replaceItem)
         }
 
+        let selectedRange = delegate?.selectedRange(for: self)
+        let context = EditorContextMenuContext(location: location ?? selectedRange?.location, selectedRange: selectedRange)
+        if let items = additionalItemsProvider?(context), !items.isEmpty {
+            menu.addItem(.separator())
+            items.forEach(menu.addItem)
+        }
+
         return menu
     }
 
     func presentContextMenu(for textInputView: TextInputView, with event: NSEvent) {
-        let menu = contextMenu(for: textInputView)
+        let point = textInputView.convert(event.locationInWindow, from: nil)
+        let menu = contextMenu(for: textInputView, location: textInputView.characterIndex(at: point))
         NSMenu.popUpContextMenu(menu, with: event, for: textInputView)
     }
 

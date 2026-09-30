@@ -146,7 +146,10 @@ final class Json {
             if (slice.contains(".") || slice.contains("e") || slice.contains("E")) {
                 return Double.parseDouble(slice);
             }
-            return Integer.parseInt(slice);
+            long value = Long.parseLong(slice);
+            // Thread and object ids overflow an int.
+            if (value == (int) value) return (int) value;
+            return value;
         }
 
         Boolean readBoolean() {

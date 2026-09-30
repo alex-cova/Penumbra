@@ -58,6 +58,22 @@ struct GutterLineMarkerEdit: Equatable {
     var insertedRows: Int {
         removedRows + lineDelta
     }
+
+    /// Where an anchor on 0-based `row` goes, or nil when its line was deleted: an anchor after
+    /// the edit moves with the text; one inside it is dropped when a line break after it was
+    /// deleted, and the line the edit ends on merges into the line it starts on.
+    func newRow(forRow row: Int) -> Int? {
+        let endRow = startRow + removedRows
+        if row < startRow { return row }
+        if row > endRow { return row + lineDelta }
+        if row == startRow {
+            if startsAtLineStart && isInsertion { return row + insertedRows }
+            if startsAtLineStart && removedRows > 0 { return nil }
+            return row
+        }
+        if row < endRow { return nil }
+        return endsAtLineStart ? startRow + insertedRows : startRow
+    }
 }
 
 /// The markers of the line-marker column, sorted by line, kept on their lines while the text is
@@ -100,21 +116,7 @@ final class GutterLineMarkerStore {
         head.reserveCapacity(tailStart - firstAffected)
         for marker in markers[firstAffected ..< tailStart] {
             let row = marker.line - 1
-            let newRow: Int?
-            if row == edit.startRow {
-                if edit.startsAtLineStart && edit.isInsertion {
-                    newRow = row + edit.insertedRows
-                } else if edit.startsAtLineStart && edit.removedRows > 0 {
-                    newRow = nil
-                } else {
-                    newRow = row
-                }
-            } else if row < endRow {
-                newRow = nil
-            } else {
-                newRow = edit.endsAtLineStart ? edit.startRow + edit.insertedRows : edit.startRow
-            }
-            guard let newRow else {
+            guard let newRow = edit.newRow(forRow: row) else {
                 didChange = true
                 didRegroup = true
                 continue

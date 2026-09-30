@@ -13,8 +13,15 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Minimal JDI-backed debug adapter for Umbra. Reads JSON lines from stdin, writes JSON lines to
- * stdout. Events (stopped, terminated) are pushed without a request id.
+ * JDI-backed debug adapter for Umbra. Reads JSON lines from stdin, writes JSON lines to stdout.
+ * Events (stopped, output, breakpointVerified, breakpointRemoved, terminated) are pushed without a
+ * request id.
+ *
+ * <p>Breakpoints are keyed by the host's id and come in four kinds: line, exception, method and
+ * field. Each carries a condition, a suspend policy (all threads, the event thread, or none), log
+ * output, remove-once-hit and a pass count. A hit is judged off the event loop, on the evaluation
+ * executor, because a condition may invoke code in the target, and the class loading that code
+ * triggers needs the event loop to keep resuming class-prepare events.
  */
 public final class DebugAdapter {
     private final BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
@@ -25,40 +32,153 @@ public final class DebugAdapter {
         return t;
     });
 
-    /** Evaluations run here so a slow {@code toString()} cannot stop the adapter reading commands. */
+    /** Evaluations and breakpoint hits run here, so a slow condition cannot stop the adapter reading commands. */
     private final ExecutorService evaluations = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "debug-evaluate");
         t.setDaemon(true);
         return t;
     });
 
-    private VirtualMachine vm;
+    private volatile VirtualMachine vm;
     private Process targetProcess;
     private volatile OutputForwarder outputForwarder;
     private final List<Thread> outputThreads = new ArrayList<>();
+
+    /** Guards the stop state: {@link #currentThread}, {@link #stopped}, {@link #pendingStops}. */
+    private final Object stopLock = new Object();
     private volatile ThreadReference currentThread;
     /** True from a stop (breakpoint, step, pause) until the program is resumed or stepped. */
     private volatile boolean stopped;
+    /** Whether the stop being shown suspended every thread, or only its own. */
+    private volatile boolean stopSuspendsAll = true;
+    /** Threads stopped by a thread-only breakpoint while another stop was showing; shown next. */
+    private final Deque<Stop> pendingStops = new ArrayDeque<>();
 
-    /** Guards {@link #breakpoints}: the request thread and the event thread both resolve them. */
+    /** Guards {@link #breakpoints}: the request thread, the event thread and hits all use them. */
     private final Object breakpointLock = new Object();
-    private final List<PendingBreakpoint> breakpoints = new ArrayList<>();
+    private final Map<String, Breakpoint> breakpoints = new LinkedHashMap<>();
+    private volatile boolean muted;
+    /** Method invocations in progress for evaluations; breakpoints stay off while any runs. */
+    private int invocations;
+    /** Breakpoints muted by Force Run to Cursor, unmuted when it arrives. */
+    private boolean forcedMute;
     private final List<Path> sourceRoots = new ArrayList<>();
+    private final CompilingEvaluator.Cache compileCache = new CompilingEvaluator.Cache();
+    /** Objects opened from the memory view, kept from collection until the program runs again. */
+    private final Map<Long, ObjectReference> pinned = new ConcurrentHashMap<>();
+    /** Nanoseconds spent stepping, for the overhead view. */
+    private volatile long steppingNanos;
+    private volatile long stepStarted;
+
+    private static final String BREAKPOINT = "umbra.breakpoint";
+    private static final String SMART_STEP = "umbra.smartStep";
+    private static final String RUN_TO_CURSOR = "__runToCursor";
+
+    private enum Kind { LINE, EXCEPTION, METHOD, FIELD }
 
     /**
-     * A breakpoint the user asked for. Its JDI requests exist only once a class holding the line
-     * is loaded, so it stays here and is resolved again whenever a class is prepared.
+     * A breakpoint the user asked for. Its JDI requests exist only once a class it applies to is
+     * loaded, so it stays here and is resolved again whenever a class is prepared.
      */
-    private static final class PendingBreakpoint {
+    private static final class Breakpoint {
+        final String id;
+        final Kind kind;
         final Path file;
         final int line;
-        final List<BreakpointRequest> requests = new ArrayList<>();
+        final String className;
+        final String memberName;
+        final boolean caught;
+        final boolean uncaught;
+        final boolean access;
+        final boolean modification;
+        final String condition;
+        final Evaluator.Node conditionTree;
+        /** {@link EventRequest#SUSPEND_ALL}, {@code SUSPEND_EVENT_THREAD} or {@code SUSPEND_NONE}. */
+        final int suspendPolicy;
+        final boolean logMessage;
+        final String logExpression;
+        final Evaluator.Node logTree;
+        final boolean removeOnceHit;
+        final int passCount;
+        final boolean temporary;
+        final List<String> imports;
+        final List<EventRequest> requests = new ArrayList<>();
+        /** Null until a class this could apply to is prepared. */
+        Boolean verified;
+        boolean expired;
+        long hits;
+        long nanos;
 
-        PendingBreakpoint(Path file, int line) {
-            this.file = file;
-            this.line = line;
+        Breakpoint(Map<String, Object> spec, boolean temporary) {
+            this.temporary = temporary;
+            String kindName = stringValue(spec.get("kind"));
+            kind = switch (kindName) {
+                case "exception" -> Kind.EXCEPTION;
+                case "method" -> Kind.METHOD;
+                case "field" -> Kind.FIELD;
+                default -> Kind.LINE;
+            };
+            String filePath = stringValue(spec.get("file"));
+            file = filePath.isEmpty() ? null : Paths.get(filePath).toAbsolutePath().normalize();
+            line = spec.containsKey("line") ? intValue(spec.get("line")) : 0;
+            String givenID = stringValue(spec.get("breakpointId"));
+            id = !givenID.isEmpty() ? givenID : (file == null ? kindName + ":" + stringValue(spec.get("className")) : file + ":" + line);
+            className = stringValue(spec.get("className"));
+            memberName = stringValue(spec.containsKey("methodName") ? spec.get("methodName") : spec.get("fieldName"));
+            caught = !spec.containsKey("caught") || boolValue(spec.get("caught"));
+            uncaught = !spec.containsKey("uncaught") || boolValue(spec.get("uncaught"));
+            access = boolValue(spec.get("access"));
+            modification = !spec.containsKey("modification") || boolValue(spec.get("modification"));
+            String cond = stringValue(spec.get("condition")).trim();
+            condition = cond.isEmpty() ? null : cond;
+            conditionTree = condition == null ? null : parseOrNull(condition);
+            suspendPolicy = switch (stringValue(spec.get("suspendPolicy"))) {
+                case "thread" -> EventRequest.SUSPEND_EVENT_THREAD;
+                case "none" -> EventRequest.SUSPEND_NONE;
+                default -> EventRequest.SUSPEND_ALL;
+            };
+            logMessage = boolValue(spec.get("logMessage"));
+            String log = stringValue(spec.get("logExpression")).trim();
+            logExpression = log.isEmpty() ? null : log;
+            logTree = logExpression == null ? null : parseOrNull(logExpression);
+            removeOnceHit = boolValue(spec.get("removeOnceHit"));
+            passCount = spec.containsKey("passCount") ? Math.max(0, intValue(spec.get("passCount"))) : 0;
+            List<String> list = new ArrayList<>();
+            if (spec.get("imports") instanceof List<?> given) for (Object entry : given) list.add(String.valueOf(entry));
+            imports = list;
+        }
+
+        private static Evaluator.Node parseOrNull(String text) {
+            try {
+                return Evaluator.parse(text);
+            } catch (Evaluator.EvaluationException e) {
+                return null;
+            }
+        }
+
+        /**
+         * The policy its requests suspend with. A breakpoint that suspends nothing but has to
+         * evaluate something still needs its thread held while it does.
+         */
+        int requestPolicy() {
+            if (suspendPolicy == EventRequest.SUSPEND_NONE && (condition != null || logExpression != null)) {
+                return EventRequest.SUSPEND_EVENT_THREAD;
+            }
+            return suspendPolicy;
+        }
+
+        String reason() {
+            return switch (kind) {
+                case EXCEPTION -> "exception";
+                case METHOD -> "method";
+                case FIELD -> "watchpoint";
+                default -> temporary ? "runToCursor" : "breakpoint";
+            };
         }
     }
+
+    /** A stop waiting to be reported. */
+    private record Stop(ThreadReference thread, Location location, String reason, boolean suspendsAll, Map<String, Object> extra) {}
 
     public static void main(String[] args) throws Exception {
         new DebugAdapter().run();
@@ -81,15 +201,26 @@ public final class DebugAdapter {
                 case "launch" -> launch(request);
                 case "attach" -> {
                     readSourceRoots(request);
+                    compileCache.setClasspath(stringValue(request.get("classpath")));
                     attach(intValue(request.get("port")));
                 }
-                case "setBreakpoint" -> setBreakpoint(stringValue(request.get("file")), intValue(request.get("line")));
-                case "clearBreakpoint" -> clearBreakpoint(stringValue(request.get("file")), intValue(request.get("line")));
+                case "setBreakpoint" -> setBreakpoint(request);
+                case "clearBreakpoint" -> clearBreakpoint(request);
+                case "muteBreakpoints" -> setMuted(boolValue(request.get("muted")));
                 case "resume" -> resume();
-                case "stepOver" -> step(StepRequest.STEP_OVER);
-                case "stepInto" -> step(StepRequest.STEP_INTO);
-                case "stepOut" -> step(StepRequest.STEP_OUT);
+                case "stepOver" -> step(StepRequest.STEP_OVER, true);
+                case "stepInto" -> step(StepRequest.STEP_INTO, true);
+                case "forceStepInto" -> step(StepRequest.STEP_INTO, false);
+                case "stepOut" -> step(StepRequest.STEP_OUT, true);
+                case "smartStepInto" -> smartStepInto(stringValue(request.get("methodName")));
+                case "runToCursor" -> runToCursor(stringValue(request.get("file")), intValue(request.get("line")), boolValue(request.get("force")));
                 case "pause" -> pause();
+                case "dropFrame" -> dropFrame(intValue(request.get("frameIndex")));
+                case "selectThread" -> selectThread(longValue(request.get("threadId")));
+                case "threads" -> {
+                    threads(id);
+                    return;
+                }
                 case "stackFrames" -> {
                     stackFrames(id);
                     return;
@@ -99,7 +230,31 @@ public final class DebugAdapter {
                     return;
                 }
                 case "evaluate" -> {
-                    evaluate(id, stringValue(request.get("expression")), request.containsKey("frameIndex") ? intValue(request.get("frameIndex")) : 0);
+                    evaluate(id, stringValue(request.get("expression")), frameIndex(request), imports(request));
+                    return;
+                }
+                case "setValue" -> {
+                    evaluate(id, stringValue(request.get("target")) + " = " + stringValue(request.get("value")), frameIndex(request), imports(request));
+                    return;
+                }
+                case "forceReturn" -> {
+                    forceReturn(id, stringValue(request.get("expression")), imports(request));
+                    return;
+                }
+                case "traceStream" -> {
+                    traceStream(id, stringValue(request.get("expression")), frameIndex(request), imports(request));
+                    return;
+                }
+                case "instanceCounts" -> {
+                    instanceCounts(id);
+                    return;
+                }
+                case "instances" -> {
+                    instances(id, stringValue(request.get("className")), request.containsKey("limit") ? intValue(request.get("limit")) : 1000);
+                    return;
+                }
+                case "overhead" -> {
+                    overhead(id);
                     return;
                 }
                 case "disconnect" -> disconnect();
@@ -114,6 +269,16 @@ public final class DebugAdapter {
         }
     }
 
+    private static int frameIndex(Map<String, Object> request) {
+        return request.containsKey("frameIndex") ? intValue(request.get("frameIndex")) : 0;
+    }
+
+    private static List<String> imports(Map<String, Object> request) {
+        List<String> list = new ArrayList<>();
+        if (request.get("imports") instanceof List<?> given) for (Object entry : given) list.add(String.valueOf(entry));
+        return list;
+    }
+
     private void launch(Map<String, Object> request) throws Exception {
         disconnectQuietly();
         String java = stringValue(request.get("java"));
@@ -124,6 +289,7 @@ public final class DebugAdapter {
         int port = intValue(request.get("port"));
         boolean suspend = boolValue(request.get("suspend"));
         readSourceRoots(request);
+        compileCache.setClasspath(classpath);
 
         List<String> cmd = new ArrayList<>();
         cmd.add(java);
@@ -384,13 +550,19 @@ public final class DebugAdapter {
         startEventLoop();
     }
 
+    // MARK: - Events
+
+    private record Hit(Breakpoint breakpoint, LocatableEvent event) {}
+
     private void startEventLoop() {
-        EventQueue queue = vm.eventQueue();
+        VirtualMachine machine = vm;
+        EventQueue queue = machine.eventQueue();
         events.submit(() -> {
             try {
                 while (true) {
                     EventSet set = queue.remove();
-                    boolean stop = false;
+                    Stop stop = null;
+                    List<Hit> hits = new ArrayList<>();
                     for (Event event : set) {
                         if (event instanceof VMDeathEvent || event instanceof VMDisconnectEvent) {
                             emitTerminated();
@@ -399,17 +571,34 @@ public final class DebugAdapter {
                         }
                         if (event instanceof ClassPrepareEvent prepared) {
                             resolveBreakpoints(prepared.referenceType());
-                        } else if (event instanceof BreakpointEvent bp) {
-                            reportStop(bp.thread(), bp.location(), "breakpoint");
-                            stop = true;
                         } else if (event instanceof StepEvent step) {
-                            vm.eventRequestManager().deleteEventRequest(step.request());
-                            reportStop(step.thread(), step.location(), "step");
-                            stop = true;
+                            clearSmartStep();
+                            machine.eventRequestManager().deleteEventRequest(step.request());
+                            noteSteppingDone();
+                            stop = new Stop(step.thread(), step.location(), "step", set.suspendPolicy() == EventRequest.SUSPEND_ALL, Map.of());
+                        } else if (event instanceof MethodEntryEvent entry && entry.request().getProperty(SMART_STEP) instanceof String target) {
+                            if (entry.method().name().equals(target) && stop == null) {
+                                clearSmartStep();
+                                noteSteppingDone();
+                                // The entries were reported for the stepping thread alone; hold every
+                                // thread, as a step does.
+                                machine.suspend();
+                                entry.thread().resume();
+                                stop = new Stop(entry.thread(), entry.location(), "step", true, Map.of());
+                            }
+                        } else if (event instanceof LocatableEvent locatable && event.request() != null
+                                && event.request().getProperty(BREAKPOINT) instanceof Breakpoint breakpoint) {
+                            hits.add(new Hit(breakpoint, locatable));
                         }
                     }
-                    // A stop keeps the program suspended until the user resumes or steps it.
-                    if (!stop) set.resume();
+                    if (stop != null) {
+                        reportStop(stop);
+                    } else if (!hits.isEmpty()) {
+                        // Judged off this loop: a condition may run code in the target.
+                        evaluations.submit(() -> judge(set, hits));
+                    } else {
+                        set.resume();
+                    }
                 }
             } catch (Exception ignored) {
                 emitTerminated();
@@ -417,70 +606,345 @@ public final class DebugAdapter {
         });
     }
 
-    private void reportStop(ThreadReference thread, Location location, String reason) {
-        currentThread = thread;
-        stopped = true;
-        emitEvent("stopped", Map.of(
-                "file", resolveFile(location),
-                "line", Math.max(0, location.lineNumber()),
-                "reason", reason
-        ));
-    }
-
-    private void setBreakpoint(String file, int line) {
-        ensureVM();
-        Path normalized = Paths.get(file).toAbsolutePath().normalize();
-        synchronized (breakpointLock) {
-            for (PendingBreakpoint existing : breakpoints) {
-                if (existing.line == line && existing.file.equals(normalized)) return;
+    /**
+     * Decides whether the breakpoints in one event set stop the program: counts the hit, checks the
+     * condition, writes the log output, and removes a remove-once-hit breakpoint that stopped.
+     */
+    private void judge(EventSet set, List<Hit> hits) {
+        Stop stop = null;
+        try {
+            for (Hit hit : hits) {
+                Breakpoint breakpoint = hit.breakpoint;
+                ThreadReference thread = hit.event.thread();
+                long started = System.nanoTime();
+                synchronized (breakpointLock) {
+                    if (!breakpoints.containsValue(breakpoint)) continue; // cleared meanwhile
+                    breakpoint.hits++;
+                    if (breakpoint.passCount > 0) breakpoint.expired = true;
+                }
+                if (breakpoint.temporary) {
+                    stop = new Stop(thread, hit.event.location(), "runToCursor", true, Map.of());
+                    continue;
+                }
+                Map<String, Object> extra = new LinkedHashMap<>();
+                extra.put("breakpointId", breakpoint.id);
+                if (hit.event instanceof ExceptionEvent exception) {
+                    ObjectReference thrown = exception.exception();
+                    String message = Evaluator.exceptionMessage(thrown);
+                    extra.put("message", thrown.referenceType().name() + (message == null ? "" : ": " + message));
+                }
+                boolean passes = true;
+                if (breakpoint.condition != null) {
+                    try {
+                        Evaluator evaluator = evaluator(thread, 0, breakpoint.imports);
+                        Evaluator.Node tree = breakpoint.conditionTree != null ? breakpoint.conditionTree : Evaluator.parse(breakpoint.condition);
+                        passes = evaluator.condition(tree, breakpoint.condition);
+                    } catch (Evaluator.EvaluationException | VMDisconnectedException e) {
+                        // As in IntelliJ: a condition that cannot be evaluated stops, and says why.
+                        extra.put("message", "The condition '" + breakpoint.condition + "' failed: " + e.getMessage());
+                        extra.put("conditionError", true);
+                        record(breakpoint, started);
+                        stop = new Stop(thread, hit.event.location(), "conditionError", true, extra);
+                        continue;
+                    }
+                }
+                if (!passes) {
+                    record(breakpoint, started);
+                    continue;
+                }
+                log(breakpoint, thread, hit.event);
+                record(breakpoint, started);
+                if (breakpoint.suspendPolicy == EventRequest.SUSPEND_NONE) continue;
+                if (breakpoint.removeOnceHit) {
+                    removeBreakpoint(breakpoint.id);
+                    emitEvent("breakpointRemoved", Map.of("id", breakpoint.id));
+                }
+                if (stop == null) {
+                    boolean all = set.suspendPolicy() == EventRequest.SUSPEND_ALL;
+                    stop = new Stop(thread, hit.event.location(), breakpoint.reason(), all, extra);
+                }
             }
-            PendingBreakpoint breakpoint = new PendingBreakpoint(normalized, line);
-            breakpoints.add(breakpoint);
-            for (ReferenceType type : vm.allClasses()) {
-                resolve(breakpoint, type);
+        } catch (VMDisconnectedException e) {
+            return;
+        } catch (RuntimeException e) {
+            emitLog("Umbra could not check a breakpoint: " + e.getMessage());
+        }
+        if (stop != null) {
+            reportStop(stop);
+        } else {
+            try {
+                set.resume();
+            } catch (VMDisconnectedException ignored) {
             }
         }
     }
 
-    private void clearBreakpoint(String file, int line) {
-        if (vm == null) return;
-        Path normalized = Paths.get(file).toAbsolutePath().normalize();
-        EventRequestManager manager = vm.eventRequestManager();
+    private void record(Breakpoint breakpoint, long started) {
         synchronized (breakpointLock) {
-            Iterator<PendingBreakpoint> iterator = breakpoints.iterator();
-            while (iterator.hasNext()) {
-                PendingBreakpoint breakpoint = iterator.next();
-                if (breakpoint.line != line || !breakpoint.file.equals(normalized)) continue;
-                for (BreakpointRequest request : breakpoint.requests) manager.deleteEventRequest(request);
-                iterator.remove();
+            breakpoint.nanos += System.nanoTime() - started;
+        }
+    }
+
+    /** "Breakpoint reached" and the log expression, as `log` lines in the program's console. */
+    private void log(Breakpoint breakpoint, ThreadReference thread, LocatableEvent event) {
+        if (breakpoint.logMessage) {
+            Location location = event.location();
+            String file = location.declaringType().name();
+            try {
+                file = location.sourceName();
+            } catch (AbsentInformationException ignored) {
             }
+            emitLog("Breakpoint reached at " + location.declaringType().name() + "." + location.method().name()
+                    + "(" + file + ":" + location.lineNumber() + ")");
+        }
+        if (breakpoint.logExpression != null) {
+            try {
+                Evaluator evaluator = evaluator(thread, 0, breakpoint.imports);
+                Evaluator.Node tree = breakpoint.logTree != null ? breakpoint.logTree : Evaluator.parse(breakpoint.logExpression);
+                emitLog(evaluator.text(evaluator.value(tree, breakpoint.logExpression)));
+            } catch (Evaluator.EvaluationException e) {
+                emitLog("Cannot evaluate '" + breakpoint.logExpression + "': " + e.getMessage());
+            }
+        }
+    }
+
+    private void emitLog(String text) {
+        Map<String, Object> line = new LinkedHashMap<>();
+        line.put("stream", "log");
+        line.put("text", text);
+        line.put("partial", false);
+        emitEvent("output", Map.of("lines", List.of(line)));
+    }
+
+    /**
+     * Shows a stop, or queues it while another is showing (a second thread stopped by a thread-only
+     * breakpoint stays suspended until the first is resumed).
+     */
+    private void reportStop(Stop stop) {
+        synchronized (stopLock) {
+            if (stopped) {
+                pendingStops.add(stop);
+                return;
+            }
+            currentThread = stop.thread;
+            stopped = true;
+            stopSuspendsAll = stop.suspendsAll;
+        }
+        endRunToCursor();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("file", resolveFile(stop.location));
+        body.put("line", Math.max(0, stop.location.lineNumber()));
+        body.put("reason", stop.reason);
+        body.put("threadId", stop.thread.uniqueID());
+        body.put("threadName", safeName(stop.thread));
+        body.put("suspendsAll", stop.suspendsAll);
+        body.putAll(stop.extra);
+        emitEvent("stopped", body);
+    }
+
+    private static String safeName(ThreadReference thread) {
+        try {
+            return thread.name();
+        } catch (ObjectCollectedException | VMDisconnectedException e) {
+            return "";
+        }
+    }
+
+    // MARK: - Breakpoints
+
+    private void setBreakpoint(Map<String, Object> spec) {
+        ensureVM();
+        Breakpoint breakpoint = new Breakpoint(spec, false);
+        if (breakpoint.kind == Kind.LINE && breakpoint.file == null) throw new IllegalArgumentException("a line breakpoint needs a file");
+        if (breakpoint.kind != Kind.LINE && breakpoint.className.isEmpty() && breakpoint.kind != Kind.EXCEPTION) {
+            throw new IllegalArgumentException("a " + breakpoint.kind.name().toLowerCase(Locale.ROOT) + " breakpoint needs a class");
+        }
+        if (breakpoint.kind == Kind.FIELD && (breakpoint.access ? !vm.canWatchFieldAccess() : !vm.canWatchFieldModification())) {
+            throw new IllegalStateException("This JVM cannot watch fields.");
+        }
+        synchronized (breakpointLock) {
+            removeBreakpoint(breakpoint.id);
+            breakpoints.put(breakpoint.id, breakpoint);
+            place(breakpoint);
+        }
+    }
+
+    private void clearBreakpoint(Map<String, Object> request) {
+        if (vm == null) return;
+        String id = stringValue(request.get("breakpointId"));
+        if (id.isEmpty()) {
+            Path file = Paths.get(stringValue(request.get("file"))).toAbsolutePath().normalize();
+            id = file + ":" + intValue(request.get("line"));
+        }
+        synchronized (breakpointLock) {
+            removeBreakpoint(id);
+        }
+    }
+
+    /** Caller holds {@link #breakpointLock} or accepts the race with a hit being judged. */
+    private void removeBreakpoint(String id) {
+        synchronized (breakpointLock) {
+            Breakpoint existing = breakpoints.remove(id);
+            if (existing == null || vm == null) return;
+            EventRequestManager manager = vm.eventRequestManager();
+            for (EventRequest request : existing.requests) {
+                try {
+                    manager.deleteEventRequest(request);
+                } catch (VMDisconnectedException ignored) {
+                }
+            }
+            existing.requests.clear();
+        }
+    }
+
+    /** Places a new breakpoint in the classes already loaded. Caller holds {@link #breakpointLock}. */
+    private void place(Breakpoint breakpoint) {
+        switch (breakpoint.kind) {
+            case LINE -> {
+                String sourceName = breakpoint.file.getFileName().toString();
+                for (ReferenceType type : vm.allClasses()) {
+                    if (hasSource(type, sourceName)) resolve(breakpoint, type);
+                }
+            }
+            case EXCEPTION -> {
+                if (breakpoint.className.isEmpty() || breakpoint.className.equals("*")) {
+                    ExceptionRequest request = vm.eventRequestManager().createExceptionRequest(null, breakpoint.caught, breakpoint.uncaught);
+                    configure(breakpoint, request);
+                    setVerified(breakpoint, true);
+                } else {
+                    for (ReferenceType type : vm.classesByName(breakpoint.className)) resolve(breakpoint, type);
+                }
+            }
+            default -> {
+                for (ReferenceType type : vm.classesByName(breakpoint.className)) resolve(breakpoint, type);
+            }
+        }
+    }
+
+    private static boolean hasSource(ReferenceType type, String sourceName) {
+        try {
+            return type.sourceName().equals(sourceName);
+        } catch (AbsentInformationException | ObjectCollectedException e) {
+            return false;
         }
     }
 
     /** Places every waiting breakpoint that `type` can hold. Called as each class is prepared. */
     private void resolveBreakpoints(ReferenceType type) {
         synchronized (breakpointLock) {
-            for (PendingBreakpoint breakpoint : breakpoints) resolve(breakpoint, type);
+            for (Breakpoint breakpoint : breakpoints.values()) {
+                switch (breakpoint.kind) {
+                    case LINE -> {
+                        if (hasSource(type, breakpoint.file.getFileName().toString())) resolve(breakpoint, type);
+                    }
+                    case EXCEPTION -> {
+                        if (type.name().equals(breakpoint.className)) resolve(breakpoint, type);
+                    }
+                    default -> {
+                        if (type.name().equals(breakpoint.className)) resolve(breakpoint, type);
+                    }
+                }
+            }
         }
     }
 
-    private void resolve(PendingBreakpoint breakpoint, ReferenceType type) {
+    /** Creates `breakpoint`'s requests in `type`. Caller holds {@link #breakpointLock}. */
+    private void resolve(Breakpoint breakpoint, ReferenceType type) {
         try {
-            if (!type.sourceNames(vm.getDefaultStratum()).contains(breakpoint.file.getFileName().toString())) return;
-            for (Location location : type.locationsOfLine(breakpoint.line)) {
-                if (!sourceFileMatches(breakpoint.file, location)) continue;
-                boolean present = false;
-                for (BreakpointRequest request : breakpoint.requests) {
-                    if (request.location().equals(location)) present = true;
+            EventRequestManager manager = vm.eventRequestManager();
+            switch (breakpoint.kind) {
+                case LINE -> {
+                    boolean placed = false;
+                    for (Location location : type.locationsOfLine(breakpoint.line)) {
+                        if (!sourceFileMatches(breakpoint.file, location)) continue;
+                        placed = true;
+                        if (hasRequestAt(breakpoint, location)) continue;
+                        configure(breakpoint, manager.createBreakpointRequest(location));
+                    }
+                    // Only a placed location is reported: a line with no code in this class may
+                    // still belong to a nested or local class of the same file not loaded yet.
+                    if (placed) setVerified(breakpoint, true);
                 }
-                if (present) continue;
-                BreakpointRequest request = vm.eventRequestManager().createBreakpointRequest(location);
-                request.setSuspendPolicy(EventRequest.SUSPEND_ALL);
-                request.enable();
-                breakpoint.requests.add(request);
+                case METHOD -> {
+                    // A line breakpoint at each overload's first instruction: much cheaper than
+                    // method-entry events, which fire for every method of the class.
+                    for (Method method : type.methodsByName(breakpoint.memberName)) {
+                        if (method.isAbstract() || method.isNative()) continue;
+                        Location location = method.location();
+                        if (location == null || hasRequestAt(breakpoint, location)) continue;
+                        configure(breakpoint, manager.createBreakpointRequest(location));
+                    }
+                    setVerified(breakpoint, !breakpoint.requests.isEmpty());
+                }
+                case FIELD -> {
+                    Field field = type.fieldByName(breakpoint.memberName);
+                    if (field == null) {
+                        setVerified(breakpoint, false);
+                        return;
+                    }
+                    if (!breakpoint.requests.isEmpty()) return;
+                    if (breakpoint.access && vm.canWatchFieldAccess()) {
+                        configure(breakpoint, manager.createAccessWatchpointRequest(field));
+                    }
+                    if (breakpoint.modification && vm.canWatchFieldModification()) {
+                        configure(breakpoint, manager.createModificationWatchpointRequest(field));
+                    }
+                    setVerified(breakpoint, !breakpoint.requests.isEmpty());
+                }
+                case EXCEPTION -> {
+                    if (!breakpoint.requests.isEmpty()) return;
+                    configure(breakpoint, manager.createExceptionRequest(type, breakpoint.caught, breakpoint.uncaught));
+                    setVerified(breakpoint, true);
+                }
             }
         } catch (AbsentInformationException | ClassNotPreparedException | ObjectCollectedException ignored) {
             // No line numbers, not loaded yet, or gone: nothing to place here.
+        }
+    }
+
+    private static boolean hasRequestAt(Breakpoint breakpoint, Location location) {
+        for (EventRequest request : breakpoint.requests) {
+            if (request instanceof BreakpointRequest existing && existing.location().equals(location)) return true;
+        }
+        return false;
+    }
+
+    private void configure(Breakpoint breakpoint, EventRequest request) {
+        request.setSuspendPolicy(breakpoint.requestPolicy());
+        if (breakpoint.passCount > 0) request.addCountFilter(breakpoint.passCount);
+        request.putProperty(BREAKPOINT, breakpoint);
+        breakpoint.requests.add(request);
+        // A class prepared during an evaluation's call must not get a live breakpoint: it could
+        // stop the invoking thread while the evaluation waits on it.
+        if ((!muted || breakpoint.temporary) && invocations == 0) request.enable();
+    }
+
+    private void setVerified(Breakpoint breakpoint, boolean verified) {
+        if (breakpoint.temporary || Objects.equals(breakpoint.verified, verified)) return;
+        if (Boolean.TRUE.equals(breakpoint.verified)) return; // one placed location is enough
+        breakpoint.verified = verified;
+        emitEvent("breakpointVerified", Map.of("id", breakpoint.id, "verified", verified));
+    }
+
+    /** Mute Breakpoints: every breakpoint stays, none of them fires. */
+    private void setMuted(boolean muted) {
+        synchronized (breakpointLock) {
+            this.muted = muted;
+            forcedMute = false;
+            applyEnabled(invocations == 0);
+        }
+    }
+
+    /** Turns every request on or off to match the mute state. Caller holds {@link #breakpointLock}. */
+    private void applyEnabled(boolean enabled) {
+        for (Breakpoint breakpoint : breakpoints.values()) {
+            boolean on = enabled && (breakpoint.temporary || !muted) && !breakpoint.expired;
+            for (EventRequest request : breakpoint.requests) {
+                try {
+                    request.setEnabled(on);
+                } catch (InvalidRequestStateException | VMDisconnectedException ignored) {
+                }
+            }
         }
     }
 
@@ -496,8 +960,8 @@ public final class DebugAdapter {
         if (relative.isEmpty()) return "";
         Path relativePath = Paths.get(relative).normalize();
         synchronized (breakpointLock) {
-            for (PendingBreakpoint breakpoint : breakpoints) {
-                if (breakpoint.file.endsWith(relativePath)) return breakpoint.file.toString();
+            for (Breakpoint breakpoint : breakpoints.values()) {
+                if (breakpoint.file != null && breakpoint.file.endsWith(relativePath)) return breakpoint.file.toString();
             }
         }
         for (Path root : sourceRoots) {
@@ -507,38 +971,152 @@ public final class DebugAdapter {
         return relative;
     }
 
+    // MARK: - Running and stepping
+
+    /**
+     * Lets the stopped program go: every thread for a stop that held them all, only the stopped
+     * thread otherwise. A thread-only stop that was waiting behind it is shown next.
+     */
     private void resume() {
         ensureVM();
         clearSteps();
-        stopped = false;
-        vm.resume();
+        Stop next;
+        synchronized (stopLock) {
+            boolean all = stopSuspendsAll;
+            ThreadReference thread = currentThread;
+            stopped = false;
+            releasePinned();
+            if (all || thread == null) {
+                pendingStops.clear(); // their threads are resumed too
+                vm.resume();
+            } else {
+                thread.resume();
+            }
+            next = pendingStops.poll();
+        }
+        if (next != null) reportStop(next);
     }
 
     private void clearSteps() {
         EventRequestManager manager = vm.eventRequestManager();
         for (StepRequest request : new ArrayList<>(manager.stepRequests())) manager.deleteEventRequest(request);
+        clearSmartStep();
+    }
+
+    private void clearSmartStep() {
+        VirtualMachine machine = vm;
+        if (machine == null) return;
+        EventRequestManager manager = machine.eventRequestManager();
+        for (MethodEntryRequest request : new ArrayList<>(manager.methodEntryRequests())) {
+            if (request.getProperty(SMART_STEP) != null) manager.deleteEventRequest(request);
+        }
     }
 
     /**
      * Runs the stopped thread to its next line: over calls, into them, or out to the caller.
-     * Stepping into skips the JDK's own classes, so it lands in the program's code.
+     * Stepping into skips the JDK's own classes unless `filtered` is off (Force Step Into).
      */
-    private void step(int depth) {
+    private void step(int depth, boolean filtered) {
         ensureVM();
-        ensureThread();
+        ensureStopped();
         clearSteps();
         StepRequest request = vm.eventRequestManager().createStepRequest(currentThread, StepRequest.STEP_LINE, depth);
-        if (depth == StepRequest.STEP_INTO) {
-            for (String pattern : RUNTIME_CLASSES) request.addClassExclusionFilter(pattern);
+        if (depth == StepRequest.STEP_INTO && filtered) {
+            for (String pattern : stepFilters()) request.addClassExclusionFilter(pattern);
         }
-        request.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+        request.setSuspendPolicy(stopSuspendsAll ? EventRequest.SUSPEND_ALL : EventRequest.SUSPEND_EVENT_THREAD);
         request.addCountFilter(1);
         request.enable();
-        stopped = false;
-        vm.resume();
+        letStoppedThreadRun();
+    }
+
+    /** Resumes for a step: the stop ends, but no queued stop is shown before the step lands. */
+    private void letStoppedThreadRun() {
+        synchronized (stopLock) {
+            stopped = false;
+            releasePinned();
+            stepStarted = System.nanoTime();
+            if (stopSuspendsAll) vm.resume();
+            else currentThread.resume();
+        }
+    }
+
+    private void noteSteppingDone() {
+        long started = stepStarted;
+        if (started != 0) steppingNanos += System.nanoTime() - started;
+        stepStarted = 0;
     }
 
     private static final String[] RUNTIME_CLASSES = {"java.*", "javax.*", "jdk.*", "sun.*", "com.sun.*"};
+    private volatile String[] stepFilters = RUNTIME_CLASSES;
+
+    private String[] stepFilters() {
+        return stepFilters;
+    }
+
+    /**
+     * Smart Step Into: steps into the call named `methodName` on the current line, skipping the
+     * calls before it. If the line finishes without entering it, stops at the next line instead.
+     */
+    private void smartStepInto(String methodName) {
+        ensureVM();
+        ensureStopped();
+        if (methodName.isEmpty()) throw new IllegalArgumentException("no method to step into");
+        clearSteps();
+        EventRequestManager manager = vm.eventRequestManager();
+        MethodEntryRequest entry = manager.createMethodEntryRequest();
+        entry.addThreadFilter(currentThread);
+        entry.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        entry.putProperty(SMART_STEP, methodName);
+        entry.enable();
+        StepRequest fallback = manager.createStepRequest(currentThread, StepRequest.STEP_LINE, StepRequest.STEP_OVER);
+        fallback.setSuspendPolicy(stopSuspendsAll ? EventRequest.SUSPEND_ALL : EventRequest.SUSPEND_EVENT_THREAD);
+        fallback.addCountFilter(1);
+        fallback.enable();
+        letStoppedThreadRun();
+    }
+
+    /**
+     * Run to Cursor: a one-time breakpoint on `line`, then resume. Other breakpoints still stop the
+     * program on the way unless `force` mutes them until the cursor is reached.
+     */
+    private void runToCursor(String file, int line, boolean force) {
+        ensureVM();
+        ensureStopped();
+        Map<String, Object> spec = new HashMap<>();
+        spec.put("breakpointId", RUN_TO_CURSOR);
+        spec.put("file", file);
+        spec.put("line", line);
+        Breakpoint cursor = new Breakpoint(spec, true);
+        synchronized (breakpointLock) {
+            removeBreakpoint(RUN_TO_CURSOR);
+            breakpoints.put(RUN_TO_CURSOR, cursor);
+            place(cursor);
+            if (cursor.requests.isEmpty()) {
+                breakpoints.remove(RUN_TO_CURSOR);
+                throw new IllegalStateException("There is no code to run to on line " + line + ".");
+            }
+            if (force && !muted) {
+                muted = true;
+                forcedMute = true;
+                applyEnabled(true);
+            }
+        }
+        resume();
+    }
+
+    /** Any stop ends Run to Cursor, whether it got there or another breakpoint stopped it first. */
+    private void endRunToCursor() {
+        synchronized (breakpointLock) {
+            if (!breakpoints.containsKey(RUN_TO_CURSOR)) return;
+            removeBreakpoint(RUN_TO_CURSOR);
+            if (forcedMute) {
+                muted = false;
+                forcedMute = false;
+                applyEnabled(true);
+            }
+        }
+    }
 
     /** Suspends a running program and reports where its main thread is. */
     private void pause() throws IncompatibleThreadStateException {
@@ -550,7 +1128,7 @@ public final class DebugAdapter {
             vm.resume();
             throw new IllegalStateException("no thread to pause");
         }
-        reportStop(thread, locationToShow(thread), "pause");
+        reportStop(new Stop(thread, locationToShow(thread), "pause", true, Map.of()));
     }
 
     /** The main thread if it has frames, else any other thread of the main group. */
@@ -575,14 +1153,117 @@ public final class DebugAdapter {
         List<StackFrame> frames = thread.frames();
         for (StackFrame frame : frames) {
             Location location = frame.location();
-            String type = location.declaringType().name();
-            boolean runtime = false;
-            for (String pattern : RUNTIME_CLASSES) {
-                if (type.startsWith(pattern.substring(0, pattern.length() - 1))) runtime = true;
-            }
-            if (!runtime && location.lineNumber() > 0) return location;
+            if (!isLibrary(location.declaringType().name()) && location.lineNumber() > 0) return location;
         }
         return frames.get(0).location();
+    }
+
+    private static boolean isLibrary(String className) {
+        for (String pattern : RUNTIME_CLASSES) {
+            if (className.startsWith(pattern.substring(0, pattern.length() - 1))) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Drop Frame: pops `frameIndex` and every frame above it, so the caller re-runs the call. The
+     * thread stays suspended, now at the call.
+     */
+    private void dropFrame(int frameIndex) throws Exception {
+        ensureVM();
+        ensureStopped();
+        if (!vm.canPopFrames()) throw new IllegalStateException("This JVM cannot drop frames.");
+        ThreadReference thread = currentThread;
+        List<StackFrame> frames = thread.frames();
+        if (frameIndex < 0 || frameIndex >= frames.size() - 1) throw new IllegalStateException("The bottom frame cannot be dropped.");
+        clearSteps();
+        thread.popFrames(frames.get(frameIndex));
+        Location location = thread.frame(0).location();
+        synchronized (stopLock) {
+            stopped = false;
+        }
+        reportStop(new Stop(thread, location, "dropFrame", stopSuspendsAll, Map.of()));
+    }
+
+    /**
+     * Force Return: the current method returns at once, with `expression`'s value (nothing for a
+     * `void` method), and the program stops again in the caller.
+     */
+    private void forceReturn(int id, String expression, List<String> imports) {
+        ensureVM();
+        ensureStopped();
+        if (!vm.canForceEarlyReturn()) throw new IllegalStateException("This JVM cannot force a return.");
+        ThreadReference thread = currentThread;
+        VirtualMachine machine = vm;
+        evaluations.submit(() -> {
+            try {
+                Method method = thread.frame(0).location().method();
+                Value value;
+                if (method.returnTypeName().equals("void")) {
+                    value = machine.mirrorOfVoid();
+                } else {
+                    if (expression.isBlank()) throw new Evaluator.EvaluationException(method.name() + "() returns " + method.returnTypeName() + ": enter a value.");
+                    value = evaluator(thread, 0, imports).value(expression);
+                }
+                thread.forceEarlyReturn(value);
+                step(StepRequest.STEP_OVER, true);
+                replyOk(id);
+            } catch (Evaluator.EvaluationException e) {
+                replyError(id, e.getMessage());
+            } catch (InvalidTypeException e) {
+                replyError(id, "The value does not match the method's return type.");
+            } catch (Exception e) {
+                replyError(id, e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        });
+    }
+
+    // MARK: - Threads, frames, variables
+
+    private void threads(int id) {
+        ensureVM();
+        List<Map<String, Object>> list = new ArrayList<>();
+        ThreadReference current = currentThread;
+        for (ThreadReference thread : vm.allThreads()) {
+            try {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("id", thread.uniqueID());
+                entry.put("name", thread.name());
+                ThreadGroupReference group = thread.threadGroup();
+                entry.put("group", group == null ? "" : group.name());
+                entry.put("status", status(thread.status()));
+                entry.put("suspended", thread.isSuspended());
+                entry.put("current", thread.equals(current));
+                list.add(entry);
+            } catch (ObjectCollectedException ignored) {
+            }
+        }
+        replyData(id, Map.of("threads", list));
+    }
+
+    private static String status(int status) {
+        return switch (status) {
+            case ThreadReference.THREAD_STATUS_RUNNING -> "running";
+            case ThreadReference.THREAD_STATUS_SLEEPING -> "sleeping";
+            case ThreadReference.THREAD_STATUS_WAIT -> "waiting";
+            case ThreadReference.THREAD_STATUS_MONITOR -> "monitor";
+            case ThreadReference.THREAD_STATUS_ZOMBIE -> "finished";
+            case ThreadReference.THREAD_STATUS_NOT_STARTED -> "not started";
+            default -> "unknown";
+        };
+    }
+
+    /** Inspects another suspended thread: frames, variables and evaluation follow it. */
+    private void selectThread(long threadId) {
+        ensureVM();
+        ensureStopped();
+        for (ThreadReference thread : vm.allThreads()) {
+            if (thread.uniqueID() != threadId) continue;
+            if (!thread.isSuspended()) throw new IllegalStateException("That thread is running.");
+            currentThread = thread;
+            return;
+        }
+        throw new IllegalStateException("No such thread.");
     }
 
     private void stackFrames(int id) {
@@ -593,13 +1274,15 @@ public final class DebugAdapter {
             int index = 0;
             for (StackFrame frame : currentThread.frames()) {
                 Location loc = frame.location();
-                frames.add(Map.of(
-                        "index", index++,
-                        "name", frame.location().method().name(),
-                        "className", frame.location().declaringType().name(),
-                        "file", resolveFile(loc),
-                        "line", Math.max(0, loc.lineNumber())
-                ));
+                String className = loc.declaringType().name();
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("index", index++);
+                entry.put("name", loc.method().name());
+                entry.put("className", className);
+                entry.put("file", resolveFile(loc));
+                entry.put("line", Math.max(0, loc.lineNumber()));
+                entry.put("library", isLibrary(className));
+                frames.add(entry);
             }
         } catch (IncompatibleThreadStateException e) {
             throw new IllegalStateException("thread not suspended");
@@ -607,19 +1290,24 @@ public final class DebugAdapter {
         replyData(id, Map.of("frames", frames));
     }
 
+    /** The frame's `this` and locals, each a value node that can be opened by evaluating its expression. */
     private void localVariables(int id, int frameIndex) {
         ensureVM();
         ensureThread();
         List<Map<String, Object>> variables = new ArrayList<>();
         try {
             StackFrame frame = currentThread.frame(frameIndex);
-            for (LocalVariable variable : frame.visibleVariables()) {
-                Value value = frame.getValue(variable);
-                variables.add(Map.of(
-                        "name", variable.name(),
-                        "type", variable.typeName(),
-                        "value", render(value)
-                ));
+            Evaluator evaluator = evaluator(currentThread, frameIndex, List.of());
+            ObjectReference self = frame.thisObject();
+            if (self != null) variables.add(evaluator.node("this", self, "this", false));
+            try {
+                for (LocalVariable variable : frame.visibleVariables()) {
+                    Map<String, Object> node = evaluator.node(variable.name(), frame.getValue(variable), variable.name(), false);
+                    node.put("type", variable.typeName());
+                    variables.add(node);
+                }
+            } catch (AbsentInformationException ignored) {
+                // Compiled without -g: `this` only.
             }
         } catch (Exception e) {
             throw new IllegalStateException(e.getMessage());
@@ -627,15 +1315,20 @@ public final class DebugAdapter {
         replyData(id, Map.of("variables", variables));
     }
 
-    private void evaluate(int id, String expression, int frameIndex) {
+    private Evaluator evaluator(ThreadReference thread, int frameIndex, List<String> imports) {
+        VirtualMachine machine = vm;
+        CompilingEvaluator compiler = new CompilingEvaluator(machine, compileCache, imports, this::disableBreakpoints, this::enableBreakpoints);
+        return new Evaluator(machine, thread, frameIndex, this::disableBreakpoints, this::enableBreakpoints, pinned, compiler);
+    }
+
+    private void evaluate(int id, String expression, int frameIndex, List<String> imports) {
         ensureVM();
         ensureThread();
         if (!stopped) throw new IllegalStateException("The program is running: pause it or wait for a breakpoint.");
         ThreadReference thread = currentThread;
-        VirtualMachine machine = vm;
         evaluations.submit(() -> {
             try {
-                Evaluator evaluator = new Evaluator(machine, thread, frameIndex, this::disableBreakpoints, this::enableBreakpoints);
+                Evaluator evaluator = evaluator(thread, frameIndex, imports);
                 replyData(id, Map.of("result", evaluator.evaluate(expression)));
             } catch (Evaluator.EvaluationException e) {
                 replyError(id, e.getMessage());
@@ -653,27 +1346,172 @@ public final class DebugAdapter {
      */
     private void disableBreakpoints() {
         synchronized (breakpointLock) {
-            for (PendingBreakpoint breakpoint : breakpoints) {
-                for (BreakpointRequest request : breakpoint.requests) request.disable();
-            }
+            invocations++;
+            applyEnabled(false);
         }
     }
 
     private void enableBreakpoints() {
         synchronized (breakpointLock) {
-            for (PendingBreakpoint breakpoint : breakpoints) {
-                for (BreakpointRequest request : breakpoint.requests) request.enable();
-            }
+            invocations = Math.max(0, invocations - 1);
+            if (invocations == 0) applyEnabled(true);
         }
     }
+
+    // MARK: - Stream trace
+
+    /**
+     * Evaluates a stream chain the host rewrote to record each stage (see JavaStreamChain): the
+     * value is an `Object[]` of one `Object[]` per stage, each holding `{long time, Object value}`
+     * records, then the terminal result. Each value comes back as text with an identity, so the
+     * host can link an element to the ones it became.
+     */
+    private void traceStream(int id, String expression, int frameIndex, List<String> imports) {
+        ensureVM();
+        ensureThread();
+        if (!stopped) throw new IllegalStateException("The program is running: pause it or wait for a breakpoint.");
+        ThreadReference thread = currentThread;
+        evaluations.submit(() -> {
+            try {
+                Evaluator evaluator = evaluator(thread, frameIndex, imports);
+                Value value = evaluator.value(expression);
+                if (!(value instanceof ArrayReference stages) || stages.length() < 1) {
+                    throw new Evaluator.EvaluationException("The traced stream returned nothing.");
+                }
+                List<Map<String, Object>> result = new ArrayList<>();
+                List<Value> all = stages.getValues();
+                for (int s = 0; s < all.size() - 1; s++) {
+                    List<Map<String, Object>> records = new ArrayList<>();
+                    if (all.get(s) instanceof ArrayReference stage) {
+                        int count = Math.min(stage.length(), 500);
+                        for (Value recordValue : stage.getValues(0, count)) {
+                            if (!(recordValue instanceof ArrayReference record) || record.length() < 2) continue;
+                            Object time = Evaluator.unboxOrNull(record.getValue(0));
+                            Value element = record.getValue(1);
+                            Map<String, Object> entry = new LinkedHashMap<>();
+                            entry.put("time", time instanceof Number n ? n.longValue() : 0L);
+                            entry.put("value", streamText(evaluator, element));
+                            entry.put("identity", identity(element));
+                            records.add(entry);
+                        }
+                        if (stage.length() > count) {
+                            Map<String, Object> more = new LinkedHashMap<>();
+                            more.put("time", Long.MAX_VALUE);
+                            more.put("value", "… " + (stage.length() - count) + " more");
+                            more.put("identity", "more");
+                            records.add(more);
+                        }
+                    }
+                    result.add(Map.of("values", records));
+                }
+                Value terminal = all.get(all.size() - 1);
+                replyData(id, Map.of("stages", result, "result", evaluator.node(null, terminal, "", true)));
+            } catch (Evaluator.EvaluationException e) {
+                replyError(id, e.getMessage());
+            } catch (VMDisconnectedException e) {
+                replyError(id, "The program has ended.");
+            } catch (Exception e) {
+                replyError(id, e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        });
+    }
+
+    private static String streamText(Evaluator evaluator, Value value) {
+        if (value instanceof StringReference || value instanceof PrimitiveValue || value == null) return Evaluator.display(value);
+        if (value instanceof ObjectReference object && Evaluator.BOXES.contains(object.referenceType().name())) return Evaluator.display(value);
+        try {
+            String text = evaluator.text(value);
+            return text.length() > 120 ? text.substring(0, 120) + "…" : text;
+        } catch (Evaluator.EvaluationException e) {
+            return Evaluator.display(value);
+        }
+    }
+
+    /** The same object in two stages has the same identity; equal primitives do too. */
+    private static String identity(Value value) {
+        if (value instanceof ObjectReference object) return "#" + object.uniqueID();
+        return "=" + Evaluator.display(value);
+    }
+
+    // MARK: - Memory and overhead
+
+    /** How many instances of each loaded class the heap holds (classes with none are left out). */
+    private void instanceCounts(int id) {
+        ensureVM();
+        if (!vm.canGetInstanceInfo()) throw new IllegalStateException("This JVM cannot count instances.");
+        ensureStopped();
+        List<ReferenceType> classes = vm.allClasses();
+        long[] counts = vm.instanceCounts(classes);
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (int i = 0; i < classes.size(); i++) {
+            if (counts[i] == 0) continue;
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("className", classes.get(i).name());
+            entry.put("count", counts[i]);
+            list.add(entry);
+        }
+        list.sort((a, b) -> Long.compare((Long) b.get("count"), (Long) a.get("count")));
+        replyData(id, Map.of("classes", list));
+    }
+
+    /** Up to `limit` instances of a class, pinned so they can be opened by `#id` until the program runs. */
+    private void instances(int id, String className, int limit) {
+        ensureVM();
+        ensureThread();
+        if (!vm.canGetInstanceInfo()) throw new IllegalStateException("This JVM cannot list instances.");
+        List<ReferenceType> types = vm.classesByName(className);
+        if (types.isEmpty()) throw new IllegalStateException("The class " + className + " is not loaded.");
+        Evaluator evaluator = evaluator(currentThread, 0, List.of());
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        int index = 0;
+        for (ObjectReference object : types.get(0).instances(Math.max(1, Math.min(limit, 5000)))) {
+            try {
+                object.disableCollection();
+            } catch (ObjectCollectedException e) {
+                continue;
+            }
+            pinned.put(object.uniqueID(), object);
+            nodes.add(evaluator.node("[" + index++ + "]", object, "#" + object.uniqueID(), false));
+        }
+        replyData(id, Map.of("instances", nodes));
+    }
+
+    private void releasePinned() {
+        for (ObjectReference object : pinned.values()) {
+            try {
+                object.enableCollection();
+            } catch (ObjectCollectedException | VMDisconnectedException ignored) {
+            }
+        }
+        pinned.clear();
+    }
+
+    private void overhead(int id) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        synchronized (breakpointLock) {
+            for (Breakpoint breakpoint : breakpoints.values()) {
+                if (breakpoint.temporary) continue;
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("id", breakpoint.id);
+                entry.put("hits", breakpoint.hits);
+                entry.put("millis", breakpoint.nanos / 1_000_000.0);
+                list.add(entry);
+            }
+        }
+        replyData(id, Map.of("breakpoints", list, "steppingMillis", steppingNanos / 1_000_000.0));
+    }
+
+    // MARK: - Session
 
     private void disconnect() {
         disconnectQuietly();
     }
 
     private void disconnectQuietly() {
-        if (vm != null) {
-            try { vm.dispose(); } catch (Exception ignored) {}
+        VirtualMachine machine = vm;
+        if (machine != null) {
+            releasePinned();
+            try { machine.dispose(); } catch (Exception ignored) {}
             vm = null;
         }
         if (targetProcess != null) {
@@ -685,11 +1523,17 @@ public final class DebugAdapter {
             forwarder.discard();
             outputForwarder = null;
         }
-        currentThread = null;
-        stopped = false;
+        synchronized (stopLock) {
+            currentThread = null;
+            stopped = false;
+            pendingStops.clear();
+        }
         synchronized (breakpointLock) {
             breakpoints.clear();
+            muted = false;
+            forcedMute = false;
         }
+        compileCache.clear();
     }
 
     private void ensureVM() {
@@ -700,17 +1544,17 @@ public final class DebugAdapter {
         if (currentThread == null) throw new IllegalStateException("no suspended thread");
     }
 
+    private void ensureStopped() {
+        ensureThread();
+        if (!stopped) throw new IllegalStateException("The program is running.");
+    }
+
     private static String sourcePath(Location location) {
         try {
             return location.sourcePath();
         } catch (AbsentInformationException e) {
             return "";
         }
-    }
-
-    private static String render(Value value) {
-        if (value == null) return "null";
-        return value.toString();
     }
 
     private static List<String> splitArgs(String text) {
@@ -761,6 +1605,11 @@ public final class DebugAdapter {
     private static int intValue(Object value) {
         if (value instanceof Number number) return number.intValue();
         return Integer.parseInt(String.valueOf(value));
+    }
+
+    private static long longValue(Object value) {
+        if (value instanceof Number number) return number.longValue();
+        return Long.parseLong(String.valueOf(value));
     }
 
     private static boolean boolValue(Object value) {

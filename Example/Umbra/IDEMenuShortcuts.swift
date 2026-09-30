@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Menu items whose shortcut depends on the selected ``KeymapPreset``.
@@ -24,6 +25,8 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     // Run
     case toggleBreakpoint, debugResume, debugPause, debugStepOver, debugStepInto, debugStepOut, debugStop
     case evaluateExpression, quickEvaluate
+    case viewBreakpoints, muteBreakpoints, debugRunToCursor, debugForceRunToCursor, debugForceStepInto
+    case debugSmartStepInto, debugDropFrame, debugForceReturn, showExecutionPoint, traceStream
     // HTTP
     case sendHTTPRequest
     // View
@@ -59,6 +62,9 @@ enum IDEMenuShortcuts {
     private static let functionKey2 = KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!))
     private static let functionKey7 = KeyEquivalent(Character(UnicodeScalar(NSF7FunctionKey)!))
     private static let functionKey8 = KeyEquivalent(Character(UnicodeScalar(NSF8FunctionKey)!))
+    private static let functionKey3 = KeyEquivalent(Character(UnicodeScalar(NSF3FunctionKey)!))
+    private static let functionKey9 = KeyEquivalent(Character(UnicodeScalar(NSF9FunctionKey)!))
+    private static let functionKey10 = KeyEquivalent(Character(UnicodeScalar(NSF10FunctionKey)!))
 
     private static let base: [IDEMenuCommand: KeyboardShortcut?] = [
         .newFile: KeyboardShortcut("n"),
@@ -86,7 +92,18 @@ enum IDEMenuShortcuts {
         .toggleDebugTool: nil,
         .hideAllToolWindows: nil,
         .resetZoom: nil,
-        .toggleBreakpoint: nil,
+        // F3 in every preset; IntelliJ's ⌘F8 is a secondary key (`secondaryShortcuts`).
+        .toggleBreakpoint: KeyboardShortcut(functionKey3, modifiers: []),
+        .viewBreakpoints: nil,
+        .muteBreakpoints: nil,
+        .debugRunToCursor: nil,
+        .debugForceRunToCursor: nil,
+        .debugForceStepInto: nil,
+        .debugSmartStepInto: nil,
+        .debugDropFrame: nil,
+        .debugForceReturn: nil,
+        .showExecutionPoint: nil,
+        .traceStream: nil,
         .debugResume: nil,
         .debugPause: nil,
         .debugStepOver: nil,
@@ -154,7 +171,12 @@ enum IDEMenuShortcuts {
         .gitPush: KeyboardShortcut("k", modifiers: [.command, .shift]),
         .gitRevert: KeyboardShortcut("z", modifiers: [.command, .option]),
         // IntelliJ's debugger keys. Pause has no default key there.
-        .toggleBreakpoint: KeyboardShortcut(functionKey8, modifiers: .command),
+        .viewBreakpoints: KeyboardShortcut(functionKey8, modifiers: [.command, .shift]),
+        .debugRunToCursor: KeyboardShortcut(functionKey9, modifiers: .option),
+        .debugForceRunToCursor: KeyboardShortcut(functionKey9, modifiers: [.command, .option]),
+        .debugForceStepInto: KeyboardShortcut(functionKey7, modifiers: [.option, .shift]),
+        .debugSmartStepInto: KeyboardShortcut(functionKey7, modifiers: .shift),
+        .showExecutionPoint: KeyboardShortcut(functionKey10, modifiers: .option),
         .debugResume: KeyboardShortcut("r", modifiers: [.command, .option]),
         .debugStepOver: KeyboardShortcut(functionKey8, modifiers: []),
         .debugStepInto: KeyboardShortcut(functionKey7, modifiers: []),
@@ -178,6 +200,41 @@ enum IDEMenuShortcuts {
         // ⌥⌘E is Encapsulate Field in IntelliJ; Select In Project View is ⌥F1.
         .revealActiveFile: KeyboardShortcut(functionKey1, modifiers: .option)
     ]
+}
+
+extension IDEMenuShortcuts {
+    /// Keys that run a command besides its menu shortcut (a SwiftUI menu item holds one key).
+    static func secondaryShortcuts(in preset: KeymapPreset) -> [(command: IDEMenuCommand, key: String, modifiers: NSEvent.ModifierFlags)] {
+        switch preset {
+        case .intelliJ:
+            // IntelliJ's Toggle Line Breakpoint, next to F3.
+            return [(.toggleBreakpoint, String(Character(UnicodeScalar(NSF8FunctionKey)!)), .command)]
+        case .sublime, .default_:
+            return []
+        }
+    }
+}
+
+/// Runs ``IDEMenuShortcuts/secondaryShortcuts(in:)`` in the key window's workspace. A local key
+/// monitor, installed once at launch; a key it does not know goes on as usual.
+@MainActor
+enum IDESecondaryShortcutMonitor {
+    private static var monitor: Any?
+
+    static func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let workspace = IDEWindowRegistry.shared.activeWorkspace else { return event }
+            let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            let key = event.charactersIgnoringModifiers ?? ""
+            for shortcut in IDEMenuShortcuts.secondaryShortcuts(in: workspace.preferences.keymapPreset)
+            where shortcut.key == key && shortcut.modifiers == flags {
+                workspace.perform(shortcut.command)
+                return nil
+            }
+            return event
+        }
+    }
 }
 
 extension View {

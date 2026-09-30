@@ -252,12 +252,14 @@ final class IDEJavaSupport {
         await testIndex.isTestSource(file: file)
     }
 
-    func runTests(scope: JavaTestRunScope) {
+    /// Runs tests through Gradle. With `debug` the test JVM waits for a debugger on the JDWP port
+    /// (`--debug-jvm`), and Gradle's run is not timed out.
+    func runTests(scope: JavaTestRunScope, debug: Bool = false) {
         guard let url = projectRootURL else { return }
         guard let request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradleModel) else { return }
         pendingTestRunRequest = request
-        let args = JavaTestRunner.gradleArguments(for: request)
-        runGradleTasks([request.gradleTaskPath], extraArguments: args)
+        let args = JavaTestRunner.gradleArguments(for: request, debug: debug)
+        runGradleTasks(JavaTestRunner.taskPaths(for: request, debug: debug), extraArguments: args, runsApplication: debug)
     }
 
     func takePendingTestRunRequest() -> JavaTestRunRequest? {

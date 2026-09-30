@@ -118,6 +118,7 @@ struct IDEDebugConsoleView: NSViewRepresentable {
             case .out: IDEAppearance.NSToken.foreground
             case .err: IDEAppearance.NSToken.error
             case .note: IDEAppearance.NSToken.muted
+            case .log: IDEAppearance.NSToken.accent
             }
         }
 

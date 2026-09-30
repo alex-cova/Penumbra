@@ -158,11 +158,24 @@ final class TextInputView: EditorView {
     var inlayHints: [InlayHint] = [] {
         didSet {
             if inlayHints != oldValue {
-                layoutManager.inlayHints = InlayHintIndex.normalized(inlayHints)
-                layoutManager.setNeedsLayout()
-                setNeedsLayout()
+                inlayHintsDidChange()
             }
         }
+    }
+    /// A second set of hints from another source (the debugger's values), shown with
+    /// ``inlayHints`` so neither replaces the other.
+    var supplementaryInlayHints: [InlayHint] = [] {
+        didSet {
+            if supplementaryInlayHints != oldValue {
+                inlayHintsDidChange()
+            }
+        }
+    }
+
+    private func inlayHintsDidChange() {
+        layoutManager.inlayHints = InlayHintIndex.normalized(supplementaryInlayHints.isEmpty ? inlayHints : inlayHints + supplementaryInlayHints)
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
     }
     /// ⌘←/→ and Home/End go to the first non-whitespace character / before trailing whitespace
     /// first (see ``LineBoundaryNavigator``) instead of straight to the row boundary.
@@ -1054,6 +1067,9 @@ final class TextInputView: EditorView {
     /// click (add a caret) or a drag (start a block/column selection). See
     /// `TextInputView+MouseKeyboard.swift`.
     var pendingOptionClickPoint: CGPoint?
+    /// A plain click on a line number, held until `mouseUp` so a drag from the gutter still
+    /// selects lines as before.
+    var pendingGutterClick: (point: CGPoint, click: GutterLineClick)?
     /// Active keystroke → action bindings. Set from ``TextView/keymap``.
     var keymap: Keymap = .default_ {
         didSet { keymapDispatcher.reset() }
@@ -1355,6 +1371,7 @@ final class TextInputView: EditorView {
 
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
         if !inlayHints.isEmpty { inlayHints = [] }
+        if !supplementaryInlayHints.isEmpty { supplementaryInlayHints = [] }
         if layoutManager.hasLineMarkers { lineMarkers = [] }
         layoutManager.clearGutterAnnotations()
         syntaxParseGeneration += 1
@@ -1661,12 +1678,51 @@ final class TextInputView: EditorView {
 
     var gutterDecorations: [GutterDecoration] {
         get { layoutManager.gutterDecorations }
-        set { layoutManager.gutterDecorations = newValue }
+        set {
+            layoutManager.gutterDecorations = newValue
+            // The column's frame is set in the layout pass; without this a first decoration waited
+            // for an unrelated layout (scroll, edit) before it could be clicked.
+            setNeedsLayout()
+        }
     }
 
     var gutterDecorationHandler: ((Int) -> Void)? {
         get { layoutManager.gutterDecorationHandler }
         set { layoutManager.gutterDecorationHandler = newValue }
+    }
+
+    var gutterLineClickHandler: ((GutterLineClick) -> Bool)? {
+        get { layoutManager.gutterLineClickHandler }
+        set { layoutManager.gutterLineClickHandler = newValue }
+    }
+
+    var gutterDecorationsDidMove: (([GutterDecoration]) -> Void)? {
+        get { layoutManager.gutterDecorationsDidMove }
+        set { layoutManager.gutterDecorationsDidMove = newValue }
+    }
+
+    var alwaysShowGutterDecorationColumn: Bool {
+        get { layoutManager.alwaysShowGutterDecorationColumn }
+        set {
+            guard newValue != layoutManager.alwaysShowGutterDecorationColumn else { return }
+            layoutManager.alwaysShowGutterDecorationColumn = newValue
+            setNeedsLayout()
+        }
+    }
+
+    var contextMenuItemsProvider: ((EditorContextMenuContext) -> [NSMenuItem])? {
+        get { editMenuController.additionalItemsProvider }
+        set { editMenuController.additionalItemsProvider = newValue }
+    }
+
+    func makeContextMenu(at location: Int?) -> NSMenu {
+        editMenuController.contextMenu(for: self, location: location)
+    }
+
+    /// The gutter line under `point`, when a host wants gutter clicks.
+    func gutterLineForClick(at point: CGPoint) -> Int? {
+        guard layoutManager.gutterLineClickHandler != nil else { return nil }
+        return layoutManager.gutterLine(at: point)
     }
 
     /// Kept on their lines through edits, and dropped when the document is replaced.
@@ -2896,6 +2952,7 @@ extension TextInputView {
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let application = textEditHelper.apply(batchReplaceSet)
         if !inlayHints.isEmpty { inlayHints = [] }
+        if !supplementaryInlayHints.isEmpty { supplementaryInlayHints = [] }
         registerBatchUndo(inverseReplacements: application.inverseReplacements)
         invalidateLines()
         layoutManager.setNeedsLayout()
@@ -3036,10 +3093,11 @@ extension TextInputView {
         // edit is described in rows up front: a few lookups, however many markers there are.
         var markerEdit: GutterLineMarkerEdit?
         let lineCountBeforeEdit = lineManager.lineCount
-        let hasLineBreak = layoutManager.hasLineMarkers || layoutManager.hasGutterAnnotations
+        let followsLineBreaks = layoutManager.hasLineMarkers || layoutManager.hasGutterDecorations
+        let hasLineBreak = followsLineBreaks || layoutManager.hasGutterAnnotations
             ? Self.containsLineBreak(newString) || Self.containsLineBreak(currentText)
             : false
-        if layoutManager.hasGutterAnnotations || (layoutManager.hasLineMarkers && hasLineBreak) {
+        if layoutManager.hasGutterAnnotations || (followsLineBreaks && hasLineBreak) {
             let lastRow = max(lineCountBeforeEdit - 1, 0)
             let startRow = lineManager.row(containingCharacterAt: range.location) ?? lastRow
             let endRow = max(lineManager.row(containingCharacterAt: range.upperBound) ?? lastRow, startRow)
@@ -3060,6 +3118,9 @@ extension TextInputView {
         if !inlayHints.isEmpty {
             inlayHints = InlayHintIndex.applyingEdit(to: inlayHints, range: range, replacementLength: nsNewString.length)
         }
+        if !supplementaryInlayHints.isEmpty {
+            supplementaryInlayHints = InlayHintIndex.applyingEdit(to: supplementaryInlayHints, range: range, replacementLength: nsNewString.length)
+        }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
         if var markerEdit {
@@ -3069,6 +3130,9 @@ extension TextInputView {
             }
             if layoutManager.hasGutterAnnotations {
                 layoutManager.applyGutterAnnotationEdit(markerEdit)
+            }
+            if layoutManager.hasGutterDecorations, hasLineBreak {
+                layoutManager.applyGutterDecorationEdit(markerEdit)
             }
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)

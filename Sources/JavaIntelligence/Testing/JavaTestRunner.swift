@@ -5,12 +5,16 @@ public enum JavaTestRunScope: Sendable, Equatable {
     case allInModule(gradleTaskPath: String)
     case testClass(JavaTestClass)
     case testMethod(JavaTestMethod, taskPath: String)
+    /// Several `--tests` filters of one task, e.g. the tests that failed last time.
+    case tests(taskPath: String, filters: [String])
 }
 
 /// Parameters for a Gradle-backed test invocation.
 public struct JavaTestRunRequest: Sendable, Equatable {
     public let gradleTaskPath: String
     public let testFilter: String?
+    /// More `--tests` filters after ``testFilter``.
+    public let additionalTestFilters: [String]
     public let projectRoot: URL
     /// Directories where Surefire/JUnit Platform XML reports are written for this task.
     public let reportDirectories: [URL]
@@ -18,11 +22,13 @@ public struct JavaTestRunRequest: Sendable, Equatable {
     public init(
         gradleTaskPath: String,
         testFilter: String?,
+        additionalTestFilters: [String] = [],
         projectRoot: URL,
         reportDirectories: [URL]
     ) {
         self.gradleTaskPath = gradleTaskPath
         self.testFilter = testFilter
+        self.additionalTestFilters = additionalTestFilters
         self.projectRoot = projectRoot
         self.reportDirectories = reportDirectories
     }
@@ -57,17 +63,37 @@ public enum JavaTestRunner {
                 projectRoot: projectRoot,
                 reportDirectories: reportDirectories(forTaskPath: taskPath, model: model)
             )
+        case .tests(let taskPath, let filters):
+            return JavaTestRunRequest(
+                gradleTaskPath: taskPath,
+                testFilter: filters.first,
+                additionalTestFilters: Array(filters.dropFirst()),
+                projectRoot: projectRoot,
+                reportDirectories: reportDirectories(forTaskPath: taskPath, model: model)
+            )
         }
     }
 
     /// Gradle CLI arguments after `--console=plain` and before the task path.
-    public static func gradleArguments(for request: JavaTestRunRequest, continueOnFailure: Bool = true) -> [String] {
+    public static func gradleArguments(for request: JavaTestRunRequest, continueOnFailure: Bool = true, debug: Bool = false) -> [String] {
         var args = ["--no-configuration-cache"]
         if continueOnFailure { args.append("--continue") }
-        if let filter = request.testFilter {
+        for filter in [request.testFilter].compactMap({ $0 }) + request.additionalTestFilters {
             args.append(contentsOf: ["--tests", filter])
         }
+        // The test JVM waits on the JDWP port (5005) for a debugger before running anything.
+        if debug { args.append("--debug-jvm") }
         return args
+    }
+
+    /// The tasks a run executes. A debug run cleans the task's outputs first: an up-to-date test
+    /// task would start no JVM, and the debugger would wait for one that never comes.
+    public static func taskPaths(for request: JavaTestRunRequest, debug: Bool) -> [String] {
+        guard debug else { return [request.gradleTaskPath] }
+        var components = request.gradleTaskPath.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard let name = components.popLast(), !name.isEmpty else { return [request.gradleTaskPath] }
+        let clean = components.joined(separator: ":") + ":clean" + name.prefix(1).uppercased() + name.dropFirst()
+        return [clean, request.gradleTaskPath]
     }
 
     public static func isTestTask(_ taskPath: String) -> Bool {

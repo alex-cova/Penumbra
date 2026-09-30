@@ -34,6 +34,13 @@ struct IDEJavaStructurePanel: View {
                             workspace.selectStructureNode(row.node)
                         }
                     )
+                    .contextMenu {
+                        // A test class or test method runs or debugs from here, as in IntelliJ.
+                        if let target = workspace.structureTestTarget(for: row.node) {
+                            Button("Run ‘\(target.title)’") { workspace.runTests(scope: target.scope, title: target.title) }
+                            Button("Debug ‘\(target.title)’") { workspace.debugTests(scope: target.scope, title: target.title) }
+                        }
+                    }
                 }
             }
             .padding(.vertical, IDEAppearance.Spacing.xs)

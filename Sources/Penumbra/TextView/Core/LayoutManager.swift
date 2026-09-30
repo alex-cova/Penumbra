@@ -222,12 +222,72 @@ final class LayoutManager {
     var gutterDecorations: [GutterDecoration] = [] {
         didSet {
             gutterDecorationView.decorations = gutterDecorations
-            gutterWidthService.showGutterDecorations = !gutterDecorations.isEmpty
-            setNeedsLayout()
+            updateGutterDecorationColumnVisibility()
+        }
+    }
+    /// Keeps the decoration column (and so the text's x position) while there are no decorations.
+    var alwaysShowGutterDecorationColumn = false {
+        didSet {
+            if alwaysShowGutterDecorationColumn != oldValue {
+                updateGutterDecorationColumnVisibility()
+            }
         }
     }
     var gutterDecorationHandler: ((Int) -> Void)? {
         didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
+    }
+    var hasGutterDecorations: Bool {
+        !gutterDecorations.isEmpty
+    }
+    /// Called with every decoration after an edit moved or dropped some.
+    var gutterDecorationsDidMove: (([GutterDecoration]) -> Void)?
+
+    /// Moves the decorations through a line-break edit, with the line markers' rules. Bounded by
+    /// the number of decorations (a file's breakpoints and run buttons), not by the document.
+    func applyGutterDecorationEdit(_ edit: GutterLineMarkerEdit) {
+        var changed = false
+        var moved: [GutterDecoration] = []
+        moved.reserveCapacity(gutterDecorations.count)
+        for decoration in gutterDecorations {
+            guard let row = edit.newRow(forRow: decoration.line - 1) else {
+                changed = true
+                continue
+            }
+            if row + 1 != decoration.line {
+                changed = true
+                moved.append(decoration.moved(toLine: row + 1))
+            } else {
+                moved.append(decoration)
+            }
+        }
+        guard changed else { return }
+        gutterDecorations = moved
+        gutterDecorationsDidMove?(moved)
+    }
+
+    /// Clicks in the line-number column, and in the decoration column away from a decoration.
+    var gutterLineClickHandler: ((GutterLineClick) -> Bool)? {
+        didSet { gutterDecorationView.onGutterLineClicked = gutterLineClickHandler }
+    }
+    private var showsGutterDecorationColumn: Bool {
+        alwaysShowGutterDecorationColumn || !gutterDecorations.isEmpty
+    }
+    private func updateGutterDecorationColumnVisibility() {
+        gutterWidthService.showGutterDecorations = showsGutterDecorationColumn
+        gutterDecorationView.isHidden = !showsGutterDecorationColumn
+        setNeedsLayout()
+    }
+
+    /// The 1-based line beside `point` (in this view's content coordinates) when the point is in
+    /// the gutter, level with a line. The interactive columns (ribbon, markers, annotations) take
+    /// their own clicks before they get here.
+    func gutterLine(at point: CGPoint) -> Int? {
+        let x = point.x - viewport.minX
+        guard x >= 0, x < totalGutterWidth else { return nil }
+        let y = point.y - textContainerInset.top
+        guard y >= 0, let row = lineManager.row(containingYOffset: y) else { return nil }
+        guard y < lineManager.yPosition(ofRow: row) + lineManager.lineInfo(atRow: row).lineHeight else { return nil }
+        return row + 1
     }
     private let gutterAnnotationView = GutterAnnotationView()
     var hasGutterAnnotations: Bool {
@@ -1497,7 +1557,7 @@ extension LayoutManager {
         gutterBackgroundView.isHidden = !showLineNumbers
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
-        gutterDecorationView.isHidden = gutterDecorations.isEmpty
+        gutterDecorationView.isHidden = !showsGutterDecorationColumn
         lineMarkerView.isHidden = !hasLineMarkers
         gutterAnnotationView.isHidden = !hasGutterAnnotations
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.

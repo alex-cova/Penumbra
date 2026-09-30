@@ -18,6 +18,8 @@ final class IDEDebugConsoleLog {
         case out
         case err
         case note
+        /// A breakpoint's log message or log expression.
+        case log
     }
 
     struct Chunk: Sendable, Equatable {
