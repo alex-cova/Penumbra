@@ -75,6 +75,8 @@ final class IDENotificationCenter {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let toastDuration: Duration
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    /// Only written in `init` and read in `deinit`, which run without other access.
+    @ObservationIgnored nonisolated(unsafe) private var defaultsObserver: NSObjectProtocol?
 
     init(defaults: UserDefaults = .standard, toastDuration: Duration = IDENotificationCenter.defaultToastDuration) {
         self.defaults = defaults
@@ -82,6 +84,38 @@ final class IDENotificationCenter {
         isMuted = defaults.bool(forKey: Keys.muted)
         let stored = defaults.stringArray(forKey: Keys.disabledCategories) ?? []
         disabledCategories = Set(stored.compactMap(IDENotificationCategory.init(rawValue:)))
+        // Do Not Disturb and the category switches are app-wide: another window's bell writes them
+        // to the same defaults, and this window's copy follows.
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadSharedSettings() }
+        }
+    }
+
+    deinit {
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+        }
+    }
+
+    /// Re-reads the two shared switches, assigning only what differs: assigning writes the defaults
+    /// again, which would post the change notification and loop.
+    private func reloadSharedSettings() {
+        let muted = defaults.bool(forKey: Keys.muted)
+        if muted != isMuted {
+            isMuted = muted
+        }
+        let stored = defaults.stringArray(forKey: Keys.disabledCategories) ?? []
+        let categories = Set(stored.compactMap(IDENotificationCategory.init(rawValue:)))
+        if categories != disabledCategories {
+            disabledCategories = categories
+            // A category another window just turned off is not recorded here either.
+            items.removeAll { categories.contains($0.category) }
+            if let toast, categories.contains(toast.category) { dismissToast() }
+        }
     }
 
     func post(

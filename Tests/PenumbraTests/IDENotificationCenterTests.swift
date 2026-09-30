@@ -114,4 +114,54 @@ final class IDENotificationCenterTests: XCTestCase {
         XCTAssertFalse(reloaded.isEnabled(.git))
         XCTAssertTrue(reloaded.isEnabled(.gradle))
     }
+
+    /// Each window has its own center (toasts belong to the window they came from), but Do Not
+    /// Disturb and the category switches are app-wide: a change in one follows in the others without
+    /// a restart.
+    private func letDefaultsChangesArrive() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
+    func testDoNotDisturbInOneWindowReachesTheOtherWindow() {
+        let windowA = makeCenter()
+        let windowB = makeCenter()
+        XCTAssertFalse(windowB.isMuted)
+
+        windowA.isMuted = true
+        letDefaultsChangesArrive()
+
+        XCTAssertTrue(windowB.isMuted)
+
+        windowB.isMuted = false
+        letDefaultsChangesArrive()
+
+        XCTAssertFalse(windowA.isMuted)
+    }
+
+    func testTurningACategoryOffInOneWindowTurnsItOffInTheOtherAndClearsItsEntries() {
+        let windowA = makeCenter()
+        let windowB = makeCenter()
+        windowB.post("pushed", category: .git)
+        windowB.post("built", category: .gradle)
+
+        windowA.setCategory(.git, enabled: false)
+        letDefaultsChangesArrive()
+
+        XCTAssertFalse(windowB.isEnabled(.git))
+        XCTAssertEqual(windowB.items.map(\.title), ["built"])
+        windowB.post("again", category: .git)
+        XCTAssertEqual(windowB.items.map(\.title), ["built"], "a disabled category is not recorded")
+    }
+
+    func testEntriesAndToastsStayInTheirOwnWindow() {
+        let windowA = makeCenter()
+        let windowB = makeCenter()
+
+        windowA.post("only here")
+        letDefaultsChangesArrive()
+
+        XCTAssertEqual(windowA.items.map(\.title), ["only here"])
+        XCTAssertTrue(windowB.items.isEmpty)
+        XCTAssertNil(windowB.toast)
+    }
 }

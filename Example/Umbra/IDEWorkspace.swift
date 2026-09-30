@@ -248,8 +248,10 @@ public final class IDEWorkspace {
     @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
     @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
     @ObservationIgnored private let generatePrompt = IDEGeneratePrompt()
-    private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
-    private let breakpointStore = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
+    /// The app's shared stores (see `IDESharedServices`): every window reads and writes the same
+    /// instances, so one window's change is neither lost nor missed by another.
+    private let runConfigurationStore = IDESharedServices.shared.runConfigurations
+    private let breakpointStore = IDESharedServices.shared.breakpoints
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
@@ -3117,7 +3119,14 @@ public final class IDEWorkspace {
         )
     }
 
+    /// A preference changed. They are shared by every window, so this repaints the editors of all of
+    /// them, not only this window's: the Settings view that calls it lives in one window.
     func applyPreferencesToAllHosts() {
+        IDEWindowRegistry.shared.applyPreferencesToAllWindows(including: self)
+    }
+
+    /// Applies the preferences to the editors of this window.
+    func applyPreferencesToOwnHosts() {
         for pane in workbench.panes {
             preferences.apply(to: host(for: pane.id).textView, repaint: true)
         }

@@ -44,8 +44,8 @@ final class IDEJDKSelection {
     @ObservationIgnored private(set) var projectRoot: URL?
     @ObservationIgnored private var scanGeneration = 0
 
-    init(storeURL: URL = IDEJDKSelection.defaultStoreURL) {
-        store = JDKSelectionStore(storeURL: storeURL)
+    init(store: JDKSelectionStore = IDESharedServices.shared.jdkSelection) {
+        self.store = store
         selection = store.selection(forProject: nil)
         addedHomes = Self.resolvedHomes(store.customJDKs)
     }

@@ -244,6 +244,19 @@ final class IDEWindowRegistry {
         return pendingTabParent
     }
 
+    /// Preferences (theme, font, layout toggles, zoom) are shared, so a change made in one window
+    /// has to reach every window's editors. `workspace` is included even when it has not registered
+    /// yet.
+    func applyPreferencesToAllWindows(including workspace: IDEWorkspace) {
+        var targets = workspaces
+        if !targets.contains(where: { $0 === workspace }) {
+            targets.append(workspace)
+        }
+        for target in targets {
+            target.applyPreferencesToOwnHosts()
+        }
+    }
+
     /// On quit: the shared lists, and the layout of the window that was active last.
     func saveSessionsForTermination() {
         IDEAppState.shared.save()

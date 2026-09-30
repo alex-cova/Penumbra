@@ -1,4 +1,5 @@
 import Foundation
+import JavaIntelligence
 
 /// A breakpoint in a Java source file (1-based line numbers, matching the editor gutter).
 struct JavaBreakpoint: Codable, Equatable, Identifiable, Sendable {
@@ -24,20 +25,34 @@ final class JavaBreakpointStore: @unchecked Sendable {
     private let storeURL: URL
     private let lock = NSLock()
     private var projects: [String: File]
+    private var stamp: FileChangeStamp
 
     init(storeURL: URL) {
         self.storeURL = storeURL
-        if let data = try? Data(contentsOf: storeURL),
-           let decoded = try? JSONDecoder().decode([String: File].self, from: data) {
-            projects = decoded
-        } else {
-            projects = [:]
+        projects = Self.load(storeURL) ?? [:]
+        stamp = FileChangeStamp(url: storeURL)
+    }
+
+    private static func load(_ url: URL) -> [String: File]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([String: File].self, from: data)
+    }
+
+    /// Picks up what another window's store or another process wrote since this one read the file,
+    /// so a write here does not drop it. A file that cannot be read keeps what is in memory.
+    /// Caller must hold `lock`.
+    private func reloadIfChangedOnDisk() {
+        guard stamp.hasChanged(at: storeURL) else { return }
+        stamp.update(at: storeURL)
+        if let loaded = Self.load(storeURL) {
+            projects = loaded
         }
     }
 
     func breakpoints(forProject root: URL?) -> [JavaBreakpoint] {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         return projects[key(for: root)]?.breakpoints ?? []
     }
 
@@ -50,6 +65,7 @@ final class JavaBreakpointStore: @unchecked Sendable {
     func toggle(atLine line: Int, file url: URL, project root: URL?) -> JavaBreakpoint? {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         let path = url.standardizedFileURL.path
         var entry = projects[key(for: root)] ?? File()
         if let index = entry.breakpoints.firstIndex(where: { $0.filePath == path && $0.line == line }) {
@@ -68,6 +84,7 @@ final class JavaBreakpointStore: @unchecked Sendable {
     func setEnabled(_ enabled: Bool, breakpointID: UUID, project root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard var entry = projects[key(for: root)],
               let index = entry.breakpoints.firstIndex(where: { $0.id == breakpointID }) else { return }
         entry.breakpoints[index].isEnabled = enabled
@@ -78,6 +95,7 @@ final class JavaBreakpointStore: @unchecked Sendable {
     func remove(breakpointID: UUID, project root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard var entry = projects[key(for: root)] else { return }
         entry.breakpoints.removeAll { $0.id == breakpointID }
         projects[key(for: root)] = entry
@@ -87,6 +105,7 @@ final class JavaBreakpointStore: @unchecked Sendable {
     func removeAll(project root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard projects[key(for: root)] != nil else { return }
         projects[key(for: root)] = File()
         persist()
@@ -106,5 +125,6 @@ final class JavaBreakpointStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(projects) else { return }
         try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: storeURL, options: .atomic)
+        stamp.update(at: storeURL)
     }
 }

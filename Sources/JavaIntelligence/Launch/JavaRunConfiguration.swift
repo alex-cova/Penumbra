@@ -226,19 +226,35 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     private let storeURL: URL
     private let lock = NSLock()
     private var projects: [String: Entry]
+    private var stamp: FileChangeStamp
 
     public init(storeURL: URL) {
         self.storeURL = storeURL
-        if let data = try? Data(contentsOf: storeURL) {
-            if let file = try? JSONDecoder().decode(File.self, from: data), file.version >= 2 {
-                projects = file.projects
-            } else if let legacy = try? JSONDecoder().decode([String: JavaRunConfiguration].self, from: data) {
-                projects = legacy.mapValues { Entry(configurations: [$0], selected: $0.id) }
-            } else {
-                projects = [:]
-            }
-        } else {
-            projects = [:]
+        projects = Self.load(storeURL) ?? [:]
+        stamp = FileChangeStamp(url: storeURL)
+    }
+
+    /// Nil when the file is missing or unreadable. Reads the older one-configuration-per-project
+    /// format too.
+    private static func load(_ url: URL) -> [String: Entry]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        if let file = try? JSONDecoder().decode(File.self, from: data), file.version >= 2 {
+            return file.projects
+        }
+        if let legacy = try? JSONDecoder().decode([String: JavaRunConfiguration].self, from: data) {
+            return legacy.mapValues { Entry(configurations: [$0], selected: $0.id) }
+        }
+        return nil
+    }
+
+    /// Picks up what another window's store or another process wrote since this one read the file,
+    /// so a write here does not drop it. A file that cannot be read keeps what is in memory.
+    /// Caller must hold `lock`.
+    private func reloadIfChangedOnDisk() {
+        guard stamp.hasChanged(at: storeURL) else { return }
+        stamp.update(at: storeURL)
+        if let loaded = Self.load(storeURL) {
+            projects = loaded
         }
     }
 
@@ -246,6 +262,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func last(forProject root: URL?) -> JavaRunConfiguration? {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard let entry = projects[key(for: root)] else { return nil }
         return entry.configurations.first { $0.id == entry.selected } ?? entry.configurations.last
     }
@@ -254,6 +271,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func configurations(forProject root: URL?) -> [JavaRunConfiguration] {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         return projects[key(for: root)]?.configurations ?? []
     }
 
@@ -262,6 +280,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func setLast(_ configuration: JavaRunConfiguration, forProject root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         var entry = projects[key(for: root)] ?? Entry()
         upsert(configuration, into: &entry)
         entry.selected = configuration.id
@@ -274,6 +293,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func save(_ configuration: JavaRunConfiguration, forProject root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         var entry = projects[key(for: root)] ?? Entry()
         upsert(configuration, into: &entry)
         if entry.selected == nil { entry.selected = configuration.id }
@@ -284,6 +304,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func select(_ id: UUID, forProject root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard var entry = projects[key(for: root)], entry.configurations.contains(where: { $0.id == id }) else { return }
         entry.selected = id
         projects[key(for: root)] = entry
@@ -294,6 +315,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func delete(_ id: UUID, forProject root: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard var entry = projects[key(for: root)] else { return }
         entry.configurations.removeAll { $0.id == id }
         if entry.selected == id { entry.selected = entry.configurations.last?.id }
@@ -306,6 +328,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
     public func duplicate(_ id: UUID, forProject root: URL?) -> JavaRunConfiguration? {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         guard var entry = projects[key(for: root)], let original = entry.configurations.first(where: { $0.id == id }) else {
             return nil
         }
@@ -347,6 +370,7 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(File(projects: projects)) else { return }
         try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: storeURL, options: .atomic)
+        stamp.update(at: storeURL)
     }
 
     private func key(for root: URL?) -> String {

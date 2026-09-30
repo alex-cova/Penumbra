@@ -16,13 +16,27 @@ public final class JDKSelectionStore: @unchecked Sendable {
     private let storeURL: URL
     private let lock = NSLock()
     private var file: File
+    private var stamp: FileChangeStamp
 
     public init(storeURL: URL) {
         self.storeURL = storeURL
-        if let data = try? Data(contentsOf: storeURL), let decoded = try? JSONDecoder().decode(File.self, from: data) {
-            file = decoded
-        } else {
-            file = File()
+        file = Self.load(storeURL) ?? File()
+        stamp = FileChangeStamp(url: storeURL)
+    }
+
+    private static func load(_ url: URL) -> File? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(File.self, from: data)
+    }
+
+    /// Picks up a choice another window's store or another process wrote since this one read the
+    /// file, so a write here does not drop it. A file that cannot be read keeps what is in memory.
+    /// Caller must hold `lock`.
+    private func reloadIfChangedOnDisk() {
+        guard stamp.hasChanged(at: storeURL) else { return }
+        stamp.update(at: storeURL)
+        if let loaded = Self.load(storeURL) {
+            file = loaded
         }
     }
 
@@ -30,6 +44,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func selection(forProject root: URL?) -> JDKSelection {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         return JDKSelection(
             project: root.flatMap { file.projects[key(for: $0)] }.map { URL(fileURLWithPath: $0) },
             global: file.global.map { URL(fileURLWithPath: $0) }
@@ -40,6 +55,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func setProject(_ home: URL?, forProject root: URL) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         file.projects[key(for: root)] = home.map(path(of:))
         persist()
     }
@@ -48,6 +64,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func setGlobal(_ home: URL?) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         file.global = home.map(path(of:))
         persist()
     }
@@ -56,6 +73,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public var customJDKs: [URL] {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         return file.customJDKs.map { URL(fileURLWithPath: $0) }
     }
 
@@ -65,6 +83,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func addCustomJDK(_ home: URL) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         let added = path(of: home)
         guard !file.customJDKs.contains(where: { resolved($0) == added }) else { return false }
         file.customJDKs.append(added)
@@ -77,6 +96,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func removeCustomJDK(_ home: URL) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         let target = path(of: home)
         file.customJDKs.removeAll { resolved($0) == target }
         persist()
@@ -87,6 +107,7 @@ public final class JDKSelectionStore: @unchecked Sendable {
     public func usage(of home: URL) -> (projects: [String], isDefault: Bool) {
         lock.lock()
         defer { lock.unlock() }
+        reloadIfChangedOnDisk()
         let target = path(of: home)
         let projects = file.projects.filter { resolved($0.value) == target }.map(\.key).sorted()
         return (projects, file.global.map { resolved($0) == target } ?? false)
@@ -109,5 +130,6 @@ public final class JDKSelectionStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(file) else { return }
         try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: storeURL, options: .atomic)
+        stamp.update(at: storeURL)
     }
 }

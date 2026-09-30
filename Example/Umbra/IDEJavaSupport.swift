@@ -91,6 +91,8 @@ final class IDEJavaSupport {
 
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
+    /// One indexing run and one parsed shard per JDK for the whole app; see `JavaSharedShardHub`.
+    private let jdkShards: JavaSharedShardHub
     /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
     /// semantic Find Usages and rename.
     let nameIndex = JavaNameIndex()
@@ -196,12 +198,16 @@ final class IDEJavaSupport {
     /// When set, the finished Gradle run's XML reports are parsed into test results.
     private(set) var pendingTestRunRequest: JavaTestRunRequest?
 
+    /// The stores and the JDK shard hub are the app's shared ones by default, so every window sees
+    /// the same Gradle trust decisions and JDK choices and indexes the JDK once.
     init(
-        gradleTrustStoreURL: URL = IDEJavaSupport.defaultGradleTrustStoreURL,
+        gradleTrustStore: GradleTrustStore = IDESharedServices.shared.gradleTrust,
         gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot,
-        jdkSelectionStoreURL: URL = IDEJDKSelection.defaultStoreURL
+        jdkSelectionStore: JDKSelectionStore = IDESharedServices.shared.jdkSelection,
+        jdkShards: JavaSharedShardHub = IDESharedServices.shared.jdkShards
     ) {
-        jdk = IDEJDKSelection(storeURL: jdkSelectionStoreURL)
+        self.jdkShards = jdkShards
+        jdk = IDEJDKSelection(store: jdkSelectionStore)
         let sharedParseCache = JavaDocumentParseCache()
         overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
         completionProvider = JavaCompletionProvider(index: javaIndex)
@@ -218,7 +224,7 @@ final class IDEJavaSupport {
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
-        gradleTrustStore = GradleTrustStore(storeURL: gradleTrustStoreURL)
+        self.gradleTrustStore = gradleTrustStore
         gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
         let runner = GradleCommandRunner(trustStore: gradleTrustStore)
         gradleRunner = runner
@@ -1138,7 +1144,7 @@ final class IDEJavaSupport {
         // different installation than the one already indexed) is it meaningful to narrate into
         // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
         let noteToConsole = gradleSync.isSyncing
-        jdkIndexingTask = Task { [paths, scheduler] in
+        jdkIndexingTask = Task { [paths, jdkShards] in
             // Resolving does synchronous filesystem/process work (java_home -X, walking
             // ~/Library/Java/JavaVirtualMachines); `IDEJDKSelection` hops it off the main actor so
             // it can't stall the UI during app launch.
@@ -1158,8 +1164,10 @@ final class IDEJavaSupport {
             if noteToConsole {
                 gradleConsole.appendNote(message)
             }
-            for await progress in await scheduler.index([(root: root, shardURL: shardURL)]) {
-                guard noteToConsole, !Task.isCancelled else { continue }
+            // Shared with every other window: one indexing run and one parsed shard per JDK. Only
+            // the window that starts the run hears its progress.
+            let reader = await jdkShards.shard(for: root, at: shardURL) { [weak self] progress in
+                guard let self, noteToConsole, !Task.isCancelled else { return }
                 switch progress {
                 case .rootFinished(let id, let classCount):
                     gradleConsole.appendNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
@@ -1172,7 +1180,7 @@ final class IDEJavaSupport {
                 }
             }
             guard !Task.isCancelled else { return }
-            jdkReader = try? JavaIndexShardReader(url: shardURL)
+            jdkReader = reader
             indexedJDKHomePath = homePath
             pendingJDKHomePath = nil
             if statusMessage == message {
