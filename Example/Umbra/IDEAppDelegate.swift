@@ -61,8 +61,14 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         IDEWindowRegistry.shared.openNewTab()
     }
 
+    /// One prompt for unsaved editors in every window.
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        IDEWindowRegistry.shared.confirmQuit() ? .terminateNow : .terminateCancel
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         IDEWindowRegistry.shared.saveSessionsForTermination()
+        IDEWindowRegistry.shared.tearDownAll()
     }
 
     private static func restorableWindows() -> [NSWindow] {

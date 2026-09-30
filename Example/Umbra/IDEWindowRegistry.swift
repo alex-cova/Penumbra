@@ -146,8 +146,9 @@ final class IDEWindowRegistry {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] result in
+            // The panel already grants access to what it returns; the workspace that opens the
+            // folder holds it from there (`IDESecurityScopedAccess`).
             guard result == .OK, let url = panel.url else { return }
-            _ = url.startAccessingSecurityScopedResource()
             self?.open(urls: [url], origin: origin)
         }
     }
@@ -257,6 +258,40 @@ final class IDEWindowRegistry {
         }
     }
 
+    /// Quitting with unsaved editors in any window asks once for all of them, where closing each
+    /// window would ask per window. Nothing to ask when everything is saved.
+    func confirmQuit() -> Bool {
+        guard let text = Self.quitPromptText(unsavedPerWindow: workspaces.map(\.unsavedDocumentCount)) else {
+            return true
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit Umbra?"
+        alert.informativeText = text
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// What the quit prompt says, or nil when no window has unsaved editors. `unsavedPerWindow` holds
+    /// each open window's count of editors with unsaved changes.
+    static func quitPromptText(unsavedPerWindow: [Int]) -> String? {
+        let unsaved = unsavedPerWindow.filter { $0 > 0 }
+        let total = unsaved.reduce(0, +)
+        guard total > 0 else { return nil }
+        let editors = "\(total) open editor\(total == 1 ? " has" : "s have")"
+        let windows = unsaved.count > 1 ? " in \(unsaved.count) windows" : ""
+        return "\(editors) unsaved changes\(windows) that will be lost."
+    }
+
+    /// Quitting: stop what every window started (debug sessions, Gradle runs, watchers), so nothing
+    /// outlives the app. Call after saving.
+    func tearDownAll() {
+        for workspace in workspaces {
+            workspace.teardown()
+        }
+    }
+
     /// On quit: the shared lists, and the layout of the window that was active last.
     func saveSessionsForTermination() {
         IDEAppState.shared.save()
@@ -264,13 +299,25 @@ final class IDEWindowRegistry {
     }
 }
 
-/// The focused window's workspace, for menu commands (`IDEAppCommands`).
+/// A weak handle to a window's workspace. The menu bar is built from the focused window's handle,
+/// never the workspace itself: SwiftUI keeps menu items and their action closures after a window
+/// closes, and a strong capture in any of them kept the closed window's whole workspace (its
+/// editors, index and watchers) alive until the menu next rebuilt.
+final class IDEWorkspaceRef {
+    weak var workspace: IDEWorkspace?
+
+    init(_ workspace: IDEWorkspace? = nil) {
+        self.workspace = workspace
+    }
+}
+
+/// The focused window's workspace handle, for menu commands (`IDEAppCommands`).
 private struct IDEWorkspaceFocusedKey: FocusedValueKey {
-    typealias Value = IDEWorkspace
+    typealias Value = IDEWorkspaceRef
 }
 
 extension FocusedValues {
-    var ideWorkspace: IDEWorkspace? {
+    var ideWorkspace: IDEWorkspaceRef? {
         get { self[IDEWorkspaceFocusedKey.self] }
         set { self[IDEWorkspaceFocusedKey.self] = newValue }
     }

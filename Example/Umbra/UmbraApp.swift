@@ -34,7 +34,7 @@ struct IDEWindowScene: View {
             if let workspace {
                 IDERootView()
                     .environment(workspace)
-                    .focusedSceneValue(\.ideWorkspace, workspace)
+                    .focusedSceneValue(\.ideWorkspace, workspace.reference)
                     .background(IDEWindowReopenBridge())
             }
         }

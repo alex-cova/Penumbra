@@ -586,6 +586,34 @@ final class IDEJavaSupport {
         gradleConsole.markFinished()
     }
 
+    /// The window is closing: stop everything this project started, so a closed project leaves no
+    /// indexing, Gradle sync or run, `javac` configuration or build-file watcher behind. Work still
+    /// in flight sees a newer generation and does not publish. The shared stores and the shared JDK
+    /// shard stay: other windows use them.
+    func teardown() {
+        projectGeneration += 1
+        jdkIndexingTask?.cancel()
+        jdkIndexingTask = nil
+        projectIndexingTask?.cancel()
+        projectIndexingTask = nil
+        nameIndexTask?.cancel()
+        nameIndexTask = nil
+        stubRefreshTask?.cancel()
+        stubRefreshTask = nil
+        gradleSyncTask?.cancel()
+        gradleSyncTask = nil
+        gradleRunTask?.cancel()
+        gradleRunTask = nil
+        isRunningGradleTasks = false
+        runningGradleTaskPaths = []
+        gradleSyncInFlight = false
+        stopBuildFileWatcher()
+        projectRootURL = nil
+        gradleModel = nil
+        // Turns `javac` off for this window and drops its configuration.
+        refreshCompilerDiagnostics()
+    }
+
     func dismissGradleBuildFileChanges() {
         gradleBuildFilesChanged = false
     }

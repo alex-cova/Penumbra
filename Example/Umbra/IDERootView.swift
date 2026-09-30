@@ -649,6 +649,21 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
         workspace?.saveSession()
         return true
     }
+
+    // This object replaces the window's own delegate (SwiftUI's), and SwiftUI learns through that
+    // delegate that a window closed, resized, changed screen and so on. Every message this class
+    // does not handle goes to the original delegate; without that SwiftUI never hears the window
+    // closed and keeps its scene, hosting view and workspace alive for the rest of the run.
+    override func responds(to aSelector: Selector!) -> Bool {
+        super.responds(to: aSelector) || (upstream?.responds(to: aSelector) ?? false)
+    }
+
+    override func forwardingTarget(for aSelector: Selector!) -> Any? {
+        if let upstream, upstream.responds(to: aSelector) {
+            return upstream
+        }
+        return super.forwardingTarget(for: aSelector)
+    }
 }
 
 /// Full-window AppKit host for the command palette. Clicks pass through while the palette is

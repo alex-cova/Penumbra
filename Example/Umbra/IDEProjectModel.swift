@@ -93,8 +93,14 @@ final class IDEProjectModel {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ))
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        _ = url.startAccessingSecurityScopedResource()
+        guard let url else { return nil }
+        // Access is needed only for the existence check; the workspace holds it once it applies the
+        // root (`IDESecurityScopedAccess`), so this start is balanced here.
+        let started = url.startAccessingSecurityScopedResource()
+        defer {
+            if started { url.stopAccessingSecurityScopedResource() }
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
 

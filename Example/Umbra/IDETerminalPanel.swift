@@ -41,6 +41,10 @@ final class IDETerminalHostView: NSView {
     private let terminalView = LocalProcessTerminalView(frame: .zero)
     private let coordinator = TerminalCoordinator()
     private var isActive = false
+    /// Set once `terminateProcess()` ran. The window is closing, but SwiftUI can still update this view
+    /// (tearing down changes the state it reads) and ask it to become active again, which would start a
+    /// new shell in a window that is going away.
+    private var isShutDown = false
     private var pendingFocus = false
 
     var workingDirectory: URL?
@@ -157,10 +161,17 @@ final class IDETerminalHostView: NSView {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// Ends the shell. SwiftTerm's `terminate()` closes the terminal's side and sends SIGTERM, which an
+    /// interactive shell ignores, so the shell would live on after its window closed; SIGHUP is what a
+    /// closing terminal sends, and shells (and their foreground jobs) exit on it.
     func terminateProcess() {
         isActive = false
-        if terminalView.process.running {
-            terminalView.terminate()
+        isShutDown = true
+        guard terminalView.process.running else { return }
+        let pid = terminalView.process.shellPid
+        terminalView.terminate()
+        if pid > 0 {
+            kill(pid, SIGHUP)
         }
     }
 
@@ -178,7 +189,7 @@ final class IDETerminalHostView: NSView {
     }
 
     func startProcessIfNeeded() {
-        guard isActive else { return }
+        guard isActive, !isShutDown else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
         guard !terminalView.process.running else {
             flushPendingCommands()
@@ -260,9 +271,12 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let command: String?
     let onTitleUpdate: (String) -> Void
     let onDirectoryUpdate: (URL) -> Void
+    /// Tells the workspace about the view, so closing the window can end its shell.
+    let onHostCreated: (IDETerminalHostView) -> Void
 
     func makeNSView(context: Context) -> IDETerminalHostView {
         let view = IDETerminalHostView(frame: .zero)
+        onHostCreated(view)
         view.workingDirectory = workingDirectory
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
@@ -420,8 +434,11 @@ struct IDETerminalPanel: View {
                         clearRequestID: tab.clearRequestID,
                         commandTicket: isSelected ? workspace.terminalCommandTicket : 0,
                         command: isSelected ? workspace.pendingTerminalCommand : nil,
-                        onTitleUpdate: { workspace.updateTerminalTabTitle(tab.id, title: $0) },
-                        onDirectoryUpdate: { workspace.updateTerminalTabDirectory(tab.id, url: $0) }
+                        // Weak: a running shell keeps its terminal view alive, and a strong capture
+                        // here would keep the whole workspace alive through it after the window closes.
+                        onTitleUpdate: { [weak workspace] in workspace?.updateTerminalTabTitle(tab.id, title: $0) },
+                        onDirectoryUpdate: { [weak workspace] in workspace?.updateTerminalTabDirectory(tab.id, url: $0) },
+                        onHostCreated: { [weak workspace] in workspace?.registerTerminalHost($0) }
                     )
                     .id(tab.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

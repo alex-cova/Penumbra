@@ -135,6 +135,17 @@ public final class IDEWorkspace {
 
     /// Names this window to `IDEOpenRouter` and the registry.
     let windowID = UUID()
+
+    /// Off in tests that create workspaces, so they neither restore nor overwrite the developer's
+    /// real `last-window.json` and `app.json`.
+    static var isSessionPersistenceEnabled = true
+
+    /// A weak handle for the menu bar; see `IDEWorkspaceRef`.
+    let reference = IDEWorkspaceRef()
+
+    /// Stands in for a workspace in menu views whose window already closed. Never bootstrapped, so
+    /// it restores and opens nothing; its actions can only run if a stale item were clicked.
+    static let placeholder = IDEWorkspace()
     /// Opened blank next to other windows instead of restoring the last one.
     @ObservationIgnored
     private var startedAsExtraWindow = false
@@ -160,7 +171,9 @@ public final class IDEWorkspace {
     /// native tab bar in full screen (see `IDEWindowChrome`).
     var isFullScreen = false
 
+
     public init() {
+        reference.workspace = self
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
         }
@@ -485,7 +498,7 @@ public final class IDEWorkspace {
         _ = IDEAppState.shared
         // A window opened with none other open (launch, or Dock reopen after closing the last one)
         // restores the last window; one opened next to another starts empty.
-        if IDEWindowRegistry.shared.shouldRestoreLastWindow {
+        if IDEWindowRegistry.shared.shouldRestoreLastWindow, Self.isSessionPersistenceEnabled {
             loadSession(IDEWindowSessionStore.load())
         } else {
             startedAsExtraWindow = true
@@ -583,9 +596,84 @@ public final class IDEWorkspace {
         }
     }
 
-    /// The window is going away: stop being a target for menu commands and external opens.
+    /// The window is going away: stop being a target for menu commands and external opens, then
+    /// stop everything it started.
     func windowWillClose() {
         IDEWindowRegistry.shared.unregister(self)
+        teardown()
+    }
+
+    /// Set once `teardown()` has run. A torn-down workspace must not save: it no longer has its
+    /// project, and its state is not the one to restore.
+    private(set) var isTornDown = false
+
+    /// Holds the project folder's security-scoped access, released when the project changes or the
+    /// window closes.
+    @ObservationIgnored
+    private let projectAccess = IDESecurityScopedAccess()
+
+    /// The window is closing: stop everything this workspace started, so a closed project leaves no
+    /// file watcher, git or index work, Gradle run, debug session, `javac` configuration or held
+    /// folder access behind, and nothing keeps the workspace alive. The layout was saved before the
+    /// window closed (`IDEWindowCloseGuard`); this does not save. Safe to call twice.
+    func teardown() {
+        guard !isTornDown else { return }
+        isTornDown = true
+        stopProjectActivity()
+        terminateTerminals()
+        projectWatcher.onBatch = []
+        projectWatcher.stop()
+        gitStatus.setRoot(nil)
+        fileIndexer.setRoot(nil)
+        intelligenceServices.javaSupport.teardown()
+        for task in nameIndexOverlayTasks.values { task.cancel() }
+        nameIndexOverlayTasks.removeAll()
+        for task in semanticHighlightTasks.values { task.cancel() }
+        semanticHighlightTasks.removeAll()
+        for task in lineMarkerTasks.values { task.cancel() }
+        lineMarkerTasks.removeAll()
+        javaRunAvailabilityTask?.cancel()
+        javaRunAvailabilityTask = nil
+        javaStructureRefreshTask?.cancel()
+        javaStructureRefreshTask = nil
+        blame.cancelAll()
+        notifications.dismissToast()
+        projectAccess.end()
+        window = nil
+    }
+
+    private struct WeakTerminalHost {
+        weak var host: IDETerminalHostView?
+    }
+
+    /// The terminal views SwiftUI created for this window's tabs, weakly. A running shell keeps its
+    /// view alive, so closing the window has to end the shell itself rather than wait for SwiftUI to
+    /// dismantle the view.
+    @ObservationIgnored
+    private var terminalHosts: [WeakTerminalHost] = []
+
+    func registerTerminalHost(_ host: IDETerminalHostView) {
+        terminalHosts.removeAll { $0.host == nil }
+        terminalHosts.append(WeakTerminalHost(host: host))
+    }
+
+    private func terminateTerminals() {
+        for entry in terminalHosts {
+            entry.host?.terminateProcess()
+        }
+        terminalHosts.removeAll()
+    }
+
+    /// Stops what the current project has running: the debug session and any Gradle task. Used when
+    /// the project goes away, whether the window closes, the folder closes or another replaces it.
+    private func stopProjectActivity() {
+        debugSession.stop()
+        intelligenceServices.javaSupport.cancelGradleTasks()
+    }
+
+    /// Open editors with unsaved changes, for the confirmation before quitting.
+    var unsavedDocumentCount: Int {
+        workbench.allDocuments().filter(\.isDirty).count
     }
 
     // MARK: - Commands
@@ -697,7 +785,6 @@ public final class IDEWorkspace {
     /// Makes `url` this window's project. The router calls it for an empty window; `replaceProject`
     /// calls it after clearing the old one.
     func openProjectFolder(_ url: URL) {
-        _ = url.startAccessingSecurityScopedResource()
         isSidebarVisible = true
         applyProjectRoot(url)
         showsWelcome = !hasOpenDocuments
@@ -713,6 +800,7 @@ public final class IDEWorkspace {
         ) else { return }
         closeAllOpenDocuments()
         dismissProjectChrome()
+        stopProjectActivity()
         openProjectFolder(url)
     }
 
@@ -877,6 +965,7 @@ public final class IDEWorkspace {
 
         closeAllOpenDocuments()
         dismissProjectChrome()
+        stopProjectActivity()
         applyProjectRoot(nil)
         showsWelcome = true
         refreshPresentation()
@@ -3298,6 +3387,7 @@ public final class IDEWorkspace {
         // Recents and preferences are shared, so any window may write them; the window layout
         // goes to `last-window.json` only from the session window (see `IDEWindowRegistry`), or a
         // background window (a finished Gradle sync) would replace the one the user works in.
+        guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
         appState.save()
         guard IDEWindowRegistry.shared.isSessionWindow(self) else { return }
         IDEWindowSessionStore.save(makeSession(
@@ -4299,6 +4389,8 @@ public final class IDEWorkspace {
     }
 
     private func applyProjectRoot(_ url: URL?) {
+        // One held access per window, released when the project changes or the window closes.
+        projectAccess.begin(url)
         project.setRoot(url)
         gitStatus.setRoot(url)
         fileIndexer.setRoot(url)
@@ -4310,7 +4402,6 @@ public final class IDEWorkspace {
             self.intelligenceServices.javaSupport.projectFilesChanged(batch.paths)
         }]
         if let url {
-            _ = url.startAccessingSecurityScopedResource()
             recordRecentProject(url)
             projectWatcher.start(root: url)
         } else {

@@ -65,6 +65,13 @@ final class IDEBlameController {
         return enabledPaths.contains(path)
     }
 
+    /// The window is closing: stop every blame run still going.
+    func cancelAll() {
+        for task in tasks.values { task.cancel() }
+        tasks.removeAll()
+        stamps.removeAll()
+    }
+
     /// Turns blame on or off for `url`. Returns the new state.
     @discardableResult
     func toggle(for url: URL) -> Bool {
