@@ -251,6 +251,9 @@ public final class IDEWorkspace {
     private var gradleDebugActive = false
     /// The configuration being edited in the run configuration sheet; the sheet shows while set.
     var runConfigurationDraft: JavaRunConfiguration?
+    /// Run or Debug was pressed in a Gradle module with neither `run` nor `bootRun`: the task
+    /// picker shows while set.
+    var gradleRunTaskPrompt: IDEGradleRunTaskPrompt?
     /// The workspace edit being previewed (rename, extract variable, …).
     var workspaceEditPreview: IDEWorkspaceEditPreviewModel?
     var renamePreview: IDEWorkspaceEditPreviewModel? {
@@ -274,6 +277,14 @@ public final class IDEWorkspace {
         let generation: UInt64
     }
     @ObservationIgnored private var httpGutterStamp: HTTPGutterStamp?
+    /// The `main` methods last found in a text view's buffer, so a caret move doesn't parse the
+    /// file again for the gutter's run buttons.
+    private struct JavaMainLocations {
+        let view: ObjectIdentifier
+        let generation: UInt64
+        let locations: [JavaMainMethodLocation]
+    }
+    @ObservationIgnored private var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
     /// Bumped when the play button should type a command into the selected terminal.
     var terminalCommandTicket: UInt64 = 0
@@ -1335,7 +1346,36 @@ public final class IDEWorkspace {
     }
 
     var javaRunHelp: String {
-        javaSupport.isGradleProject ? "Run Gradle project" : "Run Java file"
+        guard javaSupport.isGradleProject else { return "Run Java file" }
+        return activeGradleRunTaskName.map { "Run Gradle \($0)" } ?? "Run Gradle task…"
+    }
+
+    var javaDebugHelp: String {
+        guard javaFileCanDebug else { return "Debugging needs a Gradle project" }
+        return activeGradleRunTaskName.map { "Debug Gradle \($0)" } ?? "Debug Gradle task…"
+    }
+
+    /// The task the toolbar buttons run for the active file: `run`, else `bootRun`; `nil` when the
+    /// module has neither and a task gets picked (or was picked before). Read from the model only,
+    /// since the toolbar evaluates it on every redraw.
+    private var activeGradleRunTaskName: String? {
+        let path = JavaRunConfiguration.gradleProjectPath(for: javaRunFileURL, model: javaSupport.gradleModel)
+        switch JavaRunConfiguration.preferredGradleRunTask(for: path, model: javaSupport.gradleModel) {
+        case .task(let name): return name
+        case .unsynced: return "run"
+        case .ask: return nil
+        }
+    }
+
+    /// Only Gradle launches can be debugged from the toolbar; a lone `java File.java` can't.
+    var javaFileCanDebug: Bool {
+        javaFileCanRun && javaSupport.isGradleProject && project.rootURL != nil
+    }
+
+    /// Something Run or Debug started is still going: a Gradle task (the program itself, or the
+    /// build ahead of a classpath launch) or a debug session. Stop ends it.
+    var isRunActive: Bool {
+        javaSupport.isRunningGradleTasks || debugSession.isActive
     }
 
     /// Hammer for an open Gradle project. Runs `build` for the whole project, every subproject
@@ -1352,8 +1392,62 @@ public final class IDEWorkspace {
     /// `./gradlew :module:run` when the file sits in a subproject). Other files are launched with
     /// `java File.java`. The arguments last used for the same target are kept.
     public func runActiveJava() {
-        guard javaFileCanRun, let configuration = activeRunConfiguration() else { return }
+        launchActiveJava(mode: .run)
+    }
+
+    /// Bug button: the same launch as Run, under the debugger (`--debug-jvm` for a Gradle task).
+    public func debugActiveJava() {
+        guard javaFileCanDebug else { return }
+        launchActiveJava(mode: .debug)
+    }
+
+    /// Stop button: ends the debug session and the Gradle task behind a run.
+    func stopRunning() {
+        launchAfterClassesBuild = nil
+        if debugSession.isActive || gradleDebugActive {
+            stopDebugging()
+        }
+        javaSupport.cancelGradleTasks()
+    }
+
+    /// Launches the active file's configuration in `mode`, or asks which Gradle task to run when
+    /// its module has neither `run` nor `bootRun` and none was picked for it before.
+    private func launchActiveJava(mode: JavaLaunchMode) {
+        guard javaFileCanRun else { return }
+        guard var configuration = activeRunConfiguration() else {
+            if let prompt = gradleRunTaskPromptForActiveFile(mode: mode) {
+                gradleRunTaskPrompt = prompt
+            }
+            return
+        }
+        configuration.launchMode = mode
         launch(configuration)
+    }
+
+    /// The picker's content, when the active file's module needs a task picked.
+    private func gradleRunTaskPromptForActiveFile(mode: JavaLaunchMode) -> IDEGradleRunTaskPrompt? {
+        guard javaSupport.isGradleProject, project.rootURL != nil else { return nil }
+        let path = JavaRunConfiguration.gradleProjectPath(for: javaRunFileURL, model: javaSupport.gradleModel)
+        guard case .ask(let tasks) = JavaRunConfiguration.preferredGradleRunTask(for: path, model: javaSupport.gradleModel) else {
+            return nil
+        }
+        return IDEGradleRunTaskPrompt(projectPath: path, tasks: tasks, launchMode: mode)
+    }
+
+    /// The task picker's choice: saved as the module's run configuration, so the next Run goes
+    /// straight to it, then launched.
+    func chooseGradleRunTask(_ taskName: String) {
+        guard let prompt = gradleRunTaskPrompt else { return }
+        gradleRunTaskPrompt = nil
+        var configuration = JavaRunConfiguration(
+            target: .gradleRun(projectPath: prompt.projectPath, taskName: taskName == "run" ? nil : taskName)
+        )
+        configuration.launchMode = prompt.launchMode
+        launch(configuration)
+    }
+
+    func dismissGradleRunTaskPrompt() {
+        gradleRunTaskPrompt = nil
     }
 
     /// Reruns the last launched configuration, whatever file is active.
@@ -1392,17 +1486,25 @@ public final class IDEWorkspace {
     }
 
     /// The active file's default launch, carrying over what was last typed for the same target.
+    /// In a Gradle module with neither `run` nor `bootRun`, the task picked for it before; `nil`
+    /// until one has been picked.
     private func activeRunConfiguration() -> JavaRunConfiguration? {
-        JavaRunConfiguration.makeDefault(
+        // Reuse what was saved for the same target, whichever configuration ran last.
+        let saved = runConfigurationStore.configurations(forProject: project.rootURL)
+        guard let fresh = JavaRunConfiguration.makeDefault(
             file: javaRunFileURL,
             projectRoot: project.rootURL,
             isGradleProject: javaSupport.isGradleProject,
             model: javaSupport.gradleModel
-        ).map { fresh in
-            // Reuse what was saved for the same target, whichever configuration ran last.
-            let saved = runConfigurationStore.configurations(forProject: project.rootURL)
-            return fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
+        ) else {
+            guard javaSupport.isGradleProject else { return nil }
+            let path = JavaRunConfiguration.gradleProjectPath(for: javaRunFileURL, model: javaSupport.gradleModel)
+            return saved.last {
+                if case .gradleRun(path, _) = $0.target { return true }
+                return false
+            }
         }
+        return fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
     }
 
     private func launch(_ configuration: JavaRunConfiguration) {
@@ -1411,6 +1513,10 @@ public final class IDEWorkspace {
             return
         }
         let root = project.rootURL
+        if case .gradleRun(let projectPath, let taskName) = configuration.target {
+            launchGradleRun(configuration, projectPath: projectPath, taskName: taskName ?? "run")
+            return
+        }
         let wrapper = root.map {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
         } ?? false
@@ -1439,6 +1545,27 @@ public final class IDEWorkspace {
         runInTerminal(command.shellCommand)
     }
 
+    /// A Gradle run task goes through the Gradle runner, not the terminal, so Stop can end it
+    /// and the toolbar knows it is running. Its output goes to the Gradle console.
+    private func launchGradleRun(_ configuration: JavaRunConfiguration, projectPath: String, taskName: String) {
+        guard project.rootURL != nil else {
+            reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+            return
+        }
+        guard !javaSupport.isGradleBusy else {
+            reportRunProblem("Gradle is busy. Stop the running task first, then run “\(configuration.displayName)” again.")
+            return
+        }
+        runConfigurationStore.setLast(configuration, forProject: project.rootURL)
+        refreshLastRunConfiguration()
+        showGradleOutput()
+        javaSupport.runGradleTasks(
+            [JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName)],
+            extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration),
+            runsApplication: true
+        )
+    }
+
     func debugLaunch(_ configuration: JavaRunConfiguration) {
         guard configuration.supportsDebugLaunch else {
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
@@ -1446,9 +1573,13 @@ public final class IDEWorkspace {
         }
         let root = project.rootURL
         switch configuration.target {
-        case .gradleRun(let projectPath):
+        case .gradleRun(let projectPath, let taskName):
             guard root != nil else {
                 reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+                return
+            }
+            guard !javaSupport.isGradleBusy else {
+                reportRunProblem("Gradle is busy. Stop the running task first, then debug “\(configuration.displayName)” again.")
                 return
             }
             let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
@@ -1478,10 +1609,11 @@ public final class IDEWorkspace {
                     )
                 }
                 showGradleOutput()
-                let task = JavaLaunchCommand.gradleRunTask(for: projectPath)
+                let task = JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName ?? "run")
                 javaSupport.runGradleTasks(
                     [task],
-                    extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration, debug: true)
+                    extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration, debug: true),
+                    runsApplication: true
                 )
             }
         case .classpathMain(_, let sourceFile):
@@ -1590,6 +1722,48 @@ public final class IDEWorkspace {
         guard let configuration = fresh ?? activeRunConfiguration() else { return nil }
         let saved = runConfigurationStore.configurations(forProject: project.rootURL)
         return .configuration(configuration.inheritingSettings(from: saved.last { $0.target == configuration.target }))
+    }
+
+    // MARK: - Run gutter
+
+    /// The Run / Debug / Modify menu for the gutter's play button on the `main` at `line`. Parses
+    /// fresh at click time: the buttons may be one debounce behind an edit.
+    private func showMainRunMenu(atLine line: Int, file: URL, in textView: TextView) {
+        let text = textView.text
+        guard let location = JavaMainMethod.locations(in: text).first(where: { $0.line == line }),
+              let configuration = mainRunConfiguration(for: location, file: file, source: text) else { return }
+        let menu = IDEMainRunMenu.make(
+            methodName: "\(location.simpleClassName).main()",
+            keymapPreset: preferences.keymapPreset,
+            run: { [weak self] in self?.launch(configuration, mode: .run) },
+            debug: { [weak self] in self?.launch(configuration, mode: .debug) },
+            modify: { [weak self] in self?.runConfigurationDraft = configuration }
+        )
+        IDEMainRunMenu.popUp(menu, in: textView)
+    }
+
+    private func launch(_ configuration: JavaRunConfiguration, mode: JavaLaunchMode) {
+        var configuration = configuration
+        configuration.launchMode = mode
+        launch(configuration)
+    }
+
+    /// A launch of the class declaring `location`: its own class name on the Gradle classpath, or
+    /// the file's default launch (`java File.java`, `gradle run`) otherwise. What was last typed
+    /// for the same target is kept.
+    private func mainRunConfiguration(for location: JavaMainMethodLocation, file: URL, source: String) -> JavaRunConfiguration? {
+        let classpathLaunch = JavaRunConfiguration.makeClasspathLaunch(
+            file: file, className: location.binaryClassName, model: javaSupport.gradleModel
+        )
+        let fallback = JavaRunConfiguration.makeDefault(
+            file: file,
+            projectRoot: project.rootURL,
+            isGradleProject: javaSupport.isGradleProject,
+            model: javaSupport.gradleModel
+        )
+        guard let configuration = classpathLaunch ?? fallback else { return nil }
+        let saved = runConfigurationStore.configurations(forProject: project.rootURL)
+        return configuration.inheritingSettings(from: saved.last { $0.target == configuration.target })
     }
 
     // MARK: - Evaluate
@@ -5051,6 +5225,8 @@ public final class IDEWorkspace {
         }
     }
 
+    /// The Java gutter: breakpoints, test run buttons in a test source, and a run button on every
+    /// `main`. A click toggles a breakpoint first, then runs a test, then opens the `main` menu.
     private func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
         guard isJava, let fileURL else {
             javaFileCanTest = false
@@ -5066,29 +5242,29 @@ public final class IDEWorkspace {
                 accessibilityLabel: $0.isEnabled ? "Breakpoint" : "Disabled breakpoint"
             )
         }
-        guard await javaSupport.isTestSource(file: fileURL) else {
+        let mains = await mainLocations(in: textView)
+        var testClass: JavaTestClass?
+        if await javaSupport.isTestSource(file: fileURL) {
+            testClass = await javaSupport.tests(for: fileURL)
+            activeJavaTestClass = testClass
+            javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
+        } else {
             javaFileCanTest = false
             activeJavaTestClass = nil
-            textView.setGutterDecorations(breakpoints)
-            textView.gutterDecorationHandler = { [weak self] line in
-                guard let self else { return }
-                self.toggleBreakpoint(atLine: line, file: fileURL)
-                Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
-            }
-            return
         }
-        let testClass = await javaSupport.tests(for: fileURL)
-        activeJavaTestClass = testClass
-        javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
         var decorations = breakpoints
         if let testClass {
             decorations.append(contentsOf: testClass.methods.map {
                 GutterDecoration(line: $0.line, symbolName: "play.circle", accessibilityLabel: "Run \($0.displayName)")
             })
         }
+        let occupied = Set(decorations.map(\.line))
+        decorations.append(contentsOf: mains.filter { !occupied.contains($0.line) }.map {
+            GutterDecoration(line: $0.line, symbolName: "play.fill", accessibilityLabel: "Run \($0.simpleClassName).main()")
+        })
         textView.setGutterDecorations(decorations)
-        textView.gutterDecorationHandler = { [weak self] line in
-            guard let self else { return }
+        textView.gutterDecorationHandler = { [weak self, weak textView] line in
+            guard let self, let textView else { return }
             if self.breakpointStore.breakpoints(forFile: fileURL, project: self.project.rootURL).contains(where: { $0.line == line }) {
                 self.toggleBreakpoint(atLine: line, file: fileURL)
                 Task { await self.refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: true) }
@@ -5096,8 +5272,28 @@ public final class IDEWorkspace {
             }
             if let testClass, let method = testClass.methods.first(where: { $0.line == line }) {
                 self.runTestMethod(method, taskPath: testClass.gradleTaskPath)
+                return
+            }
+            if mains.contains(where: { $0.line == line }) {
+                self.showMainRunMenu(atLine: line, file: fileURL, in: textView)
             }
         }
+    }
+
+    /// The `main` methods in `textView`'s buffer, parsed off the main thread and reused until the
+    /// buffer changes. `containsMain` screens out the common file without one before parsing.
+    private func mainLocations(in textView: TextView) async -> [JavaMainMethodLocation] {
+        let view = ObjectIdentifier(textView)
+        let generation = textView.contentGeneration
+        if let cached = javaMainLocations, cached.view == view, cached.generation == generation {
+            return cached.locations
+        }
+        let text = textView.text
+        let locations = await Task.detached(priority: .utility) {
+            JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text) : []
+        }.value
+        javaMainLocations = JavaMainLocations(view: view, generation: generation, locations: locations)
+        return locations
     }
 
     /// Writes `textView`'s live content back into `document` and bumps `document.contentGeneration`

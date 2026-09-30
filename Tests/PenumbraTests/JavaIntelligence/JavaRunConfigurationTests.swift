@@ -95,6 +95,56 @@ final class JavaRunConfigurationTests: XCTestCase {
         XCTAssertNil(JavaRunConfiguration.makeDefault(file: URL(fileURLWithPath: "/tmp/notes.txt"), projectRoot: nil, isGradleProject: false, model: nil))
     }
 
+    func testGradleRunTaskPrefersRunThenBootRunThenAsks() {
+        let file = URL(fileURLWithPath: "/proj/app/src/main/java/App.java")
+        func model(_ taskNames: [String]) -> JavaGradleProjectModel {
+            let tasks = taskNames.map { JavaGradleProjectModel.GradleTask(path: ":app:\($0)", name: $0, group: "application") }
+            let sourceSet = JavaGradleProjectModel.SourceSet(name: "main", sourceDirs: [file.deletingLastPathComponent()])
+            return JavaGradleProjectModel(
+                formatVersion: 2, gradleVersion: "9.0",
+                subprojects: [.init(path: ":app", directory: root.appendingPathComponent("app"), sourceSets: [sourceSet], tasks: tasks)]
+            )
+        }
+        func defaultTarget(_ taskNames: [String]) -> JavaRunConfiguration.Target? {
+            JavaRunConfiguration.makeDefault(file: file, projectRoot: root, isGradleProject: true, model: model(taskNames))?.target
+        }
+
+        XCTAssertEqual(defaultTarget(["build", "run", "bootRun"]), .gradleRun(projectPath: ":app"))
+        XCTAssertEqual(defaultTarget(["build", "bootRun"]), .gradleRun(projectPath: ":app", taskName: "bootRun"))
+        XCTAssertNil(defaultTarget(["build", "serve"]))
+        guard case .ask(let tasks) = JavaRunConfiguration.preferredGradleRunTask(for: ":app", model: model(["build", "serve"])) else {
+            return XCTFail("expected a prompt")
+        }
+        XCTAssertEqual(tasks.map(\.name), ["build", "serve"])
+        XCTAssertEqual(JavaRunConfiguration.preferredGradleRunTask(for: ":app", model: nil), .unsynced)
+        XCTAssertEqual(JavaRunConfiguration.preferredGradleRunTask(for: ":other", model: model(["run"])), .unsynced)
+    }
+
+    func testGradleTaskNameIsOptionalInSavedConfigurations() throws {
+        let legacy = Data(#"{"target":{"gradleRun":{"projectPath":":app"}},"programArguments":"","vmArguments":"","environment":{}}"#.utf8)
+        let decoded = try JSONDecoder().decode(JavaRunConfiguration.self, from: legacy)
+        XCTAssertEqual(decoded.target, .gradleRun(projectPath: ":app"))
+        XCTAssertEqual(decoded.gradleTaskName, "run")
+
+        let boot = JavaRunConfiguration(target: .gradleRun(projectPath: ":app", taskName: "bootRun"))
+        let roundTripped = try JSONDecoder().decode(JavaRunConfiguration.self, from: JSONEncoder().encode(boot))
+        XCTAssertEqual(roundTripped.target, boot.target)
+        XCTAssertEqual(boot.displayName, "Gradle bootRun (:app)")
+        XCTAssertEqual(boot.gradleTaskName, "bootRun")
+        XCTAssertNil(JavaRunConfiguration(target: .singleFile(path: "/tmp/A.java")).gradleTaskName)
+    }
+
+    func testGradleRunTaskPathsAndCommandUseTheTaskName() {
+        XCTAssertEqual(JavaLaunchCommand.gradleRunTask(for: ":"), "run")
+        XCTAssertEqual(JavaLaunchCommand.gradleRunTask(for: ":", taskName: "bootRun"), "bootRun")
+        XCTAssertEqual(JavaLaunchCommand.gradleRunTask(for: ":app", taskName: "bootRun"), ":app:bootRun")
+        let command = JavaLaunchCommand.make(
+            configuration: JavaRunConfiguration(target: .gradleRun(projectPath: ":app", taskName: "bootRun")),
+            projectRoot: root, gradleWrapperExists: true
+        )
+        XCTAssertEqual(command?.shellCommand.hasSuffix("./gradlew :app:bootRun"), true)
+    }
+
     func testInheritingSettingsOnlyFromTheSameTarget() {
         let previous = JavaRunConfiguration(
             target: .singleFile(path: "/tmp/A.java"), programArguments: "x", vmArguments: "-ea", environment: ["K": "v"]

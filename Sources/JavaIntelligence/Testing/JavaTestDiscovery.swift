@@ -132,6 +132,15 @@ public enum JavaTestDiscovery {
     }
 
     private static func enclosingQualifiedTypeName(of node: SyntaxNode, packageName: String) -> String? {
+        let names = enclosingTypeNames(of: node)
+        guard !names.isEmpty else { return nil }
+        let nested = names.joined(separator: ".")
+        if packageName.isEmpty { return nested }
+        return "\(packageName).\(nested)"
+    }
+
+    /// The names of the types declaring `node`, outermost first.
+    static func enclosingTypeNames(of node: SyntaxNode) -> [String] {
         var names: [String] = []
         var current = node.parent
         while let parent = current {
@@ -140,13 +149,10 @@ public enum JavaTestDiscovery {
             }
             current = parent.parent
         }
-        guard !names.isEmpty else { return nil }
-        let nested = names.joined(separator: ".")
-        if packageName.isEmpty { return nested }
-        return "\(packageName).\(nested)"
+        return names
     }
 
-    private static func lineColumn(forByteOffset byteOffset: Int, in bytes: [UInt8]) -> (line: Int, column: Int) {
+    static func lineColumn(forByteOffset byteOffset: Int, in bytes: [UInt8]) -> (line: Int, column: Int) {
         let clamped = min(max(0, byteOffset), bytes.count)
         var line = 0
         var lineStart = 0

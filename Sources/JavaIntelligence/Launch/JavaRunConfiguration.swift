@@ -9,8 +9,10 @@ public enum JavaLaunchMode: String, Codable, Equatable, Sendable {
 /// How to launch a Java program: what to run, and the arguments and environment to run it with.
 public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public enum Target: Codable, Equatable, Sendable {
-        /// The Gradle `run` task of a project: `":"` for the root project, else `":app"` and so on.
-        case gradleRun(projectPath: String)
+        /// A Gradle run task of a project: `":"` for the root project, else `":app"` and so on.
+        /// `taskName` is the task to run (`bootRun` for a Spring Boot app); `nil` means `run`, and
+        /// is what configurations saved before it existed decode to.
+        case gradleRun(projectPath: String, taskName: String? = nil)
         /// A single `.java` file launched with `java File.java`.
         case singleFile(path: String)
         /// A compiled class launched with the runtime classpath of the Gradle source set that
@@ -87,13 +89,21 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     /// A short description of the target: `Gradle run (:app)`, the file's name, or the class.
     public var defaultName: String {
         switch target {
-        case .gradleRun(let projectPath):
-            return projectPath == ":" ? "Gradle run" : "Gradle run (\(projectPath))"
+        case .gradleRun(let projectPath, let taskName):
+            let label = "Gradle \(taskName ?? "run")"
+            return projectPath == ":" ? label : "\(label) (\(projectPath))"
         case .singleFile(let path):
             return URL(fileURLWithPath: path).lastPathComponent
         case .classpathMain(let className, _):
             return className.split(separator: ".").last.map(String.init) ?? className
         }
+    }
+
+    /// The Gradle task a ``Target/gradleRun(projectPath:taskName:)`` target runs, `run` by default;
+    /// `nil` for other targets.
+    public var gradleTaskName: String? {
+        guard case .gradleRun(_, let taskName) = target else { return nil }
+        return taskName ?? "run"
     }
 
     /// Whether ``vmArguments`` can be passed to this target.
@@ -130,8 +140,39 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
     }
 
-    /// The configuration Run uses for `file` before the user edits anything: the Gradle `run`
-    /// task of the file's subproject in a Gradle project, else a single-file launch.
+    /// Which task Run uses for a Gradle subproject.
+    public enum GradleRunTaskChoice: Equatable, Sendable {
+        /// The subproject has this task: `run`, else `bootRun`.
+        case task(String)
+        /// No synced task list for the subproject: Run falls back to `run`.
+        case unsynced
+        /// The subproject has tasks, but neither `run` nor `bootRun`: the user picks one of these.
+        case ask([JavaGradleProjectModel.GradleTask])
+    }
+
+    /// `run` when the subproject at `projectPath` has one, else `bootRun` (a Spring Boot app), else
+    /// ``GradleRunTaskChoice/ask(_:)`` with its tasks. ``GradleRunTaskChoice/unsynced`` without a
+    /// model or a task list for it.
+    public static func preferredGradleRunTask(
+        for projectPath: String, model: JavaGradleProjectModel?
+    ) -> GradleRunTaskChoice {
+        guard let tasks = model?.subprojects.first(where: { $0.path == projectPath })?.tasks, !tasks.isEmpty else {
+            return .unsynced
+        }
+        for name in ["run", "bootRun"] where tasks.contains(where: { $0.name == name }) {
+            return .task(name)
+        }
+        return .ask(tasks)
+    }
+
+    /// The Gradle subproject Run launches for `file`: the one whose source set holds it, else the root.
+    public static func gradleProjectPath(for file: URL?, model: JavaGradleProjectModel?) -> String {
+        file.flatMap { model?.sourceSet(containing: $0)?.subproject.path } ?? ":"
+    }
+
+    /// The configuration Run uses for `file` before the user edits anything: in a Gradle project,
+    /// the file's subproject's `run` task, or `bootRun` when it has no `run`; else a single-file
+    /// launch. `nil` for a synced Gradle subproject that has neither task: the host asks which to run.
     public static func makeDefault(
         file: URL?,
         projectRoot: URL?,
@@ -139,8 +180,15 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         model: JavaGradleProjectModel?
     ) -> JavaRunConfiguration? {
         if isGradleProject, projectRoot != nil {
-            let path = file.flatMap { model?.sourceSet(containing: $0)?.subproject.path } ?? ":"
-            return JavaRunConfiguration(target: .gradleRun(projectPath: path))
+            let path = gradleProjectPath(for: file, model: model)
+            switch preferredGradleRunTask(for: path, model: model) {
+            case .task(let name):
+                return JavaRunConfiguration(target: .gradleRun(projectPath: path, taskName: name == "run" ? nil : name))
+            case .unsynced:
+                return JavaRunConfiguration(target: .gradleRun(projectPath: path))
+            case .ask:
+                return nil
+            }
         }
         guard let file, file.pathExtension.lowercased() == "java" else { return nil }
         return JavaRunConfiguration(target: .singleFile(path: file.path))
@@ -150,10 +198,16 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     /// Gradle source set: `nil` when the file is not a `.java` file or the model has no source set
     /// for it. `source` supplies the `package` line, which the class name needs.
     public static func makeClasspathLaunch(file: URL, source: String, model: JavaGradleProjectModel?) -> JavaRunConfiguration? {
-        guard file.pathExtension.lowercased() == "java", let model,
-              model.runtimeClasspath(forFile: file) != nil else { return nil }
         let simpleName = file.deletingPathExtension().lastPathComponent
         let className = (packageName(in: source).map { $0 + "." } ?? "") + simpleName
+        return makeClasspathLaunch(file: file, className: className, model: model)
+    }
+
+    /// A classpath launch of `className` (a binary name, `a.Outer$Inner` for a nested type)
+    /// declared in `file`, under the same conditions as ``makeClasspathLaunch(file:source:model:)``.
+    public static func makeClasspathLaunch(file: URL, className: String, model: JavaGradleProjectModel?) -> JavaRunConfiguration? {
+        guard file.pathExtension.lowercased() == "java", let model,
+              model.runtimeClasspath(forFile: file) != nil else { return nil }
         return JavaRunConfiguration(target: .classpathMain(className: className, sourceFile: file.path))
     }
 

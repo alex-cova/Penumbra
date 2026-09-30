@@ -204,6 +204,16 @@ public struct IDERootView: View {
                     .preferredColorScheme(IDEAppearance.preferredColorScheme)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { workspace.gradleRunTaskPrompt != nil },
+            set: { if !$0 { workspace.dismissGradleRunTaskPrompt() } }
+        )) {
+            if let prompt = workspace.gradleRunTaskPrompt {
+                IDEGradleTaskPickerSheet(prompt: prompt)
+                    .environment(workspace)
+                    .preferredColorScheme(IDEAppearance.preferredColorScheme)
+            }
+        }
         .sheet(item: Binding(
             get: { workspace.workspaceEditPreview },
             set: { if $0 == nil { workspace.dismissWorkspaceEditPreview() } }

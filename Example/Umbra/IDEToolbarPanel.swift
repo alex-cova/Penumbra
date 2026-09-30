@@ -39,13 +39,18 @@ struct IDEToolbarPanel: View {
                     isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
                     isGradleProject: workspace.javaSupport.isGradleProject,
                     isJavaRunnable: workspace.javaFileCanRun,
+                    isJavaDebuggable: workspace.javaFileCanDebug,
+                    isRunActive: workspace.isRunActive,
                     isJavaTestable: workspace.javaFileCanTest,
                     javaRunHelp: workspace.javaRunHelp,
+                    javaDebugHelp: workspace.javaDebugHelp,
                     isHTTPFile: workspace.statusLanguage == "http",
                     isHTTPSendable: workspace.httpFileCanSend,
                     toggleMarkdownPreview: workspace.toggleMarkdownPreview,
                     buildGradle: workspace.buildGradleProject,
                     runJava: workspace.runActiveJava,
+                    debugJava: workspace.debugActiveJava,
+                    stopRunning: workspace.stopRunning,
                     runJavaTests: workspace.runActiveJavaTests,
                     sendHTTPRequest: workspace.sendActiveHTTPRequest,
                     exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
@@ -209,13 +214,18 @@ private struct IDEToolbarActionCluster: View {
     let isMarkdownPreviewVisible: Bool
     let isGradleProject: Bool
     let isJavaRunnable: Bool
+    let isJavaDebuggable: Bool
+    let isRunActive: Bool
     let isJavaTestable: Bool
     let javaRunHelp: String
+    let javaDebugHelp: String
     let isHTTPFile: Bool
     let isHTTPSendable: Bool
     let toggleMarkdownPreview: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
+    let debugJava: () -> Void
+    let stopRunning: () -> Void
     let runJavaTests: () -> Void
     let sendHTTPRequest: () -> Void
     let exportMarkdownPreviewToPDF: () -> Void
@@ -248,6 +258,24 @@ private struct IDEToolbarActionCluster: View {
                     help: javaRunHelp,
                     action: runJava
                 )
+                IDEToolbarIconButton(
+                    systemName: "ladybug.fill",
+                    tint: isJavaDebuggable ? IDEAppearance.ColorToken.run : nil,
+                    help: javaDebugHelp,
+                    action: debugJava
+                )
+                .disabled(!isJavaDebuggable)
+            }
+
+            // Stays up while something runs, even after switching to a file that can't run.
+            if isJavaRunnable || isRunActive {
+                IDEToolbarIconButton(
+                    systemName: "stop.fill",
+                    tint: isRunActive ? IDEAppearance.ColorToken.error : nil,
+                    help: "Stop",
+                    action: stopRunning
+                )
+                .disabled(!isRunActive)
             }
 
             if isJavaTestable {

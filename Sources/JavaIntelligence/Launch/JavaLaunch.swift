@@ -1,5 +1,21 @@
 import Foundation
 
+/// A launchable `main` found in a source file.
+public struct JavaMainMethodLocation: Sendable, Equatable {
+    /// 1-based line of the method name.
+    public let line: Int
+    /// The declaring type's own name, e.g. `Inner` for `a.Outer.Inner`.
+    public let simpleClassName: String
+    /// The name the JVM launches, e.g. `a.Outer$Inner`.
+    public let binaryClassName: String
+
+    public init(line: Int, simpleClassName: String, binaryClassName: String) {
+        self.line = line
+        self.simpleClassName = simpleClassName
+        self.binaryClassName = binaryClassName
+    }
+}
+
 /// Whether a Java source declares a launchable `main`. Recognizes `psvm` in either modifier order
 /// (`public static void main` and `static public void main`). Comments and string literals do not count.
 public enum JavaMainMethod {
@@ -14,6 +30,64 @@ public enum JavaMainMethod {
             }
         }
         return false
+    }
+
+    /// Every `static void main(String[] args)` declared in `source`, nested types included, for the
+    /// gutter's run buttons. Parses the whole file, so keep it off the main thread.
+    public static func locations(in source: String) -> [JavaMainMethodLocation] {
+        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        let packageName = JavaImportList(tree: tree).packageName
+        var result: [JavaMainMethodLocation] = []
+        collectMains(in: tree.rootNode, packageName: packageName, into: &result)
+        return result
+    }
+
+    private static func collectMains(in node: SyntaxNode, packageName: String, into result: inout [JavaMainMethodLocation]) {
+        if node.type == "method_declaration" {
+            if let location = mainLocation(node, packageName: packageName) {
+                result.append(location)
+            }
+            return
+        }
+        for child in node.namedChildren {
+            collectMains(in: child, packageName: packageName, into: &result)
+        }
+    }
+
+    private static func mainLocation(_ method: SyntaxNode, packageName: String) -> JavaMainMethodLocation? {
+        guard let name = method.child(byFieldName: "name"), name.text == "main",
+              method.child(byFieldName: "type")?.type == "void_type",
+              let modifiers = method.firstNamedChild(ofType: "modifiers"),
+              modifiers.children.contains(where: { $0.type == "static" }),
+              let parameters = method.child(byFieldName: "parameters") else { return nil }
+        let declared = parameters.namedChildren.filter { $0.type == "formal_parameter" || $0.type == "spread_parameter" }
+        guard declared.count == 1, isStringArray(declared[0]) else { return nil }
+        let types = JavaTestDiscovery.enclosingTypeNames(of: method)
+        guard let simpleName = types.last else { return nil }
+        let prefix = packageName.isEmpty ? "" : packageName + "."
+        let position = JavaTestDiscovery.lineColumn(forByteOffset: name.startByte, in: method.tree.sourceBytes)
+        return JavaMainMethodLocation(
+            line: position.line + 1,
+            simpleClassName: simpleName,
+            binaryClassName: prefix + types.joined(separator: "$")
+        )
+    }
+
+    /// `String[] args`, `String args[]` or `String... args`, with `String` optionally qualified.
+    private static func isStringArray(_ parameter: SyntaxNode) -> Bool {
+        let typeNode = parameter.type == "spread_parameter"
+            ? parameter.namedChildren.first { $0.type != "modifiers" && $0.type != "variable_declarator" }
+            : parameter.child(byFieldName: "type")
+        guard var type = typeNode?.text.filter({ !$0.isWhitespace }) else { return false }
+        var dimensions = parameter.type == "spread_parameter" ? 1 : 0
+        while type.hasSuffix("[]") {
+            type.removeLast(2)
+            dimensions += 1
+        }
+        if let declaredDimensions = parameter.child(byFieldName: "dimensions") {
+            dimensions += declaredDimensions.text.filter { $0 == "[" }.count
+        }
+        return dimensions == 1 && (type == "String" || type == "java.lang.String")
     }
 
     /// One or more modifiers, then `void main(`. `static` is checked on the match so `public void main` does not qualify.
@@ -119,9 +193,9 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         let java = javaHome.map { shellQuote($0.appendingPathComponent("bin/java").path) } ?? "java"
         let jdkEnvironment = javaHome.map(jdkEnvironmentPrefix) ?? ""
         switch configuration.target {
-        case .gradleRun(let projectPath):
+        case .gradleRun(let projectPath, let taskName):
             guard let projectRoot else { return nil }
-            var task = projectPath == ":" ? "run" : "\(projectPath):run"
+            var task = gradleRunTask(for: projectPath, taskName: taskName ?? "run")
             let arguments = configuration.programArguments.trimmingCharacters(in: .whitespacesAndNewlines)
             if !arguments.isEmpty { task += " --args=\(shellQuote(arguments))" }
             return JavaLaunchCommand(shellCommand: gradleInvocation(
@@ -213,9 +287,10 @@ public struct JavaLaunchCommand: Equatable, Sendable {
         "-agentlib:jdwp=transport=dt_socket,server=y,suspend=\(suspend ? "y" : "n"),address=*:\(port)"
     }
 
-    /// The Gradle `run` task path for a subproject (`:` → `run`, `:app` → `:app:run`).
-    public static func gradleRunTask(for projectPath: String) -> String {
-        projectPath == ":" ? "run" : "\(projectPath):run"
+    /// The path of a subproject's task, `run` by default (`:` → `run`, `:app` → `:app:run`,
+    /// `:app` and `bootRun` → `:app:bootRun`).
+    public static func gradleRunTask(for projectPath: String, taskName: String = "run") -> String {
+        projectPath == ":" ? taskName : "\(projectPath):\(taskName)"
     }
 
     /// Extra Gradle CLI flags for `runGradleTasks`, optionally including `--debug-jvm`.

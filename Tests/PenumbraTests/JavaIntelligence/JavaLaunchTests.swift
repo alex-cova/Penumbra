@@ -15,6 +15,44 @@ final class JavaLaunchTests: XCTestCase {
         XCTAssertFalse(JavaMainMethod.containsMain(in: "String s = \"public static void main(String[] args)\";"))
     }
 
+    func testLocatesMainMethodsWithTheirLinesAndClasses() {
+        let source = """
+        package a.b;
+
+        public class App {
+            public static void main(String[] args) {}
+
+            static class Inner {
+                static public void main(String... args) {}
+            }
+        }
+
+        class Other {
+            public static final void main(java.lang.String args[]) {}
+        }
+        """
+        XCTAssertEqual(JavaMainMethod.locations(in: source), [
+            JavaMainMethodLocation(line: 4, simpleClassName: "App", binaryClassName: "a.b.App"),
+            JavaMainMethodLocation(line: 7, simpleClassName: "Inner", binaryClassName: "a.b.App$Inner"),
+            JavaMainMethodLocation(line: 12, simpleClassName: "Other", binaryClassName: "a.b.Other")
+        ])
+    }
+
+    func testLocationsIgnoreMethodsThatCannotBeLaunched() {
+        let source = """
+        class App {
+            public void main(String[] args) {}
+            public static int main(String[] args) { return 0; }
+            public static void main(int count) {}
+            public static void main(String[][] args) {}
+            public static void main(String[] args, int extra) {}
+            // public static void main(String[] args) {}
+            String s = "public static void main(String[] args) {}";
+        }
+        """
+        XCTAssertEqual(JavaMainMethod.locations(in: source), [])
+    }
+
     func testPlainFileLaunchesWithJava() {
         let file = URL(fileURLWithPath: "/tmp/Hello World.java")
         let command = JavaLaunchCommand.make(

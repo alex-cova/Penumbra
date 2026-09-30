@@ -9,13 +9,14 @@ struct IDERunConfigurationSheet: View {
     @State private var environmentText: String
     @State private var kind: TargetKind
     @State private var gradleProjectPath: String
+    @State private var gradleTaskName: String
     @State private var filePath: String
     @State private var className: String
     @State private var launchMode: JavaLaunchMode
     @State private var suspendOnStart: Bool
 
     enum TargetKind: String, CaseIterable, Identifiable {
-        case gradleRun = "Gradle run"
+        case gradleRun = "Gradle task"
         case singleFile = "Single file"
         case classpathMain = "Class with classpath"
 
@@ -26,19 +27,22 @@ struct IDERunConfigurationSheet: View {
         _draft = State(initialValue: configuration)
         _environmentText = State(initialValue: JavaRunConfiguration.environmentText(configuration.environment))
         switch configuration.target {
-        case .gradleRun(let path):
+        case .gradleRun(let path, let taskName):
             _kind = State(initialValue: .gradleRun)
             _gradleProjectPath = State(initialValue: path)
+            _gradleTaskName = State(initialValue: taskName ?? "run")
             _filePath = State(initialValue: "")
             _className = State(initialValue: "")
         case .singleFile(let path):
             _kind = State(initialValue: .singleFile)
             _gradleProjectPath = State(initialValue: ":")
+            _gradleTaskName = State(initialValue: "run")
             _filePath = State(initialValue: path)
             _className = State(initialValue: "")
         case .classpathMain(let name, let source):
             _kind = State(initialValue: .classpathMain)
             _gradleProjectPath = State(initialValue: ":")
+            _gradleTaskName = State(initialValue: "run")
             _filePath = State(initialValue: source)
             _className = State(initialValue: name)
         }
@@ -51,7 +55,11 @@ struct IDERunConfigurationSheet: View {
         switch kind {
         case .gradleRun:
             let path = gradleProjectPath.trimmingCharacters(in: .whitespaces)
-            return path.hasPrefix(":") ? .gradleRun(projectPath: path) : nil
+            let task = gradleTaskName.trimmingCharacters(in: .whitespaces)
+            // Task names go on a command line: letters, digits and the usual separators only.
+            guard path.hasPrefix(":"),
+                  task.range(of: #"^[A-Za-z][\w.-]*$"#, options: .regularExpression) != nil else { return nil }
+            return .gradleRun(projectPath: path, taskName: task == "run" ? nil : task)
         case .singleFile:
             let path = filePath.trimmingCharacters(in: .whitespaces)
             return path.hasSuffix(".java") ? .singleFile(path: path) : nil
@@ -95,7 +103,7 @@ struct IDERunConfigurationSheet: View {
             field(
                 "VM options",
                 caption: kind == .gradleRun
-                    ? "Gradle's run task takes JVM options from the build script (applicationDefaultJvmArgs), not from here."
+                    ? "Gradle run tasks take JVM options from the build script (applicationDefaultJvmArgs, jvmArgs), not from here."
                     : "For example -Xmx512m -Dkey=value."
             ) {
                 TextField("-Xmx512m", text: $draft.vmArguments)
@@ -145,7 +153,7 @@ struct IDERunConfigurationSheet: View {
 
     private var kindCaption: String {
         switch kind {
-        case .gradleRun: return "Runs the project's Gradle run task."
+        case .gradleRun: return "Runs a Gradle task of the project, such as run or bootRun."
         case .singleFile: return "Runs one file with java File.java."
         case .classpathMain: return "Runs a compiled class with the module's runtime classpath. It is built first if needed."
         }
@@ -154,7 +162,7 @@ struct IDERunConfigurationSheet: View {
     private var debugCaption: String {
         switch kind {
         case .gradleRun:
-            return "Gradle run uses --debug-jvm (port \(JavaLaunchCommand.gradleDebugJdwpPort)). ⌃⌥D to debug last configuration."
+            return "Gradle tasks run with --debug-jvm (port \(JavaLaunchCommand.gradleDebugJdwpPort)). ⌃⌥D to debug last configuration."
         case .classpathMain:
             return "Classpath launches run under the managed debugger. ⌃⌥D to debug last configuration."
         default:
@@ -168,6 +176,11 @@ struct IDERunConfigurationSheet: View {
         case .gradleRun:
             field("Gradle project", caption: "`:` for the root project, `:app` for a module.") {
                 TextField(":app", text: $gradleProjectPath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(IDEAppearance.Typography.monoSmall)
+            }
+            field("Task", caption: "run for the application plugin, bootRun for Spring Boot.") {
+                TextField("run", text: $gradleTaskName)
                     .textFieldStyle(.roundedBorder)
                     .font(IDEAppearance.Typography.monoSmall)
             }

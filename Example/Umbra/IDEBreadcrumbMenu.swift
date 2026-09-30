@@ -159,7 +159,7 @@ private final class IDEDirectoryMenu: NSMenu, NSMenuDelegate {
     }
 }
 
-private final class IDEClosureMenuItem: NSMenuItem {
+final class IDEClosureMenuItem: NSMenuItem {
     private let handler: () -> Void
 
     init(title: String, handler: @escaping () -> Void) {

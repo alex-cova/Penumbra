@@ -500,8 +500,9 @@ final class IDEJavaSupport {
 
     /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
     /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
-    /// first when the project has not been trusted yet.
-    func runGradleTasks(_ taskPaths: [String], extraArguments: [String] = []) {
+    /// first when the project has not been trusted yet. `runsApplication` is for tasks that start the
+    /// program (`run`, `bootRun`): a server runs until it is stopped, so the sync timeout doesn't apply.
+    func runGradleTasks(_ taskPaths: [String], extraArguments: [String] = [], runsApplication: Bool = false) {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         guard !taskPaths.isEmpty else { return }
         guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
@@ -537,7 +538,9 @@ final class IDEJavaSupport {
             }
 
             do {
-                let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
+                let timeout = runsApplication
+                    ? Self.applicationRunTimeout
+                    : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
                 let startedAt = Date()
                 let result = try await gradleRunner.run(
                     projectDirectory: url,
@@ -575,6 +578,9 @@ final class IDEJavaSupport {
             }
         }
     }
+
+    /// Long enough to mean "until stopped" without overflowing the runner's `Task.sleep`.
+    private static let applicationRunTimeout = Duration.seconds(365 * 24 * 60 * 60)
 
     func cancelGradleTasks() {
         guard isRunningGradleTasks else { return }
