@@ -174,6 +174,9 @@ public extension EditorActionID {
     static let encapsulateField = EditorActionID("encapsulateField")
     /// Inserts getter/setter methods for the field at the caret.
     static let generateAccessors = EditorActionID("generateAccessors")
+    /// Generates a constructor, getters/setters or `toString()` in the type at the caret. Unbound
+    /// by default: ⌘N is New File in Umbra's menus.
+    static let generate = EditorActionID("generate")
     /// Moves the top-level class at the caret to another package (F6 in the IntelliJ keymap).
     static let moveClass = EditorActionID("moveClass")
     /// Deletes the symbol at the caret when it has no usages.
@@ -259,6 +262,7 @@ public extension EditorActionID {
         .changeSignature: "Change Method Signature…",
         .encapsulateField: "Encapsulate Field",
         .generateAccessors: "Generate Getter and Setter",
+        .generate: "Generate…",
         .moveClass: "Move Class…",
         .safeDelete: "Safe Delete",
         .typeHierarchy: "Type Hierarchy",

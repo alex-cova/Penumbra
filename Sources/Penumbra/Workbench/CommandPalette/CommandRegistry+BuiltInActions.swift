@@ -26,7 +26,7 @@ public extension CommandRegistry {
         .rename,
         .extractVariable, .extractField, .extractConstant, .extractMethod,
         .inlineVariable, .inlineMethod,
-        .changeSignature, .encapsulateField, .generateAccessors,
+        .changeSignature, .encapsulateField, .generateAccessors, .generate,
         .moveClass, .safeDelete,
         .typeHierarchy
     ]

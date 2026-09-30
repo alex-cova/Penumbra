@@ -205,6 +205,7 @@ struct UmbraApp: App {
                 Button("Change Method Signature…", action: workspace.changeMethodSignature)
                 Button("Encapsulate Field", action: workspace.encapsulateField)
                     .menuShortcut(.encapsulateField, in: preset)
+                Button("Generate…", action: workspace.generate)
                 Button("Generate Getter and Setter", action: workspace.generateAccessors)
                 Button("Move Class…", action: workspace.moveClass)
                 Button("Safe Delete", action: workspace.safeDelete)

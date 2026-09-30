@@ -1,4 +1,5 @@
 import EditorIntelligence
+import JavaIntelligence
 import Penumbra
 
 @MainActor
@@ -53,6 +54,7 @@ final class IDEIntelligenceServices {
             codeActionProvider: javaSupport.codeActionProvider,
             renameProvider: javaSupport.renameProvider,
             refactoringProvider: javaSupport.refactoringProvider,
+            codeGenerationProvider: JavaCodeGenerationProvider(),
             breadcrumbProvider: javaSupport.breadcrumbProvider,
             inlayHintProvider: javaSupport.inlayHintProvider,
             symbolIndex: symbolIndex,

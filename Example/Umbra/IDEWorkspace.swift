@@ -202,6 +202,7 @@ public final class IDEWorkspace {
     @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
     @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
     private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
+    @ObservationIgnored private let generatePrompt = IDEGeneratePrompt()
     private let breakpointStore = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
@@ -845,6 +846,11 @@ public final class IDEWorkspace {
     }
 
     /// Inlines the local variable at the caret (⌥⌘N).
+    /// Generates a constructor, getters/setters or `toString()` in the class at the caret.
+    func generate() {
+        _ = host(for: workbench.activePane.id).textView.perform(.generate)
+    }
+
     func inlineVariable() {
         _ = host(for: workbench.activePane.id).textView.perform(.inlineVariable)
     }
@@ -3286,6 +3292,10 @@ public final class IDEWorkspace {
             self.changeSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
         }
         host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
+        host.intelligenceController?.onRequestGeneration = { [weak self, weak host] menu, completion in
+            guard let self, let textView = host?.textView else { return completion(nil) }
+            self.generatePrompt.present(menu: menu, in: textView, completion: completion)
+        }
             guard let self else { return WorkspaceEditApplyResult() }
             return await IDEWorkspaceEditApplier(host: self).apply(edit)
         }

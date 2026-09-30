@@ -16,6 +16,8 @@ public struct EditorIntelligenceServices {
     public var renameProvider: (any RenameProviding)?
     /// Selection-based refactorings (extract variable, …).
     public var refactoringProvider: (any RefactoringProviding)?
+    /// Constructor, accessor and `toString()` generation behind ``EditorActionID/generate``.
+    public var codeGenerationProvider: (any CodeGenerationProviding)?
     /// Language-aware breadcrumbs, tried before the ones derived from ``symbolIndex``.
     public var breadcrumbProvider: (any BreadcrumbProviding)?
     /// Parameter-name hints drawn inline at call sites (see ``TextView/inlayHints``).
@@ -35,6 +37,7 @@ public struct EditorIntelligenceServices {
         codeActionProvider: (any CodeActionProviding)? = nil,
         renameProvider: (any RenameProviding)? = nil,
         refactoringProvider: (any RefactoringProviding)? = nil,
+        codeGenerationProvider: (any CodeGenerationProviding)? = nil,
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         inlayHintProvider: (any InlayHintProviding)? = nil,
         foldingProvider: (any FoldingProviding)? = nil,
@@ -47,6 +50,7 @@ public struct EditorIntelligenceServices {
         self.codeActionProvider = codeActionProvider
         self.renameProvider = renameProvider
         self.refactoringProvider = refactoringProvider
+        self.codeGenerationProvider = codeGenerationProvider
         self.breadcrumbProvider = breadcrumbProvider
         self.inlayHintProvider = inlayHintProvider
         self.foldingProvider = foldingProvider
@@ -101,6 +105,7 @@ public final class EditorIntelligenceController {
     private let codeActionProvider: (any CodeActionProviding)?
     private let renameProvider: (any RenameProviding)?
     private let refactoringProvider: (any RefactoringProviding)?
+    private let codeGenerationProvider: (any CodeGenerationProviding)?
     private let breadcrumbProvider: (any BreadcrumbProviding)?
     private var inlayHintProvider: (any InlayHintProviding)?
     private var inlayHintTask: Task<Void, Never>?
@@ -189,6 +194,7 @@ public final class EditorIntelligenceController {
         self.codeActionProvider = services.codeActionProvider
         self.renameProvider = services.renameProvider
         self.refactoringProvider = services.refactoringProvider
+        self.codeGenerationProvider = services.codeGenerationProvider
         self.breadcrumbProvider = services.breadcrumbProvider
         self.inlayHintProvider = services.inlayHintProvider
         self.symbolIndex = services.symbolIndex
@@ -366,6 +372,12 @@ public final class EditorIntelligenceController {
         _ descriptor: RefactoringDescriptor, _ completion: @escaping ([String: String]?) -> Void
     ) -> Void)?
 
+    /// Asks the host which member to generate and from which fields. Call `completion` once with
+    /// the choice, or `nil` when cancelled. Left `nil`, Generate shows a hint and does nothing.
+    public var onRequestGeneration: ((
+        _ menu: CodeGenerationMenu, _ completion: @escaping (CodeGenerationChoice?) -> Void
+    ) -> Void)?
+
     /// Lists refactorings available at the current selection.
     public func availableRefactorings() async -> [RefactoringDescriptor] {
         guard let refactoringProvider, let document = liveDocument() else { return [] }
@@ -442,6 +454,63 @@ public final class EditorIntelligenceController {
             }
         }
         return true
+    }
+
+    /// Runs Generate…: the provider's options → the host's pick → one edit, applied without a
+    /// preview (like IntelliJ), as a single undo step.
+    @discardableResult
+    public func generate() -> Bool {
+        guard let codeGenerationProvider else {
+            showTransientHint("Generate isn't available for this file")
+            return true
+        }
+        guard let document = liveDocument() else { return false }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let menu = await codeGenerationProvider.generationMenu(self.refactoringContext(for: document)) else {
+                self.showTransientHint("Nothing to generate here")
+                return
+            }
+            guard let prompt = self.onRequestGeneration else {
+                self.showTransientHint("Generate isn't set up in this app")
+                return
+            }
+            prompt(menu) { [weak self] choice in
+                guard let self, let choice else { return }
+                self.applyGeneration(choice, provider: codeGenerationProvider)
+            }
+        }
+        return true
+    }
+
+    private func applyGeneration(_ choice: CodeGenerationChoice, provider: any CodeGenerationProviding) {
+        // The buffer is read again: the caret and text are whatever the popup left behind.
+        guard let document = liveDocument() else { return }
+        let context = refactoringContext(for: document)
+        Task { [weak self] in
+            let plan = await provider.generate(choice.kind, fieldNames: choice.fieldNames, context: context)
+            guard let self else { return }
+            if let blocking = plan.blockingError {
+                self.reportRenameFailure(blocking)
+                return
+            }
+            guard !plan.entries.isEmpty else {
+                self.reportRenameFailure("Nothing to generate")
+                return
+            }
+            let result = await self.applyWorkspaceEdit(plan.workspaceEdit())
+            if let failure = result.failures.values.first { self.reportRenameFailure(failure) }
+        }
+    }
+
+    private func refactoringContext(for document: Document) -> RefactoringContext {
+        RefactoringContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            workspace: workspace,
+            index: symbolIndex
+        )
     }
 
     private func planRefactoring(
@@ -630,6 +699,8 @@ public final class EditorIntelligenceController {
             return performRefactoring(.encapsulateField)
         case .generateAccessors:
             return performRefactoring(.generateAccessors)
+        case .generate:
+            return generate()
         case .moveClass:
             return performRefactoring(.moveClass)
         case .safeDelete:
