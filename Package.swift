@@ -64,7 +64,7 @@ let package = Package(
             path: "Vendor/BeautifulMermaid/Sources/BeautifulMermaidSwift",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        .target(name: "EditorIntelligence", dependencies: [], swiftSettings: swift6),
+        .target(name: "EditorIntelligence", dependencies: [], exclude: ["CLAUDE.md"], swiftSettings: swift6),
         .target(
             name: "EditorIntelligenceLSP",
             dependencies: [
@@ -80,7 +80,9 @@ let package = Package(
             "TreeSitter",
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
-            "Documentation.docc"
+            "CLAUDE.md",
+            "Documentation.docc",
+            "Workbench/CLAUDE.md"
         ], resources: [
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
@@ -96,6 +98,7 @@ let package = Package(
                 "TreeSitterJava",
                 .product(name: "FernflowerKit", package: "sunflower")
             ],
+            exclude: ["CLAUDE.md"],
             swiftSettings: swift6
         ),
         .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
@@ -119,6 +122,7 @@ let package = Package(
             ],
             path: "Example/Umbra",
             exclude: [
+                "CLAUDE.md",
                 "SplitView/LICENSE",
                 "SplitView/README.md",
                 "Tools/JavaDebugAdapter/build.sh",
