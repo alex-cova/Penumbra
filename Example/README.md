@@ -143,9 +143,11 @@ git push origin 1.6.0
 
 Preferences (⌘,) persist font size, tab width, wrap, line numbers, folding, minimap, Metal renderer, and keymap preset.
 
-Editor state is saved to:
+Editor state is saved under `~/Library/Application Support/com.umbra.editor/`:
 
-`~/Library/Application Support/com.umbra.editor/session.json`
+- `app.json` — preferences and the recent files and projects, shared by every window.
+- `last-window.json` — the project, tabs and panel layout of the window you used last; it is the one window restored at launch.
+- `session.json` — the single file older versions wrote. It is migrated once on first launch and then left untouched.
 
 ## System requirements
 

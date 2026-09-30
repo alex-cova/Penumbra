@@ -124,7 +124,7 @@ rather than fighting each other.
 - **`SplitPanes`:**
   - `onResize(primary, secondary)` reports the settled divider in points (drag end, container
     resize), in the units `idealPrimary`/`idealSecondary` take. Umbra persists sidebar widths
-    and the terminal height in `IDESessionStore` through it rather than `storageKey`.
+    and the terminal height in `IDEWindowSession` (`last-window.json`) through it rather than `storageKey`.
   - The opening width is resolved with `onChange(of: length, initial: true)` instead of
     `task(id:)`, so the first frame isn't drawn at `defaultFraction`.
   - A split positioned only by `defaultFraction` (no ideal size, no `storageKey`) follows changes

@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
-    @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
-    @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
+    @State private var sidebarWidth = IDEWindowSessionStore.load().sidebarWidth
+    @State private var gradleSidebarWidth = IDEWindowSessionStore.load().gradleSidebarWidth
     @State private var didRecordPanelSizes = false
     @State private var didBootstrap = false
     /// The window's top safe-area inset: the system titlebar, plus the native tab bar while it

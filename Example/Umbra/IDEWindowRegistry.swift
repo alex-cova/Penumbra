@@ -14,12 +14,8 @@ final class IDEWindowRegistry {
         weak var workspace: IDEWorkspace?
     }
 
+    /// Most recently key first. A window that has not been key yet sits after the ones that have.
     private var entries: [WeakWorkspace] = []
-    private weak var lastActive: IDEWorkspace?
-    /// The workspace that restored, and therefore writes, `session.json`. Until persistence is
-    /// split per window, one workspace at a time may own it; a second window starts empty and
-    /// never writes it, or two windows would overwrite each other's project and tabs.
-    private weak var sessionOwner: IDEWorkspace?
     private var hasHandledLaunchArguments = false
     /// Folders/files handed over by Finder or the Dock before any window was ready (cold launch).
     private var pendingOpenURLs: [URL] = []
@@ -41,10 +37,7 @@ final class IDEWindowRegistry {
             }
             window = current.sheetParent
         }
-        if let lastActive, workspaces.contains(where: { $0 === lastActive }) {
-            return lastActive
-        }
-        return workspaces.last
+        return workspaces.first
     }
 
     func workspace(for window: NSWindow) -> IDEWorkspace? {
@@ -54,40 +47,43 @@ final class IDEWindowRegistry {
     func register(_ workspace: IDEWorkspace) {
         guard !workspaces.contains(where: { $0 === workspace }) else { return }
         entries.append(WeakWorkspace(workspace: workspace))
-        if lastActive == nil {
-            lastActive = workspace
-        }
         drainPendingOpenURLs()
     }
 
-    /// Called when the workspace's window closes. Releases the session, so a window opened later
-    /// (Dock reopen after closing the last one) restores what the closed window saved.
+    /// Called when the workspace's window closes. When it was the session window and another
+    /// window with content remains, that one takes over and saves its layout right away, so "the
+    /// last window" stays a window that is still open. With none left the closed window's own
+    /// save (made as it closed) stands.
     func unregister(_ workspace: IDEWorkspace) {
+        let wasSessionWindow = sessionWindow === workspace
         entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
-        if sessionOwner === workspace {
-            sessionOwner = nil
-        }
-        if lastActive === workspace {
-            lastActive = nil
+        if wasSessionWindow {
+            sessionWindow?.saveSession()
         }
     }
 
     func didBecomeActive(_ workspace: IDEWorkspace) {
-        lastActive = workspace
+        entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
+        entries.insert(WeakWorkspace(workspace: workspace), at: 0)
     }
 
-    // MARK: - Session ownership
+    // MARK: - Session
 
-    /// True for the first workspace to ask while nobody owns the session; that workspace restores
-    /// and saves it. Everyone else gets an empty window.
-    func claimSession(for workspace: IDEWorkspace) -> Bool {
-        guard sessionOwner == nil else { return sessionOwner === workspace }
-        sessionOwner = workspace
-        return true
+    /// True while no other window is open: the window opening now restores the last window (launch,
+    /// or Dock reopen after closing the last one). A window opened next to another starts empty.
+    var shouldRestoreLastWindow: Bool {
+        workspaces.isEmpty
     }
 
-    func ownsSession(_ workspace: IDEWorkspace) -> Bool {
-        sessionOwner === workspace
+    /// The window whose layout is saved to `last-window.json` and restored at the next launch: the
+    /// one that was key last, skipping pristine windows. A blank window opened next to others must
+    /// not replace the project you were working in just because you clicked into it.
+    var sessionWindow: IDEWorkspace? {
+        workspaces.first { !$0.isPristine }
+    }
+
+    func isSessionWindow(_ workspace: IDEWorkspace) -> Bool {
+        sessionWindow === workspace
     }
 
     // MARK: - Launch and external opens
@@ -112,10 +108,10 @@ final class IDEWindowRegistry {
         target.openDroppedURLs(urls)
     }
 
+    /// On quit: the shared lists, and the layout of the window that was active last.
     func saveSessionsForTermination() {
-        for workspace in workspaces {
-            workspace.saveSession()
-        }
+        IDEAppState.shared.save()
+        sessionWindow?.saveSession()
     }
 }
 

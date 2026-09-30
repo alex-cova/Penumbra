@@ -85,12 +85,23 @@ public final class IDEWorkspace {
     /// pane shows the same document so they can be replayed there.
     @ObservationIgnored private var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
     private var hasPresentedMetalFailure = false
-    private var recentFiles: [URL] = []
+    /// The recent lists are shared by every window (`IDEAppState`), so what one window opens shows
+    /// in all of them.
+    private var appState: IDEAppState { IDEAppState.shared }
+    private var recentFiles: [URL] {
+        get { appState.recentFiles }
+        set { appState.recentFiles = newValue }
+    }
     /// Files edited in the editor, most recent first: the ⌘E "Show edited only" list (IntelliJ's
-    /// recently edited files, not git's). Ignored by observation: it changes while typing.
-    @ObservationIgnored
-    private var recentlyEditedFiles: [URL] = []
-    private var recentProjects: [URL] = []
+    /// recently edited files, not git's).
+    private var recentlyEditedFiles: [URL] {
+        get { appState.recentlyEditedFiles }
+        set { appState.recentlyEditedFiles = newValue }
+    }
+    private var recentProjects: [URL] {
+        get { appState.recentProjects }
+        set { appState.recentProjects = newValue }
+    }
 
     public let preferences = IDEPreferences.shared
     let project = IDEProjectModel()
@@ -121,6 +132,21 @@ public final class IDEWorkspace {
     /// first-responder changes target this window, not whichever one happens to be key.
     @ObservationIgnored
     weak var window: NSWindow?
+    /// Opened blank next to other windows instead of restoring the last one.
+    @ObservationIgnored
+    private var startedAsExtraWindow = false
+
+    /// No project and no documents: the Welcome screen.
+    var isEmpty: Bool {
+        !hasOpenProject && !hasOpenDocuments
+    }
+
+    /// A blank window opened next to others that has not been used: it never becomes the window
+    /// that is restored at the next launch.
+    var isPristine: Bool {
+        startedAsExtraWindow && isEmpty
+    }
+
     /// Kept current by `IDEWindowConfiguratorView`; the toolbar row lays out differently around the
     /// native tab bar in full screen (see `IDEWindowChrome`).
     var isFullScreen = false
@@ -444,12 +470,14 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
             self?.javaGutterIconsPreferenceChanged()
         }
-        // Only the first window restores (and later writes) the saved session; another window opened
-        // next to it starts empty and just reads the shared recent lists.
-        if IDEWindowRegistry.shared.claimSession(for: self) {
-            loadSession()
+        // First use restores the saved preferences and recent lists.
+        _ = IDEAppState.shared
+        // A window opened with none other open (launch, or Dock reopen after closing the last one)
+        // restores the last window; one opened next to another starts empty.
+        if IDEWindowRegistry.shared.shouldRestoreLastWindow {
+            loadSession(IDEWindowSessionStore.load())
         } else {
-            loadRecentLists()
+            startedAsExtraWindow = true
         }
         wireAdapter()
         rebuildLayoutHosts()
@@ -3161,14 +3189,10 @@ public final class IDEWorkspace {
         sidebarWidth: Double,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
-    ) -> AppSession {
-        AppSession(
+    ) -> IDEWindowSession {
+        IDEWindowSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
-            recentFiles: recentFiles,
-            recentlyEditedFiles: recentlyEditedFiles,
-            recentProjects: recentProjects,
-            preferences: preferences.snapshot(),
             sidebarWidth: sidebarWidth,
             isSidebarVisible: isSidebarVisible,
             gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
@@ -3187,10 +3211,12 @@ public final class IDEWorkspace {
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
-        // One `session.json` for the whole app until persistence is split per window: only the
-        // window that restored it may write it back.
-        guard IDEWindowRegistry.shared.ownsSession(self) else { return }
-        IDESessionStore.save(makeSession(
+        // Recents and preferences are shared, so any window may write them; the window layout
+        // goes to `last-window.json` only from the session window (see `IDEWindowRegistry`), or a
+        // background window (a finished Gradle sync) would replace the one the user works in.
+        appState.save()
+        guard IDEWindowRegistry.shared.isSessionWindow(self) else { return }
+        IDEWindowSessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
             gradleSidebarWidth: gradleSidebarWidth,
             terminalHeight: terminalHeight
@@ -3212,19 +3238,7 @@ public final class IDEWorkspace {
         )
     }
 
-    private func loadRecentLists() {
-        let session = IDESessionStore.load()
-        recentFiles = session.recentFiles
-        recentlyEditedFiles = session.recentlyEditedFiles
-        recentProjects = session.recentProjects
-    }
-
-    private func loadSession() {
-        let session = IDESessionStore.load()
-        preferences.restore(from: session.preferences)
-        recentFiles = session.recentFiles
-        recentlyEditedFiles = session.recentlyEditedFiles
-        recentProjects = session.recentProjects
+    private func loadSession(_ session: IDEWindowSession) {
         // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
         selectedSidebarTab = session.sidebarTab ?? .explorer
@@ -3248,7 +3262,7 @@ public final class IDEWorkspace {
         // means the folder was closed, so nothing is reopened.
         var restoredRoot = project.rootURL(from: session.projectRootBookmark)
         if restoredRoot == nil, session.projectRootBookmark != nil {
-            restoredRoot = session.recentProjects.first { FileManager.default.fileExists(atPath: $0.path) }
+            restoredRoot = recentProjects.first { FileManager.default.fileExists(atPath: $0.path) }
         }
         applyProjectRoot(restoredRoot)
 
