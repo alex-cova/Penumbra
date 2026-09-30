@@ -16,6 +16,7 @@ public final class IDEPreferences {
         static let uiFontName = "com.umbra.editor.uiFontName"
         static let uiFontSize = "com.umbra.editor.uiFontSize"
         static let welcomeBackground = "com.umbra.editor.welcomeBackground"
+        static let uiColorSchemeID = "com.umbra.editor.uiColorSchemeID"
         static let themeID = "com.umbra.editor.themeID"
         static let scaleMarkdownHeadings = "com.umbra.editor.scaleMarkdownHeadings"
         static let tabWidth = "com.umbra.editor.tabWidth"
@@ -74,6 +75,18 @@ public final class IDEPreferences {
     /// Animated backdrop of the welcome page.
     var welcomeBackground: IDEWelcomeBackground {
         didSet { UserDefaults.standard.set(welcomeBackground.rawValue, forKey: Keys.welcomeBackground) }
+    }
+
+    /// Shell chrome colors (sidebars, tabs, panels). Editor syntax themes are separate.
+    var uiColorSchemeID: String {
+        didSet {
+            UserDefaults.standard.set(uiColorSchemeID, forKey: Keys.uiColorSchemeID)
+            IDEAppearance.applyUIColorScheme(uiColorScheme)
+        }
+    }
+
+    var uiColorScheme: IDEUIColorScheme {
+        IDEUIColorSchemeCatalog.scheme(id: uiColorSchemeID)
     }
 
     var themeID: String {
@@ -242,6 +255,12 @@ public final class IDEPreferences {
         uiFontSize = defaults.object(forKey: Keys.uiFontSize) as? Double ?? IDEUIFonts.defaultFontSize
         welcomeBackground = defaults.string(forKey: Keys.welcomeBackground)
             .flatMap(IDEWelcomeBackground.init(rawValue:)) ?? .starfield
+        let savedUIColorSchemeID = defaults.string(forKey: Keys.uiColorSchemeID)
+        uiColorSchemeID = switch savedUIColorSchemeID {
+        case "fleet", "fleet-dark-edited": IDEUIColorSchemeCatalog.defaultID
+        case let id?: id
+        default: IDEUIColorSchemeCatalog.defaultID
+        }
         themeID = defaults.string(forKey: Keys.themeID) ?? ThemeCatalog.defaultDarkID
         scaleMarkdownHeadings = defaults.object(forKey: Keys.scaleMarkdownHeadings) as? Bool ?? true
         tabWidth = defaults.object(forKey: Keys.tabWidth) as? Int ?? 4
@@ -276,6 +295,7 @@ public final class IDEPreferences {
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         IDEUIFonts.setCurrentFamilyName(uiFontName)
         IDEUIFonts.setCurrentFontSize(uiFontSize)
+        IDEAppearance.applyUIColorScheme(uiColorScheme)
         applyTheme()
     }
 

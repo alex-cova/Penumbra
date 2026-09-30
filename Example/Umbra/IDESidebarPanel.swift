@@ -218,5 +218,5 @@ private struct IDEExplorerSearchField: View {
             return workspace
         }())
         .frame(width: 240, height: 480)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

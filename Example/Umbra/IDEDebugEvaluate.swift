@@ -173,7 +173,7 @@ final class IDEQuickEvaluatePopover: NSObject, NSPopoverDelegate {
         popover.behavior = .transient
         popover.delegate = self
         popover.contentViewController = NSHostingController(
-            rootView: IDEQuickEvaluateView(session: session, expression: expression).preferredColorScheme(.dark)
+            rootView: IDEQuickEvaluateView(session: session, expression: expression).preferredColorScheme(IDEAppearance.preferredColorScheme)
         )
         self.popover = popover
         let caret = textView.caretRectInViewport(at: location)

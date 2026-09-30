@@ -84,8 +84,6 @@ final class IDETerminalHostView: NSView {
 
     override func layout() {
         super.layout()
-        terminalView.frame = bounds
-        terminalView.needsLayout = true
         if isActive {
             startProcessIfNeeded()
             if pendingFocus {
@@ -93,6 +91,15 @@ final class IDETerminalHostView: NSView {
                 requestFocus()
             }
         }
+    }
+
+    func applyUIColorScheme() {
+        terminalView.nativeBackgroundColor = IDEAppearance.NSToken.editor
+        terminalView.nativeForegroundColor = IDEAppearance.NSToken.foreground
+        terminalView.caretColor = IDEAppearance.NSToken.accent
+        terminalView.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
+        layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
+        terminalView.setNeedsDisplay(terminalView.bounds)
     }
 
     func setActive(_ active: Bool) {
@@ -245,6 +252,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let isActive: Bool
     let fontName: String
     let fontSize: Double
+    let uiColorSchemeID: String
     let focusRequestID: UInt64
     let restartRequestID: UInt64
     let clearRequestID: UInt64
@@ -264,6 +272,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         context.coordinator.lastFocusRequestID = focusRequestID
         context.coordinator.lastRestartRequestID = restartRequestID
         context.coordinator.lastClearRequestID = clearRequestID
+        context.coordinator.lastUIColorSchemeID = uiColorSchemeID
         if isActive {
             view.scheduleFocus()
         }
@@ -276,6 +285,10 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         view.onDirectoryUpdate = onDirectoryUpdate
         view.applyEditorFont(name: fontName, size: fontSize)
         view.syncWorkingDirectory(workingDirectory)
+        if context.coordinator.lastUIColorSchemeID != uiColorSchemeID {
+            context.coordinator.lastUIColorSchemeID = uiColorSchemeID
+            view.applyUIColorScheme()
+        }
         let wasActive = context.coordinator.wasActive
         view.setActive(isActive)
         context.coordinator.wasActive = isActive
@@ -330,6 +343,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         var lastRestartRequestID: UInt64 = 0
         var lastClearRequestID: UInt64 = 0
         var lastCommandTicket: UInt64 = 0
+        var lastUIColorSchemeID = ""
         var wasActive = false
     }
 }
@@ -340,6 +354,7 @@ struct IDETerminalPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
                 IDETerminalTabsBar()
@@ -399,6 +414,7 @@ struct IDETerminalPanel: View {
                         isActive: workspace.isTerminalVisible && isSelected,
                         fontName: workspace.preferences.fontName,
                         fontSize: workspace.preferences.fontSize,
+                        uiColorSchemeID: workspace.preferences.uiColorSchemeID,
                         focusRequestID: workspace.terminalFocusRequestID,
                         restartRequestID: tab.restartRequestID,
                         clearRequestID: tab.clearRequestID,
@@ -408,6 +424,7 @@ struct IDETerminalPanel: View {
                         onDirectoryUpdate: { workspace.updateTerminalTabDirectory(tab.id, url: $0) }
                     )
                     .id(tab.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(isSelected ? 1 : 0)
                     .allowsHitTesting(isSelected)
                 }
@@ -418,6 +435,7 @@ struct IDETerminalPanel: View {
                         fontName: workspace.preferences.fontName,
                         fontSize: workspace.preferences.fontSize
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(workspace.isGradleConsoleSelected ? 1 : 0)
                     .allowsHitTesting(workspace.isGradleConsoleSelected)
                 }
@@ -428,48 +446,56 @@ struct IDETerminalPanel: View {
                         fontName: workspace.preferences.fontName,
                         fontSize: workspace.preferences.fontSize
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(workspace.isHTTPConsoleSelected ? 1 : 0)
                     .allowsHitTesting(workspace.isHTTPConsoleSelected)
                 }
 
                 if workspace.showsProblemsTab {
                     IDEProblemsPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isProblemsSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isProblemsSelected)
                 }
 
                 if workspace.showsTypeHierarchyTab {
                     IDETypeHierarchyPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isTypeHierarchySelected ? 1 : 0)
                         .allowsHitTesting(workspace.isTypeHierarchySelected)
                 }
 
                 if workspace.showsUsagesTab {
                     IDEUsagesPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isUsagesSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isUsagesSelected)
                 }
 
                 if workspace.showsTestResultsTab {
                     IDETestResultsPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isTestResultsSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isTestResultsSelected)
                 }
 
                 if workspace.showsDebugTab {
                     IDEDebugPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isDebugSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isDebugSelected)
                 }
 
                 if workspace.showsCallHierarchyTab {
                     IDECallHierarchyPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isCallHierarchySelected ? 1 : 0)
                         .allowsHitTesting(workspace.isCallHierarchySelected)
                 }
 
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isSourceControlSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isSourceControlSelected)
                 }

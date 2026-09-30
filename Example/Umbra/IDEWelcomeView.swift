@@ -51,6 +51,28 @@ struct IDEWelcomeView: View {
     @State private var parallax = IDEWelcomeParallax()
 
     var body: some View {
+        // The content cannot shrink, so without a scroll view a short editor area (terminal open)
+        // would grow the whole root layout past the window instead of clipping.
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                content
+                    .frame(minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location): parallax.pointer = location
+            case .ended: parallax.pointer = nil
+            }
+        }
+        .background {
+            IDEWelcomeBackdrop(kind: workspace.preferences.welcomeBackground, parallax: parallax)
+        }
+    }
+
+    private var content: some View {
         HStack(spacing: 0) {
             Spacer(minLength: IDEAppearance.Spacing.xxl)
 
@@ -81,16 +103,7 @@ struct IDEWelcomeView: View {
 
             Spacer(minLength: IDEAppearance.Spacing.xxl)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let location): parallax.pointer = location
-            case .ended: parallax.pointer = nil
-            }
-        }
-        .background {
-            IDEWelcomeBackdrop(kind: workspace.preferences.welcomeBackground, parallax: parallax)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -518,5 +531,5 @@ private struct IDEWelcomeStarfield: View {
 #Preview {
     IDEWelcomeView()
         .environment(IDEWorkspace())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

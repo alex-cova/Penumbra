@@ -5,6 +5,16 @@ import SwiftUI
 /// Shared design tokens for the Umbra shell.
 /// VARIANCE 7 · DENSITY 8
 enum IDEAppearance {
+    nonisolated(unsafe) private(set) static var scheme: IDEUIColorScheme = IDEUmbraUIColorScheme.shared
+
+    @MainActor
+    static func applyUIColorScheme(_ scheme: IDEUIColorScheme) {
+        self.scheme = scheme
+    }
+
+    static var preferredColorScheme: ColorScheme {
+        scheme.isDark ? .dark : .light
+    }
     enum Spacing {
         static let xs = 4.0
         static let sm = 8.0
@@ -79,47 +89,47 @@ enum IDEAppearance {
 
     enum ColorToken {
         /// The window frame the floating panels sit on: titlebar, stripes, gaps, status bar.
-        static let window = Color(hex: 0x0B0B0D)
+        static var window: Color { Color(hex: scheme.window) }
         /// Floating panel (card) fill and outline.
-        static let panel = Color(hex: 0x18181B)
-        static let panelBorder = Color.white.opacity(0.05)
-        static let card = Color(hex: 0x27272B)
-        static let workbench = Color(hex: 0x101012)
-        static let sidebar = Color(hex: 0x18181B)
-        static let editor = Color(hex: 0x101012)
-        static let tabBar = Color(hex: 0x18181B)
-        static let tabActive = Color(hex: 0x2A2A30)
+        static var panel: Color { Color(hex: scheme.panel) }
+        static var panelBorder: Color { Color(hex: scheme.panelBorder) }
+        static var card: Color { Color(hex: scheme.card) }
+        static var workbench: Color { Color(hex: scheme.workbench) }
+        static var sidebar: Color { Color(hex: scheme.sidebar) }
+        static var editor: Color { Color(hex: scheme.editor) }
+        static var tabBar: Color { Color(hex: scheme.tabBar) }
+        static var tabActive: Color { Color(hex: scheme.tabActive) }
         static let tabInactive = Color.clear
-        static let tabHover = Color(hex: 0x1C1C20)
-        static let controlHover = Color.white.opacity(0.06)
-        static let border = Color.white.opacity(0.08)
-        static let accent = Color(hex: 0x74ADE8)
-        static let run = Color(hex: 0x3DDC84)
-        static let foreground = Color(hex: 0xECEDEE)
-        static let muted = Color(hex: 0x8A8F98)
-        static let selection = Color(hex: 0x74ADE8).opacity(0.18)
-        static let error = Color(hex: 0xE5484D)
-        static let gitModified = Color(hex: 0xE2C08D)
-        static let gitAdded = Color(hex: 0x73C991)
-        static let gitUntracked = Color(hex: 0x73C991)
-        static let gitConflict = Color(hex: 0xE5484D)
-        static let gitIgnored = Color(hex: 0x8A8F98).opacity(0.55)
-        static let sourceRoot = Color(hex: 0x74ADE8)
-        static let testSourceRoot = Color(hex: 0x73C991)
-        static let resourcesFolder = Color(hex: 0xD7A35B)
+        static var tabHover: Color { Color(hex: scheme.tabHover) }
+        static var controlHover: Color { Color(hex: scheme.controlHover) }
+        static var border: Color { Color(hex: scheme.border) }
+        static var accent: Color { Color(hex: scheme.accent) }
+        static var run: Color { Color(hex: scheme.run) }
+        static var foreground: Color { Color(hex: scheme.foreground) }
+        static var muted: Color { Color(hex: scheme.muted) }
+        static var selection: Color { Color(hex: scheme.selectionAccent).opacity(scheme.selectionOpacity) }
+        static var error: Color { Color(hex: scheme.error) }
+        static var gitModified: Color { Color(hex: scheme.gitModified) }
+        static var gitAdded: Color { Color(hex: scheme.gitAdded) }
+        static var gitUntracked: Color { Color(hex: scheme.gitUntracked) }
+        static var gitConflict: Color { Color(hex: scheme.gitConflict) }
+        static var gitIgnored: Color { Color(hex: scheme.muted).opacity(scheme.gitIgnoredOpacity) }
+        static var sourceRoot: Color { Color(hex: scheme.sourceRoot) }
+        static var testSourceRoot: Color { Color(hex: scheme.testSourceRoot) }
+        static var resourcesFolder: Color { Color(hex: scheme.resourcesFolder) }
     }
 
     enum NSToken {
-        static let window = ns(0x0B0B0D)
-        static let workbench = ns(0x101012)
-        static let editor = ns(0x101012)
-        static let sidebar = ns(0x18181B)
-        static let border = NSColor.white.withAlphaComponent(0.08)
-        static let accent = ns(0x74ADE8)
-        static let foreground = ns(0xECEDEE)
-        static let muted = ns(0x8A8F98)
-        static let selection = ns(0x74ADE8).withAlphaComponent(0.18)
-        static let error = ns(0xE5484D)
+        static var window: NSColor { ns(scheme.window) }
+        static var workbench: NSColor { ns(scheme.workbench) }
+        static var editor: NSColor { ns(scheme.editor) }
+        static var sidebar: NSColor { ns(scheme.sidebar) }
+        static var border: NSColor { ns(scheme.border) }
+        static var accent: NSColor { ns(scheme.accent) }
+        static var foreground: NSColor { ns(scheme.foreground) }
+        static var muted: NSColor { ns(scheme.muted) }
+        static var selection: NSColor { ns(scheme.selectionAccent).withAlphaComponent(scheme.selectionOpacity) }
+        static var error: NSColor { ns(scheme.error) }
 
         private static func ns(_ hex: UInt32) -> NSColor {
             NSColor(
@@ -205,6 +215,13 @@ enum IDEUIFonts {
 }
 
 extension View {
+    /// Settings scroll views use a solid scheme surface instead of the default vibrancy, which
+    /// stays dark even when a light UI theme is active.
+    func ideSettingsScrollSurface() -> some View {
+        scrollContentBackground(.hidden)
+            .background(IDEAppearance.ColorToken.workbench)
+    }
+
     /// Floating-panel chrome: the content becomes a rounded card sitting on the window frame
     /// (`ColorToken.window`), with a faint outline so adjacent cards separate without hairlines.
     func idePanel(fill: Color = IDEAppearance.ColorToken.panel) -> some View {

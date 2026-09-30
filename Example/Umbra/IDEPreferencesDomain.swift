@@ -35,7 +35,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
         case .editor:
             ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts"]
         case .appearance:
-            ["ui font", "ui font size", "interface font", "sf compact", "welcome", "background", "starfield", "deep space", "stars", "animation"]
+            ["ui theme", "color scheme", "appearance", "visual studio", "resharper", "umbra light", "interface", "ui font", "ui font size", "interface font", "sf compact", "welcome", "background", "starfield", "deep space", "stars", "animation"]
         case .focus:
             ["typewriter", "distraction free", "focus mode", "writing"]
         case .project:

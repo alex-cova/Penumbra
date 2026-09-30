@@ -4,6 +4,7 @@ struct IDEStatusBarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = workspace.uiColorSchemeEpoch
         HStack(spacing: IDEAppearance.Spacing.sm) {
             IDEStatusBarBreadcrumb(
                 headerContext: workspace.headerContext,
@@ -257,5 +258,5 @@ private struct IDEStatusBarBreadcrumbSegment: View {
             workspace.statusLanguage = "javascript"
             return workspace
         }())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

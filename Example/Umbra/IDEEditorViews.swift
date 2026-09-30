@@ -230,5 +230,5 @@ struct IDEEditorSplitChain: View {
     }
     .frame(width: 640, height: 360)
     .background(IDEAppearance.ColorToken.window)
-    .preferredColorScheme(.dark)
+    .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

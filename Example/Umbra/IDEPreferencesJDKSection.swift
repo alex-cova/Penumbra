@@ -84,13 +84,13 @@ struct IDEPreferencesJDKSection: View {
                             .font(.caption2)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(.quaternary, in: Capsule())
-                            .foregroundStyle(.secondary)
+                            .background(IDEAppearance.ColorToken.card, in: Capsule())
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
                 }
                 Text(installation.home.path)
                     .font(IDEAppearance.Typography.monoCaption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }

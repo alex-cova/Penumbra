@@ -27,7 +27,7 @@ final class IDERefactoringNamePrompt: NSObject, NSPopoverDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: view.preferredColorScheme(.dark))
+        popover.contentViewController = NSHostingController(rootView: view.preferredColorScheme(IDEAppearance.preferredColorScheme))
         self.popover = popover
         let caret = textView.caretRectInViewport(at: anchorRange.location)
         let anchor = caret.isEmpty ? CGRect(x: 0, y: 0, width: 1, height: 16) : caret.insetBy(dx: 0, dy: -1)

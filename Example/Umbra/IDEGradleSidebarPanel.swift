@@ -832,5 +832,5 @@ private struct IDEGradleSidebarPlaceholder: View {
     }
     return Harness()
         .frame(width: 260, height: 520)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

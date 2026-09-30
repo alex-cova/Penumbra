@@ -605,6 +605,6 @@ private struct IDEFirstRunPlainButtonStyle: ButtonStyle {
 #Preview("First run guide") {
     IDEFirstRunGuideOverlay()
         .environment(IDEWorkspace())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .frame(width: 960, height: 640)
 }

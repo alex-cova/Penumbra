@@ -141,6 +141,8 @@ public final class IDEWorkspace {
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
     private(set) var layoutEpoch: UInt64 = 0
+    /// Bumped when the shell UI color scheme changes so chrome views pick up new tokens.
+    private(set) var uiColorSchemeEpoch: UInt64 = 0
     private(set) var activePaneID = UUID()
     /// Mirrors whether any document is open. `hasOpenDocuments` reads the workbench, which is
     /// not observable, so this stored flag is what refreshes the welcome-vs-editor switch.
@@ -2988,6 +2990,15 @@ public final class IDEWorkspace {
         }
         if let textView = adapter?.textView {
             updateStatus(from: textView)
+        }
+    }
+
+    func refreshUIColorScheme() {
+        uiColorSchemeEpoch += 1
+        for pane in workbench.panes {
+            let host = host(for: pane.id)
+            host.textView.backgroundColor = IDEAppearance.NSToken.editor
+            host.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         }
     }
 

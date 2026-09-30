@@ -544,12 +544,12 @@ private struct IDEInlineRenameField: NSViewRepresentable {
     )
     .frame(width: 240, height: 320)
     .background(IDEAppearance.ColorToken.sidebar)
-    .preferredColorScheme(.dark)
+    .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }
 
 #Preview("Empty") {
     IDEFileTreeView(project: IDEProjectModel(), onOpenFile: { _ in }, collapsedWhileFiltering: .constant([]))
         .frame(width: 240, height: 320)
         .background(IDEAppearance.ColorToken.sidebar)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

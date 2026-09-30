@@ -88,6 +88,7 @@ final class ThemeCatalogTests: XCTestCase {
         let lightFirst = ThemeCatalog.palettes(preferring: false)
         XCTAssertEqual(lightFirst.first?.isDark, false)
     }
+
 }
 
 final class PaletteThemeTests: XCTestCase {

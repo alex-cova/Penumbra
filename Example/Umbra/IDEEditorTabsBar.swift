@@ -169,5 +169,5 @@ private struct IDEEditorTabCloseButton: View {
             ]
             return workspace
         }())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

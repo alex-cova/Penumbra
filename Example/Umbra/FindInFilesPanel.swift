@@ -370,5 +370,5 @@ private struct FindInFilesEmptyState: View {
             ]
             return workspace
         }())
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

@@ -5,6 +5,14 @@ struct IDEPreferencesAppearancePane: View {
     @Bindable var preferences: IDEPreferences
 
     var body: some View {
+        IDESettingsSection("Color Scheme") {
+            IDESettingsPicker("UI Theme", selection: $preferences.uiColorSchemeID) {
+                ForEach(IDEUIColorSchemeCatalog.schemes(preferringDark: true)) { scheme in
+                    Text(scheme.name).tag(scheme.id)
+                }
+            }
+        }
+
         IDESettingsSection("Interface") {
             IDESettingsPicker("UI Font", selection: $preferences.uiFontName) {
                 ForEach(IDEUIFonts.choices(including: preferences.uiFontName), id: \.self) { familyName in

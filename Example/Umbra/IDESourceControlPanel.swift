@@ -989,5 +989,5 @@ struct IDESourceControlControls: View {
     }())
     .environment(IDEWorkspace())
     .frame(width: 720, height: 320)
-    .preferredColorScheme(.dark)
+    .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

@@ -87,7 +87,7 @@ struct IDEPreferencesTypePreview: View {
                         .textCase(.uppercase)
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -311,6 +311,7 @@ struct IDESettingsPicker<Selection: Hashable, Content: View>: View {
         IDESettingsRow(title) {
             Picker(title, selection: $selection) { content }
                 .labelsHidden()
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .frame(width: 260, alignment: .leading)
         }
     }
@@ -337,5 +338,6 @@ struct IDESettingsPage<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollIndicators(.automatic)
+        .ideSettingsScrollSurface()
     }
 }

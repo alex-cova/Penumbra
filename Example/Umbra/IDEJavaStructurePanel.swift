@@ -181,5 +181,5 @@ private struct IDEJavaStructureRowView: View {
             return workspace
         }())
         .frame(width: 220, height: 320)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

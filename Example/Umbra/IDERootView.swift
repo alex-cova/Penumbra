@@ -19,6 +19,8 @@ public struct IDERootView: View {
         let _ = workspace.showsWelcome
         let _ = workspace.preferences.uiFontName
         let _ = workspace.preferences.uiFontSize
+        let _ = workspace.preferences.uiColorSchemeID
+        let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             IDEToolbarPanel()
                 .frame(height: titlebarHeight)
@@ -68,6 +70,8 @@ public struct IDERootView: View {
                         .overlay {
                             if workspace.isSettingsVisible {
                                 IDEPreferencesView(preferences: workspace.preferences)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(IDEAppearance.ColorToken.workbench)
                                     .transition(.opacity)
                             }
                         }
@@ -118,6 +122,7 @@ public struct IDERootView: View {
             }
 
             IDEStatusBarPanel()
+                .id(workspace.uiColorSchemeEpoch)
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
         }
@@ -128,7 +133,11 @@ public struct IDERootView: View {
         }
         // The frame color is `NSWindow.backgroundColor` (set in `IDEWindowConfiguratorView`); an
         // opaque SwiftUI fill here would paint over the traffic lights.
-        .background(IDEWindowConfigurator(title: workspace.windowTitle, workspace: workspace))
+        .background(IDEWindowConfigurator(
+            title: workspace.windowTitle,
+            workspace: workspace,
+            uiColorSchemeID: workspace.preferences.uiColorSchemeID
+        ))
         .overlay {
             IDEPaletteOverlayHost(workspace: workspace)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -171,7 +180,7 @@ public struct IDERootView: View {
             if let configuration = workspace.runConfigurationDraft {
                 IDERunConfigurationSheet(configuration: configuration)
                     .environment(workspace)
-                    .preferredColorScheme(.dark)
+                    .preferredColorScheme(IDEAppearance.preferredColorScheme)
             }
         }
         .sheet(item: Binding(
@@ -180,9 +189,13 @@ public struct IDERootView: View {
         )) { model in
             IDEWorkspaceEditPreviewSheet(model: model)
                 .environment(workspace)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
-        .preferredColorScheme(.dark)
+        .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in
+            workspace.refreshUIColorScheme()
+        }
         .task {
             guard !didBootstrap else { return }
             didBootstrap = true
@@ -393,6 +406,7 @@ private struct IDEResizeDragArea: NSViewRepresentable {
 private struct IDEWindowConfigurator: NSViewRepresentable {
     let title: String
     let workspace: IDEWorkspace
+    let uiColorSchemeID: String
 
     func makeCoordinator() -> Coordinator {
         Coordinator(workspace: workspace)

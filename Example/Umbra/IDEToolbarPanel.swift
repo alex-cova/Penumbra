@@ -352,5 +352,5 @@ private struct IDEToolbarIconLabel: View {
             return workspace
         }())
         .frame(width: 720, height: IDEAppearance.Spacing.titlebarMinHeight)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }

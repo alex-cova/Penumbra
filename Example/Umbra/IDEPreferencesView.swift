@@ -22,6 +22,7 @@ public struct IDEPreferencesView: View {
     }
 
     public var body: some View {
+        let _ = preferences.uiColorSchemeID
         VStack(spacing: 0) {
             IDESettingsTabHeader(onClose: workspace.hideSettings)
             searchField
@@ -33,11 +34,15 @@ public struct IDEPreferencesView: View {
                     .frame(width: 1)
                 detail
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(IDEAppearance.ColorToken.workbench)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.workbench)
+        .id(preferences.uiColorSchemeID)
         .onExitCommand(perform: workspace.hideSettings)
-        .preferredColorScheme(.dark)
+        .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .tint(IDEAppearance.ColorToken.accent)
         .modifier(IDEPreferencesLiveUpdateModifier(preferences: preferences, workspace: workspace))
     }
@@ -49,6 +54,7 @@ public struct IDEPreferencesView: View {
                 .accessibilityHidden(true)
             TextField("Search settings", text: $query)
                 .textFieldStyle(.plain)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .focused($searchFocused)
                 .onSubmit {
                     if let first = visibleDomains.first { selectedDomain = first }
@@ -102,6 +108,7 @@ public struct IDEPreferencesView: View {
             }
             .padding(IDEAppearance.Spacing.sm)
         }
+        .ideSettingsScrollSurface()
     }
 
     @ViewBuilder
@@ -224,5 +231,5 @@ private struct IDEPreferencesSidebarRow: View {
     IDEPreferencesView(preferences: IDEPreferences.shared)
         .environment(IDEWorkspace())
         .frame(width: 880, height: 600)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }
