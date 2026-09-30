@@ -24,8 +24,15 @@ struct IDEPreferencesAppearancePane: View {
 
         IDESettingsSection("Welcome Page") {
             IDESettingsPicker("Background", selection: $preferences.welcomeBackground) {
-                ForEach(IDEWelcomeBackground.allCases) { background in
-                    Text(background.title).tag(background)
+                Section("Built-in") {
+                    ForEach(IDEWelcomeBackground.allCases.filter { !$0.isReactBits }) { background in
+                        Text(background.title).tag(background)
+                    }
+                }
+                Section("React Bits") {
+                    ForEach(IDEWelcomeBackground.allCases.filter(\.isReactBits)) { background in
+                        Text(background.title).tag(background)
+                    }
                 }
             }
         }

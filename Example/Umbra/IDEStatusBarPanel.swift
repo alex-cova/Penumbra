@@ -7,6 +7,7 @@ struct IDEStatusBarPanel: View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             IDEStatusBarBreadcrumb(
                 headerContext: workspace.headerContext,
+                makeMenu: workspace.breadcrumbMenu,
                 onSelect: workspace.selectBreadcrumb
             )
             // Takes whatever the row has left, so the trailing items never truncate.
@@ -155,6 +156,7 @@ struct IDEStatusBarPanel: View {
 
 private struct IDEStatusBarBreadcrumb: View {
     let headerContext: IDEHeaderContext
+    let makeMenu: (IDEBreadcrumbItem) async -> NSMenu?
     let onSelect: (IDEBreadcrumbItem) -> Void
 
     var body: some View {
@@ -171,7 +173,8 @@ private struct IDEStatusBarBreadcrumb: View {
                     IDEStatusBarBreadcrumbSegment(
                         item: item,
                         isLast: index == items.count - 1,
-                        action: { onSelect(item) }
+                        makeMenu: makeMenu,
+                        onSelect: onSelect
                     )
                 }
                 if headerContext.isDirty {
@@ -192,17 +195,26 @@ private struct IDEStatusBarBreadcrumb: View {
 private struct IDEStatusBarBreadcrumbSegment: View {
     let item: IDEBreadcrumbItem
     let isLast: Bool
-    let action: () -> Void
+    let makeMenu: (IDEBreadcrumbItem) async -> NSMenu?
+    let onSelect: (IDEBreadcrumbItem) -> Void
 
     @State private var isHovering = false
+    @State private var isMenuOpen = false
+    @State private var anchor = IDEMenuAnchor()
 
     var body: some View {
-        Button(action: action) {
+        Button(action: openMenu) {
             Text(item.title)
                 .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
-                .foregroundStyle(isLast || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .foregroundStyle(isLast || isHovering || isMenuOpen ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .padding(.horizontal, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
+                )
         }
         .buttonStyle(.plain)
+        .background(IDEMenuAnchorView(anchor: anchor))
         .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(item.title)
@@ -211,12 +223,27 @@ private struct IDEStatusBarBreadcrumbSegment: View {
         .focusable(false)
     }
 
+    private func openMenu() {
+        Task { @MainActor in
+            guard let menu = await makeMenu(item) else {
+                onSelect(item)
+                return
+            }
+            isMenuOpen = true
+            // Returns once the menu closes.
+            anchor.popUp(menu)
+            isMenuOpen = false
+        }
+    }
+
     private var help: String {
         switch item.target {
         case .folder:
-            "Reveal \(item.title) in Explorer"
+            "Show the contents of \(item.title)"
+        case .file:
+            "Switch to another file in this folder"
         case .symbol:
-            "Go to \(item.title)"
+            "Show the members around \(item.title)"
         }
     }
 }

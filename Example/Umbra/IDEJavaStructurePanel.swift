@@ -143,25 +143,9 @@ private struct IDEJavaStructureRowView: View {
         }
     }
 
-    private var kindSymbol: String {
-        switch row.node.kind {
-        case .type: return "c.circle.fill"
-        case .field: return "f.circle.fill"
-        case .method, .constructor: return "m.circle.fill"
-        case .enumConstant: return "e.circle.fill"
-        case .recordComponent: return "r.circle.fill"
-        }
-    }
+    private var kindSymbol: String { row.node.kind.iconSystemName }
 
-    private var kindTint: Color {
-        switch row.node.kind {
-        case .type: return .blue
-        case .field: return .purple
-        case .method, .constructor: return .orange
-        case .enumConstant: return .green
-        case .recordComponent: return .teal
-        }
-    }
+    private var kindTint: Color { Color(nsColor: row.node.kind.iconTint) }
 }
 
 #Preview {

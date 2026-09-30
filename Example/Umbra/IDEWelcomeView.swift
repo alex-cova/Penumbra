@@ -4,6 +4,15 @@ import SwiftUI
 enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
     case starfield
     case deepSpace
+    case gradientWaves
+    case moltenMetal
+    case galaxy
+    case liquidChrome
+    case evilEye
+    case pixelSnow
+    case particles
+    case dotField
+    case aeroShards
     case none
 
     var id: String { rawValue }
@@ -12,7 +21,27 @@ enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
         switch self {
         case .starfield: "Starfield"
         case .deepSpace: "Deep Space"
+        case .gradientWaves: "Gradient Waves"
+        case .moltenMetal: "Molten Metal"
+        case .galaxy: "Galaxy"
+        case .liquidChrome: "Liquid Chrome"
+        case .evilEye: "Evil Eye"
+        case .pixelSnow: "Pixel Snow"
+        case .particles: "Particles"
+        case .dotField: "Dot Field"
+        case .aeroShards: "Aero Shards"
         case .none: "None"
+        }
+    }
+
+    /// Built-in Umbra backgrounds vs React Bits ports.
+    var isReactBits: Bool {
+        switch self {
+        case .gradientWaves, .moltenMetal, .galaxy, .liquidChrome, .evilEye,
+             .pixelSnow, .particles, .dotField, .aeroShards:
+            true
+        case .starfield, .deepSpace, .none:
+            false
         }
     }
 }
@@ -76,6 +105,33 @@ private struct IDEWelcomeBackdrop: View {
                 .background(IDEAppearance.ColorToken.editor)
         case .deepSpace:
             IDEWelcomeDeepSpace(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .gradientWaves:
+            IDEWelcomeGradientWaves(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .moltenMetal:
+            IDEWelcomeMoltenMetal(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .galaxy:
+            IDEWelcomeGalaxy(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .liquidChrome:
+            IDEWelcomeLiquidChrome(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .evilEye:
+            IDEWelcomeEvilEye(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .pixelSnow:
+            IDEWelcomePixelSnow(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .particles:
+            IDEWelcomeParticles(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .dotField:
+            IDEWelcomeDotField(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .aeroShards:
+            IDEWelcomeAeroShards(parallax: parallax)
                 .background(IDEAppearance.ColorToken.editor)
         case .none:
             IDEAppearance.ColorToken.editor

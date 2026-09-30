@@ -34,10 +34,12 @@ extension IDETerminalTab: Codable {
     }
 }
 
-/// One segment in the toolbar breadcrumb. Folders reveal in the Explorer; symbols jump in-file.
+/// One segment in the status bar breadcrumb. A folder lists its contents and a file its
+/// siblings, to switch files; a symbol lists the enclosing type's members (Java) or jumps in-file.
 struct IDEBreadcrumbItem: Equatable, Identifiable {
     enum Target: Equatable {
         case folder(URL)
+        case file(URL)
         case symbol(EditorIntelligence.TextRange)
     }
 
@@ -46,8 +48,7 @@ struct IDEBreadcrumbItem: Equatable, Identifiable {
     let target: Target
 }
 
-/// Folder path plus enclosing symbols for the active document. Empty when nothing is open.
-/// The filename is omitted: the tab already shows it.
+/// Folder path, filename and enclosing symbols for the active document. Empty when nothing is open.
 struct IDEHeaderContext: Equatable {
     var documentID: UUID?
     var pathItems: [IDEBreadcrumbItem] = []
@@ -201,8 +202,8 @@ public final class IDEWorkspace {
     @ObservationIgnored private let renamePrompt = IDERenamePrompt()
     @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
     @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
-    private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
     @ObservationIgnored private let generatePrompt = IDEGeneratePrompt()
+    private let runConfigurationStore = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
     private let breakpointStore = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
@@ -845,12 +846,12 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.generateAccessors)
     }
 
-    /// Inlines the local variable at the caret (⌥⌘N).
     /// Generates a constructor, getters/setters or `toString()` in the class at the caret.
     func generate() {
         _ = host(for: workbench.activePane.id).textView.perform(.generate)
     }
 
+    /// Inlines the local variable at the caret (⌥⌘N).
     func inlineVariable() {
         _ = host(for: workbench.activePane.id).textView.perform(.inlineVariable)
     }
@@ -3291,11 +3292,11 @@ public final class IDEWorkspace {
             guard let self, let textView = host?.textView else { return completion(nil) }
             self.changeSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
         }
-        host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
         host.intelligenceController?.onRequestGeneration = { [weak self, weak host] menu, completion in
             guard let self, let textView = host?.textView else { return completion(nil) }
             self.generatePrompt.present(menu: menu, in: textView, completion: completion)
         }
+        host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
             guard let self else { return WorkspaceEditApplyResult() }
             return await IDEWorkspaceEditApplier(host: self).apply(edit)
         }
@@ -4274,12 +4275,64 @@ public final class IDEWorkspace {
         }
     }
 
-    func selectBreadcrumb(_ item: IDEBreadcrumbItem) {
+    /// What a click on a breadcrumb segment opens: the folder's contents, the file's siblings, or
+    /// the Java type around a symbol. `nil` means there is nothing to list, so the segment acts
+    /// directly (`selectBreadcrumb`).
+    func breadcrumbMenu(for item: IDEBreadcrumbItem) async -> NSMenu? {
+        let open: (URL) -> Void = { [weak self] url in
+            Task { await self?.openDocument(from: url) }
+        }
         switch item.target {
         case .folder(let url):
+            return IDEBreadcrumbMenu.directoryMenu(
+                url,
+                current: workbench.activePane.selectedDocument?.url,
+                onOpen: open,
+                onReveal: { [weak self] in self?.revealInSidebar(url) }
+            )
+        case .file(let url):
+            return IDEBreadcrumbMenu.directoryMenu(
+                url.deletingLastPathComponent(),
+                current: url,
+                onOpen: open,
+                onReveal: { [weak self] in self?.revealInSidebar(url) }
+            )
+        case .symbol(let range):
+            return await javaStructureBreadcrumbMenu(for: range)
+        }
+    }
+
+    func selectBreadcrumb(_ item: IDEBreadcrumbItem) {
+        switch item.target {
+        case .folder(let url), .file(let url):
             revealInSidebar(url)
         case .symbol(let range):
             jumpToSymbol(range)
+        }
+    }
+
+    /// The type a Java breadcrumb symbol names (or the type enclosing it) with all its members,
+    /// the symbol checked. Other languages have no member outline here and return `nil`.
+    private func javaStructureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
+        guard statusLanguage == "java" else { return nil }
+        let text = host(for: workbench.activePaneID).textView.text
+        guard let roots = await javaSupport.structureProvider.allStructure(for: text) else { return nil }
+        let utf16Offset = min(max(range.start.utf16Offset, 0), text.utf16.count)
+        let byteOffset = text.utf8.distance(from: text.startIndex, to: String.Index(utf16Offset: utf16Offset, in: text))
+        // The path from a root to the segment's declaration, found by its name's start.
+        func path(to byteOffset: Int, in nodes: [JavaStructureNode]) -> [JavaStructureNode]? {
+            for node in nodes {
+                if node.nameByteRange.lowerBound == byteOffset { return [node] }
+                if node.bodyByteRange.contains(byteOffset), let rest = path(to: byteOffset, in: node.children) {
+                    return [node] + rest
+                }
+            }
+            return nil
+        }
+        guard let chain = path(to: byteOffset, in: roots), let target = chain.last else { return nil }
+        let container = target.kind == .type ? target : (chain.dropLast().last ?? target)
+        return IDEBreadcrumbMenu.structureMenu(container, selectedID: target.id) { [weak self] node in
+            self?.selectStructureNode(node)
         }
     }
 
@@ -4592,11 +4645,15 @@ public final class IDEWorkspace {
         _ = textView.focusTextInput()
     }
 
-    /// Folder crumbs leading to the active file, excluding the filename (the tab already shows
-    /// that). Project-relative when a folder is open; otherwise the last few parent directories.
+    /// Folder crumbs leading to the active file, then the file itself. Project-relative when a
+    /// folder is open; otherwise the last few parent directories.
     private func pathBreadcrumbItems(for document: WorkbenchDocument) -> [IDEBreadcrumbItem] {
-        guard let url = document.url else { return [] }
-        let directory = url.standardizedFileURL.deletingLastPathComponent()
+        guard let url = document.url?.standardizedFileURL else { return [] }
+        let fileItem = IDEBreadcrumbItem(id: "file:\(url.path)", title: url.lastPathComponent, target: .file(url))
+        return folderBreadcrumbItems(leadingTo: url.deletingLastPathComponent()) + [fileItem]
+    }
+
+    private func folderBreadcrumbItems(leadingTo directory: URL) -> [IDEBreadcrumbItem] {
         if let rootURL = project.rootURL {
             let root = rootURL.standardizedFileURL
             let directoryPath = directory.path

@@ -334,18 +334,17 @@ final class IDEProjectModel {
         return root
     }
 
-    /// One level of `path`, filtered and sorted like `buildNode`. Children whose id and kind match
-    /// `known` are returned without a node so the caller keeps its existing subtree.
-    nonisolated private static func listDirectory(_ path: String, known: [String: Bool]) -> DirectoryListing? {
-        let url = URL(fileURLWithPath: path)
+    /// One level of `directory` as the Explorer lists it: hidden and ignored names skipped, folders
+    /// first, then case-insensitive by name. `nil` when the folder can't be read.
+    nonisolated static func visibleEntries(of directory: URL) -> [(url: URL, isDirectory: Bool)]? {
         guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: url,
+            at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
             return nil
         }
-        let visible = entries.compactMap { entry -> (url: URL, isDirectory: Bool)? in
+        return entries.compactMap { entry -> (url: URL, isDirectory: Bool)? in
             let name = entry.lastPathComponent
             guard !name.hasPrefix("."), !ignoredDirectoryNames.contains(name) else { return nil }
             let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
@@ -355,6 +354,12 @@ final class IDEProjectModel {
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.url.lastPathComponent.localizedCaseInsensitiveCompare(rhs.url.lastPathComponent) == .orderedAscending
         }
+    }
+
+    /// One level of `path`, filtered and sorted like `buildNode`. Children whose id and kind match
+    /// `known` are returned without a node so the caller keeps its existing subtree.
+    nonisolated private static func listDirectory(_ path: String, known: [String: Bool]) -> DirectoryListing? {
+        guard let visible = visibleEntries(of: URL(fileURLWithPath: path)) else { return nil }
         let listed = visible.map { item -> DirectoryListing.Entry in
             let id = item.url.path
             if known[id] == item.isDirectory { return .init(id: id, node: nil) }

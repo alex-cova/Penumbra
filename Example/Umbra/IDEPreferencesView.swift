@@ -67,7 +67,7 @@ public struct IDEPreferencesView: View {
         }
         .font(IDEAppearance.Typography.body)
         .padding(.horizontal, IDEAppearance.Spacing.md)
-        .frame(height: 32)
+        .frame(width: 240, height: 32)
         .background(
             IDEAppearance.ColorToken.panel,
             in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
@@ -82,6 +82,7 @@ public struct IDEPreferencesView: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.lg)
         .padding(.vertical, IDEAppearance.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sidebar: some View {
@@ -101,7 +102,6 @@ public struct IDEPreferencesView: View {
             }
             .padding(IDEAppearance.Spacing.sm)
         }
-        .background(IDEAppearance.ColorToken.sidebar)
     }
 
     @ViewBuilder

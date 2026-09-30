@@ -27,6 +27,15 @@ Umbra's split panes (`Example/Umbra/SplitView/`) are vendored from
 `Example/Umbra/SplitView/LICENSE`), by way of the Hextech app. They are compiled into the Umbra
 app only, not into `Penumbra`.
 
+## Umbra welcome backgrounds (React Bits)
+
+Umbra's welcome-page animated backgrounds (`Example/Umbra/WelcomeBackgrounds/`) are
+native Metal and SwiftUI ports inspired by [davidhdev/react-bits](https://github.com/davidhdev/react-bits)
+(MIT + Commons Clause; see upstream `LICENSE.md`). The ported shaders and effects are used
+inside the Umbra app only, not redistributed as a standalone component library. Aero Shards
+is an Umbra approximation — the upstream component uses the `vgpu` runtime and was not
+ported line-for-line.
+
 ## Bundled Tree-sitter grammars
 
 The `PenumbraLanguages`, `PenumbraGraphQLLanguage`, and `PenumbraMarkdownLanguage`

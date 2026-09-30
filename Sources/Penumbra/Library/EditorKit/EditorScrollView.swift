@@ -14,12 +14,19 @@ open class EditorScrollView: EditorView {
             storedContentOffset
         }
         set {
-            guard newValue != storedContentOffset else { return }
+            animatedScrollTarget = nil
+            guard newValue != storedContentOffset else {
+                syncClipViewWithContentOffset()
+                return
+            }
             storedContentOffset = newValue
             clipView.scroll(to: newValue)
             onDidScroll?()
         }
     }
+    /// The target of an in-flight animated scroll, during which the clip view legitimately lags
+    /// `contentOffset`.
+    private var animatedScrollTarget: CGPoint?
 
     /// The clip view's actual bounds origin. Equal to `contentOffset` for direct scrolls, but
     /// during an animated `setContentOffset(_:animationDuration:)` this tracks the in-flight
@@ -107,17 +114,34 @@ open class EditorScrollView: EditorView {
             return
         }
         storedContentOffset = offset
+        animatedScrollTarget = offset
         onDidScroll?()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             clipView.animator().setBoundsOrigin(offset)
+        } completionHandler: { [weak self] in
+            guard let self, self.animatedScrollTarget == offset else { return }
+            self.animatedScrollTarget = nil
+            self.syncClipViewWithContentOffset()
         }
     }
 
     /// Stops a pending animated scroll at the current target.
     open func cancelAnimatedScrolling() {
+        animatedScrollTarget = nil
         clipView.layer?.removeAllAnimations()
+        clipView.scroll(to: storedContentOffset)
+    }
+
+    /// AppKit re-clamps the clip view's origin when the document container shrinks (a restored
+    /// scroll position followed by a `setState` or a resize that briefly shortens the content),
+    /// but nothing moves it back when the content grows again. `contentOffset` drives layout and
+    /// the fixed Metal canvas, the clip view shows the views inside the container — gutter line
+    /// numbers, line markers — so the two then disagree: the gutter is shifted and the rows above
+    /// the laid-out band are blank. Keep the clip view at `contentOffset`.
+    private func syncClipViewWithContentOffset() {
+        guard animatedScrollTarget == nil, clipView.bounds.origin != storedContentOffset else { return }
         clipView.scroll(to: storedContentOffset)
     }
     private func updateDocumentViewFrame() {
@@ -137,6 +161,7 @@ open class EditorScrollView: EditorView {
         if clipView.documentView !== documentContainer {
             clipView.documentView = documentContainer
         }
+        syncClipViewWithContentOffset()
     }
     override open func layout() {
         isInLayout = true
