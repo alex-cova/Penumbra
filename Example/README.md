@@ -33,7 +33,8 @@ Pre-built releases are published on [GitHub Releases](https://github.com/alex-co
 **Workbench**
 - Split editors (horizontal/vertical), tabbed panes
 - Command palette (⌘⇧P), go to line (⌘G)
-- Session restore: tabs, splits, caret, and last project folder
+- Multiple windows, one project each, optionally merged into native macOS tabs
+- Session restore: tabs, splits, caret, and the project folder of the window you used last
 
 ## Keyboard shortcuts
 
@@ -42,6 +43,7 @@ Umbra uses the **Sublime** keymap by default (change in Settings → Keymap).
 | Shortcut | Action |
 |----------|--------|
 | ⌘N | New file |
+| ⌘⇧N | New window |
 | ⌘O | Open file |
 | ⌘⇧O | Open folder |
 | ⌘S / ⌘⇧S | Save / Save As |
@@ -54,6 +56,19 @@ Umbra uses the **Sublime** keymap by default (change in Settings → Keymap).
 | ⌘\\ | Split editor right |
 | ⌘B | Toggle sidebar |
 | ⌘, | Settings |
+
+## Windows and projects
+
+Each window holds one project, with its own tabs, sidebar, terminal and index. File ▸ New Window (⌘⇧N) opens another; File ▸ New Window Tab, or Window ▸ Merge All Windows, puts them in one native tab bar (the system "Prefer tabs" setting applies to new windows).
+
+Opening a folder, from File ▸ Open Folder…, Open Recent, or by dropping it on a window:
+
+- A folder that is already open brings its window forward instead of opening a second copy.
+- An empty window (the Welcome screen) takes it.
+- A window that already has a project asks whether to open the folder in a new window or replace this window's project. "Remember my choice" sets Settings ▸ Project ▸ Open Folders; you can change it there later.
+- Folders and files opened from the Dock, Finder or `open -a Umbra <path>` get a new window without asking. A file opens in the window whose project contains it.
+
+Closing a window closes only its project. Quitting asks once if any window has unsaved editors. On the next launch Umbra restores the window you used last; your other projects are in File ▸ Open Recent.
 
 ## Development
 

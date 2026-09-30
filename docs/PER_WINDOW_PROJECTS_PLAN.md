@@ -1,14 +1,14 @@
 # Per-window projects in Umbra
 
-Status: proposal, design decisions settled (see "Decisions"). Nothing here is implemented.
+Status: phases 1 to 5 are implemented and committed on `main` (not pushed); phase 6 is partly done (performance check and docs; the manual checklist below has not been run end to end). Each phase below opens with an implementation status that says where the code differs from the original plan text that follows it; where they disagree, the status wins.
 
 ## Goal
 
 Every Umbra window owns one project (or none). Dropping a folder on the Dock icon, ⌘O on a folder, File ▸ Open Recent and `open -a Umbra <dir>` open that folder in its own window (or native window tab), next to the ones already open. Closing a window closes only its project. Quitting and relaunching brings back the last window; other projects come back through Open Recent.
 
-## Where we are today
+## Where we started (before this work)
 
-Umbra is one process with **one `IDEWorkspace`**, and every window shares it.
+This is the state the plan was written against, kept for context. Umbra was one process with **one `IDEWorkspace`**, and every window shared it.
 
 - `UmbraApp` holds `@State private var workspace = IDEWorkspace()` and injects it into each `WindowGroup(id: "main")` window (`Example/Umbra/UmbraApp.swift:7`). A second window (Dock reopen, `openWindow(id: "main")`) renders the same tabs, sidebar and project as the first, so the two are mirrors, not independent editors.
 - The whole menu bar (`.commands { … }`, ~200 lines) reads that captured `workspace` directly.
@@ -18,7 +18,7 @@ Umbra is one process with **one `IDEWorkspace`**, and every window shares it.
 - `IDEPreferences.shared` and `IDEEditorTheme.shared` are singletons, which is right for app-wide settings but means preferences are saved *through* the workspace session.
 - `IDEWorkspace` still reaches for `NSApp.keyWindow` / `NSApp.mainWindow` (lines ~149, 1573, 4897, 4927, 4949) instead of its own window.
 
-## Design decisions (recommended)
+## Design decisions
 
 1. **One `IDEWorkspace` per window**, created by the window's root view. No shared mutable project state between windows.
 2. **Same folder, same window.** Opening a folder that is already open in a window focuses that window instead of creating a second one. This removes the worst multi-writer cases (two Java indexes, two file watchers and two Gradle syncs on one tree) and matches VS Code and IntelliJ behavior. Two windows on one project can be a later, explicit feature.
@@ -145,6 +145,12 @@ Exit criteria: dropping three different folders on the Dock icon gives three win
 
 ### Phase 6 — Tests, docs, polish
 
+**Status: partly done.** Unit tests, the performance check and the docs are done. The manual checklist was not run as a whole; what each phase's running-app checks (scratch app bundle, `open -a`, accessibility scripting) did and did not cover:
+
+- Covered: Dock/Finder drop on cold and warm launch (`open -a <dir>`), several windows on different plain folders, folder-already-open focus, file routing, closing windows in any order, New Window with none open, the replace/new prompt, Zoom In reaching every window, merging windows into tabs and moving a tab out (windowed and full screen), closing windows with terminals, `swift run Umbra` without a bundle (launch, windows, menus).
+- **Not covered:** two windows on different *Gradle* projects (sync, build, debug in both) and the trust prompt across windows; Cmd-Q with unsaved editors (scripted typing never reached the editor, so the prompt itself was never seen); a theme change repainting another window (zoom was checked, not the theme picker); closing a tab in a tab group that has unsaved documents; relaunching with a tab group open; dragging a tab out with the mouse. These need a person at the keyboard, or an automation that can type into the editor.
+- Two unexplained exits of the scratch app a minute or two after closing a window that had a shell (see phase 5); not reproduced in four later attempts.
+
 - Unit tests (`Tests/PenumbraTests` is a library target; Umbra is an executable, so put the routing logic in a small pure type, e.g. `IDEOpenRouter`, that can be tested without AppKit): folder already open → focus; empty key window → reuse; user-initiated open with a populated key window → ask, with the `Open folders in` setting resolving to new/replace without asking; external open → new window without asking; file inside/outside a project; symlinked and trailing-slash paths; cold-launch queueing.
 - Session tests: migration from a real old `session.json`, `last-window.json` round trip, a corrupt `last-window.json` falls back to an empty window without losing app state, closing a background window does not overwrite the key window's saved state.
 - Manual checklist: Dock drop on cold and warm launch; two windows with different Gradle projects (sync, build, debug in both); Cmd-Q with dirty tabs in two windows; closing the first window then the second; changing theme in window A repaints B; `swift run Umbra` (no bundle) still works; merge windows into tabs and split them again, drag a tab out, close a tab with dirty documents, relaunch with a tab group open (only the key project returns).
@@ -164,6 +170,8 @@ Exit criteria: dropping three different folders on the Dock icon gives three win
 | Welcome / recents | `IDEWelcomeView.swift`, `UmbraApp.swift` Open Recent menu |
 
 ## Risks
+
+What became of them: the menu bar rewrite needed the weak-handle design (phase 5), retention was real and had four causes (phase 5), JDK memory is shared (phase 4), migration leaves `session.json` byte-identical (phase 2), and the tab bar overlapped the toolbar until the chrome was split (phase 1). The two-process risk is reduced, not solved. The original notes follow.
 
 - **Menu bar rewrite.** Moving to `@FocusedValue` means menu items are disabled while nothing is focused (for example during a sheet). Test every command that used to work with no window focused, such as Settings and Open Folder.
 - **Retention.** Any lingering strong reference keeps a closed project's index, watcher and terminals alive. Phase 5 verification is not optional.

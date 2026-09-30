@@ -11,7 +11,7 @@ Penumbra is a Swift Package Manager library: a high-performance plain text/code 
 - **`JavaIntelligence`** — native Java indexing, completion, navigation, diagnostics, refactoring, with **no dependency on `Penumbra`**. Umbra wires it through `Example/Umbra/IDEJavaSupport.swift`. Details: `Sources/JavaIntelligence/CLAUDE.md`.
 - **HTTP client** — `.http` parsing and sending live in the Umbra target (`Example/Umbra/HTTP/`), not a library; JavaIntelligence does not depend on it.
 - **`GitIntelligence`** (`Packages/GitIntelligence`) — its own dependency-free Swift package wrapping the git CLI; Umbra wires it through `IDEGitStatus`.
-- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**, built on `Penumbra`, `EditorIntelligence` and `JavaIntelligence`. Every split in the app is a `SplitPanes` (`Example/Umbra/SplitView/`) — don't add `HSplitView`/`NSSplitView` or hand-rolled drag handles. Details: `Example/Umbra/CLAUDE.md`.
+- **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**, built on `Penumbra`, `EditorIntelligence` and `JavaIntelligence`. Every window is one project with its own `IDEWorkspace` (`IDEWindowRegistry` finds them; native tabs are merged windows). Every split in the app is a `SplitPanes` (`Example/Umbra/SplitView/`) — don't add `HSplitView`/`NSSplitView` or hand-rolled drag handles. Details: `Example/Umbra/CLAUDE.md`.
 
 ## App Store safety
 
