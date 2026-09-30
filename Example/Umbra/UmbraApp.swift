@@ -19,81 +19,84 @@ struct UmbraApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             let preset = workspace.preferences.keymapPreset
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…", systemImage: "gearshape", action: workspace.showSettings)
-                    .keyboardShortcut(",", modifiers: .command)
-            }
-            CommandGroup(replacing: .newItem) {
-                Button("New File", systemImage: "doc.badge.plus", action: workspace.newFile)
-                    .menuShortcut(.newFile, in: preset)
-                Button("Open…", systemImage: "folder", action: workspace.openFile)
-                    .menuShortcut(.openFile, in: preset)
-                Button("Open Folder…", systemImage: "folder.badge.plus", action: workspace.openFolder)
-                    .menuShortcut(.openFolder, in: preset)
-                Button("Close Folder", systemImage: "folder.badge.minus", action: workspace.closeFolder)
-                    .disabled(!workspace.hasOpenProject)
-                Divider()
-                Button("Save", systemImage: "square.and.arrow.down") {
-                    Task { await workspace.saveActiveDocument() }
+            // `CommandsBuilder` only takes 10 children on older SDKs (Xcode 26.3 in CI); group to stay under.
+            Group {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…", systemImage: "gearshape", action: workspace.showSettings)
+                        .keyboardShortcut(",", modifiers: .command)
                 }
-                .menuShortcut(.save, in: preset)
-                Button("Save As…", systemImage: "square.and.arrow.down.on.square") {
-                    Task { await workspace.saveActiveDocumentAs() }
-                }
-                .menuShortcut(.saveAs, in: preset)
-                Divider()
-                Button("Close Tab", systemImage: "xmark", action: workspace.closeActiveTab)
-                    .menuShortcut(.closeTab, in: preset)
-                if !workspace.recentProjectURLs.isEmpty || !workspace.recentFileURLs.isEmpty {
+                CommandGroup(replacing: .newItem) {
+                    Button("New File", systemImage: "doc.badge.plus", action: workspace.newFile)
+                        .menuShortcut(.newFile, in: preset)
+                    Button("Open…", systemImage: "folder", action: workspace.openFile)
+                        .menuShortcut(.openFile, in: preset)
+                    Button("Open Folder…", systemImage: "folder.badge.plus", action: workspace.openFolder)
+                        .menuShortcut(.openFolder, in: preset)
+                    Button("Close Folder", systemImage: "folder.badge.minus", action: workspace.closeFolder)
+                        .disabled(!workspace.hasOpenProject)
                     Divider()
-                    Menu("Open Recent") {
-                        if !workspace.recentProjectURLs.isEmpty {
-                            ForEach(workspace.recentProjectURLs, id: \.path) { url in
-                                Button(url.lastPathComponent, systemImage: "folder") {
-                                    workspace.openRecentProject(url)
+                    Button("Save", systemImage: "square.and.arrow.down") {
+                        Task { await workspace.saveActiveDocument() }
+                    }
+                    .menuShortcut(.save, in: preset)
+                    Button("Save As…", systemImage: "square.and.arrow.down.on.square") {
+                        Task { await workspace.saveActiveDocumentAs() }
+                    }
+                    .menuShortcut(.saveAs, in: preset)
+                    Divider()
+                    Button("Close Tab", systemImage: "xmark", action: workspace.closeActiveTab)
+                        .menuShortcut(.closeTab, in: preset)
+                    if !workspace.recentProjectURLs.isEmpty || !workspace.recentFileURLs.isEmpty {
+                        Divider()
+                        Menu("Open Recent") {
+                            if !workspace.recentProjectURLs.isEmpty {
+                                ForEach(workspace.recentProjectURLs, id: \.path) { url in
+                                    Button(url.lastPathComponent, systemImage: "folder") {
+                                        workspace.openRecentProject(url)
+                                    }
+                                }
+                                if !workspace.recentFileURLs.isEmpty {
+                                    Divider()
                                 }
                             }
-                            if !workspace.recentFileURLs.isEmpty {
-                                Divider()
-                            }
-                        }
-                        ForEach(workspace.recentFileURLs, id: \.path) { url in
-                            Button(url.lastPathComponent, systemImage: "doc") {
-                                workspace.openRecentFile(url)
+                            ForEach(workspace.recentFileURLs, id: \.path) { url in
+                                Button(url.lastPathComponent, systemImage: "doc") {
+                                    workspace.openRecentFile(url)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // SwiftUI's default Undo/Redo items call the environment undo manager, which is
-            // not the editor's `TimedUndoManager`, and their ⌘Z / ⌘⇧Z equivalents consume the
-            // key before `TextInputView` sees it. Send the actions down the responder chain
-            // so the focused editor (or a focused text field) uses its own stack.
-            CommandGroup(replacing: .undoRedo) {
-                Button("Undo") {
-                    if !NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
-                        workspace.undoActiveEditor()
+                // SwiftUI's default Undo/Redo items call the environment undo manager, which is
+                // not the editor's `TimedUndoManager`, and their ⌘Z / ⌘⇧Z equivalents consume the
+                // key before `TextInputView` sees it. Send the actions down the responder chain
+                // so the focused editor (or a focused text field) uses its own stack.
+                CommandGroup(replacing: .undoRedo) {
+                    Button("Undo") {
+                        if !NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
+                            workspace.undoActiveEditor()
+                        }
                     }
-                }
-                .keyboardShortcut("z", modifiers: .command)
-                Button("Redo") {
-                    if !NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
-                        workspace.redoActiveEditor()
+                    .keyboardShortcut("z", modifiers: .command)
+                    Button("Redo") {
+                        if !NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
+                            workspace.redoActiveEditor()
+                        }
                     }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-            }
 
-            CommandGroup(after: .pasteboard) {
-                Button("Find…", systemImage: "magnifyingglass", action: workspace.showFind)
-                    .menuShortcut(.find, in: preset)
-                Button("Replace…", systemImage: "arrow.left.arrow.right", action: workspace.showReplace)
-                    .menuShortcut(.replace, in: preset)
-                Button("Find in Files…", systemImage: "folder.badge.gearshape", action: workspace.showFindInFiles)
-                    .menuShortcut(.findInFiles, in: preset)
-                Button("Replace in Files…", systemImage: "arrow.left.arrow.right.square", action: workspace.showReplaceInFiles)
-                    .menuShortcut(.replaceInFiles, in: preset)
+                CommandGroup(after: .pasteboard) {
+                    Button("Find…", systemImage: "magnifyingglass", action: workspace.showFind)
+                        .menuShortcut(.find, in: preset)
+                    Button("Replace…", systemImage: "arrow.left.arrow.right", action: workspace.showReplace)
+                        .menuShortcut(.replace, in: preset)
+                    Button("Find in Files…", systemImage: "folder.badge.gearshape", action: workspace.showFindInFiles)
+                        .menuShortcut(.findInFiles, in: preset)
+                    Button("Replace in Files…", systemImage: "arrow.left.arrow.right.square", action: workspace.showReplaceInFiles)
+                        .menuShortcut(.replaceInFiles, in: preset)
+                }
             }
 
             CommandMenu("Go") {
