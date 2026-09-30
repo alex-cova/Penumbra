@@ -8,9 +8,18 @@ public struct IDERootView: View {
     @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
     @State private var didRecordPanelSizes = false
     @State private var didBootstrap = false
-    /// The system titlebar's height (the top safe-area inset). The titlebar row takes exactly
-    /// this height so its controls line up with the traffic lights.
-    @State private var titlebarHeight = IDEAppearance.Spacing.titlebarMinHeight
+    /// The window's top safe-area inset: the system titlebar, plus the native tab bar while it
+    /// shows. `toolbarRowHeight` and `topChromeHeight` derive from it.
+    @State private var topInset = IDEAppearance.Spacing.titlebarMinHeight
+
+    private var chrome: IDEWindowChrome {
+        IDEWindowChrome(topInset: topInset, isFullScreen: workspace.isFullScreen)
+    }
+
+    /// Everything above the panels: the toolbar row plus the native tab bar's strip.
+    private var topChromeHeight: CGFloat {
+        chrome.toolbarRowHeight + chrome.tabBarHeight
+    }
 
     public init() {}
 
@@ -22,11 +31,19 @@ public struct IDERootView: View {
         let _ = workspace.preferences.uiColorSchemeID
         let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
+            // Full screen: the native tab bar is the topmost strip and the toolbar row sits under it.
+            if chrome.hasTabBarAboveToolbar {
+                Color.clear.frame(height: chrome.tabBarHeight)
+            }
             IDEToolbarPanel()
-                .frame(height: titlebarHeight)
-                .padding(.bottom, IDEAppearance.Spacing.xs)
+                .frame(height: chrome.toolbarRowHeight)
+                .padding(.bottom, chrome.hasTabBarBelowToolbar ? 0 : IDEAppearance.Spacing.xs)
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
+            // Windowed: the native tab bar hangs right under the system titlebar, over this strip.
+            if chrome.hasTabBarBelowToolbar {
+                Color.clear.frame(height: chrome.tabBarHeight + IDEAppearance.Spacing.xs)
+            }
 
             HStack(spacing: 0) {
                 Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
@@ -129,7 +146,7 @@ public struct IDERootView: View {
         .ignoresSafeArea(.container, edges: .top)
         .onGeometryChange(for: CGFloat.self, of: \.safeAreaInsets.top) { inset in
             // Full screen hides the titlebar (inset 0) but keeps the row.
-            titlebarHeight = max(inset, IDEAppearance.Spacing.titlebarMinHeight)
+            topInset = inset
         }
         // The frame color is `NSWindow.backgroundColor` (set in `IDEWindowConfiguratorView`); an
         // opaque SwiftUI fill here would paint over the traffic lights.
@@ -145,7 +162,7 @@ public struct IDERootView: View {
         }
         .overlay(alignment: .topTrailing) {
             IDEStatusToast()
-                .padding(.top, titlebarHeight + IDEAppearance.Spacing.xs)
+                .padding(.top, topChromeHeight + IDEAppearance.Spacing.xs)
                 .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -158,7 +175,7 @@ public struct IDERootView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { workspace.notifications.setPanelPresented(false) }
                     IDENotificationPanel()
-                        .padding(.top, titlebarHeight + IDEAppearance.Spacing.xs)
+                        .padding(.top, topChromeHeight + IDEAppearance.Spacing.xs)
                         .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -402,6 +419,45 @@ private struct IDEResizeDragArea: NSViewRepresentable {
     }
 }
 
+/// What AppKit's own chrome takes from the window's top edge, split into the system titlebar and
+/// the native tab bar, which appears once two project windows are merged into one tab group.
+///
+/// Derived from the top inset alone (titlebar plus tab bar), so it cannot disagree with the layout
+/// the way a separate "tab bar visible" flag can while a tab is being moved in or out.
+///
+/// In a window the tab bar hangs right under the system titlebar, so the toolbar row shrinks to the
+/// titlebar's height and the tab bar takes the strip below it. In full screen there is no titlebar
+/// and the tab bar is the topmost strip, so the row keeps its height and sits under it.
+struct IDEWindowChrome: Equatable {
+    /// The window's top safe-area inset.
+    var topInset: CGFloat
+    var isFullScreen: Bool
+
+    /// The height of a plain titled window's titlebar.
+    @MainActor
+    static var standardTitlebarHeight: CGFloat {
+        NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height
+    }
+
+    /// Height of the tab bar while it shows (two or more tabs), else 0.
+    @MainActor
+    var tabBarHeight: CGFloat {
+        let extra = isFullScreen ? topInset : topInset - Self.standardTitlebarHeight
+        return extra > 1 ? extra : 0
+    }
+
+    @MainActor var hasTabBarBelowToolbar: Bool { tabBarHeight > 0 && !isFullScreen }
+    @MainActor var hasTabBarAboveToolbar: Bool { tabBarHeight > 0 && isFullScreen }
+
+    @MainActor
+    var toolbarRowHeight: CGFloat {
+        if hasTabBarBelowToolbar {
+            return topInset - tabBarHeight
+        }
+        return max(topInset, IDEAppearance.Spacing.titlebarMinHeight)
+    }
+}
+
 /// Configures the SwiftUI window for a hidden, movable titlebar without a hosting view controller.
 private struct IDEWindowConfigurator: NSViewRepresentable {
     let title: String
@@ -415,12 +471,14 @@ private struct IDEWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> IDEWindowConfiguratorView {
         let view = IDEWindowConfiguratorView()
         view.title = title
+        view.workspace = workspace
         view.closeGuard = context.coordinator.closeGuard
         return view
     }
 
     func updateNSView(_ view: IDEWindowConfiguratorView, context: Context) {
         view.title = title
+        view.workspace = workspace
         view.closeGuard = context.coordinator.closeGuard
         view.apply(activate: false)
     }
@@ -438,7 +496,12 @@ private struct IDEWindowConfigurator: NSViewRepresentable {
 }
 
 final class IDEWindowConfiguratorView: NSView {
+    /// Every Umbra window shares this identifier, so AppKit can merge project windows into one tab
+    /// group (Window > Merge All Windows, or the system "Prefer tabs" setting).
+    static let tabbingIdentifier = "com.umbra.editor.project-window"
+
     var title: String = "Umbra"
+    weak var workspace: IDEWorkspace?
     var closeGuard: IDEWindowCloseGuard?
 
     private var observers: [NSObjectProtocol] = []
@@ -449,17 +512,44 @@ final class IDEWindowConfiguratorView: NSView {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         guard let window else { return }
+        window.tabbingIdentifier = Self.tabbingIdentifier
+        window.tabbingMode = .automatic
+        if let workspace {
+            workspace.window = window
+            if window.isKeyWindow {
+                IDEWindowRegistry.shared.didBecomeActive(workspace)
+            }
+        }
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if let workspace = self?.workspace {
+                    IDEWindowRegistry.shared.didBecomeActive(workspace)
+                }
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.workspace?.windowWillClose() }
+        })
         // AppKit lays the traffic lights out again on resize and when leaving full screen.
         let names: [Notification.Name] = [
             NSWindow.didResizeNotification,
+            NSWindow.didEnterFullScreenNotification,
             NSWindow.didExitFullScreenNotification,
             NSWindow.didEndLiveResizeNotification
         ]
-        observers = names.map { name in
+        observers += names.map { name in
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.centerTrafficLights() }
+                MainActor.assumeIsolated {
+                    self?.updateFullScreen()
+                    self?.centerTrafficLights()
+                }
             }
         }
+        updateFullScreen()
         // ...and it moves the buttons itself after those notifications, so follow their frames too.
         if let titlebar = window.standardWindowButton(.closeButton)?.superview {
             titlebar.postsFrameChangedNotifications = true
@@ -488,13 +578,25 @@ final class IDEWindowConfiguratorView: NSView {
         guard let window, !window.styleMask.contains(.fullScreen),
               let close = window.standardWindowButton(.closeButton),
               let titlebar = close.superview else { return }
-        let centerFromTop = IDEAppearance.Spacing.titlebarMinHeight / 2
+        // With the tab bar showing the toolbar row is the system titlebar's height, so the lights
+        // keep their native spot; otherwise they follow the taller row. The titlebar view is the
+        // titlebar plus the tab bar, so its height is the same inset the root view lays out with.
+        let chrome = IDEWindowChrome(topInset: titlebar.frame.height, isFullScreen: false)
+        let centerFromTop = chrome.toolbarRowHeight / 2
         for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             guard let button = window.standardWindowButton(type), button.superview === titlebar else { continue }
             let y = (titlebar.bounds.height - centerFromTop - button.frame.height / 2).rounded()
             if abs(button.frame.origin.y - y) > 0.5 {
                 button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: y))
             }
+        }
+    }
+
+    private func updateFullScreen() {
+        guard let window, let workspace else { return }
+        let isFullScreen = window.styleMask.contains(.fullScreen)
+        if workspace.isFullScreen != isFullScreen {
+            workspace.isFullScreen = isFullScreen
         }
     }
 

@@ -1,10 +1,10 @@
 # Per-window projects in Umbra
 
-Status: proposal. Nothing here is implemented.
+Status: proposal, design decisions settled (see "Decisions"). Nothing here is implemented.
 
 ## Goal
 
-Every Umbra window owns one project (or none). Dropping a folder on the Dock icon, ⌘O on a folder, File ▸ Open Recent and `open -a Umbra <dir>` open that folder in its own window, next to the ones already open. Closing a window closes only its project. Quitting and relaunching brings the windows back.
+Every Umbra window owns one project (or none). Dropping a folder on the Dock icon, ⌘O on a folder, File ▸ Open Recent and `open -a Umbra <dir>` open that folder in its own window (or native window tab), next to the ones already open. Closing a window closes only its project. Quitting and relaunching brings back the last window; other projects come back through Open Recent.
 
 ## Where we are today
 
@@ -22,18 +22,29 @@ Umbra is one process with **one `IDEWorkspace`**, and every window shares it.
 
 1. **One `IDEWorkspace` per window**, created by the window's root view. No shared mutable project state between windows.
 2. **Same folder, same window.** Opening a folder that is already open in a window focuses that window instead of creating a second one. This removes the worst multi-writer cases (two Java indexes, two file watchers and two Gradle syncs on one tree) and matches VS Code and IntelliJ behavior. Two windows on one project can be a later, explicit feature.
-3. **New-window rule for external opens.**
-   - Folder already open → focus that window.
-   - Key window is empty (welcome screen, no project, no dirty documents) → reuse it.
-   - Otherwise → open a new window.
+3. **Routing rule for opening a folder.**
+   - Folder already open → focus that window (select its tab if it is in a tab group).
+   - Key window is empty (welcome screen, no project, no dirty documents) → reuse it, no prompt.
+   - Key window already has a project and the open is user-initiated in that window (⌘O, Open Folder…, Open Recent) → **ask**: "Open in New Window" / "Replace This Window's Project" / Cancel. A "Remember my choice" checkbox writes the `Open folders in` preference (Ask / New window / Replace), which Settings can reset. Replace runs the window's normal `confirmCloseWindow` unsaved-documents flow first.
+   - External opens (Dock drop, `open -a Umbra <dir>`, Finder) never prompt: they open a new window, because no window asked for them.
    - A file goes to the window whose project contains it, else to the key window, else a new window.
 4. **App-wide vs window state split.** App-wide (preferences, theme, keymap, recent files/projects, notification switches) is loaded once and shared. Window-wide (project root, tab layout, sidebar/terminal state, run configuration selection) is stored per window.
-5. **Restore all windows that were open at quit**, each with its own project. A window the user closed explicitly is not restored, except that closing the last window keeps it as the "last window" so a plain relaunch still shows the last project.
-6. **Heavy per-project services stay per-window** (`IDEJavaSupport`, Gradle runner, debug session, terminals, watcher). The JDK index is large and identical across windows, so it moves to a process-wide shared object in phase 4.
+5. **Restore only the last window.** Relaunch restores one window: the one that was key at quit, or the last one closed if the user closed them all. Other windows the user had open are not reopened; their projects stay one click away in Open Recent. No windows index is needed, just a single `last-window.json`.
+6. **Native macOS window tabs are in scope.** Every project stays one `NSWindow` with its own `IDEWorkspace`; AppKit tab groups merge those windows. New project windows follow the system "Prefer tabs" setting (`tabbingMode = .automatic`), and Window ▸ Merge All Windows / Show Tab Bar work as in any Mac app. Umbra's own editor tabs live inside the window, so users see project tabs above editor tabs.
+7. **Heavy per-project services stay per-window** (`IDEJavaSupport`, Gradle runner, debug session, terminals, watcher). The JDK index is large and identical across windows, so it moves to a process-wide shared object in phase 4.
 
 ## Plan
 
 ### Phase 1 — Window-scoped workspace and menus (no behavior change for one window)
+
+**Status: implemented** (not committed). Deviations and leftovers:
+
+- `IDEWindowScene` creates its workspace in `onAppear`, not as a `@State` default, because SwiftUI can re-initialize the struct and would build and discard a whole workspace each time. The workspace registers with `IDEWindowRegistry` at the end of `bootstrap()` and unregisters when its window closes.
+- `IDEAppCommands` is split into one small `View` per menu (`IDEFileCommands`, `IDEGoCommands`, …) taking a non-optional workspace, so the menu bodies moved verbatim. With no focused window, menus show a disabled "No Open Window" item; File keeps New Window (⌘⇧N).
+- **Stopgap until Phase 2:** one window at a time owns `session.json` (`IDEWindowRegistry.claimSession`). The first window restores and saves it, later windows start empty and never write it (so recents added in a second window are not persisted yet), and closing the owner releases it, so a reopened window restores what it saved.
+- `--open` / `--open-folder` are applied once per process, by the first window.
+- Native tabs work at the AppKit level: Window ▸ Merge All Windows, Move Tab to New Window and closing tabs behave, each tab keeping its own workspace.
+- **Tab bar vs. toolbar (fixed):** the native tab bar is a 28pt strip under the system titlebar, and AppKit grows the top safe-area inset by that much, which made the toolbar row 56pt tall with its buttons under the tab bar. `IDEWindowChrome` (in `IDERootView.swift`) now splits the inset into titlebar and tab bar. In a window the toolbar row shrinks to the titlebar (28pt) and the tab bar gets the strip below it; in full screen the tab bar strip goes above the toolbar row. The traffic lights center on the actual row. It is derived from the inset alone: an earlier version that also read `tabGroup.isTabBarVisible` went stale after moving a tab out and collapsed the row to 0pt. Checked by measuring element positions through accessibility (windowed single, merged, merged full screen, and after splitting a tab out); not checked by eye, since screenshots are unavailable in this environment.
 
 The riskiest structural change; everything else builds on it.
 
@@ -43,30 +54,34 @@ The riskiest structural change; everything else builds on it.
 - Give `IDEWorkspace` a `weak var window: NSWindow?`, set by `IDEWindowConfiguratorView.viewDidMoveToWindow`, and replace the `NSApp.keyWindow` / `mainWindow` uses with it (sheets, first-responder resets, alerts must target *their* window, not whichever is key).
 - Move the `--open` / `--open-folder` launch arguments out of `IDEWorkspace.init` into the app-launch path so only the first window honors them.
 - Ensure `.handlesExternalEvents(matching: ["*"])` stays (SwiftUI must not spawn windows for URLs itself; Phase 3 opens them explicitly).
+- Set `tabbingMode` and a shared `tabbingIdentifier` explicitly in `IDEWindowConfiguratorView` instead of relying on defaults. Check that Umbra's custom titlebar/toolbar chrome leaves room for the native tab bar; if the titlebar is hidden or transparent, that is the first thing to fix here, not in Phase 3.
 
-Exit criteria: with one window, behavior is unchanged; with ⌘N / Dock reopen the second window is an independent empty workspace and menu commands act on the focused window.
+Exit criteria: with one window, behavior is unchanged; with ⌘N / Dock reopen the second window is an independent empty workspace and menu commands act on the focused window; two windows can be merged into a tab group and back, each keeping its own workspace.
 
 ### Phase 2 — Split persistence: app state vs window state
 
 - New `IDEAppSessionStore` (`app.json`): preferences snapshot, recent files, recently edited, recent projects, notification switches. Loaded once by `IDEPreferences`/an `IDEAppState` object, saved with a debounce, written atomically.
-- New `IDEWindowSessionStore` (`windows/<IDEWindowID>.json` plus a small `windows.json` index with order and the last-key window): `EditorRestorationState`, `projectRootBookmark`, sidebar/structure/gradle widths and visibility, terminal tabs.
-- `IDEWorkspace.init(windowID:restoring:)` takes the state it should restore instead of calling `IDESessionStore.load()`. `makeSession`/`saveSession` split accordingly.
-- **Migration:** on first launch with the old `session.json` and no `app.json`, split it: app-wide fields go to `app.json`, the rest becomes window 1. Keep `session.json` untouched for one release so a downgrade still works.
+- New `IDEWindowSessionStore` (`last-window.json`, a single record): `EditorRestorationState`, `projectRootBookmark`, sidebar/structure/gradle widths and visibility, terminal tabs. Only one window is ever restored, so there is no index and no per-window files to garbage-collect.
+- `IDEWorkspace.init(windowID:restoring:)` takes the state it should restore (or `nil` for an empty window) instead of calling `IDESessionStore.load()`. Only the first window at launch gets the restored state; later windows start empty. `makeSession`/`saveSession` split accordingly.
+- **Which window is "last":** the registry tracks the most recently key workspace. A window's state is written to `last-window.json` when it becomes non-key after edits (debounced) and when it closes, but a closing window only overwrites the file if it is the most recently key one, so closing a background window never replaces the state of the one you were working in.
+- **Migration:** on first launch with the old `session.json` and no `app.json`, split it: app-wide fields go to `app.json`, the rest becomes `last-window.json`. Keep `session.json` untouched for one release so a downgrade still works.
 - Recent lists are shared, so a write from any window must merge with, not overwrite, what another window just recorded (single `IDEAppState` owner, no per-workspace copies).
-- Restore path: `UmbraApp` reads the index and opens one window per entry using `WindowGroup(id: "main", for: IDEWindowID.self)`. Windows opened with a value get that ID; the plain "no value" window gets a fresh ID.
+- Restore path: `UmbraApp` opens the first window with the restored state via `WindowGroup(id: "main", for: IDEWindowID.self)`; windows opened with a value get that ID, the plain "no value" window gets a fresh ID.
 
-Exit criteria: two windows with different projects and tabs survive quit + relaunch; old `session.json` users keep their project.
+Exit criteria: a window with its project and tabs survives quit + relaunch when other windows were open (the key one wins); old `session.json` users keep their project.
 
 ### Phase 3 — Routing external opens and the Dock
 
 - The delegate cannot call `openWindow`. Extend `IDEWindowReopenBridge` to register an `openWindow(value:)` closure with the registry, which queues requests until it exists (cold launch, before any window has appeared; this is today's `pendingOpenURLs` mechanism generalized).
 - `IDEWindowRegistry.open(urls:)` applies the routing rule from the design decisions above. It needs a "project root → workspace" lookup (standardized, symlink-resolved path) and an `isEmpty` predicate on the workspace (no project, no documents, none dirty).
-- Cold launch with a dropped folder: do **not** restore the previous windows and then replace one. Restore the session as usual, then route the dropped folder through the same rule. Reuse only if the restored window is empty.
-- "Open Recent", the welcome screen, ⌘O on a folder and Open Folder… use the same entry point instead of `applyProjectRoot` on the current workspace. Open Folder… gets an explicit "in this window" fallback only when the current window is empty. Add File ▸ New Window (⌘⇧N) and ⌘⇧N handling for "New Project Window".
-- Window title/`representedURL` show the project folder name; add the Window menu list (SwiftUI does this for `WindowGroup`).
-- Keep `applicationShouldHandleReopen` behavior: no visible windows → reopen the last window from the index, else a welcome window.
+- Cold launch with a dropped folder: restore the last window as usual, then route the dropped folder through the same rule. Reuse the restored window only if it is empty; otherwise the dropped folder opens beside it, without a prompt (external open).
+- "Open Recent", the welcome screen, ⌘O on a folder and Open Folder… use the same entry point instead of `applyProjectRoot` on the current workspace. When the current window already has a project, that entry point shows the "Open in New Window / Replace This Window's Project / Cancel" prompt from design decision 3 (a sheet on that window, with the remember-my-choice checkbox and the `Open folders in` setting). The router returns a decision (`.focus(window)`, `.reuse(window)`, `.askReplaceOrNew(window)`, `.newWindow`) and the UI layer acts on it, so the prompt logic stays testable.
+- Add File ▸ New Window (⌘⇧N, new empty project window) and File ▸ New Window Tab (only shown when tabbing is preferred). Check the shortcut against the Sublime keymap presets before choosing one; ⌘T and ⌘N already have meanings in the editor.
+- Tabs: when the system prefers tabs (or the user chose New Window Tab), a new project window is attached with `addTabbedWindow(_:ordered:)` to the key window's tab group; otherwise it is a separate window. "Focus existing" selects the tab when the target lives in a tab group and brings the group forward.
+- Window title/`representedURL` show the project folder name, which is also the native tab title; add the Window menu list (SwiftUI does this for `WindowGroup`).
+- Keep `applicationShouldHandleReopen` behavior: no visible windows → reopen the last window from `last-window.json`, else a welcome window.
 
-Exit criteria: dropping three different folders on the Dock icon gives three windows; dropping one already open focuses it; a file inside an open project lands in that project's window.
+Exit criteria: dropping three different folders on the Dock icon gives three windows (or three tabs with tabs preferred); dropping one already open focuses it; a file inside an open project lands in that project's window; ⌘O with a project open asks replace-or-new and both answers work, including cancel.
 
 ### Phase 4 — Shared stores and services that assumed one writer
 
@@ -79,14 +94,16 @@ Exit criteria: dropping three different folders on the Dock icon gives three win
 
 - Window close: `IDEWindowCloseGuard` asks only its own workspace (`confirmCloseWindow`), saves that window's state, then tears the workspace down.
 - Add `IDEWorkspace.teardown()`: stop the file watcher, terminals (kill child shells), debug session, Gradle runs and indexing, and balance the security-scoped `startAccessingSecurityScopedResource()` calls made in `applyProjectRoot` / `openDroppedURLs` (they are never stopped today, which only mattered while there was one project).
-- `applicationShouldTerminate`: gather unsaved documents across all workspaces in one prompt. `applicationWillTerminate`: save every window plus the index.
+- Replace-in-window (from the Open Folder prompt) reuses the same path: confirm close, `teardown()`, then apply the new root to the same window, so nothing from the old project survives.
+- Closing a tab in a native tab group is a window close, so it goes through the same guard and teardown as any window.
+- `applicationShouldTerminate`: gather unsaved documents across all workspaces in one prompt. `applicationWillTerminate`: save the most recently key window to `last-window.json`, the shared app state and the index. Other windows are not persisted.
 - Confirm the workspace actually deallocates after close (Debug Memory Graph, or a `deinit` log in a test). `navigationBuffers`, Java support callbacks and the `[weak self]` closures are the usual suspects. A leak here means a closed project keeps its index and watcher alive.
 
 ### Phase 6 — Tests, docs, polish
 
-- Unit tests (`Tests/PenumbraTests` is a library target; Umbra is an executable, so put the routing logic in a small pure type, e.g. `IDEOpenRouter`, that can be tested without AppKit): folder already open → focus; empty key window → reuse; else new window; file inside/outside a project; symlinked and trailing-slash paths; cold-launch queueing.
-- Session tests: migration from a real old `session.json`, per-window round trip, corrupt window file is skipped without losing the others.
-- Manual checklist: Dock drop on cold and warm launch; two windows with different Gradle projects (sync, build, debug in both); Cmd-Q with dirty tabs in two windows; closing the first window then the second; changing theme in window A repaints B; `swift run Umbra` (no bundle) still works.
+- Unit tests (`Tests/PenumbraTests` is a library target; Umbra is an executable, so put the routing logic in a small pure type, e.g. `IDEOpenRouter`, that can be tested without AppKit): folder already open → focus; empty key window → reuse; user-initiated open with a populated key window → ask, with the `Open folders in` setting resolving to new/replace without asking; external open → new window without asking; file inside/outside a project; symlinked and trailing-slash paths; cold-launch queueing.
+- Session tests: migration from a real old `session.json`, `last-window.json` round trip, a corrupt `last-window.json` falls back to an empty window without losing app state, closing a background window does not overwrite the key window's saved state.
+- Manual checklist: Dock drop on cold and warm launch; two windows with different Gradle projects (sync, build, debug in both); Cmd-Q with dirty tabs in two windows; closing the first window then the second; changing theme in window A repaints B; `swift run Umbra` (no bundle) still works; merge windows into tabs and split them again, drag a tab out, close a tab with dirty documents, relaunch with a tab group open (only the key project returns).
 - Run the performance checks in `docs/PERFORMANCE_RULES.md` (`PerfHarness enter-session`); no engine code changes are expected, so any regression points at the per-window plumbing.
 - Update `CLAUDE.md` (Umbra section) and `Example/README.md` with the window model, and mention `IDEWindowRegistry` there.
 
@@ -97,7 +114,7 @@ Exit criteria: dropping three different folders on the Dock icon gives three win
 | Scene / menus | `UmbraApp.swift` (split into `IDEWindowScene`, `IDEAppCommands`), `IDEMenuShortcuts.swift` |
 | Delegate / routing | `IDEAppDelegate.swift`, new `IDEWindowRegistry.swift`, new `IDEOpenRouter.swift` |
 | Workspace | `IDEWorkspace.swift` (init, `window`, `teardown`, session split, `NSApp.keyWindow` uses, `openRecentProject`, `openDroppedURLs`) |
-| Window chrome | `IDERootView.swift` (`IDEWindowConfiguratorView`, `IDEWindowCloseGuard`) |
+| Window chrome | `IDERootView.swift` (`IDEWindowConfiguratorView` incl. tabbing mode, `IDEWindowCloseGuard`) |
 | Persistence | `IDESessionStore.swift` (split, migration), `IDEPreferences*.swift`, `JavaBreakpointStore.swift`, `IDEJDKSelection.swift`, `IDEJavaSupport.swift` (trust store, run configs) |
 | Welcome / recents | `IDEWelcomeView.swift`, `UmbraApp.swift` Open Recent menu |
 
@@ -109,10 +126,13 @@ Exit criteria: dropping three different folders on the Dock icon gives three win
 - **Session migration** is one-way risky for users mid-project. Keeping the old file for a release is the safety net.
 - **Sandbox.** Security-scoped access is per URL, so a restored window must resolve its own bookmark. Do not assume a bookmark from window A works for window B's project.
 - **Two Umbra processes** (a debug build alongside an installed app, for example) share the same on-disk stores today. Atomic writes and re-read-before-merge reduce the damage, but they do not make that supported.
+- **Native tabs vs. custom chrome.** A hidden or transparent titlebar may not leave room for the AppKit tab bar, and the tab bar adds a second row above Umbra's editor tabs. Check this in Phase 1 before building on it.
+- **Tab groups and "restore only the last window".** A tab group of three projects relaunches as one project. That is intended, but users may notice; Open Recent is the way back.
+- **Prompt fatigue.** Asking replace-or-new on every ⌘O gets old fast, which is why the prompt carries a remember-my-choice checkbox and a setting.
 
-## Open questions for you
+## Decisions
 
-1. Should a window on a folder that is already open focus the existing one (recommended), or is a second window on the same project wanted?
-2. On relaunch, restore every window that was open, or only the last one?
-3. Should Open Folder… (⌘O in the Sublime keymap) open in a new window by default, or replace the current window's project when that window already has one? The plan assumes new window, with reuse only of an empty window.
-4. Do you want native macOS window tabs (merging windows into one tab bar) later? It affects whether windows are `NSWindow`-per-project or tab-grouped, and is cheaper to decide now.
+1. **Same folder:** focus the existing window (or tab). A second window on one project is out of scope for now.
+2. **Relaunch:** restore only the last (most recently key) window.
+3. **Open Folder…:** if the current window already has a project, ask "Open in New Window" or "Replace This Window's Project"; an empty window is reused without asking. External opens (Dock, `open -a`) always open a new window.
+4. **Native macOS window tabs:** supported from the start, one `NSWindow` and one `IDEWorkspace` per project, following the system tab preference.

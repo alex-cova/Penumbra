@@ -10,11 +10,6 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     /// so `NSApp.delegate as? IDEAppDelegate` always fails. The adaptor-owned instance is kept here.
     static weak var shared: IDEAppDelegate?
 
-    weak var workspace: IDEWorkspace? {
-        didSet { drainPendingOpenURLs() }
-    }
-    /// Folders/files handed over by Finder or the Dock before the workspace existed (cold launch).
-    private var pendingOpenURLs: [URL] = []
     /// Called when the dock icon is clicked and every window has been closed. Wired from
     /// `IDEWindowReopenBridge` so SwiftUI can open a fresh `WindowGroup` window.
     var onReopenWithoutVisibleWindows: (() -> Void)?
@@ -52,24 +47,17 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Files or folders dropped on the Dock icon, opened with Open With, or `open -a Umbra <path>`.
-    /// A folder becomes the project; files open as tabs (`IDEWorkspace.openDroppedURLs`).
+    /// A folder becomes the project; files open as tabs (`IDEWorkspace.openDroppedURLs`). They go
+    /// to the active window through `IDEWindowRegistry`, which holds them until a window exists.
     public func application(_ application: NSApplication, open urls: [URL]) {
-        pendingOpenURLs.append(contentsOf: urls)
-        drainPendingOpenURLs()
-        if workspace != nil {
+        IDEWindowRegistry.shared.open(urls: urls)
+        if IDEWindowRegistry.shared.activeWorkspace != nil {
             Self.activateAndKeyWindows()
         }
     }
 
-    private func drainPendingOpenURLs() {
-        guard let workspace, !pendingOpenURLs.isEmpty else { return }
-        let urls = pendingOpenURLs
-        pendingOpenURLs.removeAll()
-        workspace.openDroppedURLs(urls)
-    }
-
     public func applicationWillTerminate(_ notification: Notification) {
-        workspace?.saveSession()
+        IDEWindowRegistry.shared.saveSessionsForTermination()
     }
 
     private static func restorableWindows() -> [NSWindow] {

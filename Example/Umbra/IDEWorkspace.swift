@@ -117,6 +117,14 @@ public final class IDEWorkspace {
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
 
+    /// The window this workspace is shown in, set by `IDEWindowConfiguratorView`. Sheets, alerts and
+    /// first-responder changes target this window, not whichever one happens to be key.
+    @ObservationIgnored
+    weak var window: NSWindow?
+    /// Kept current by `IDEWindowConfiguratorView`; the toolbar row lays out differently around the
+    /// native tab bar in full screen (see `IDEWindowChrome`).
+    var isFullScreen = false
+
     public init() {
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
@@ -157,7 +165,7 @@ public final class IDEWorkspace {
         isBottomPanelExpanded = false
         isSettingsVisible = true
         // Otherwise keystrokes keep going to the editor hidden under the settings.
-        NSApp.keyWindow?.makeFirstResponder(nil)
+        window?.makeFirstResponder(nil)
     }
 
     func hideSettings() {
@@ -436,7 +444,13 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
             self?.javaGutterIconsPreferenceChanged()
         }
-        loadSession()
+        // Only the first window restores (and later writes) the saved session; another window opened
+        // next to it starts empty and just reads the shared recent lists.
+        if IDEWindowRegistry.shared.claimSession(for: self) {
+            loadSession()
+        } else {
+            loadRecentLists()
+        }
         wireAdapter()
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
@@ -444,15 +458,8 @@ public final class IDEWorkspace {
         showsWelcome = !hasOpenDocuments
         showsFirstRunGuide = !preferences.hasCompletedFirstRunGuide
 
-        if let index = CommandLine.arguments.firstIndex(of: "--open"),
-           index + 1 < CommandLine.arguments.count {
-            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            Task { await openDocument(from: url) }
-        }
-        if let index = CommandLine.arguments.firstIndex(of: "--open-folder"),
-           index + 1 < CommandLine.arguments.count {
-            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            applyProjectRoot(url)
+        if IDEWindowRegistry.shared.consumeLaunchArguments() {
+            openLaunchArgumentTargets()
         }
 
         navigationBuffers.workspace = self
@@ -520,7 +527,26 @@ public final class IDEWorkspace {
             await intelligenceServices.javaSupport.connect(to: workspaceBridge.workspace)
         }
 
-        IDEAppDelegate.shared?.workspace = self
+        IDEWindowRegistry.shared.register(self)
+    }
+
+    /// `--open <file>` and `--open-folder <dir>`; only the first window of the process calls this.
+    private func openLaunchArgumentTargets() {
+        if let index = CommandLine.arguments.firstIndex(of: "--open"),
+           index + 1 < CommandLine.arguments.count {
+            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await openDocument(from: url) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--open-folder"),
+           index + 1 < CommandLine.arguments.count {
+            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            applyProjectRoot(url)
+        }
+    }
+
+    /// The window is going away: stop being a target for menu commands and external opens.
+    func windowWillClose() {
+        IDEWindowRegistry.shared.unregister(self)
     }
 
     // MARK: - Commands
@@ -1645,7 +1671,7 @@ public final class IDEWorkspace {
         isBottomPanelExpanded.toggle()
         if isBottomPanelExpanded {
             // Otherwise keystrokes keep going to the editor hidden under the panel.
-            NSApp.keyWindow?.makeFirstResponder(nil)
+            window?.makeFirstResponder(nil)
             requestTerminalFocus()
         }
     }
@@ -3161,6 +3187,9 @@ public final class IDEWorkspace {
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
+        // One `session.json` for the whole app until persistence is split per window: only the
+        // window that restored it may write it back.
+        guard IDEWindowRegistry.shared.ownsSession(self) else { return }
         IDESessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
             gradleSidebarWidth: gradleSidebarWidth,
@@ -3181,6 +3210,13 @@ public final class IDEWorkspace {
             title: IDETerminalTab.defaultTitle(for: directory),
             workingDirectory: directory
         )
+    }
+
+    private func loadRecentLists() {
+        let session = IDESessionStore.load()
+        recentFiles = session.recentFiles
+        recentlyEditedFiles = session.recentlyEditedFiles
+        recentProjects = session.recentProjects
     }
 
     private func loadSession() {
@@ -5133,7 +5169,7 @@ public final class IDEWorkspace {
             let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
                 continuation.resume(returning: response == .alertFirstButtonReturn)
             }
-            if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            if let window {
                 alert.beginSheetModal(for: window) { response in
                     finish(response)
                 }
@@ -5163,7 +5199,7 @@ public final class IDEWorkspace {
             let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
                 continuation.resume(returning: response == .alertFirstButtonReturn)
             }
-            if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            if let window {
                 alert.beginSheetModal(for: window) { response in
                     finish(response)
                 }
@@ -5185,7 +5221,7 @@ public final class IDEWorkspace {
         alert.messageText = "Metal rendering was disabled"
         alert.informativeText = "\(reason)\n\nThe editor has switched to Core Graphics."
         alert.addButton(withTitle: "OK")
-        if let window = NSApp.mainWindow {
+        if let window {
             alert.beginSheetModal(for: window)
         } else {
             alert.runModal()
