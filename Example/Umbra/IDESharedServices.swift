@@ -20,14 +20,23 @@ final class IDESharedServices {
     let jdkSelection: JDKSelectionStore
     let runConfigurations: JavaRunConfigurationStore
     let breakpoints: JavaBreakpointStore
-    /// One indexing run and one parsed shard per JDK for all windows.
-    let jdkShards: JavaSharedShardHub
+    /// One indexing run and one parsed shard per JDK and per dependency jar, for all windows.
+    let shards: JavaSharedShardHub
+    /// Gives back the parsed jar and JDK shards nobody is using when the system asks for memory;
+    /// they are rebuilt from disk on the next request. Held for the life of the app.
+    private let memoryPressure: DispatchSourceMemoryPressure
 
     private init() {
         gradleTrust = GradleTrustStore(storeURL: IDEJavaSupport.defaultGradleTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
         runConfigurations = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
         breakpoints = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
-        jdkShards = JavaSharedShardHub()
+        let hub = JavaSharedShardHub()
+        shards = hub
+        memoryPressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        memoryPressure.setEventHandler {
+            Task { await hub.trimMemory() }
+        }
+        memoryPressure.resume()
     }
 }

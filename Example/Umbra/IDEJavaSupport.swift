@@ -92,7 +92,7 @@ final class IDEJavaSupport {
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
     /// One indexing run and one parsed shard per JDK for the whole app; see `JavaSharedShardHub`.
-    private let jdkShards: JavaSharedShardHub
+    private let shardHub: JavaSharedShardHub
     /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
     /// semantic Find Usages and rename.
     let nameIndex = JavaNameIndex()
@@ -204,9 +204,9 @@ final class IDEJavaSupport {
         gradleTrustStore: GradleTrustStore = IDESharedServices.shared.gradleTrust,
         gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot,
         jdkSelectionStore: JDKSelectionStore = IDESharedServices.shared.jdkSelection,
-        jdkShards: JavaSharedShardHub = IDESharedServices.shared.jdkShards
+        shardHub: JavaSharedShardHub = IDESharedServices.shared.shards
     ) {
-        self.jdkShards = jdkShards
+        self.shardHub = shardHub
         jdk = IDEJDKSelection(store: jdkSelectionStore)
         let sharedParseCache = JavaDocumentParseCache()
         overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
@@ -907,6 +907,7 @@ final class IDEJavaSupport {
             }
             for jar in diff.removedJars {
                 try? FileManager.default.removeItem(at: paths.jarShard(jar))
+                await shardHub.invalidate(paths.jarShard(jar))
             }
             let reindexDirs = diff.addedSourceDirectories + diff.changedSourceDirectories
             let reindexSources = reindexDirs.map { directory in
@@ -974,11 +975,10 @@ final class IDEJavaSupport {
             }
             lastFlush = .now
         }
-        for await progress in await scheduler.index(targets) {
-            guard isCurrent(generation) else { return }
+        func handle(_ progress: JavaIndexScheduler.Progress) {
             switch progress {
             case .allFinished:
-                continue
+                return
             case .rootStarted(let id):
                 if logToConsole {
                     pendingNotes.append("Indexing \(Self.shortRootName(id))…")
@@ -1009,24 +1009,40 @@ final class IDEJavaSupport {
                 flush()
             }
         }
+        // Project sources are this window's own. Dependency jars go through the shared hub: one
+        // indexing run per jar across windows, and the same parsed reader for all of them.
+        let projectTargets = targets.filter { !($0.root is JarRoot) }
+        let jarTargets = targets.filter { $0.root is JarRoot }
+        for await progress in await scheduler.index(projectTargets) {
+            guard isCurrent(generation) else { return }
+            handle(progress)
+        }
+        for await progress in await shardHub.indexJars(jarTargets) {
+            guard isCurrent(generation) else { return }
+            handle(progress)
+        }
         guard isCurrent(generation) else { return }
         flush()
 
-        // Opening a shard decodes its whole string table: ~750 ms on main for a Gradle project's
-        // dependency JARs, twice at launch (session restore, then the recent project).
-        let loaded = await Task.detached(priority: .userInitiated) {
-            let sourceTargets = model.sourceIndexTargets(paths: paths)
-            let jarTargets = model.jarIndexTargets(paths: paths)
-            let sources = sourceTargets.compactMap { target -> JavaIndex.Source? in
+        // Opening a shard decodes its whole string table. Project shards are opened here, off the
+        // main actor; jar readers come from the hub, which parses only the ones no window (or
+        // earlier sync) already holds.
+        let modelJarTargets = model.jarIndexTargets(paths: paths)
+        async let projectReaders = Task.detached(priority: .userInitiated) {
+            model.sourceIndexTargets(paths: paths).compactMap { target -> JavaIndex.Source? in
                 guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
                 return JavaIndex.Source(precedence: 1, reader: reader, shardPath: target.shardURL.path)
             }
-            let jars = jarTargets.compactMap { target -> JavaIndex.Source? in
-                guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
-                return JavaIndex.Source(precedence: 2, reader: reader, shardPath: target.shardURL.path)
-            }
-            return (sources, jars)
         }.value
+        let jarReaders = await shardHub.readers(for: modelJarTargets)
+        let loaded = (
+            await projectReaders,
+            modelJarTargets.compactMap { target -> JavaIndex.Source? in
+                jarReaders[target.shardURL].map {
+                    JavaIndex.Source(precedence: 2, reader: $0, shardPath: target.shardURL.path)
+                }
+            }
+        )
         guard isCurrent(generation) else { return }
         projectSources = loaded.0
         jarSources = loaded.1
@@ -1172,7 +1188,7 @@ final class IDEJavaSupport {
         // different installation than the one already indexed) is it meaningful to narrate into
         // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
         let noteToConsole = gradleSync.isSyncing
-        jdkIndexingTask = Task { [paths, jdkShards] in
+        jdkIndexingTask = Task { [paths, shardHub] in
             // Resolving does synchronous filesystem/process work (java_home -X, walking
             // ~/Library/Java/JavaVirtualMachines); `IDEJDKSelection` hops it off the main actor so
             // it can't stall the UI during app launch.
@@ -1194,7 +1210,7 @@ final class IDEJavaSupport {
             }
             // Shared with every other window: one indexing run and one parsed shard per JDK. Only
             // the window that starts the run hears its progress.
-            let reader = await jdkShards.shard(for: root, at: shardURL) { [weak self] progress in
+            let reader = await shardHub.shard(for: root, at: shardURL) { [weak self] progress in
                 guard let self, noteToConsole, !Task.isCancelled else { return }
                 switch progress {
                 case .rootFinished(let id, let classCount):

@@ -104,22 +104,39 @@ public final class JavaIndexShardReader: @unchecked Sendable {
     private let offsetTable: [String: (Int, Int)]
     private let stringTable: [String]
 
-    public init(url: URL) throws {
-        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-        self.data = data
-        var cursor = 0
-        guard data.count >= 4, Array(data.prefix(4)) == Array("PJIX".utf8) else {
+    /// Bytes before the entry count: magic, format version, and the root's stamp (size, date).
+    private static let stampHeaderLength = 24
+
+    /// The stamp a shard was written with, read from its first bytes without mapping the file or
+    /// parsing its name tables. Nil when the file is missing, too short, not a shard, or written by
+    /// another format version, which is also when ``init(url:)`` throws. Deciding whether a shard
+    /// is still current needs only this, and opening each of hundreds of jar shards to learn it
+    /// costs a full parse apiece.
+    public static func readStamp(at url: URL) -> JavaStamp? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: stampHeaderLength) else { return nil }
+        return try? parseStampHeader(header)
+    }
+
+    private static func parseStampHeader(_ data: Data) throws -> JavaStamp {
+        guard data.count >= stampHeaderLength, Array(data.prefix(4)) == Array("PJIX".utf8) else {
             throw JavaIndexStoreError.badMagic
         }
-        cursor = 4
-        let version = data.readUInt32LE(at: cursor); cursor += 4
+        let version = data.readUInt32LE(at: 4)
         guard version == JavaIndexShardWriter.formatVersion else {
             throw JavaIndexStoreError.unsupportedFormatVersion(found: Int(version), expected: Int(JavaIndexShardWriter.formatVersion))
         }
-        let size = Int64(bitPattern: data.readUInt64LE(at: cursor)); cursor += 8
-        let modBits = data.readUInt64LE(at: cursor); cursor += 8
-        let modDate = Double(bitPattern: modBits)
-        self.stamp = JavaStamp(size: size, modificationDate: modDate)
+        let size = Int64(bitPattern: data.readUInt64LE(at: 8))
+        let modDate = Double(bitPattern: data.readUInt64LE(at: 16))
+        return JavaStamp(size: size, modificationDate: modDate)
+    }
+
+    public init(url: URL) throws {
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        self.data = data
+        self.stamp = try Self.parseStampHeader(data)
+        var cursor = Self.stampHeaderLength
 
         let entryCount = Int(data.readUInt32LE(at: cursor)); cursor += 4
 

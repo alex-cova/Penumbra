@@ -143,9 +143,6 @@ public final class IDEWorkspace {
     /// A weak handle for the menu bar; see `IDEWorkspaceRef`.
     let reference = IDEWorkspaceRef()
 
-    /// Stands in for a workspace in menu views whose window already closed. Never bootstrapped, so
-    /// it restores and opens nothing; its actions can only run if a stale item were clicked.
-    static let placeholder = IDEWorkspace()
     /// Opened blank next to other windows instead of restoring the last one.
     @ObservationIgnored
     private var startedAsExtraWindow = false
@@ -194,6 +191,9 @@ public final class IDEWorkspace {
     /// Breakpoints tab. Refreshed by `refreshBreakpoints()` after every change to the store.
     private(set) var breakpoints: [JavaBreakpoint] = []
     var isGradleSidebarVisible = true
+    /// The explorer sidebar's width. `IDERootView` owns the drag and mirrors it here so a save made
+    /// from anywhere (`saveSession()`) writes the width on screen, not the default.
+    var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var chromeOpacity = 1.0
     private(set) var layoutEpoch: UInt64 = 0
@@ -502,6 +502,11 @@ public final class IDEWorkspace {
             loadSession(IDEWindowSessionStore.load())
         } else {
             startedAsExtraWindow = true
+            // A window that does not restore still opens at the widths the user last used, which
+            // is what `IDERootView` shows; the workspace must agree or its first save resets them.
+            if Self.isSessionPersistenceEnabled {
+                seedPanelWidths(from: IDEWindowSessionStore.load())
+            }
         }
         wireAdapter()
         rebuildLayoutHosts()
@@ -3359,14 +3364,14 @@ public final class IDEWorkspace {
     }
 
     func makeSession(
-        sidebarWidth: Double,
+        sidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> IDEWindowSession {
         IDEWindowSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
-            sidebarWidth: sidebarWidth,
+            sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
             gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
             isGradleSidebarVisible: isGradleSidebarVisible,
@@ -3380,7 +3385,7 @@ public final class IDEWorkspace {
     }
 
     func saveSession(
-        sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
+        sidebarWidth: Double? = nil,
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
@@ -3412,12 +3417,17 @@ public final class IDEWorkspace {
         )
     }
 
+    func seedPanelWidths(from session: IDEWindowSession) {
+        sidebarWidth = session.sidebarWidth
+        gradleSidebarWidth = session.gradleSidebarWidth
+    }
+
     private func loadSession(_ session: IDEWindowSession) {
         // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
         selectedSidebarTab = session.sidebarTab ?? .explorer
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
-        gradleSidebarWidth = session.gradleSidebarWidth
+        seedPanelWidths(from: session)
         isGradleSidebarVisible = session.isGradleSidebarVisible
         isTerminalVisible = session.isTerminalVisible
         terminalHeight = session.terminalHeight

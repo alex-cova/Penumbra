@@ -144,4 +144,50 @@ final class JavaIndexStoreTests: XCTestCase {
         let stamp = try XCTUnwrap(JavaStamp(url: url))
         XCTAssertEqual(stamp.size, 5)
     }
+
+    // MARK: - readStamp
+
+    func testReadStampMatchesTheReadersStamp() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let stamp = JavaStamp(size: 1234, modificationDate: 987_654_321.5)
+        try JavaIndexShardWriter().write([sampleStub()], stamp: stamp, to: url)
+
+        XCTAssertEqual(JavaIndexShardReader.readStamp(at: url), stamp)
+        XCTAssertEqual(JavaIndexShardReader.readStamp(at: url), try JavaIndexShardReader(url: url).stamp)
+    }
+
+    func testReadStampIsNilForAMissingFile() {
+        XCTAssertNil(JavaIndexShardReader.readStamp(at: tempURL()))
+    }
+
+    func testReadStampIsNilForATruncatedFile() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try JavaIndexShardWriter().write([sampleStub()], stamp: JavaStamp(size: 1, modificationDate: 1), to: url)
+        let header = try Data(contentsOf: url).prefix(10)
+        try Data(header).write(to: url)
+
+        XCTAssertNil(JavaIndexShardReader.readStamp(at: url))
+    }
+
+    func testReadStampIsNilForANonShardFile() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(repeating: 0x41, count: 64).write(to: url)
+
+        XCTAssertNil(JavaIndexShardReader.readStamp(at: url))
+    }
+
+    func testReadStampIsNilForAnotherFormatVersion() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try JavaIndexShardWriter().write([sampleStub()], stamp: JavaStamp(size: 1, modificationDate: 1), to: url)
+        var bytes = try Data(contentsOf: url)
+        bytes[4] = bytes[4] &+ 1
+        try bytes.write(to: url)
+
+        XCTAssertNil(JavaIndexShardReader.readStamp(at: url))
+        XCTAssertThrowsError(try JavaIndexShardReader(url: url))
+    }
 }

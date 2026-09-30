@@ -65,7 +65,7 @@ public actor JavaIndexScheduler {
 
     private static func indexOne(root: any JavaIndexableRoot, shardURL: URL, force: Bool) async -> Progress {
         let currentStamp = root.stamp
-        if !force, let existing = try? JavaIndexShardReader(url: shardURL), existing.stamp == currentStamp {
+        if !force, JavaIndexShardReader.readStamp(at: shardURL) == currentStamp {
             return .rootSkipped(id: root.id, reason: "up to date")
         }
         do {

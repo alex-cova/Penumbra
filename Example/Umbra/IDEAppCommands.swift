@@ -169,8 +169,8 @@ private struct IDEOpenRecentMenu: View {
                 ForEach(appState.recentFiles, id: \.path) { url in
                     Button(url.lastPathComponent, systemImage: "doc") {
                         if case .window(let id) = origin,
-                           let workspace = IDEWindowRegistry.shared.workspace(withID: id) {
-                            workspace.openRecentFile(url)
+                           let target = IDEWindowRegistry.shared.workspace(withID: id) {
+                            target.openRecentFile(url)
                         } else {
                             IDEWindowRegistry.shared.open(urls: [url])
                         }
@@ -187,18 +187,18 @@ private struct IDEFindCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Find…", systemImage: "magnifyingglass", action: { workspace.showFind() })
+        Button("Find…", systemImage: "magnifyingglass", action: { workspace?.showFind() })
             .menuShortcut(.find, in: preset)
-        Button("Replace…", systemImage: "arrow.left.arrow.right", action: { workspace.showReplace() })
+        Button("Replace…", systemImage: "arrow.left.arrow.right", action: { workspace?.showReplace() })
             .menuShortcut(.replace, in: preset)
-        Button("Find in Files…", systemImage: "folder.badge.gearshape", action: { workspace.showFindInFiles() })
+        Button("Find in Files…", systemImage: "folder.badge.gearshape", action: { workspace?.showFindInFiles() })
             .menuShortcut(.findInFiles, in: preset)
-        Button("Replace in Files…", systemImage: "arrow.left.arrow.right.square", action: { workspace.showReplaceInFiles() })
+        Button("Replace in Files…", systemImage: "arrow.left.arrow.right.square", action: { workspace?.showReplaceInFiles() })
             .menuShortcut(.replaceInFiles, in: preset)
     }
 }
@@ -209,27 +209,27 @@ private struct IDEGoCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Go to File…", action: { workspace.showQuickOpen() })
+        Button("Go to File…", action: { workspace?.showQuickOpen() })
             .menuShortcut(.goToFile, in: preset)
-        Button("Go to Symbol…", action: { workspace.showGoToSymbol() })
+        Button("Go to Symbol…", action: { workspace?.showGoToSymbol() })
             .menuShortcut(.goToSymbol, in: preset)
-        Button("Tool Window…", action: { workspace.showToolWindows() })
-        Button("File Structure…", action: { workspace.showFileStructure() })
+        Button("Tool Window…", action: { workspace?.showToolWindows() })
+        Button("File Structure…", action: { workspace?.showFileStructure() })
             .menuShortcut(.fileStructure, in: preset)
-        Button("Go to Line…", action: { workspace.showGoToLine() })
+        Button("Go to Line…", action: { workspace?.showGoToLine() })
             .menuShortcut(.goToLine, in: preset)
-        Button("Next Problem") { workspace.goToProblem(forward: true) }
+        Button("Next Problem") { workspace?.goToProblem(forward: true) }
             .menuShortcut(.nextProblem, in: preset)
-        Button("Previous Problem") { workspace.goToProblem(forward: false) }
+        Button("Previous Problem") { workspace?.goToProblem(forward: false) }
             .menuShortcut(.previousProblem, in: preset)
-        Button("Recent Locations…", action: { workspace.showRecentLocations() })
+        Button("Recent Locations…", action: { workspace?.showRecentLocations() })
             .menuShortcut(.recentLocations, in: preset)
-        Button("Command Palette…", action: { workspace.showCommandPalette() })
+        Button("Command Palette…", action: { workspace?.showCommandPalette() })
             .menuShortcut(.commandPalette, in: preset)
     }
 }
@@ -240,53 +240,53 @@ private struct IDERunCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Run Last Configuration", action: { workspace.runLastRunConfiguration() })
+        Button("Run Last Configuration", action: { workspace?.runLastRunConfiguration() })
             .menuShortcut(.runLastConfiguration, in: preset)
-            .disabled(workspace.lastRunConfiguration == nil)
-        Button("Debug Last Configuration", action: { workspace.debugLastConfiguration() })
+            .disabled(workspace?.lastRunConfiguration == nil)
+        Button("Debug Last Configuration", action: { workspace?.debugLastConfiguration() })
             .menuShortcut(.debugLastConfiguration, in: preset)
-            .disabled(workspace.lastRunConfiguration == nil)
-        Button("Run in Context", action: { workspace.runInContext(debug: false) })
+            .disabled(workspace?.lastRunConfiguration == nil)
+        Button("Run in Context", action: { workspace?.runInContext(debug: false) })
             .menuShortcut(.runInContext, in: preset)
-        Button("Debug in Context", action: { workspace.runInContext(debug: true) })
+        Button("Debug in Context", action: { workspace?.runInContext(debug: true) })
             .menuShortcut(.debugInContext, in: preset)
-        Button("Edit Run Configuration…", action: { workspace.editRunConfiguration() })
-            .disabled(!workspace.canEditRunConfiguration)
+        Button("Edit Run Configuration…", action: { workspace?.editRunConfiguration() })
+            .disabled(!(workspace?.canEditRunConfiguration ?? false))
         Divider()
-        Button("Toggle Breakpoint", action: { workspace.toggleBreakpointAtCaret() })
+        Button("Toggle Breakpoint", action: { workspace?.toggleBreakpointAtCaret() })
             .menuShortcut(.toggleBreakpoint, in: preset)
         Divider()
-        Button("Resume", action: { workspace.debugResume() })
+        Button("Resume", action: { workspace?.debugResume() })
             .menuShortcut(.debugResume, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
-        Button("Pause", action: { workspace.debugPause() })
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
+        Button("Pause", action: { workspace?.debugPause() })
             .menuShortcut(.debugPause, in: preset)
-            .disabled(!workspace.isDebuggerRunning)
-        Button("Step Over", action: { workspace.debugStepOver() })
+            .disabled(!(workspace?.isDebuggerRunning ?? false))
+        Button("Step Over", action: { workspace?.debugStepOver() })
             .menuShortcut(.debugStepOver, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
-        Button("Step Into", action: { workspace.debugStepInto() })
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
+        Button("Step Into", action: { workspace?.debugStepInto() })
             .menuShortcut(.debugStepInto, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
-        Button("Step Out", action: { workspace.debugStepOut() })
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
+        Button("Step Out", action: { workspace?.debugStepOut() })
             .menuShortcut(.debugStepOut, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
         Divider()
-        Button("Evaluate Expression…", action: { workspace.showEvaluateExpression() })
+        Button("Evaluate Expression…", action: { workspace?.showEvaluateExpression() })
             .menuShortcut(.evaluateExpression, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
-        Button("Quick Evaluate Expression", action: { workspace.quickEvaluate() })
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
+        Button("Quick Evaluate Expression", action: { workspace?.quickEvaluate() })
             .menuShortcut(.quickEvaluate, in: preset)
-            .disabled(!workspace.isDebuggerStopped)
+            .disabled(!(workspace?.isDebuggerStopped ?? false))
         Divider()
-        Button("Stop", action: { workspace.stopDebugging() })
+        Button("Stop", action: { workspace?.stopDebugging() })
             .menuShortcut(.debugStop, in: preset)
-            .disabled(!workspace.debugSession.isActive)
+            .disabled(!(workspace?.debugSession.isActive ?? false))
     }
 }
 
@@ -296,29 +296,29 @@ private struct IDEGitCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Update Project (Pull)", action: { workspace.pullProject() })
+        Button("Update Project (Pull)", action: { workspace?.pullProject() })
             .menuShortcut(.gitPull, in: preset)
-            .disabled(!workspace.gitStatus.isRepository)
-        Button("Push", action: { workspace.pushProject() })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Button("Push", action: { workspace?.pushProject() })
             .menuShortcut(.gitPush, in: preset)
-            .disabled(!workspace.gitStatus.isRepository)
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
         Divider()
-        Button("Show History for File", action: { workspace.showFileHistory() })
+        Button("Show History for File", action: { workspace?.showFileHistory() })
             .menuShortcut(.gitFileHistory, in: preset)
-            .disabled(!workspace.gitStatus.isRepository)
-        Button(workspace.isBlameShownForActiveFile ? "Hide Git Blame" : "Show Git Blame", action: { workspace.toggleGitBlame() })
-            .disabled(!workspace.gitStatus.isRepository)
-        Button("Revert File…", action: { workspace.revertActiveFile() })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Button(workspace?.isBlameShownForActiveFile == true ? "Hide Git Blame" : "Show Git Blame", action: { workspace?.toggleGitBlame() })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Button("Revert File…", action: { workspace?.revertActiveFile() })
             .menuShortcut(.gitRevert, in: preset)
-            .disabled(!workspace.gitStatus.isRepository)
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
         Divider()
-        Button("Show Source Control", action: { workspace.showSourceControl() })
-            .disabled(!workspace.gitStatus.isRepository)
+        Button("Show Source Control", action: { workspace?.showSourceControl() })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
     }
 }
 
@@ -328,52 +328,52 @@ private struct IDEJavaCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Show Context Actions", action: { workspace.showContextActions() })
+        Button("Show Context Actions", action: { workspace?.showContextActions() })
             .menuShortcut(.showContextActions, in: preset)
-        Button("Parameter Info", action: { workspace.showParameterInfo() })
+        Button("Parameter Info", action: { workspace?.showParameterInfo() })
             .menuShortcut(.parameterInfo, in: preset)
-        Button("Go to Super Method", action: { workspace.goToSuperMethod() })
-        Button("Go to Type Declaration", action: { workspace.goToTypeDefinition() })
+        Button("Go to Super Method", action: { workspace?.goToSuperMethod() })
+        Button("Go to Type Declaration", action: { workspace?.goToTypeDefinition() })
             .menuShortcut(.goToTypeDefinition, in: preset)
-        Button("Rename…", action: { workspace.renameSymbol() })
-        Button("Extract Variable…", action: { workspace.extractVariable() })
+        Button("Rename…", action: { workspace?.renameSymbol() })
+        Button("Extract Variable…", action: { workspace?.extractVariable() })
             .menuShortcut(.extractVariable, in: preset)
-        Button("Extract Field…", action: { workspace.extractField() })
+        Button("Extract Field…", action: { workspace?.extractField() })
             .menuShortcut(.extractField, in: preset)
-        Button("Extract Constant…", action: { workspace.extractConstant() })
+        Button("Extract Constant…", action: { workspace?.extractConstant() })
             .menuShortcut(.extractConstant, in: preset)
-        Button("Extract Method…", action: { workspace.extractMethod() })
+        Button("Extract Method…", action: { workspace?.extractMethod() })
             .menuShortcut(.extractMethod, in: preset)
-        Button("Inline Variable", action: { workspace.inlineVariable() })
+        Button("Inline Variable", action: { workspace?.inlineVariable() })
             .menuShortcut(.inlineVariable, in: preset)
-        Button("Inline Method", action: { workspace.inlineMethod() })
-        Button("Change Method Signature…", action: { workspace.changeMethodSignature() })
-        Button("Encapsulate Field", action: { workspace.encapsulateField() })
+        Button("Inline Method", action: { workspace?.inlineMethod() })
+        Button("Change Method Signature…", action: { workspace?.changeMethodSignature() })
+        Button("Encapsulate Field", action: { workspace?.encapsulateField() })
             .menuShortcut(.encapsulateField, in: preset)
-        Button("Generate…", action: { workspace.generate() })
-        Button("Generate Getter and Setter", action: { workspace.generateAccessors() })
-        Button("Move Class…", action: { workspace.moveClass() })
-        Button("Safe Delete", action: { workspace.safeDelete() })
-        Button("Reformat Code", action: { workspace.reformatCode() })
-        Button("Type Hierarchy") { workspace.showTypeHierarchy() }
-        Button("Call Hierarchy") { workspace.showCallHierarchy() }
+        Button("Generate…", action: { workspace?.generate() })
+        Button("Generate Getter and Setter", action: { workspace?.generateAccessors() })
+        Button("Move Class…", action: { workspace?.moveClass() })
+        Button("Safe Delete", action: { workspace?.safeDelete() })
+        Button("Reformat Code", action: { workspace?.reformatCode() })
+        Button("Type Hierarchy") { workspace?.showTypeHierarchy() }
+        Button("Call Hierarchy") { workspace?.showCallHierarchy() }
         Divider()
-        Button("Optimize Imports", action: { workspace.optimizeImports() })
+        Button("Optimize Imports", action: { workspace?.optimizeImports() })
         Divider()
         Menu("Project JDK") {
             IDEJDKMenuFromRef(ref: ref)
         }
-        Button("Build Project", systemImage: "hammer", action: { workspace.buildGradleProject() })
-            .disabled(!workspace.javaSupport.isGradleProject)
-        Button("Reload Gradle Project", action: { workspace.reloadGradleProject() })
-            .disabled(!workspace.javaSupport.isGradleProject)
-        Button("Show Gradle Output", action: { workspace.showGradleOutput() })
-            .disabled(workspace.javaSupport.gradleConsole.lines.isEmpty)
+        Button("Build Project", systemImage: "hammer", action: { workspace?.buildGradleProject() })
+            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        Button("Reload Gradle Project", action: { workspace?.reloadGradleProject() })
+            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
+            .disabled(workspace?.javaSupport.gradleConsole.lines.isEmpty ?? true)
     }
 }
 
@@ -383,16 +383,16 @@ private struct IDEHTTPCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Send Request", systemImage: "paperplane.fill", action: { workspace.sendActiveHTTPRequest() })
+        Button("Send Request", systemImage: "paperplane.fill", action: { workspace?.sendActiveHTTPRequest() })
             .menuShortcut(.sendHTTPRequest, in: preset)
-            .disabled(!workspace.httpFileCanSend)
-        Button("Show Response", action: { workspace.showHTTPResponse() })
-            .disabled(workspace.httpSupport.responseLog.lines.isEmpty)
+            .disabled(!(workspace?.httpFileCanSend ?? false))
+        Button("Show Response", action: { workspace?.showHTTPResponse() })
+            .disabled(workspace?.httpSupport.responseLog.lines.isEmpty ?? true)
     }
 }
 
@@ -402,81 +402,82 @@ private struct IDEViewCommands: View {
 
     /// Resolved when read, never stored: menu actions run long after this view was built, and a
     /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace { ref.workspace ?? IDEWorkspace.placeholder }
+    private var workspace: IDEWorkspace? { ref.workspace }
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
-    /// A binding that reaches the workspace when read or written, instead of capturing it.
+    /// A binding that reaches the workspace when read or written, instead of capturing it. With the
+    /// window gone it reads false and ignores writes.
     private func binding(_ keyPath: KeyPath<IDEWorkspace, Binding<Bool>>) -> Binding<Bool> {
         Binding(
-            get: { workspace[keyPath: keyPath].wrappedValue },
-            set: { workspace[keyPath: keyPath].wrappedValue = $0 }
+            get: { workspace?[keyPath: keyPath].wrappedValue ?? false },
+            set: { workspace?[keyPath: keyPath].wrappedValue = $0 }
         )
     }
 
     var body: some View {
-        Button("Split Editor Right", systemImage: "rectangle.split.2x1", action: { workspace.splitRight() })
+        Button("Split Editor Right", systemImage: "rectangle.split.2x1", action: { workspace?.splitRight() })
             .menuShortcut(.splitRight, in: preset)
-        Button("Split Editor Down", systemImage: "rectangle.split.1x2", action: { workspace.splitDown() })
+        Button("Split Editor Down", systemImage: "rectangle.split.1x2", action: { workspace?.splitDown() })
             .menuShortcut(.splitDown, in: preset)
-        Button("Close Editor Group", systemImage: "rectangle.slash", action: { workspace.closeActivePane() })
-        Button("Next Tab") { workspace.selectAdjacentTab(forward: true) }
+        Button("Close Editor Group", systemImage: "rectangle.slash", action: { workspace?.closeActivePane() })
+        Button("Next Tab") { workspace?.selectAdjacentTab(forward: true) }
             .menuShortcut(.nextTab, in: preset)
-        Button("Previous Tab") { workspace.selectAdjacentTab(forward: false) }
+        Button("Previous Tab") { workspace?.selectAdjacentTab(forward: false) }
             .menuShortcut(.previousTab, in: preset)
-        Button("Next Editor Group") { workspace.focusAdjacentPane(forward: true) }
+        Button("Next Editor Group") { workspace?.focusAdjacentPane(forward: true) }
             .menuShortcut(.nextSplit, in: preset)
-        Button("Previous Editor Group") { workspace.focusAdjacentPane(forward: false) }
+        Button("Previous Editor Group") { workspace?.focusAdjacentPane(forward: false) }
             .menuShortcut(.previousSplit, in: preset)
         Divider()
-        Button("Toggle Sidebar", systemImage: "sidebar.leading", action: { workspace.toggleSidebar() })
+        Button("Toggle Sidebar", systemImage: "sidebar.leading", action: { workspace?.toggleSidebar() })
             .menuShortcut(.toggleSidebar, in: preset)
-        Button("Toggle Structure", systemImage: "list.bullet.indent", action: { workspace.toggleStructureSidebar() })
+        Button("Toggle Structure", systemImage: "list.bullet.indent", action: { workspace?.toggleStructureSidebar() })
             .menuShortcut(.toggleStructure, in: preset)
         Button("Toggle Breakpoints", systemImage: "circle.fill") {
-            workspace.toggleSidebarTab(.breakpoints)
+            workspace?.toggleSidebarTab(.breakpoints)
         }
-        Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: { workspace.toggleGradleSidebar() })
-            .disabled(!workspace.javaSupport.isGradleProject)
-        Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace.revealActiveFileInExplorer() })
+        Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: { workspace?.toggleGradleSidebar() })
+            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace?.revealActiveFileInExplorer() })
             .menuShortcut(.revealActiveFile, in: preset)
-        Button("Markdown Preview", systemImage: "doc.richtext", action: { workspace.toggleMarkdownPreview() })
+        Button("Markdown Preview", systemImage: "doc.richtext", action: { workspace?.toggleMarkdownPreview() })
             .menuShortcut(.markdownPreview, in: preset)
-        Button("Toggle Terminal", systemImage: "terminal", action: { workspace.toggleTerminal() })
+        Button("Toggle Terminal", systemImage: "terminal", action: { workspace?.toggleTerminal() })
             .menuShortcut(.toggleTerminal, in: preset)
-        Button("Toggle Debug", systemImage: "ladybug", action: { workspace.toggleDebugToolWindow() })
+        Button("Toggle Debug", systemImage: "ladybug", action: { workspace?.toggleDebugToolWindow() })
             .menuShortcut(.toggleDebugTool, in: preset)
-            .disabled(!workspace.showsDebugTab)
-        Button("Hide All Tool Windows", systemImage: "rectangle.compress.vertical", action: { workspace.toggleAllToolWindows() })
+            .disabled(!(workspace?.showsDebugTab ?? false))
+        Button("Hide All Tool Windows", systemImage: "rectangle.compress.vertical", action: { workspace?.toggleAllToolWindows() })
             .menuShortcut(.hideAllToolWindows, in: preset)
-        Button("Toggle Problems", systemImage: "exclamationmark.triangle", action: { workspace.toggleProblems() })
+        Button("Toggle Problems", systemImage: "exclamationmark.triangle", action: { workspace?.toggleProblems() })
             .menuShortcut(.toggleProblems, in: preset)
-        Button("Toggle Changes", systemImage: "arrow.triangle.branch", action: { workspace.toggleSourceControl() })
-            .disabled(!workspace.showsSourceControlTab)
+        Button("Toggle Changes", systemImage: "arrow.triangle.branch", action: { workspace?.toggleSourceControl() })
+            .disabled(!(workspace?.showsSourceControlTab ?? false))
             .menuShortcut(.toggleSourceControl, in: preset)
         Button("New Terminal Tab", systemImage: "plus.rectangle.on.rectangle") {
-            workspace.addTerminalTab()
+            workspace?.addTerminalTab()
         }
             .menuShortcut(.newTerminalTab, in: preset)
-        Button("Clear Terminal", systemImage: "eraser", action: { workspace.clearTerminal() })
-            .disabled(!(workspace.isTerminalVisible && workspace.isTerminalTabSelected))
+        Button("Clear Terminal", systemImage: "eraser", action: { workspace?.clearTerminal() })
+            .disabled(!(workspace.map { $0.isTerminalVisible && $0.isTerminalTabSelected } ?? false))
         Button("Close Terminal Tab", systemImage: "xmark.rectangle", action: {
-            if let id = workspace.selectedTerminalTabID {
-                workspace.closeTerminalTab(id)
+            if let id = workspace?.selectedTerminalTabID {
+                workspace?.closeTerminalTab(id)
             }
         })
-        Button("Next Terminal Tab", action: { workspace.selectNextTerminalTab() })
+        Button("Next Terminal Tab", action: { workspace?.selectNextTerminalTab() })
             .menuShortcut(.nextTerminalTab, in: preset)
-        Button("Previous Terminal Tab", action: { workspace.selectPreviousTerminalTab() })
+        Button("Previous Terminal Tab", action: { workspace?.selectPreviousTerminalTab() })
             .menuShortcut(.previousTerminalTab, in: preset)
         Divider()
-        Button("Zoom In", systemImage: "plus.magnifyingglass", action: { workspace.zoomIn() })
+        Button("Zoom In", systemImage: "plus.magnifyingglass", action: { workspace?.zoomIn() })
             .menuShortcut(.zoomIn, in: preset)
-        Button("Zoom Out", systemImage: "minus.magnifyingglass", action: { workspace.zoomOut() })
+        Button("Zoom Out", systemImage: "minus.magnifyingglass", action: { workspace?.zoomOut() })
             .menuShortcut(.zoomOut, in: preset)
-        Button("Actual Size", systemImage: "1.magnifyingglass", action: { workspace.resetZoom() })
+        Button("Actual Size", systemImage: "1.magnifyingglass", action: { workspace?.resetZoom() })
             .menuShortcut(.resetZoom, in: preset)
-            .disabled(workspace.preferences.zoomPercent == 100)
+            .disabled(IDEPreferences.shared.zoomPercent == 100)
         Divider()
         Toggle("Line Numbers", isOn: binding(\.showLineNumbersBinding))
         Toggle("Code Folding", isOn: binding(\.isLineFoldingEnabledBinding))
@@ -487,12 +488,12 @@ private struct IDEViewCommands: View {
         Menu("Syntax") {
             ForEach(IDELanguageSupport.selectableSyntaxes) { option in
                 Button(option.displayName) {
-                    workspace.setLanguage(identifier: option.id)
+                    workspace?.setLanguage(identifier: option.id)
                 }
-                .disabled(!workspace.canChangeActiveLanguage)
+                .disabled(!(workspace?.canChangeActiveLanguage ?? false))
             }
         }
-        .disabled(!workspace.canChangeActiveLanguage)
+        .disabled(!(workspace?.canChangeActiveLanguage ?? false))
         Divider()
         Toggle("Typewriter Scrolling", isOn: binding(\.isTypewriterScrollingEnabledBinding))
         Toggle("Distraction Free", isOn: binding(\.isDistractionFreeModeEnabledBinding))
@@ -507,7 +508,11 @@ private struct IDEJDKMenuFromRef: View {
     let ref: IDEWorkspaceRef
 
     var body: some View {
-        IDEJDKMenuContent()
-            .environment(ref.workspace ?? IDEWorkspace.placeholder)
+        // The workspace is read while the body is evaluated and handed to the environment only;
+        // the body holds no closure that keeps it.
+        if let workspace = ref.workspace {
+            IDEJDKMenuContent()
+                .environment(workspace)
+        }
     }
 }

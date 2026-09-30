@@ -116,7 +116,7 @@ public struct JModsRoot: JavaIndexableRoot {
 /// Handles multi-release JARs (`META-INF/versions/N/...`) by preferring the highest `N` at or
 /// below the project's language level over the base entry.
 public struct JarRoot: JavaIndexableRoot {
-    private let jarURL: URL
+    public let jarURL: URL
     private let languageLevel: Int
     public let id: String
 

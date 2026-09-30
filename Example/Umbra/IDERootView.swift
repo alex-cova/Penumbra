@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
-    @State private var sidebarWidth = IDEWindowSessionStore.load().sidebarWidth
-    @State private var gradleSidebarWidth = IDEWindowSessionStore.load().gradleSidebarWidth
+    @State private var sidebarWidth: Double
+    @State private var gradleSidebarWidth: Double
     @State private var didRecordPanelSizes = false
     @State private var didBootstrap = false
     /// The window's top safe-area inset: the system titlebar, plus the native tab bar while it
@@ -21,7 +21,11 @@ public struct IDERootView: View {
         chrome.toolbarRowHeight + chrome.tabBarHeight
     }
 
-    public init() {}
+    public init() {
+        let session = IDEWindowSessionStore.load()
+        _sidebarWidth = State(initialValue: session.sidebarWidth)
+        _gradleSidebarWidth = State(initialValue: session.gradleSidebarWidth)
+    }
 
     public var body: some View {
         let _ = workspace.layoutEpoch
@@ -218,6 +222,9 @@ public struct IDERootView: View {
             didBootstrap = true
             workspace.bootstrap()
             workspace.focusActiveEditor()
+        }
+        .onChange(of: sidebarWidth) { _, newWidth in
+            workspace.sidebarWidth = newWidth
         }
         .onChange(of: gradleSidebarWidth) { _, newWidth in
             workspace.gradleSidebarWidth = newWidth

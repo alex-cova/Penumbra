@@ -65,13 +65,13 @@ final class IDEWindowRegistry {
     func register(_ workspace: IDEWorkspace) {
         guard !workspaces.contains(where: { $0 === workspace }) else { return }
         hasHadWindow = true
-        // A window that is already key (the first one, or a new one brought forward) leads.
-        let entry = WeakWorkspace(workspace: workspace)
-        if workspace.window?.isKeyWindow == true {
-            entries.insert(entry, at: 0)
-        } else {
-            entries.append(entry)
-        }
+        let current = workspaces
+        entries.append(WeakWorkspace(workspace: workspace))
+        reorder(IDESessionWindowPolicy.registered(
+            workspace.windowID,
+            isKey: workspace.window?.isKeyWindow == true,
+            in: current.map(\.windowID)
+        ))
         if !newWindowJobs.isEmpty {
             let urls = newWindowJobs.removeFirst()
             if !urls.isEmpty {
@@ -86,10 +86,10 @@ final class IDEWindowRegistry {
     /// last window" stays a window that is still open. With none left the closed window's own
     /// save (made as it closed) stands.
     func unregister(_ workspace: IDEWorkspace) {
-        let wasSessionWindow = sessionWindow === workspace
+        let successor = IDESessionWindowPolicy.successor(afterClosing: workspace.windowID, in: policyWindows)
         entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
-        if wasSessionWindow {
-            sessionWindow?.saveSession()
+        if let successor {
+            self.workspace(withID: successor)?.saveSession()
         }
     }
 
@@ -97,9 +97,19 @@ final class IDEWindowRegistry {
     /// before its workspace finishes bootstrapping) is ignored: adding it here would make
     /// `register` skip it and would count it as open while it is still deciding whether to restore.
     func didBecomeActive(_ workspace: IDEWorkspace) {
-        guard workspaces.contains(where: { $0 === workspace }) else { return }
-        entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
-        entries.insert(WeakWorkspace(workspace: workspace), at: 0)
+        reorder(IDESessionWindowPolicy.activated(workspace.windowID, in: workspaces.map(\.windowID)))
+    }
+
+    /// Puts the entries in the order of `ids`, dropping closed windows.
+    private func reorder(_ ids: [UUID]) {
+        let current = workspaces
+        entries = ids.compactMap { id in
+            current.first { $0.windowID == id }.map { WeakWorkspace(workspace: $0) }
+        }
+    }
+
+    private var policyWindows: [IDESessionWindowPolicy.Window] {
+        workspaces.map { IDESessionWindowPolicy.Window(id: $0.windowID, isPristine: $0.isPristine) }
     }
 
     // MARK: - Session
@@ -108,14 +118,17 @@ final class IDEWindowRegistry {
     /// or Dock reopen after closing the last one). A window opened next to another starts empty, and
     /// so does one opened to show a folder or file the user just asked for.
     var shouldRestoreLastWindow: Bool {
-        workspaces.isEmpty && newWindowJobs.allSatisfy(\.isEmpty)
+        IDESessionWindowPolicy.shouldRestoreLastWindow(
+            openWindowCount: workspaces.count,
+            pendingNewWindowJobs: newWindowJobs.filter { !$0.isEmpty }.count
+        )
     }
 
     /// The window whose layout is saved to `last-window.json` and restored at the next launch: the
     /// one that was key last, skipping pristine windows. A blank window opened next to others must
     /// not replace the project you were working in just because you clicked into it.
     var sessionWindow: IDEWorkspace? {
-        workspaces.first { !$0.isPristine }
+        IDESessionWindowPolicy.sessionWindow(in: policyWindows).flatMap { workspace(withID: $0) }
     }
 
     func isSessionWindow(_ workspace: IDEWorkspace) -> Bool {
