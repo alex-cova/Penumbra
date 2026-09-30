@@ -6,6 +6,7 @@ public struct IDERootView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth = IDESessionStore.load().sidebarWidth
     @State private var gradleSidebarWidth = IDESessionStore.load().gradleSidebarWidth
+    @State private var didRecordPanelSizes = false
     @State private var didBootstrap = false
     /// The system titlebar's height (the top safe-area inset). The titlebar row takes exactly
     /// this height so its controls line up with the traffic lights.
@@ -188,18 +189,23 @@ public struct IDERootView: View {
             workspace.bootstrap()
             workspace.focusActiveEditor()
         }
-        .onChange(of: sidebarWidth) { _, newWidth in
-            workspace.saveSession(sidebarWidth: newWidth, gradleSidebarWidth: gradleSidebarWidth)
-        }
         .onChange(of: gradleSidebarWidth) { _, newWidth in
             workspace.gradleSidebarWidth = newWidth
-            workspace.saveSession(sidebarWidth: sidebarWidth, gradleSidebarWidth: newWidth)
         }
-        .onChange(of: workspace.terminalHeight) { _, newHeight in
+        // Building and writing the session is far too heavy to do on every tick of a resize drag,
+        // so it waits for the sizes to settle. `task(id:)` cancels the pending save on each change.
+        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: gradleSidebarWidth, terminal: workspace.terminalHeight)) {
+            // The first run is the launch state, not a change: record it and save nothing.
+            guard didRecordPanelSizes else {
+                didRecordPanelSizes = true
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
             workspace.saveSession(
                 sidebarWidth: sidebarWidth,
                 gradleSidebarWidth: gradleSidebarWidth,
-                terminalHeight: newHeight
+                terminalHeight: workspace.terminalHeight
             )
         }
         .focusable(false)
@@ -258,37 +264,31 @@ struct IDEGradleReloadBanner: View {
     }
 }
 
+private struct PanelSizes: Hashable {
+    var sidebar: Double
+    var gradle: Double
+    var terminal: Double
+}
+
 private struct IDETerminalResizeHandle: View {
     @Binding var height: Double
-    @State private var lastTranslation: CGFloat = 0
+    /// The height when the drag began; the drag is applied as start + total movement.
+    @State private var startHeight: Double?
 
     var body: some View {
         // The gap between the editor card and the bottom panel is the handle.
-        Color.clear
-            .frame(height: IDEAppearance.Spacing.panelGap)
-            .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    let delta = lastTranslation - value.translation.height
-                    lastTranslation = value.translation.height
-                    height = min(
-                        max(height + delta, IDEAppearance.Spacing.terminalMinHeight),
-                        IDEAppearance.Spacing.terminalMaxHeight
-                    )
-                }
-                .onEnded { _ in
-                    lastTranslation = 0
-                }
-        )
-        .onHover { hovering in
-            if hovering {
-                NSCursor.resizeUpDown.push()
-            } else {
-                NSCursor.pop()
-            }
+        IDEResizeDragArea(axis: .vertical) { movement in
+            let start = startHeight ?? height
+            startHeight = start
+            height = min(
+                max(start - movement, IDEAppearance.Spacing.terminalMinHeight),
+                IDEAppearance.Spacing.terminalMaxHeight
+            )
+        } onEnd: {
+            startHeight = nil
         }
+        .frame(height: IDEAppearance.Spacing.panelGap)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -299,34 +299,92 @@ private struct IDESidebarResizeHandle: View {
 
     @Binding var width: Double
     var edge: Edge = .leading
-    @State private var lastTranslation: CGFloat = 0
+    /// The width when the drag began; see `IDETerminalResizeHandle.startHeight`.
+    @State private var startWidth: Double?
 
     var body: some View {
         // The gap between two cards is the handle.
-        Color.clear
-            .frame(width: IDEAppearance.Spacing.panelGap)
-            .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    let rawDelta = value.translation.width - lastTranslation
-                    lastTranslation = value.translation.width
-                    let delta = edge == .leading ? rawDelta : -rawDelta
-                    width = min(
-                        max(width + delta, IDEAppearance.Spacing.sidebarMinWidth),
-                        IDEAppearance.Spacing.sidebarMaxWidth
-                    )
-                }
-                .onEnded { _ in
-                    lastTranslation = 0
-                }
-        )
-        .onHover { hovering in
-            if hovering {
-                NSCursor.resizeLeftRight.push()
-            } else {
-                NSCursor.pop()
-            }
+        IDEResizeDragArea(axis: .horizontal) { movement in
+            let start = startWidth ?? width
+            startWidth = start
+            let delta = edge == .leading ? movement : -movement
+            width = min(
+                max(start + delta, IDEAppearance.Spacing.sidebarMinWidth),
+                IDEAppearance.Spacing.sidebarMaxWidth
+            )
+        } onEnd: {
+            startWidth = nil
+        }
+        .frame(width: IDEAppearance.Spacing.panelGap)
+    }
+}
+
+/// The drag target of a panel resize handle, in AppKit. A SwiftUI `DragGesture` on these handles
+/// misbehaved: the handle moves as its panel resizes, so its own coordinate space moves under the
+/// cursor, and the window is `isMovableByWindowBackground`, so a transparent gap can start a
+/// window drag. This view refuses window dragging, measures the mouse in window space (which
+/// neither the handle nor the panels move) and owns the resize cursor.
+private struct IDEResizeDragArea: NSViewRepresentable {
+    enum Axis { case horizontal, vertical }
+
+    let axis: Axis
+    /// Total movement since the mouse went down, along `axis`, positive to the right / downwards.
+    let onDrag: (CGFloat) -> Void
+    let onEnd: () -> Void
+
+    init(axis: Axis, onDrag: @escaping (CGFloat) -> Void, onEnd: @escaping () -> Void) {
+        self.axis = axis
+        self.onDrag = onDrag
+        self.onEnd = onEnd
+    }
+
+    func makeNSView(context: Context) -> DragView {
+        let view = DragView()
+        view.axis = axis
+        view.onDrag = onDrag
+        view.onEnd = onEnd
+        return view
+    }
+
+    func updateNSView(_ view: DragView, context: Context) {
+        view.axis = axis
+        view.onDrag = onDrag
+        view.onEnd = onEnd
+    }
+
+    final class DragView: NSView {
+        var axis: Axis = .horizontal
+        var onDrag: (CGFloat) -> Void = { _ in }
+        var onEnd: () -> Void = {}
+        private var startLocation: NSPoint?
+
+        private var cursor: NSCursor { axis == .horizontal ? .resizeLeftRight : .resizeUpDown }
+
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: cursor)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            startLocation = event.locationInWindow
+            cursor.set()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let startLocation else { return }
+            let location = event.locationInWindow
+            // Window coordinates grow upwards; report downwards-positive movement.
+            let movement = axis == .horizontal ? location.x - startLocation.x : startLocation.y - location.y
+            cursor.set()
+            onDrag(movement)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard startLocation != nil else { return }
+            startLocation = nil
+            onEnd()
         }
     }
 }

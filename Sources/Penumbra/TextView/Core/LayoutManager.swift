@@ -181,8 +181,9 @@ final class LayoutManager {
     /// `true` when `paintBackend` is the Metal renderer. Flipped by `setMetalRenderingActive(_:)`.
     private(set) var isMetalRenderingActive = false
     private var metalRasterRetryCount = 0
-    /// Viewport origin at the last Metal present, so a scroll presents in the same frame as the gutter.
-    private var lastPresentedViewportOrigin: CGPoint?
+    /// Viewport at the last Metal present, so a scroll or a resize presents in the same frame as the
+    /// gutter and the canvas's new bounds.
+    private var lastPresentedViewport: CGRect?
     private static let maxMetalRasterRetries = 40
     /// Lines touched by the latest edit; layout highlights these synchronously so keystrokes
     /// keep syntax colours instead of flashing default `theme.textColor` until async work lands.
@@ -819,10 +820,13 @@ extension LayoutManager {
                 // `CATransaction.commit`; disableActions swallows that contents update, which is
                 // the blank-editor symptom (offscreen encode still has glyphs, the on-screen
                 // `CAMetalLayer` stays clear).
-                // A scroll must land in the same frame as the gutter's line numbers.
-                let viewportMoved = viewport.origin != lastPresentedViewportOrigin
-                lastPresentedViewportOrigin = viewport.origin
-                metalCanvasView.withCoalescedPresent(immediately: viewportMoved, performLayout)
+                // A scroll must land in the same frame as the gutter's line numbers. A resize must
+                // too: the canvas takes its new bounds in this frame, and until a drawable of the
+                // new size is presented Core Animation stretches the old one over them, so every
+                // tick of a panel drag that only changes the editor's size squashed the text.
+                let viewportChanged = viewport != lastPresentedViewport
+                lastPresentedViewport = viewport
+                metalCanvasView.withCoalescedPresent(immediately: viewportChanged, performLayout)
             } else {
                 performLayout()
             }

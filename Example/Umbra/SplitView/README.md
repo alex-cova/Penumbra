@@ -1,9 +1,10 @@
 # SplitView (vendored)
 
 > Copied into Umbra from Hextech (`Hextech/DesignSystem/SplitView`). The notes below describe
-> the Hextech port; **Umbra's own changes are listed in the last section.** `SplitPanes` is the
-> component to use for every split in Umbra: the workbench shell (`IDERootView`), editor panes
-> (`IDEEditorSplitChain`), the debug panel and the source-control list/diff.
+> the Hextech port; **Umbra's own changes are listed in the last section.** `SplitPanes` is used
+> for the editor panes (`IDEEditorSplitChain`), the debug panel and the source-control list/diff.
+> The workbench shell (`IDERootView`: the sidebars and the bottom panel) sizes its panels itself,
+> with the AppKit `IDEResizeDragArea` handles.
 
 Source: <https://github.com/stevengharris/SplitView> — MIT, Copyright (c) 2023 Steven G. Harris.
 Full licence text in `LICENSE` beside this file. Vendored rather than added as a package
@@ -114,6 +115,9 @@ rather than fighting each other.
   the gap (so the editor's gutter and overlay scroller keep their clicks), and it collapses with
   a hidden pane (`hidesWithPane`, i.e. `styling.hideSplitter`) so a hidden sidebar leaves no
   seam.
+- **`Split`: the drag is measured in a named coordinate space on the container** (start
+  fraction + total translation) instead of per-tick deltas in the splitter's local space, which
+  moves under the cursor as the splitter is re-positioned.
 - **`Split`: synchronous `onChange(of: size, initial: true)`** instead of `task(id:)`, and zero
   sizes ignored. The task ran after the frame was committed, so a priority side wobbled on every
   live-resize tick.

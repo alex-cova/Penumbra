@@ -43,8 +43,10 @@ struct Split<P: View, D: SplitDivider, S: View>: View {
     @State private var fullFraction: CGFloat
     /// The previous size, used to determine how to change `constrainedFraction` as size changes
     @State private var oldSize: CGSize?
-    /// The previous position as we drag the `splitter`
-    @State private var previousPosition: CGFloat?
+    /// The splitter's `constrainedFraction` when the current drag began; nil when not dragging.
+    @State private var dragStartFraction: CGFloat?
+
+    private static var dragSpace: String { "UmbraSplitDrag" }
 
     var body: some View {
         GeometryReader { geometry in
@@ -84,6 +86,9 @@ struct Split<P: View, D: SplitDivider, S: View>: View {
                         .simultaneousGesture(drag(in: size))
                 }
             }
+            // Umbra: the drag is measured in this fixed space. The splitter is re-positioned on every
+            // change, so its own local space moves under the cursor and the divider overshot.
+            .coordinateSpace(.named(Self.dragSpace))
             // Our size changes when the window size changes or the containing window's size changes.
             // Note our size doesn't change when dragging the splitter, but when we have nested split
             // views, dragging our splitter can cause the size of another split view to change.
@@ -181,18 +186,18 @@ struct Split<P: View, D: SplitDivider, S: View>: View {
     /// When we are done dragging, we set the value of `fraction`, which does nothing unless someone
     /// is holding onto it.
     private func drag(in size: CGSize) -> some Gesture {
-        DragGesture()
+        DragGesture(coordinateSpace: .named(Self.dragSpace))
             .onChanged { gesture in
                 unhide(in: size)    // Unhide if the splitter is hidden, but resetting constrainedFraction first
+                if dragStartFraction == nil { dragStartFraction = constrainedFraction }
                 let fraction = fraction(for: gesture, in: size)
                 constrainedFraction = fraction.constrained
                 fullFraction = fraction.full
                 splitter.styling.previewHide = !isDraggable() || sideToHide() != nil
                 onDrag?(constrainedFraction)
-                previousPosition = layout.isHorizontal ? constrainedFraction * size.width : constrainedFraction * size.height
             }
             .onEnded { _ in
-                previousPosition = nil
+                dragStartFraction = nil
                 splitter.styling.previewHide = false     // We are never previewing the hidden state when drag ends
                 hide.side = sideToHide()
                 // The fullFraction is used to determine the sideToHide, so we need to reset when done dragging,
@@ -223,16 +228,16 @@ struct Split<P: View, D: SplitDivider, S: View>: View {
     /// The `constrained` value is always between `minSFraction` and `minPFraction` (if specified).
     /// The `full` value is always between 0 and 1.
     ///
-    /// We use a delta based on `previousPosition` so the `splitter` follows the location where drag begins, not
-    /// the center of the splitter.
+    /// The position is the fraction at drag start plus the gesture's translation, both measured in
+    /// the container's fixed coordinate space, so the splitter follows the cursor 1:1 however often
+    /// it is re-positioned.
     func fraction(for gesture: DragGesture.Value, in size: CGSize) -> (constrained: CGFloat, full: CGFloat) {
         let horizontal = layout.isHorizontal
         let length = horizontal ? size.width : size.height                                              // Size in direction of dragging
-        let splitterLocation = length * constrainedFraction                                             // Splitter position prior to drag
-        let gestureLocation = horizontal ? gesture.location.x : gesture.location.y                      // Gesture location in direction of dragging
-        let gestureTranslation = horizontal ? gesture.translation.width : gesture.translation.height    // Gesture movement since beginning of drag
-        let delta = previousPosition == nil ? gestureTranslation : gestureLocation - previousPosition!  // Amount moved since last change
-        let constrainedLocation = max(0, min(length, splitterLocation + delta))                         // New location kept in proper bounds
+        guard length > 0 else { return (constrained: constrainedFraction, full: fullFraction) }
+        let startLocation = length * (dragStartFraction ?? constrainedFraction)                         // Splitter position when the drag began
+        let translation = horizontal ? gesture.translation.width : gesture.translation.height           // Cursor movement since the drag began
+        let constrainedLocation = max(0, min(length, startLocation + translation))                     // New location kept in proper bounds
         let fullFraction = constrainedLocation / length                                                 // Fraction of full size without regard to constraints
         let constrainedFraction = min(1 - (minSFraction ?? 0), max((minPFraction ?? 0), fullFraction))  // Fraction of full size kept within constraints
         return (constrained: constrainedFraction, full: fullFraction)

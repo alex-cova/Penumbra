@@ -95,7 +95,6 @@ struct IDEGradleSidebarPanel: View {
     private var header: some View {
         HStack(spacing: 2) {
             IDEPanelTitle("Gradle")
-                .fixedSize()
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if java.isGradleBusy {
@@ -148,6 +147,11 @@ struct IDEGradleSidebarPanel: View {
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
         .frame(height: IDEAppearance.Spacing.tabHeight + 2)
+        // The buttons alone are wider than the narrowest sidebar. Without this frame the header's
+        // minimum width widened the whole panel past its card, centered, so the tree's scroll view
+        // stuck out over the resize handle and took its clicks.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .trailing)
+        .clipped()
     }
 
     // MARK: Content
