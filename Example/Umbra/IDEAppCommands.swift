@@ -21,9 +21,11 @@ struct IDEAppCommands: Commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Window", systemImage: "macwindow.badge.plus") { openWindow(id: "main") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                if let workspace {
-                    IDEFileCommands(workspace: workspace)
+                Button("New Window Tab", systemImage: "plus.rectangle.on.rectangle") {
+                    IDEWindowRegistry.shared.openNewTab()
                 }
+                Divider()
+                IDEFileCommands(workspace: workspace)
             }
 
             // SwiftUI's default Undo/Redo items call the environment undo manager, which is
@@ -97,49 +99,75 @@ private struct IDENoWindowCommand: View {
     }
 }
 
-/// File menu items that need a window: documents, folders, recents.
+/// The File menu's documents, folders and recents. Open Folder… and Open Recent work with no window
+/// focused (they route to a window, or open a new one); the rest need one.
 private struct IDEFileCommands: View {
-    let workspace: IDEWorkspace
+    let workspace: IDEWorkspace?
 
-    private var preset: KeymapPreset { workspace.preferences.keymapPreset }
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
+    private var origin: IDEOpenOrigin { workspace.map { .window($0.windowID) } ?? .external }
 
     var body: some View {
-        Button("New File", systemImage: "doc.badge.plus", action: workspace.newFile)
+        Button("New File", systemImage: "doc.badge.plus") { workspace?.newFile() }
             .menuShortcut(.newFile, in: preset)
-        Button("Open…", systemImage: "folder", action: workspace.openFile)
+            .disabled(workspace == nil)
+        Button("Open…", systemImage: "folder") { workspace?.openFile() }
             .menuShortcut(.openFile, in: preset)
-        Button("Open Folder…", systemImage: "folder.badge.plus", action: workspace.openFolder)
-            .menuShortcut(.openFolder, in: preset)
-        Button("Close Folder", systemImage: "folder.badge.minus", action: workspace.closeFolder)
-            .disabled(!workspace.hasOpenProject)
+            .disabled(workspace == nil)
+        Button("Open Folder…", systemImage: "folder.badge.plus") {
+            IDEWindowRegistry.shared.chooseFolder(from: origin)
+        }
+        .menuShortcut(.openFolder, in: preset)
+        Button("Close Folder", systemImage: "folder.badge.minus") { workspace?.closeFolder() }
+            .disabled(!(workspace?.hasOpenProject ?? false))
         Divider()
         Button("Save", systemImage: "square.and.arrow.down") {
-            Task { await workspace.saveActiveDocument() }
+            Task { await workspace?.saveActiveDocument() }
         }
         .menuShortcut(.save, in: preset)
+        .disabled(workspace == nil)
         Button("Save As…", systemImage: "square.and.arrow.down.on.square") {
-            Task { await workspace.saveActiveDocumentAs() }
+            Task { await workspace?.saveActiveDocumentAs() }
         }
         .menuShortcut(.saveAs, in: preset)
+        .disabled(workspace == nil)
         Divider()
-        Button("Close Tab", systemImage: "xmark", action: workspace.closeActiveTab)
+        Button("Close Tab", systemImage: "xmark") { workspace?.closeActiveTab() }
             .menuShortcut(.closeTab, in: preset)
-        if !workspace.recentProjectURLs.isEmpty || !workspace.recentFileURLs.isEmpty {
+            .disabled(workspace == nil)
+        IDEOpenRecentMenu(workspace: workspace, origin: origin)
+    }
+}
+
+/// Open Recent, from the shared recent lists, so it lists the same entries in every window and with
+/// none open.
+private struct IDEOpenRecentMenu: View {
+    let workspace: IDEWorkspace?
+    let origin: IDEOpenOrigin
+
+    private var appState: IDEAppState { IDEAppState.shared }
+
+    var body: some View {
+        if !appState.recentProjects.isEmpty || !appState.recentFiles.isEmpty {
             Divider()
             Menu("Open Recent") {
-                if !workspace.recentProjectURLs.isEmpty {
-                    ForEach(workspace.recentProjectURLs, id: \.path) { url in
+                if !appState.recentProjects.isEmpty {
+                    ForEach(appState.recentProjects, id: \.path) { url in
                         Button(url.lastPathComponent, systemImage: "folder") {
-                            workspace.openRecentProject(url)
+                            IDEWindowRegistry.shared.open(urls: [url], origin: origin)
                         }
                     }
-                    if !workspace.recentFileURLs.isEmpty {
+                    if !appState.recentFiles.isEmpty {
                         Divider()
                     }
                 }
-                ForEach(workspace.recentFileURLs, id: \.path) { url in
+                ForEach(appState.recentFiles, id: \.path) { url in
                     Button(url.lastPathComponent, systemImage: "doc") {
-                        workspace.openRecentFile(url)
+                        if let workspace {
+                            workspace.openRecentFile(url)
+                        } else {
+                            IDEWindowRegistry.shared.open(urls: [url])
+                        }
                     }
                 }
             }

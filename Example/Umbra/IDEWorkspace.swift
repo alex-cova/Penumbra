@@ -132,9 +132,18 @@ public final class IDEWorkspace {
     /// first-responder changes target this window, not whichever one happens to be key.
     @ObservationIgnored
     weak var window: NSWindow?
+
+    /// Names this window to `IDEOpenRouter` and the registry.
+    let windowID = UUID()
     /// Opened blank next to other windows instead of restoring the last one.
     @ObservationIgnored
     private var startedAsExtraWindow = false
+
+    /// The project folder's name, or "Umbra": what tells this window apart in the Window menu and
+    /// in the native tab bar.
+    private var projectTitle: String {
+        project.rootURL?.lastPathComponent ?? "Umbra"
+    }
 
     /// No project and no documents: the Welcome screen.
     var isEmpty: Bool {
@@ -676,18 +685,92 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Open Folder…: the chosen folder goes through the router, so it opens here when this window is
+    /// empty, focuses the window that already has it, or asks whether to replace this project or
+    /// open a new window.
     public func openFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.begin { [weak self] result in
-            guard result == .OK, let url = panel.url, let self else { return }
-            _ = url.startAccessingSecurityScopedResource()
-            self.isSidebarVisible = true
-            self.applyProjectRoot(url)
-            self.refreshPresentation()
-            self.saveSession()
+        IDEWindowRegistry.shared.chooseFolder(from: .window(windowID))
+    }
+
+    /// Makes `url` this window's project. The router calls it for an empty window; `replaceProject`
+    /// calls it after clearing the old one.
+    func openProjectFolder(_ url: URL) {
+        _ = url.startAccessingSecurityScopedResource()
+        isSidebarVisible = true
+        applyProjectRoot(url)
+        showsWelcome = !hasOpenDocuments
+        refreshPresentation()
+        saveSession()
+    }
+
+    /// Replaces this window's project and tabs with `url`, after confirming if anything is unsaved.
+    func replaceProject(with url: URL) {
+        guard confirmDiscardingUnsavedChanges(
+            messageText: "Open another folder in this window?",
+            confirmButtonTitle: "Replace"
+        ) else { return }
+        closeAllOpenDocuments()
+        dismissProjectChrome()
+        openProjectFolder(url)
+    }
+
+    /// This window already has a project: ask whether `url` replaces it or opens in a new window.
+    /// "Remember my choice" writes the `Open folders in` setting.
+    func askHowToOpenFolder(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Open “\(url.lastPathComponent)” in a new window?"
+        alert.informativeText = "This window already has “\(project.rootURL?.lastPathComponent ?? "a folder")” open."
+        alert.addButton(withTitle: "New Window")
+        alert.addButton(withTitle: "Replace This Window's Project")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Remember my choice"
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            let remember = alert.suppressionButton?.state == .on
+            switch response {
+            case .alertFirstButtonReturn:
+                if remember { self.preferences.openFoldersIn = .newWindow }
+                IDEWindowRegistry.shared.openNewWindow(urls: [url])
+            case .alertSecondButtonReturn:
+                if remember { self.preferences.openFoldersIn = .replace }
+                self.replaceProject(with: url)
+            default:
+                break
+            }
+        }
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    /// Brings this window forward, selecting its tab when it is in a tab group.
+    func focusWindow() {
+        guard let window else { return }
+        if let group = window.tabGroup, group.windows.count > 1 {
+            group.selectedWindow = window
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Files and folders dropped on this window. Files open here as tabs, wherever they live; a
+    /// folder is an open request made from this window.
+    func openURLsDropped(_ urls: [URL]) {
+        var files: [URL] = []
+        var folders: [URL] = []
+        for url in urls {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue { folders.append(url) } else { files.append(url) }
+        }
+        if !files.isEmpty {
+            openDroppedURLs(files)
+        }
+        if !folders.isEmpty {
+            IDEWindowRegistry.shared.open(urls: folders, origin: .window(windowID))
         }
     }
 
@@ -696,11 +779,7 @@ public final class IDEWorkspace {
     }
 
     public func openRecentProject(_ url: URL) {
-        applyProjectRoot(url)
-        isSidebarVisible = true
-        showsWelcome = !hasOpenDocuments
-        refreshPresentation()
-        saveSession()
+        IDEWindowRegistry.shared.open(urls: [url], origin: .window(windowID))
     }
 
     public func removeRecentFile(_ url: URL) {
@@ -3064,11 +3143,7 @@ public final class IDEWorkspace {
                     continue
                 }
                 if isDirectory.boolValue {
-                    _ = url.startAccessingSecurityScopedResource()
-                    isSidebarVisible = true
-                    applyProjectRoot(url)
-                    refreshPresentation()
-                    saveSession()
+                    openProjectFolder(url)
                 } else {
                     await openDocument(from: url)
                 }
@@ -4291,7 +4366,7 @@ public final class IDEWorkspace {
         autoRevealActiveDocumentIfNeeded()
         isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
         if let document = workbench.activePane.selectedDocument {
-            windowTitle = "\(document.displayName) · Umbra"
+            windowTitle = "\(document.displayName) · \(projectTitle)"
             let pathItems = pathBreadcrumbItems(for: document)
             let symbolItems = headerContext.documentID == document.id ? headerContext.symbolItems : []
             let newContext = IDEHeaderContext(
@@ -4304,7 +4379,7 @@ public final class IDEWorkspace {
                 headerContext = newContext
             }
         } else {
-            windowTitle = "Umbra"
+            windowTitle = projectTitle
             if headerContext != IDEHeaderContext() {
                 headerContext = IDEHeaderContext()
             }

@@ -80,6 +80,18 @@ Exit criteria: a window with its project and tabs survives quit + relaunch when 
 
 ### Phase 3 — Routing external opens and the Dock
 
+**Status: implemented** (not committed). Where it differs from the text below:
+
+- **`IDEOpenRouter`** (pure, `IDEOpenRouter.swift`) returns `.focus`, `.reuse`, `.replace`, `.askReplaceOrNew` or `.newWindow` for a folder, and a window or `.newWindow` for a file. `IDEWindowRegistry.open(urls:origin:)` acts on it; the workspace provides `openProjectFolder`, `replaceProject(with:)`, `askHowToOpenFolder` (the sheet with "Remember my choice") and `focusWindow`. `Open folders in` is an `IDEPreferences` setting (Ask / New window / Replace) with a picker in Settings ▸ Project. It is not part of the preferences snapshot.
+- **SwiftUI opens its own window for every external event unless told otherwise.** `handlesExternalEvents(matching: ["*"])` (the old setting) opened a blank window per `open -a` on top of ours; an empty set stopped the launch window from opening at all. The scene now matches a name no event uses (`UmbraApp.swift`), so only our routing decides.
+- **Cold launch:** opens wait until the first window has registered (`hasHadWindow`), so the restored window exists first; the folder then goes through the rule (reuse if the restored window is empty, else a new window). Without that wait the queued open asked for a new window before the first one registered, and the first window skipped its restore.
+- **Registration order bug found on the way:** a window's key-window notification can arrive before its workspace registers; `didBecomeActive` now ignores unregistered workspaces, because adding them made `register` return early and skip the new window's folder.
+- **New windows with a folder** use a job queue (`newWindowJobs`): the next workspace to register takes the job and opens its URLs, and a pending job also stops that window from restoring the last one (opening a folder with no windows open shows just that folder).
+- **Menus:** File ▸ New Window (⌘⇧N), New Window Tab (joins the key window's tab group; also the tab bar's + button through `newWindowForTab:`), Open Folder… and Open Recent now work with no window focused. Open Recent lists the shared `IDEAppState` lists.
+- **Titles:** a window's title is `file · project` (or the project name), which is also its tab title.
+- **Not done:** `representedURL` (the title is hidden, so it has no visible effect).
+- Tests: `IDEOpenRouterTests` (19). Checked by running a scratch app bundle with `open -a`: new window per project, reopening a project focuses it, files go to their project's window, a blank key window takes a folder, open with no windows, cold launch with a folder, the prompt's Cancel / New Window / Replace / Remember, New Window Tab.
+
 - The delegate cannot call `openWindow`. Extend `IDEWindowReopenBridge` to register an `openWindow(value:)` closure with the registry, which queues requests until it exists (cold launch, before any window has appeared; this is today's `pendingOpenURLs` mechanism generalized).
 - `IDEWindowRegistry.open(urls:)` applies the routing rule from the design decisions above. It needs a "project root → workspace" lookup (standardized, symlink-resolved path) and an `isEmpty` predicate on the workspace (no project, no documents, none dirty).
 - Cold launch with a dropped folder: restore the last window as usual, then route the dropped folder through the same rule. Reuse the restored window only if it is empty; otherwise the dropped folder opens beside it, without a prompt (external open).

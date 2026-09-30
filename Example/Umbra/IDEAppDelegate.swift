@@ -56,6 +56,11 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The tab bar's + button and File > New Window Tab reach here through the responder chain.
+    @objc func newWindowForTab(_ sender: Any?) {
+        IDEWindowRegistry.shared.openNewTab()
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         IDEWindowRegistry.shared.saveSessionsForTermination()
     }
@@ -118,6 +123,9 @@ struct IDEWindowReopenBridge: View {
     private func register() {
         guard let delegate = IDEAppDelegate.shared else { return }
         delegate.onReopenWithoutVisibleWindows = {
+            openWindow(id: "main")
+        }
+        IDEWindowRegistry.shared.setOpenWindowAction {
             openWindow(id: "main")
         }
     }

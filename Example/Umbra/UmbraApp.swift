@@ -9,9 +9,12 @@ struct UmbraApp: App {
         WindowGroup(id: "main") {
             IDEWindowScene()
         }
-        // Every external open (Dock drop, Open With) goes to `IDEAppDelegate.application(_:open:)`
-        // and `IDEWindowRegistry`; without this SwiftUI opens a new window per URL.
-        .handlesExternalEvents(matching: ["*"])
+        // Every external open (Dock drop, Open With, `open -a`) goes to
+        // `IDEAppDelegate.application(_:open:)` and `IDEWindowRegistry`, which picks the window. So
+        // SwiftUI must not open one itself: matching "*" opens a blank window per event, and an
+        // empty set also suppresses the launch window. A name no event has matches nothing and
+        // leaves the launch window alone.
+        .handlesExternalEvents(matching: ["umbra-never-matches-an-event"])
         .windowStyle(.hiddenTitleBar)
         .commands {
             IDEAppCommands()

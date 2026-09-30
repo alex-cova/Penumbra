@@ -30,6 +30,7 @@ public final class IDEPreferences {
         static let explorerAutoReveal = "com.umbra.editor.explorerAutoReveal"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
+        static let openFoldersIn = "com.umbra.editor.openFoldersIn"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
         static let highlightsOccurrencesOfSelection = "com.umbra.editor.highlightsOccurrencesOfSelection"
         static let showInvisibleCharacters = "com.umbra.editor.showInvisibleCharacters"
@@ -145,6 +146,12 @@ public final class IDEPreferences {
 
     var keymapPreset: KeymapPreset {
         didSet { UserDefaults.standard.set(keymapPreset.rawValue, forKey: Keys.keymapPreset) }
+    }
+
+    /// What opening a folder from a window that already has a project does. Not part of the
+    /// preferences snapshot: it stays on this Mac.
+    var openFoldersIn: IDEOpenFoldersIn {
+        didSet { UserDefaults.standard.set(openFoldersIn.rawValue, forKey: Keys.openFoldersIn) }
     }
 
     var showMethodSeparators: Bool {
@@ -275,6 +282,7 @@ public final class IDEPreferences {
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
+        openFoldersIn = defaults.string(forKey: Keys.openFoldersIn).flatMap(IDEOpenFoldersIn.init(rawValue:)) ?? .ask
         showMethodSeparators = defaults.object(forKey: Keys.showMethodSeparators) as? Bool ?? true
         highlightsOccurrencesOfSelection = defaults.object(forKey: Keys.highlightsOccurrencesOfSelection) as? Bool ?? true
         showInvisibleCharacters = defaults.object(forKey: Keys.showInvisibleCharacters) as? Bool ?? false

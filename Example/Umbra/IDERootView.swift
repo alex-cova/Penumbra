@@ -246,7 +246,7 @@ public struct IDERootView: View {
             _ = provider.loadObject(ofClass: URL.self) { item, _ in
                 if let url = item {
                     Task { @MainActor in
-                        workspace.openDroppedURLs([url])
+                        workspace.openURLsDropped([url])
                     }
                 }
             }
@@ -516,6 +516,12 @@ final class IDEWindowConfiguratorView: NSView {
         window.tabbingMode = .automatic
         if let workspace {
             workspace.window = window
+            // A window opened as a tab (File > New Window Tab, the tab bar's +) joins its group here.
+            if let parent = MainActor.assumeIsolated({ IDEWindowRegistry.shared.takePendingTabParent() }),
+               parent !== window {
+                parent.addTabbedWindow(window, ordered: .above)
+                window.makeKeyAndOrderFront(nil)
+            }
             if window.isKeyWindow {
                 IDEWindowRegistry.shared.didBecomeActive(workspace)
             }
