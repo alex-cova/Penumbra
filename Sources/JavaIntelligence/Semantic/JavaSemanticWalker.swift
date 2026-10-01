@@ -70,15 +70,31 @@ final class JavaSemanticWalker {
         return result
     }
 
-    /// Runs the pass. `false` when the task was cancelled part way.
+    /// The deepest tree `walk` recurses through. A 400-term `"a" + "b" + …` is a left-leaning chain
+    /// 400 levels deep and overflowed the 512 KB stack of a Swift task thread.
+    static let maxTreeDepth = 200
+
+    /// Runs the pass. `false` when the task was cancelled part way, or the tree is too deep to
+    /// recurse through safely (nothing is collected then).
     func run() -> Bool {
         let root = tree.rootNode
+        guard Self.depth(of: root, isAtMost: Self.maxTreeDepth) else { return false }
         collectDeclarations(root)
         for entry in importList.entries where entry.isStatic && !entry.isOnDemand {
             if let last = entry.qualifiedName.split(separator: ".").last { staticImportedMembers.insert(String(last)) }
         }
         scopes = [[:]]
         return walk(root)
+    }
+
+    /// Whether no node is deeper than `limit` levels below `root`, measured without recursion.
+    static func depth(of root: SyntaxNode, isAtMost limit: Int) -> Bool {
+        var stack: [(node: SyntaxNode, depth: Int)] = [(root, 0)]
+        while let (node, depth) = stack.popLast() {
+            if depth > limit { return false }
+            for child in node.children { stack.append((child, depth + 1)) }
+        }
+        return true
     }
 
     func finish(externalKinds: [String: JavaTypeKind]) -> [JavaSemanticToken] {
