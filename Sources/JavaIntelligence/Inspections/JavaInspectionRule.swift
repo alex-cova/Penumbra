@@ -12,6 +12,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case errorHandling
     case codeMaturity
     case controlFlow
+    case namingConventions
 
     public var title: String {
         switch self {
@@ -25,6 +26,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .errorHandling: return "Error handling"
         case .codeMaturity: return "Code maturity"
         case .controlFlow: return "Control flow issues"
+        case .namingConventions: return "Naming conventions"
         }
     }
 }
@@ -105,6 +107,15 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case overwrittenElement
     case infiniteRecursion
     case duplicatedDelimiters
+    case classNamingConvention
+    case methodNamingConvention
+    case fieldNamingConvention
+    case localVariableNamingConvention
+    case parameterNamingConvention
+    case typeParameterNamingConvention
+    case enumConstantNamingConvention
+    case nonConstantFieldNamedLikeConstant
+    case methodNameSameAsClass
 
     private struct Info {
         let code: String
@@ -190,6 +201,15 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .overwrittenElement: Info(code: "overwritten-element", title: "Overwritten array or map element", group: .probableBugs, severity: .warning, summary: "Reports 'a[i] = x; a[i] = y;' and two puts of one key in a row."),
         .infiniteRecursion: Info(code: "infinite-recursion", title: "Infinite recursion", group: .probableBugs, severity: .warning, summary: "Reports a method that calls itself with its own parameters and has no way out."),
         .duplicatedDelimiters: Info(code: "duplicated-delimiters", title: "Duplicated delimiters in 'StringTokenizer'", group: .probableBugs, severity: .warning, summary: "Reports a delimiter string that repeats a character."),
+        .classNamingConvention: Info(code: "class-naming-convention", title: "Class naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a class, interface, enum, record or annotation not named in UpperCamelCase."),
+        .methodNamingConvention: Info(code: "method-naming-convention", title: "Method naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a method not named in lowerCamelCase. Overrides and test methods are exempt."),
+        .fieldNamingConvention: Info(code: "field-naming-convention", title: "Field and constant naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a field not in lowerCamelCase, or a static final constant not in UPPER_SNAKE_CASE."),
+        .localVariableNamingConvention: Info(code: "local-variable-naming-convention", title: "Local variable naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a local variable not named in lowerCamelCase."),
+        .parameterNamingConvention: Info(code: "parameter-naming-convention", title: "Method parameter naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a method parameter not named in lowerCamelCase."),
+        .typeParameterNamingConvention: Info(code: "type-parameter-naming-convention", title: "Type parameter naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports a type parameter not starting with an upper-case letter."),
+        .enumConstantNamingConvention: Info(code: "enum-constant-naming-convention", title: "Enum constant naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports an enum constant not in UPPER_SNAKE_CASE."),
+        .nonConstantFieldNamedLikeConstant: Info(code: "non-constant-field-named-like-constant", title: "Non-constant field with a constant's name", group: .namingConventions, severity: .weakWarning, summary: "Reports a field in UPPER_SNAKE_CASE that is not static final."),
+        .methodNameSameAsClass: Info(code: "method-name-same-as-class", title: "Method name is the same as its class name", group: .namingConventions, severity: .warning, summary: "Reports a method with a return type named like its class, which is probably a misspelt constructor."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

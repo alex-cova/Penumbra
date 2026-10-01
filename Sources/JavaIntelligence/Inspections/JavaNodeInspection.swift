@@ -88,6 +88,16 @@ enum JavaInspectionRegistry {
         JavaJumpOutOfFinallyInspection.self,
         JavaEmptyFinallyBlockInspection.self,
         JavaEmptyTryBlockInspection.self,
+        // Naming conventions
+        JavaClassNamingInspection.self,
+        JavaMethodNamingInspection.self,
+        JavaFieldNamingInspection.self,
+        JavaLocalVariableNamingInspection.self,
+        JavaParameterNamingInspection.self,
+        JavaTypeParameterNamingInspection.self,
+        JavaEnumConstantNamingInspection.self,
+        JavaNonConstantFieldNamedLikeConstantInspection.self,
+        JavaMethodNameSameAsClassInspection.self,
         // Control flow
         JavaRedundantIfStatementInspection.self,
         JavaSimplifiableConditionalInspection.self,

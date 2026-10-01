@@ -530,6 +530,63 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes(body("        Object t = new StringTokenizer(s);")), [])
     }
 
+    // MARK: Naming conventions
+
+    func testClassAndTypeParameterNaming() throws {
+        XCTAssertEqual(try codes("class my_class { }"), ["class-naming-convention"])
+        XCTAssertEqual(try codes("interface lowerCase { }"), ["class-naming-convention"])
+        XCTAssertEqual(try codes("enum color { RED }"), ["class-naming-convention"])
+        XCTAssertEqual(try codes("class MyClass2 { }"), [])
+        XCTAssertEqual(try codes("class Box<t> { }"), ["type-parameter-naming-convention"])
+        XCTAssertEqual(try codes("class Box<T, Value> { }"), [])
+    }
+
+    func testMethodNaming() throws {
+        XCTAssertEqual(try codes("class A { void Do_it() { } }"), ["method-naming-convention"])
+        XCTAssertEqual(try codes("class A { void doIt2() { } }"), [])
+        XCTAssertEqual(try codes("class A { @Override public String ToString() { return \"\"; } }"), [], "an override takes its name from the supertype")
+        XCTAssertEqual(try codes("class A { @Test void should_work() { } }"), [], "test names read as sentences")
+    }
+
+    func testFieldAndConstantNaming() throws {
+        XCTAssertEqual(try codes("class A { int Count; }"), ["field-naming-convention"])
+        XCTAssertEqual(try codes("class A { int my_count; }"), ["field-naming-convention"])
+        XCTAssertEqual(try codes("class A { static final int maxSize = 3; }"), ["field-naming-convention"])
+        XCTAssertEqual(try codes("class A { static final int MAX_SIZE = 3; private int count; }"), [])
+        XCTAssertEqual(try codes("interface I { int limit = 3; }"), ["field-naming-convention"])
+        XCTAssertEqual(try codes("class A { static final long serialVersionUID = 1L; }"), [])
+        XCTAssertEqual(try codes("class A { private static final Logger log = null; }"), [], "a logger handle")
+    }
+
+    func testVariableAndParameterNaming() throws {
+        XCTAssertEqual(try codes("class A { void f() { int Count = 0; } }"), ["local-variable-naming-convention"])
+        XCTAssertEqual(try codes("class A { void f(int[] xs) { for (int Item : xs) { } } }"), ["local-variable-naming-convention"])
+        XCTAssertEqual(try codes("class A { void f() { int count = 0; int _ = 1; } }"), [])
+        XCTAssertEqual(try codes("class A { void f() { final int PRIME = 31; } }"), [], "a local constant")
+        XCTAssertEqual(try codes("class A { void f() { int PRIME = 31; } }"), ["local-variable-naming-convention"])
+        XCTAssertEqual(try codes("class A { void f(int Count) { } }"), ["parameter-naming-convention"])
+        XCTAssertEqual(try codes("class A { void f(int... Rest) { } }"), ["parameter-naming-convention"])
+        XCTAssertEqual(try codes("record R(int X) { }"), [], "record components are named like fields")
+        XCTAssertEqual(try codes("class A { void f(int count, String... rest) { } }"), [])
+    }
+
+    func testEnumConstantNaming() throws {
+        XCTAssertEqual(try codes("enum E { Red, GREEN_2, blue }"), ["enum-constant-naming-convention", "enum-constant-naming-convention"])
+        XCTAssertEqual(try codes("enum E { RED, DARK_RED }"), [])
+    }
+
+    func testNonConstantFieldNamedLikeConstant() throws {
+        XCTAssertEqual(try codes("class A { static int MAX_SIZE = 3; }"), ["non-constant-field-named-like-constant"])
+        XCTAssertEqual(try codes("class A { final int MAX_SIZE = 3; }"), ["non-constant-field-named-like-constant"])
+        XCTAssertEqual(try codes("class A { static final int MAX_SIZE = 3; }"), [])
+        XCTAssertEqual(try codes("class A { int N; }"), [], "a single letter")
+    }
+
+    func testMethodNameSameAsClass() throws {
+        XCTAssertEqual(try codes("class Widget { void Widget() { } }"), ["method-name-same-as-class"])
+        XCTAssertEqual(try codes("class Widget { Widget() { } }"), [])
+    }
+
     func testCleanCodeProducesNoFindings() throws {
         let source = """
         import java.util.List;
