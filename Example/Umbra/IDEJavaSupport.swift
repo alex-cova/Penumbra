@@ -299,6 +299,15 @@ final class IDEJavaSupport {
             .appendingPathComponent("javac", isDirectory: true)
     }
 
+    /// Applies the code-insight settings the Java services own: how long a file rests before its
+    /// inspections run again, and what a Suppress quick fix writes.
+    func applyCodeInsightPreferences(autoreparseDelay: Duration, suppressionStyle: JavaSuppressionStyle) {
+        Task { [inspectionService, codeActionProvider] in
+            await inspectionService.setIdleDelay(autoreparseDelay)
+            await codeActionProvider.setSuppressionStyle(suppressionStyle)
+        }
+    }
+
     /// Points the compiler at the current project, or turns it off. Nothing is checked in a Gradle
     /// project until its sync has produced a model (which needs the trust prompt), nor when the
     /// user has turned the preference off, nor when no installed JDK ships a `javac`.

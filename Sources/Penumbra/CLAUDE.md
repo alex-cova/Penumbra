@@ -73,3 +73,7 @@ Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour note
 
 **Diagnostics (rendering)**
 - Squiggle underlines for `TextViewDiagnostic` values by severity (`DiagnosticEmphasisController`).
+- `TextViewDiagnostic` carries `message` and `source`; `TextView.diagnostics(at:)` returns the ones covering an offset (hover tooltip, Show Error Description).
+- Error stripe (`TextView.showsErrorStripe`, `errorStripeMinimumMarkHeight`; `ErrorStripeView`/`ErrorStripeController` in `TextView/Diagnostics/`): a 6 pt strip on the trailing edge with a tick per diagnostic at its fraction of the document height, over the minimap and under the scrollers, never taking mouse events. Positions are recomputed when diagnostics change and, debounced (0.2 s), when the content height changes — never per scrolled frame; at most `ErrorStripeController.maxMarks` ticks, most severe first.
+- Current scope (`TextView.highlightsCurrentScope`, `ScopeHighlightController`): a bar in the fold ribbon (`FoldRibbonView.scopeRows`, via `LayoutManager.scopeHighlightRows`) beside the innermost fold region containing the caret. It uses the fold regions, so it needs `isLineFoldingEnabled`; lookup is debounced and skipped above `ScopeHighlightController.maxRegionCount` regions or with several carets.
+- `TextView.addMouseMovedObserver(_:)` lets several owners watch pointer movement next to the single-owner `onHoverEvent` (used by the intelligence controller's hover tooltips).

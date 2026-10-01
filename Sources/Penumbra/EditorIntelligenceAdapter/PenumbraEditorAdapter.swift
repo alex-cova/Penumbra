@@ -24,7 +24,11 @@ public final class PenumbraEditorAdapter: EditorAdapter, @unchecked Sendable {
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval` — downstream consumers of
     /// this adapter's `.documentChanged` events (`Workspace`, `LSPWorkspaceSyncBridge`,
     /// `IndexingService`, ...) all get throttled for free once the source event rate drops.
-    private static let refreshDebounceNanoseconds: UInt64 = 200_000_000
+    private static let defaultRefreshDebounce: TimeInterval = 0.2
+    /// How long the editor must rest before the document snapshot is refreshed and diagnostics
+    /// and symbols are recomputed from it (IntelliJ's "Autoreparse delay"). Read when each
+    /// refresh is scheduled; the default matches the batch interval described above.
+    public var refreshDebounce: TimeInterval = PenumbraEditorAdapter.defaultRefreshDebounce
 
     /// Create an adapter for a Penumbra text view.
     /// - Parameters:
@@ -96,7 +100,7 @@ public final class PenumbraEditorAdapter: EditorAdapter, @unchecked Sendable {
     private func refreshDocument() {
         refreshTask?.cancel()
         refreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: Self.refreshDebounceNanoseconds)
+            try? await Task.sleep(nanoseconds: UInt64(max(refreshDebounce, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             guard let textView = textView else { return }
             let document = makeDocument(with: textView)

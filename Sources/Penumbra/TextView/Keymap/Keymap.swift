@@ -85,6 +85,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("b", .command)), to: .toggleMarkdownPreview)
         map.bind(KeyStroke(KeyChord(code: 0x24, .option)), to: .showContextActions)
         map.bind(KeyStroke(KeyChord(code: 0x7A /* F1 */)), to: .quickDocumentation)
+        map.bind(KeyStroke(KeyChord(code: 0x7A /* F1 */, .command)), to: .showErrorDescription)
         // File Structure lists the current file's declarations; Go to Symbol searches every open one.
         map.bind(KeyStroke(KeyChord(code: 0x6F /* F12 */, .command)), to: .goToFileSymbol)
         return map

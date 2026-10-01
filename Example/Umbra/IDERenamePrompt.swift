@@ -81,7 +81,14 @@ private struct IDERenamePromptView: View {
                 .frame(width: 240, alignment: .leading)
         }
         .padding(IDEAppearance.Spacing.md)
-        .onAppear { isFocused = true }
+        .onAppear {
+            isFocused = true
+            guard IDEPreferences.shared.preselectsRenamedName else { return }
+            // The field editor takes focus a moment after `isFocused` flips; select once it has.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
+        }
         .onExitCommand { onFinish(nil) }
     }
 

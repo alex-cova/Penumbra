@@ -101,4 +101,19 @@ final class ProblemNavigatorTests: XCTestCase {
         let messy = URL(fileURLWithPath: "/proj/../proj/A.java")
         XCTAssertEqual(step(messy, 1, in: list), "A.java:5:0")
     }
+
+    func testHighestSeverityScopeStopsOnlyAtErrorsWhileThereAreAny() {
+        let list = files([a: [diagnostic(2, 0, .warning), diagnostic(5), diagnostic(9, 0, .warning)]])
+        let severities = ProblemNavigator.severities(for: .highestSeverity, in: list)
+        XCTAssertEqual(severities, [.error])
+        let row = ProblemNavigator.step(from: .init(url: a, line: 0, column: 0), forward: true, in: list, severities: severities)
+        XCTAssertEqual(spot(row), "A.java:5:0")
+        XCTAssertNil(ProblemNavigator.step(from: .init(url: a, line: 5, column: 0), forward: true, in: list, severities: severities))
+    }
+
+    func testHighestSeverityScopeFallsBackToWarningsWhenThereAreNoErrors() {
+        let list = files([a: [diagnostic(2, 0, .warning), diagnostic(9, 0, .warning)]])
+        XCTAssertEqual(ProblemNavigator.severities(for: .highestSeverity, in: list), [.warning])
+        XCTAssertEqual(ProblemNavigator.severities(for: .all, in: list), [.error, .warning])
+    }
 }

@@ -723,6 +723,34 @@ public struct DocumentTextExport: Sendable {
         }
         set {
             textInputView.diagnostics = newValue
+            errorStripeController.setDiagnostics(newValue)
+        }
+    }
+    /// The diagnostics whose range covers `location` (a zero-length one counts at its own offset),
+    /// most severe first. Drives the hover tooltip and Show Error Description.
+    public func diagnostics(at location: Int) -> [TextViewDiagnostic] {
+        diagnostics
+            .filter { diagnostic in
+                let range = diagnostic.range
+                return range.length == 0 ? location == range.location : (location >= range.location && location < NSMaxRange(range))
+            }
+            .sorted { $0.severity.stripeRank > $1.severity.stripeRank }
+    }
+    /// Draws a tick for every diagnostic along the trailing edge, positioned by where it sits in
+    /// the document (IntelliJ's error stripe). It sits over the minimap and under the scrollers and
+    /// never takes mouse events. Off by default.
+    public var showsErrorStripe = false {
+        didSet {
+            if showsErrorStripe != oldValue {
+                errorStripeController.isEnabled = showsErrorStripe
+                setNeedsLayout()
+            }
+        }
+    }
+    /// Shortest tick on the error stripe, in points (IntelliJ's "Error stripe mark minimum height").
+    public var errorStripeMinimumMarkHeight: CGFloat = 2 {
+        didSet {
+            errorStripeController.view.minimumMarkHeight = errorStripeMinimumMarkHeight
         }
     }
     /// Enable to show highlight the selected lines. The selection is only shown in the gutter when multiple lines are selected.
@@ -1221,6 +1249,8 @@ public struct DocumentTextExport: Sendable {
     var minimapViewForTesting: MinimapView { minimapView }
     /// Test hook — the overlay scrollers, so tests can probe and drive them directly.
     var scrollerOverlayForTesting: ScrollerOverlayController { scrollerOverlay }
+    /// Test hook — the error stripe, so tests can read its ticks.
+    var errorStripeViewForTesting: ErrorStripeView { errorStripeController.view }
     /// Test hook — how many `LineController`s are currently kept.
     var lineControllerCountForTesting: Int { textInputView.lineControllerCount }
     /// Test hook — the selection highlight rects the overlay currently draws.
@@ -1240,6 +1270,7 @@ public struct DocumentTextExport: Sendable {
     }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
+    private let errorStripeController = ErrorStripeController()
     private let tapGestureRecognizer = EditorQuickTapGestureRecognizer()
     private var delegateAllowsEditingToBegin: Bool {
         guard isEditable else {
@@ -1324,6 +1355,16 @@ public struct DocumentTextExport: Sendable {
         minimapView.applyTheme()
         minimapView.collapseOverlay()
         addFixedOverlaySubview(minimapView)
+        errorStripeController.fractionForOffset = { [weak self] offset in
+            guard let self else { return nil }
+            let input = self.textInputView
+            guard offset >= 0, let row = input.lineManager.row(containingCharacterAt: min(offset, input.documentLength)) else {
+                return nil
+            }
+            let total = input.contentSize.height
+            return total > 0 ? (input.textContainerInset.top + input.lineManager.yPosition(ofRow: row)) / total : 0
+        }
+        addFixedOverlaySubview(errorStripeController.view)
         scrollerOverlay.install(in: self, themeSource: textInputView) { [weak self] in
             self?.suspendTypewriterScrollingForUserInteraction()
         }
@@ -1425,6 +1466,19 @@ public struct DocumentTextExport: Sendable {
             // trailing edge. `isHidden` alone does not always clip a layer-backed child's border.
             minimapView.collapseOverlay()
         }
+        if showsErrorStripe {
+            let stripeView = errorStripeController.view
+            stripeView.isHidden = false
+            stripeView.frame = CGRect(x: bounds.maxX - ErrorStripeView.width, y: 0, width: ErrorStripeView.width, height: bounds.height)
+            // Between the minimap and the scrollers; only reorder when it is not already there, so
+            // a steady-state layout pass causes no view churn.
+            let visibleScrollers = [scrollerOverlay.verticalScroller, scrollerOverlay.horizontalScroller].filter { !$0.isHidden }.count
+            if subviews.dropLast(visibleScrollers).last !== stripeView {
+                bringSubviewToFront(stripeView)
+            }
+        } else if !errorStripeController.view.isHidden {
+            errorStripeController.view.isHidden = true
+        }
         scrollerOverlay.layout(in: self)
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
         findPanelController.panelView.frame = CGRect(x: 0,
@@ -1478,6 +1532,14 @@ public struct DocumentTextExport: Sendable {
     /// which is the first responder.
     public var onHoverEvent: ((NSEvent) -> Void)?
 
+    private var mouseMovedObservers: [(NSEvent) -> Void] = []
+
+    /// Calls `observer` for every mouse movement over the editor, next to ``onHoverEvent`` (which
+    /// has a single owner). Observers live as long as the text view.
+    public func addMouseMovedObserver(_ observer: @escaping (NSEvent) -> Void) {
+        mouseMovedObservers.append(observer)
+    }
+
     override open func mouseMoved(with event: NSEvent) {
         distractionFreeController.mouseDidMove()
         let point = convert(event.locationInWindow, from: nil)
@@ -1485,6 +1547,9 @@ public struct DocumentTextExport: Sendable {
         // The fold hit test works in the text input's (document) coordinates, not the scroll view's.
         textInputView.updateFoldPreview(at: textInputView.convert(event.locationInWindow, from: nil))
         onHoverEvent?(event)
+        for observer in mouseMovedObservers {
+            observer(event)
+        }
         super.mouseMoved(with: event)
     }
 
@@ -1830,6 +1895,18 @@ public struct DocumentTextExport: Sendable {
         }
         set {
             textInputView.highlightsOccurrencesOfSelection = newValue
+        }
+    }
+
+    /// Marks the block the caret is in with a bar along the fold ribbon (IntelliJ's "Highlight
+    /// current scope"). The blocks are the fold regions, so it needs ``isLineFoldingEnabled``.
+    /// Off by default.
+    public var highlightsCurrentScope: Bool {
+        get {
+            textInputView.highlightsCurrentScope
+        }
+        set {
+            textInputView.highlightsCurrentScope = newValue
         }
     }
 
@@ -2593,6 +2670,7 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidInvalidateContentSize(_ view: TextInputView) {
+        errorStripeController.contentDidChange()
         if contentSize != view.contentSize {
             hasPendingContentSizeUpdate = true
             setNeedsLayout()

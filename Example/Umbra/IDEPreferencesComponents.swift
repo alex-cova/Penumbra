@@ -149,7 +149,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
 
     // Split into groups: one 22-modifier chain exceeds the type checker's time limit.
     func body(content: Content) -> some View {
-        modeChanges(displayChanges(editingChanges(appearanceChanges(content))))
+        codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content)))))
     }
 
     private func appearanceChanges(_ view: some View) -> some View {
@@ -188,6 +188,19 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.isTypewriterScrollingEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isDistractionFreeModeEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isFocusModeEnabled) { applyLivePreferences() }
+    }
+
+    private func codeInsightChanges(_ view: some View) -> some View {
+        view
+            .onChange(of: preferences.showsErrorStripe) { applyLivePreferences() }
+            .onChange(of: preferences.errorStripeMarkMinHeight) { applyLivePreferences() }
+            .onChange(of: preferences.highlightsCurrentScope) { applyLivePreferences() }
+            .onChange(of: preferences.showsDocumentationOnHover) { applyLivePreferences() }
+            .onChange(of: preferences.tooltipDelayMilliseconds) { applyLivePreferences() }
+            .onChange(of: preferences.autoreparseDelayMilliseconds) { applyLivePreferences() }
+            .onChange(of: preferences.inPlaceRefactoring) { applyLivePreferences() }
+            .onChange(of: preferences.confirmsInlineVariable) { applyLivePreferences() }
+            .onChange(of: preferences.javaSuppressWithComment) { applyLivePreferences() }
     }
 
     private func applyLivePreferences() {

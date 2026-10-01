@@ -28,7 +28,20 @@ final class FoldRibbonView: EditorView {
         }
     }
 
+    /// The rows of the block the caret is in, marked by a bar along the ribbon's trailing edge.
+    var scopeRows: ClosedRange<Int>? {
+        didSet {
+            if scopeRows != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+    var scopeColor: NSColor = .secondaryLabelColor {
+        didSet { needsDisplay = true }
+    }
+
     private static let symbolPointSize: CGFloat = 11
+    private static let scopeBarWidth: CGFloat = 2
     private static let restingAlpha: CGFloat = 0.55
     private static let collapsedAlpha: CGFloat = 0.85
 
@@ -100,6 +113,7 @@ final class FoldRibbonView: EditorView {
         guard minRow <= maxRow else {
             return
         }
+        drawScopeBar(in: dirtyRect, lineManager: lineManager)
         let isRevealed = hoveredRow != nil
         // Regions can share a header row (`{` opening two nested folds): draw one chevron there,
         // collapsed if any of them is.
@@ -144,6 +158,21 @@ private extension FoldRibbonView {
             }
         }
         return best
+    }
+
+    private func drawScopeBar(in dirtyRect: CGRect, lineManager: LineManager) {
+        guard let scopeRows, scopeRows.lowerBound < lineManager.lineCount else {
+            return
+        }
+        let last = min(scopeRows.upperBound, lineManager.lineCount - 1)
+        let top = textContainerInsetTop + lineManager.yPosition(ofRow: scopeRows.lowerBound)
+        let bottom = textContainerInsetTop + lineManager.yPosition(ofRow: last) + lineManager.lineInfo(atRow: last).lineHeight
+        let bar = CGRect(x: bounds.maxX - Self.scopeBarWidth - 1, y: top, width: Self.scopeBarWidth, height: max(bottom - top, 0))
+        guard bar.height > 0, bar.intersects(dirtyRect) else {
+            return
+        }
+        scopeColor.setFill()
+        NSBezierPath(roundedRect: bar, xRadius: Self.scopeBarWidth / 2, yRadius: Self.scopeBarWidth / 2).fill()
     }
 
     private func drawChevron(atRow row: Int, isCollapsed: Bool, lineManager: LineManager) {

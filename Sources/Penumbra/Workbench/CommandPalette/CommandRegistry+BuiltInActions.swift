@@ -22,7 +22,7 @@ public extension CommandRegistry {
         .toggleMarkdownPreview,
         .goToDefinition, .goToImplementation, .goToSuperMethod, .goToTypeDefinition, .findUsages, .goToNextProblem, .goToPreviousProblem, .navigateBack, .navigateForward,
         .triggerCompletion, .triggerSmartCompletion,
-        .quickDocumentation, .showParameterInfo, .showContextActions, .optimizeImports,
+        .quickDocumentation, .showErrorDescription, .showParameterInfo, .showContextActions, .optimizeImports,
         .rename,
         .extractVariable, .extractField, .extractConstant, .extractMethod,
         .inlineVariable, .inlineMethod,

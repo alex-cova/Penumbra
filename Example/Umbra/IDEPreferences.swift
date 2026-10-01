@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import EditorIntelligence
 import JavaIntelligence
 import Observation
 import Penumbra
@@ -49,6 +50,17 @@ public final class IDEPreferences {
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
+        static let showsErrorStripe = "com.umbra.editor.showsErrorStripe"
+        static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
+        static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
+        static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
+        static let tooltipDelayMilliseconds = "com.umbra.editor.tooltipDelayMilliseconds"
+        static let autoreparseDelayMilliseconds = "com.umbra.editor.autoreparseDelayMilliseconds"
+        static let nextErrorScope = "com.umbra.editor.nextErrorScope"
+        static let inPlaceRefactoring = "com.umbra.editor.inPlaceRefactoring"
+        static let preselectsRenamedName = "com.umbra.editor.preselectsRenamedName"
+        static let confirmsInlineVariable = "com.umbra.editor.confirmsInlineVariable"
+        static let javaSuppressWithComment = "com.umbra.editor.javaSuppressWithComment"
     }
 
     var fontSize: Double {
@@ -162,6 +174,65 @@ public final class IDEPreferences {
         didSet {
             UserDefaults.standard.set(highlightsOccurrencesOfSelection, forKey: Keys.highlightsOccurrencesOfSelection)
         }
+    }
+
+    // MARK: Code insight (IntelliJ's Editor > General)
+    // Kept on this Mac, not in the preferences snapshot, like the Java settings.
+
+    /// A tick per problem along the trailing edge, over the minimap or the scrollbar.
+    var showsErrorStripe: Bool {
+        didSet { UserDefaults.standard.set(showsErrorStripe, forKey: Keys.showsErrorStripe) }
+    }
+
+    /// Shortest error stripe tick, in points.
+    var errorStripeMarkMinHeight: Int {
+        didSet { UserDefaults.standard.set(errorStripeMarkMinHeight, forKey: Keys.errorStripeMarkMinHeight) }
+    }
+
+    /// A bar in the fold ribbon beside the block the caret is in.
+    var highlightsCurrentScope: Bool {
+        didSet { UserDefaults.standard.set(highlightsCurrentScope, forKey: Keys.highlightsCurrentScope) }
+    }
+
+    /// Documentation of the symbol under the pointer once it rests.
+    var showsDocumentationOnHover: Bool {
+        didSet { UserDefaults.standard.set(showsDocumentationOnHover, forKey: Keys.showsDocumentationOnHover) }
+    }
+
+    /// How long the pointer or caret rests before a tooltip or documentation popup shows.
+    var tooltipDelayMilliseconds: Int {
+        didSet { UserDefaults.standard.set(tooltipDelayMilliseconds, forKey: Keys.tooltipDelayMilliseconds) }
+    }
+
+    /// How long typing pauses before the document is re-read for diagnostics, symbols and inspections.
+    var autoreparseDelayMilliseconds: Int {
+        didSet { UserDefaults.standard.set(autoreparseDelayMilliseconds, forKey: Keys.autoreparseDelayMilliseconds) }
+    }
+
+    /// Which problems Next / Previous Problem (F2) stops at.
+    var nextErrorScope: ProblemNavigationScope {
+        didSet { UserDefaults.standard.set(nextErrorScope.rawValue, forKey: Keys.nextErrorScope) }
+    }
+
+    /// Rename and Extract mark the affected code in the editor and apply without a preview when
+    /// nothing needs a decision.
+    var inPlaceRefactoring: Bool {
+        didSet { UserDefaults.standard.set(inPlaceRefactoring, forKey: Keys.inPlaceRefactoring) }
+    }
+
+    /// The rename field opens with the old name selected, so typing replaces it.
+    var preselectsRenamedName: Bool {
+        didSet { UserDefaults.standard.set(preselectsRenamedName, forKey: Keys.preselectsRenamedName) }
+    }
+
+    /// Inline Variable previews its changes before applying them.
+    var confirmsInlineVariable: Bool {
+        didSet { UserDefaults.standard.set(confirmsInlineVariable, forKey: Keys.confirmsInlineVariable) }
+    }
+
+    /// Suppress quick fixes add a `//noinspection` comment instead of `@SuppressWarnings`.
+    var javaSuppressWithComment: Bool {
+        didSet { UserDefaults.standard.set(javaSuppressWithComment, forKey: Keys.javaSuppressWithComment) }
     }
 
     var showInvisibleCharacters: Bool {
@@ -286,6 +357,17 @@ public final class IDEPreferences {
         showMethodSeparators = defaults.object(forKey: Keys.showMethodSeparators) as? Bool ?? true
         highlightsOccurrencesOfSelection = defaults.object(forKey: Keys.highlightsOccurrencesOfSelection) as? Bool ?? true
         showInvisibleCharacters = defaults.object(forKey: Keys.showInvisibleCharacters) as? Bool ?? false
+        showsErrorStripe = defaults.object(forKey: Keys.showsErrorStripe) as? Bool ?? true
+        errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
+        highlightsCurrentScope = defaults.object(forKey: Keys.highlightsCurrentScope) as? Bool ?? true
+        showsDocumentationOnHover = defaults.object(forKey: Keys.showsDocumentationOnHover) as? Bool ?? true
+        tooltipDelayMilliseconds = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500
+        autoreparseDelayMilliseconds = defaults.object(forKey: Keys.autoreparseDelayMilliseconds) as? Int ?? 200
+        nextErrorScope = defaults.string(forKey: Keys.nextErrorScope).flatMap(ProblemNavigationScope.init(rawValue:)) ?? .all
+        inPlaceRefactoring = defaults.object(forKey: Keys.inPlaceRefactoring) as? Bool ?? true
+        preselectsRenamedName = defaults.object(forKey: Keys.preselectsRenamedName) as? Bool ?? true
+        confirmsInlineVariable = defaults.object(forKey: Keys.confirmsInlineVariable) as? Bool ?? false
+        javaSuppressWithComment = defaults.bool(forKey: Keys.javaSuppressWithComment)
         showPageGuide = defaults.object(forKey: Keys.showPageGuide) as? Bool ?? false
         pageGuideColumn = defaults.object(forKey: Keys.pageGuideColumn) as? Int ?? 120
         lineHeightMultiplier = defaults.object(forKey: Keys.lineHeightMultiplier) as? Double ?? 1.2
@@ -320,6 +402,9 @@ public final class IDEPreferences {
         textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         textView.showMethodSeparators = showMethodSeparators
         textView.highlightsOccurrencesOfSelection = highlightsOccurrencesOfSelection
+        textView.showsErrorStripe = showsErrorStripe
+        textView.errorStripeMinimumMarkHeight = CGFloat(errorStripeMarkMinHeight)
+        textView.highlightsCurrentScope = highlightsCurrentScope
         textView.showTabs = showInvisibleCharacters
         textView.showSpaces = showInvisibleCharacters
         textView.showPageGuide = showPageGuide
@@ -338,6 +423,14 @@ public final class IDEPreferences {
             textView.redisplayVisibleLines()
             textView.refreshGutterChrome()
         }
+    }
+
+    /// Applies the code-insight settings to a pane's intelligence controller.
+    func apply(to controller: EditorIntelligenceController) {
+        controller.showsDocumentationOnMouseHover = showsDocumentationOnHover
+        controller.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
+        controller.appliesRefactoringsInPlace = inPlaceRefactoring
+        controller.confirmsInlineVariable = confirmsInlineVariable
     }
 
     /// Editor zoom, in percent of ``fontSize``. Lives for the session only: the size chosen in

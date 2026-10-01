@@ -5,6 +5,14 @@ import Foundation
 /// Problems are walked in one order across files: by file path, then line, then column, wrapping
 /// from the last problem to the first (and back). Several problems starting at the same place
 /// count as one stop, so repeated presses always advance.
+/// Which problems Next / Previous Problem stops at (IntelliJ's "Next error action goes through").
+public enum ProblemNavigationScope: String, Sendable, CaseIterable {
+    /// Errors and warnings.
+    case all
+    /// Only the most severe kind present: errors while there are any, else warnings.
+    case highestSeverity
+}
+
 public enum ProblemNavigator {
     /// Where the caret is: the file (nil for an unsaved buffer) and a 0-based line and column.
     public struct Position: Sendable, Equatable {
@@ -50,6 +58,17 @@ public enum ProblemNavigator {
             return nil
         }
         return target.row
+    }
+
+    /// The severities Next / Previous Problem stops at for `scope`, given the problems in `files`.
+    public static func severities(for scope: ProblemNavigationScope, in files: [ProblemFile]) -> Set<DiagnosticSeverity> {
+        switch scope {
+        case .all:
+            return [.error, .warning]
+        case .highestSeverity:
+            let present = Set(files.flatMap(\.rows).map(\.diagnostic.severity))
+            return present.contains(.error) ? [.error] : [.warning]
+        }
     }
 
     private struct Key: Comparable, Equatable {

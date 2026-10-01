@@ -785,6 +785,10 @@ final class TextInputView: EditorView {
                     selectedRange: _selectedRange,
                     isMultiCaret: isMultiCursorActive
                 )
+                scopeHighlightController.selectionDidChange(
+                    selectedRange: _selectedRange,
+                    isMultiCaret: isMultiCursorActive
+                )
                 updateFocusModeIfNeeded()
                 // The caret overlay and the current-line bar do not need a viewport walk, so draw
                 // them now. `setNeedsLayout()` is still required: `layoutSubviews` delivers the
@@ -1004,6 +1008,13 @@ final class TextInputView: EditorView {
     private let foldPreviewController = FoldPreviewController()
     let methodSeparatorController = MethodSeparatorController()
     let occurrenceHighlightController: OccurrenceHighlightController
+    let scopeHighlightController = ScopeHighlightController()
+    /// Marks the block the caret is in along the fold ribbon. Needs line folding on, since the
+    /// blocks are the fold regions.
+    var highlightsCurrentScope: Bool {
+        get { scopeHighlightController.isEnabled }
+        set { scopeHighlightController.isEnabled = newValue }
+    }
     /// Resolved per-language behaviour. Pushed from ``TextView`` whenever the identifier or
     /// registry changes; drives method separators and occurrence highlighting.
     var languageConfiguration: LanguageConfiguration? {
@@ -1144,6 +1155,15 @@ final class TextInputView: EditorView {
         diagnosticEmphasisController.emphasisManager = emphasisManager
         occurrenceHighlightController.emphasisManager = emphasisManager
         occurrenceHighlightController.tokenizer = tokenizer
+        scopeHighlightController.apply = { [weak self] rows in
+            self?.layoutManager.scopeHighlightRows = rows
+        }
+        scopeHighlightController.regionsProvider = { [weak self] in
+            self?.foldingModel.regions ?? []
+        }
+        scopeHighlightController.rowProvider = { [weak self] location in
+            self?.lineManager.row(containingCharacterAt: location)
+        }
         methodSeparatorController.onRowsChanged = { [weak self] rows in
             guard let self else { return }
             self.layoutManager.setMethodSeparatorRows(rows)
@@ -2133,6 +2153,7 @@ private extension TextInputView {
         foldingModel.didChangeFolds.sink { [weak self] in
             self?.adjustSelectionForFoldingIfNeeded()
             self?.foldPreviewController.dismiss()
+            self?.scopeHighlightController.regionsDidChange()
         }.store(in: &cancellables)
     }
 

@@ -52,7 +52,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
     private var enabledRules: Set<JavaInspectionRule>
-    private let idleDelay: Duration
+    private var idleDelay: Duration
     private var cache: [URL: CachedResult] = [:]
     private var pending: [URL: Task<Void, Never>] = [:]
     private var resultHandler: (@Sendable (URL, [Diagnostic]) -> Void)?
@@ -78,6 +78,9 @@ public actor JavaInspectionService: DiagnosticProvider {
         classpathModel = model
         classpathPaths = model == nil ? nil : indexPaths
     }
+
+    /// How long the file must rest before it is analyzed again (IntelliJ's "Autoreparse delay").
+    public func setIdleDelay(_ delay: Duration) { idleDelay = delay }
 
     public func setEnabledRules(_ rules: Set<JavaInspectionRule>) {
         enabledRules = rules
@@ -150,10 +153,22 @@ public actor JavaInspectionService: DiagnosticProvider {
             }
             return found
         }
-        let diagnostics = inspections.map { $0.asDiagnostic() }
+        let diagnostics = suppressionFiltered(inspections, text: text).map { $0.asDiagnostic() }
         cache[url] = CachedResult(textHash: hash, diagnostics: diagnostics)
         pending[url] = nil
         resultHandler?(url, diagnostics)
+    }
+
+    /// Drops what an `@SuppressWarnings` or `//noinspection` in the file silences.
+    private func suppressionFiltered(_ inspections: [JavaInspection], text: String) -> [JavaInspection] {
+        guard !inspections.isEmpty, text.contains("SuppressWarnings") || text.contains("noinspection"),
+              let tree = JavaSyntaxParser().parse(text) else { return inspections }
+        let ns = text as NSString
+        return inspections.filter { inspection in
+            let location = min(max(0, inspection.range.start.utf16Offset), ns.length)
+            let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: location, in: text)
+            return !JavaSuppression.isSuppressed(code: inspection.id, atByteOffset: byteOffset, tree: tree)
+        }
     }
 
     private func scope(for file: URL) -> Set<String>? {

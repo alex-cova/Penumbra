@@ -163,6 +163,12 @@ public final class EditorIntelligenceController {
     private var windowObserver: NSObjectProtocol?
     private var ghostTextModel: GhostTextModel?
     private var latestDiagnostics: [Diagnostic] = []
+    private var mouseHoverTask: Task<Void, Never>?
+    /// What the mouse is over (an identifier or a diagnostic's range) while a tooltip is pending
+    /// or showing for it.
+    private var mouseHoverTarget: NSRange?
+    private var isMouseHoverVisible = false
+    private var refactoringPreviewTask: Task<Void, Never>?
     private var diagnosticsTask: Task<Void, Never>?
     private let forwardingDelegateBox: EditorIntelligenceForwardingDelegate
 
@@ -238,6 +244,9 @@ public final class EditorIntelligenceController {
         }
         textView.addTypingObserver { [weak self] event in
             self?.handleTypingEvent(event)
+        }
+        textView.addMouseMovedObserver { [weak self] event in
+            self?.handleMouseMoved(event)
         }
         textView.onCaretRepositioningClick = { [weak self] in
             self?.hideNavigationChoices()
@@ -340,6 +349,32 @@ public final class EditorIntelligenceController {
     /// a refresh superseded by a newer one is cancelled and never reported.
     public var onDiagnosticsUpdated: ((DiagnosticReport) -> Void)?
 
+    // MARK: - Tooltips
+
+    /// How long the pointer (or the caret) rests before a tooltip or documentation popup appears,
+    /// in seconds. IntelliJ's "Tooltip delay".
+    public var tooltipDelay: TimeInterval = 0.35
+    /// Show the documentation of the symbol under the pointer once it rests (IntelliJ's "Show
+    /// quick documentation on hover"). Off by default.
+    public var showsDocumentationOnMouseHover = false
+    /// Show the message of a diagnostic when the pointer rests on its squiggle.
+    public var showsDiagnosticTooltips = true
+
+    // MARK: - In-place refactoring
+
+    /// When `true`, rename and the extract refactorings mark the code they will change in the
+    /// editor while the name is typed, and a plan that needs no judgment (nothing ambiguous,
+    /// read-only or warned about) is applied straight away instead of being previewed first.
+    /// When `false`, every plan goes through the host's preview. IntelliJ's "Enable in-place mode".
+    public var appliesRefactoringsInPlace = false
+    /// Called after a refactoring was applied without a preview, so the host can refresh what
+    /// the edit touched (a file tree, version-control status).
+    public var onWorkspaceEditApplied: ((WorkspaceEditApplyResult) -> Void)?
+    /// When `true`, Inline Variable shows the plan's preview before changing anything; when
+    /// `false` a plan that needs no judgment is applied straight away (IntelliJ's "Display a
+    /// confirmation dialog for Inline local variable").
+    public var confirmsInlineVariable = true
+
     // MARK: - Rename
 
     /// Asks the user for the new name of `target` (an inline prompt near the caret). Call
@@ -419,7 +454,12 @@ public final class EditorIntelligenceController {
                     return
                 }
                 let suggested = descriptor.suggestedParameters["name"] ?? "result"
+                if self.appliesRefactoringsInPlace, context.selection.range.start != context.selection.range.end,
+                   let textView = self.textView {
+                    self.highlightRefactoring([textView.selectedRange])
+                }
                 prompt(descriptor.title, suggested, RenameTarget.validateIdentifier) { [weak self] name in
+                    self?.clearRefactoringPreview()
                     guard let self, let name else { return }
                     self.planRefactoring(
                         provider: refactoringProvider, context: context, id: id, parameters: ["name": name]
@@ -533,14 +573,39 @@ public final class EditorIntelligenceController {
                 self.reportRenameFailure("Nothing to change")
                 return
             }
-            self.presentWorkspaceEditPlan(plan)
+            self.presentWorkspaceEditPlan(plan, appliesDirectly: self.appliesDirectly(id))
         }
     }
 
-    private func presentWorkspaceEditPlan(_ plan: WorkspaceEditPlan) {
+    /// Whether a plan for `id` skips the preview when it needs no judgment: the in-place
+    /// refactorings (rename, extract) with in-place mode on, Inline Variable unless confirmed.
+    private func appliesDirectly(_ id: RefactoringID) -> Bool {
+        switch id {
+        case .extractVariable, .extractField, .extractConstant, .extractMethod:
+            return appliesRefactoringsInPlace
+        case .inlineVariable:
+            return !confirmsInlineVariable
+        default:
+            return false
+        }
+    }
+
+    private func presentWorkspaceEditPlan(_ plan: WorkspaceEditPlan, appliesDirectly: Bool = false) {
         let apply: (WorkspaceEdit) async -> WorkspaceEditApplyResult = { [weak self] edit in
             guard let self else { return WorkspaceEditApplyResult() }
             return await self.applyWorkspaceEdit(edit)
+        }
+        if appliesDirectly, Self.needsNoJudgment(plan) {
+            let edit = plan.workspaceEdit()
+            Task { [weak self] in
+                guard let self else { return }
+                let result = await apply(edit)
+                if !result.failures.isEmpty {
+                    self.reportRenameFailure(result.failures.values.sorted().joined(separator: "\n"))
+                }
+                self.onWorkspaceEditApplied?(result)
+            }
+            return
         }
         if let present = onPresentWorkspaceEditPlan {
             present(plan, apply)
@@ -548,6 +613,52 @@ public final class EditorIntelligenceController {
             present(plan, apply)
         } else {
             showTransientHint("Refactoring isn't set up in this app")
+        }
+    }
+
+    /// A plan with nothing ambiguous, read-only, deleted or warned about has nothing for the user
+    /// to decide in a preview.
+    static func needsNoJudgment(_ plan: WorkspaceEditPlan) -> Bool {
+        plan.warnings.isEmpty && plan.fileDeletions.isEmpty
+            && plan.entries.allSatisfy { !$0.isAmbiguous && !$0.isReadOnly }
+    }
+
+    /// Marks `ranges` as the code a refactoring in progress will change.
+    private func highlightRefactoring(_ ranges: [NSRange]) {
+        guard let textView else { return }
+        textView.emphasisManager.replaceEmphases(
+            ranges.map { Emphasis(range: $0, style: .outline(color: .controlAccentColor, fill: true)) },
+            for: EmphasisGroup.refactoring,
+            color: .controlAccentColor
+        )
+    }
+
+    private func clearRefactoringPreview() {
+        refactoringPreviewTask?.cancel()
+        refactoringPreviewTask = nil
+        textView?.emphasisManager.removeEmphases(for: EmphasisGroup.refactoring)
+    }
+
+    /// While the new name is typed, shows every place in this document the rename will touch.
+    /// The symbol itself is marked at once; the rest follows when the provider has planned a
+    /// rename to a throwaway name.
+    private func previewRename(provider: any RenameProviding, context: NavigationContext, target: RenameTarget) {
+        guard let textView else { return }
+        highlightRefactoring([TextEditApplicator.nsRange(for: target.range, in: textView)])
+        refactoringPreviewTask?.cancel()
+        let documentURL = (textView.documentURL ?? context.document.url)?.standardizedFileURL
+        refactoringPreviewTask = Task { [weak self] in
+            guard let plan = try? await provider.rename(context, to: target.currentName + "Renamed"),
+                  plan.blockingError == nil, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, let textView = self.textView, self.refactoringPreviewTask != nil else { return }
+                let ranges = plan.entries
+                    .filter { $0.url.standardizedFileURL == documentURL }
+                    .map { TextEditApplicator.nsRange(for: $0.range, in: textView) }
+                if !ranges.isEmpty {
+                    self.highlightRefactoring(ranges)
+                }
+            }
         }
     }
 
@@ -577,7 +688,11 @@ public final class EditorIntelligenceController {
                 self.showTransientHint("Rename isn't set up in this app")
                 return
             }
+            if self.appliesRefactoringsInPlace {
+                self.previewRename(provider: renameProvider, context: context, target: target)
+            }
             onRequestRename(target) { [weak self] newName in
+                self?.clearRefactoringPreview()
                 guard let self, let newName, newName != target.currentName else { return }
                 self.planRename(provider: renameProvider, context: context, newName: newName)
             }
@@ -603,7 +718,7 @@ public final class EditorIntelligenceController {
                 self.reportRenameFailure("Nothing to rename")
                 return
             }
-            self.presentWorkspaceEditPlan(plan)
+            self.presentWorkspaceEditPlan(plan, appliesDirectly: self.appliesRefactoringsInPlace)
         }
     }
 
@@ -662,6 +777,9 @@ public final class EditorIntelligenceController {
             return true
         case .quickDocumentation:
             requestHover(trigger: .manual)
+            return true
+        case .showErrorDescription:
+            showErrorDescription()
             return true
         case .showParameterInfo:
             guard signatureHelpProvider != nil else { return false }
@@ -997,7 +1115,7 @@ public final class EditorIntelligenceController {
 
     /// The document as it is on screen: the adapter's snapshot lags the live buffer, so code
     /// actions get the live text and a caret with its real line and column.
-    private func liveDocument() -> Document? {
+    private func liveDocument(caretAt overrideOffset: Int? = nil) -> Document? {
         guard let textView, let base = adapter.currentDocument else {
             return nil
         }
@@ -1014,15 +1132,15 @@ public final class EditorIntelligenceController {
         func range(_ selected: NSRange) -> EditorIntelligence.TextRange {
             EditorIntelligence.TextRange(start: position(selected.location), end: position(selected.location + selected.length))
         }
-        let caret = position(textView.selectedRange.location)
-        let selected = textView.selectedRanges
+        let selected = overrideOffset.map { [NSRange(location: min(max(0, $0), ns.length), length: 0)] } ?? textView.selectedRanges
+        let caret = position(overrideOffset ?? textView.selectedRange.location)
         return Document(
             id: base.id,
             url: textView.documentURL ?? base.url,
             displayName: base.displayName,
             contentSnapshot: TextSnapshot(version: base.version, text: text),
             selection: Selection(
-                range: range(textView.selectedRange),
+                range: range(selected.first ?? textView.selectedRange),
                 additionalRanges: selected.dropFirst().map(range)
             ),
             cursor: Cursor(position: caret),
@@ -1805,7 +1923,8 @@ public final class EditorIntelligenceController {
         if !hoverWindowView.isHidden { hideHover() }
         hoverTask?.cancel()
         hoverTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.35 }
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
                 self.requestHover(trigger: .idle)
@@ -1814,12 +1933,15 @@ public final class EditorIntelligenceController {
     }
 
     private func showHover(_ result: HoverResult, document: Document) {
+        presentHover(markdown: result.contents, anchorRange: result.range ?? document.selection.range)
+    }
+
+    private func presentHover(markdown: String, anchorRange: EditorIntelligence.TextRange) {
         guard let textView else {
             return
         }
-        let anchorRange = result.range ?? document.selection.range
         let model = HoverWindowModel(
-            contents: result.contents,
+            contents: markdown,
             anchorRange: anchorRange,
             isMarkdown: true
         )
@@ -1836,7 +1958,176 @@ public final class EditorIntelligenceController {
 
     private func hideHover() {
         hoverWindowView.isHidden = true
+        isMouseHoverVisible = false
+        mouseHoverTarget = nil
         updateOverlayVisibility()
+    }
+
+    // MARK: - Mouse hover and error descriptions
+
+    /// What the pointer is resting on: the range that identifies it, and the diagnostics there.
+    private struct MouseHoverTarget {
+        var range: NSRange
+        var diagnostics: [TextViewDiagnostic]
+    }
+
+    private func handleMouseMoved(_ event: NSEvent) {
+        guard event.type == .mouseMoved, let textView, showsDiagnosticTooltips || showsDocumentationOnMouseHover else {
+            return
+        }
+        // Command-hover underlines a symbol for navigation (`JumpToDefinitionController`).
+        guard !event.modifierFlags.contains(.command) else {
+            cancelMouseHover()
+            return
+        }
+        let point = textView.convert(event.locationInWindow, from: nil)
+        // Moving onto the popup (to read or copy from it) must not dismiss it.
+        guard !isPointOverOverlayPanel(point) else {
+            return
+        }
+        guard let target = mouseHoverTarget(at: point, in: textView) else {
+            cancelMouseHover()
+            return
+        }
+        guard target.range != mouseHoverTarget else {
+            return
+        }
+        cancelMouseHover()
+        mouseHoverTarget = target.range
+        let range = target.range
+        mouseHoverTask = Task { [weak self] in
+            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.35 }
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.showMouseHover(for: target, expectedRange: range)
+        }
+    }
+
+    private func cancelMouseHover() {
+        mouseHoverTask?.cancel()
+        mouseHoverTask = nil
+        let wasShowing = isMouseHoverVisible
+        mouseHoverTarget = nil
+        if wasShowing {
+            hideHover()
+        }
+    }
+
+    /// The diagnostic or identifier under `point` (in the text view's coordinates), or `nil`
+    /// when the pointer is not on text a tooltip applies to. Reads a short window around the
+    /// character, never the whole document: this runs on every mouse movement.
+    private func mouseHoverTarget(at point: CGPoint, in textView: TextView) -> MouseHoverTarget? {
+        guard textView.bounds.contains(point), let index = textView.characterIndex(at: point) else {
+            return nil
+        }
+        func isOnText(_ range: NSRange) -> Bool {
+            // The pointer is still on what the pending or showing tooltip is about: skip the
+            // layout lookups below, this runs on every mouse movement.
+            if range == mouseHoverTarget { return true }
+            // `characterIndex(at:)` snaps to the nearest character, so make sure the pointer is
+            // really over the range's first line of text.
+            let start = textView.caretRectInViewport(at: range.location)
+            let end = textView.caretRectInViewport(at: NSMaxRange(range))
+            guard point.y >= start.minY, point.y <= start.maxY else { return false }
+            return start.minY != end.minY || (point.x >= start.minX && point.x <= end.minX)
+        }
+        if showsDiagnosticTooltips {
+            let diagnostics = textView.diagnostics(at: index)
+            if let first = diagnostics.first, isOnText(first.range) {
+                return MouseHoverTarget(range: first.range, diagnostics: diagnostics)
+            }
+        }
+        guard showsDocumentationOnMouseHover, let identifier = identifierRange(around: index, in: textView),
+              isOnText(identifier) else {
+            return nil
+        }
+        return MouseHoverTarget(range: identifier, diagnostics: [])
+    }
+
+    private func isPointOverOverlayPanel(_ point: CGPoint) -> Bool {
+        [hoverWindowView, completionPanelView, codeActionView].contains { !$0.isHidden && $0.frame.contains(point) }
+    }
+
+    private func identifierRange(around index: Int, in textView: TextView) -> NSRange? {
+        let window = 128
+        let start = max(0, index - window)
+        let length = min(textView.documentLength, index + window) - start
+        guard length > 0, let slice = textView.text(in: NSRange(location: start, length: length)) as NSString? else {
+            return nil
+        }
+        func isIdentifier(_ unit: unichar) -> Bool {
+            (unit >= 48 && unit <= 57) || (unit >= 65 && unit <= 90) || (unit >= 97 && unit <= 122) || unit == 95 || unit == 36 || unit > 127
+        }
+        let local = index - start
+        guard local >= 0, local < slice.length, isIdentifier(slice.character(at: local)) else { return nil }
+        var first = local
+        while first > 0, isIdentifier(slice.character(at: first - 1)) { first -= 1 }
+        var last = local + 1
+        while last < slice.length, isIdentifier(slice.character(at: last)) { last += 1 }
+        let digit = slice.character(at: first)
+        guard !(digit >= 48 && digit <= 57) else { return nil }
+        return NSRange(location: start + first, length: last - first)
+    }
+
+    private func showMouseHover(for target: MouseHoverTarget, expectedRange: NSRange) async {
+        guard mouseHoverTarget == expectedRange, let textView else { return }
+        let anchor = hoverPosition(at: expectedRange.location, in: textView)
+        let anchorRange = EditorIntelligence.TextRange(start: anchor, end: anchor)
+        if !target.diagnostics.isEmpty {
+            presentHover(markdown: Self.diagnosticMarkdown(target.diagnostics), anchorRange: anchorRange)
+            isMouseHoverVisible = true
+            return
+        }
+        guard let document = liveDocument(caretAt: expectedRange.location) else { return }
+        let context = HoverContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            trigger: .manual
+        )
+        guard let result = await hoverEngine.hover(context: context),
+              !Task.isCancelled, mouseHoverTarget == expectedRange else { return }
+        presentHover(markdown: result.contents, anchorRange: result.range ?? anchorRange)
+        isMouseHoverVisible = true
+    }
+
+    private func hoverPosition(at offset: Int, in textView: TextView) -> TextPosition {
+        let location = textView.textLocation(at: offset)
+        return TextPosition(line: location?.lineNumber ?? 0, column: location?.column ?? offset, utf16Offset: offset)
+    }
+
+    /// Shows the message of the error or warning at the caret (IntelliJ's Show Error Description).
+    public func showErrorDescription() {
+        guard let textView else { return }
+        let caret = textView.selectedRange.location
+        var diagnostics = textView.diagnostics(at: caret)
+        if diagnostics.isEmpty, caret > 0 {
+            // A caret just after the last character of a squiggle still means that squiggle.
+            diagnostics = textView.diagnostics(at: caret - 1)
+        }
+        guard !diagnostics.isEmpty else {
+            showTransientHint("No errors or warnings at the caret")
+            return
+        }
+        let anchor = hoverPosition(at: diagnostics[0].range.location, in: textView)
+        presentHover(markdown: Self.diagnosticMarkdown(diagnostics), anchorRange: EditorIntelligence.TextRange(start: anchor, end: anchor))
+    }
+
+    /// The popup text for `diagnostics`: one paragraph each, severity in bold, then the message
+    /// and where it came from.
+    static func diagnosticMarkdown(_ diagnostics: [TextViewDiagnostic]) -> String {
+        diagnostics.map { diagnostic in
+            let label: String
+            switch diagnostic.severity {
+            case .error: label = "Error"
+            case .warning: label = "Warning"
+            case .information: label = "Info"
+            case .hint: label = "Hint"
+            }
+            let message = diagnostic.message.isEmpty ? "No description available." : diagnostic.message
+            let source = diagnostic.source.map { "  \n*\($0)*" } ?? ""
+            return "**\(label):** \(message)\(source)"
+        }.joined(separator: "\n\n")
     }
 
     // MARK: - Completion documentation

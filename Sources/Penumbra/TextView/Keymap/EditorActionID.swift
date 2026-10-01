@@ -141,6 +141,9 @@ public extension EditorActionID {
     /// Shows the documentation of the symbol at the caret right away (F1, ⌃J), instead of waiting
     /// for the caret to rest.
     static let quickDocumentation = EditorActionID("quickDocumentation")
+    /// Shows the message of the error or warning at the caret in a popup (⌘F1; IntelliJ's Show
+    /// Error Description).
+    static let showErrorDescription = EditorActionID("showErrorDescription")
     /// Shows the signatures of the call around the caret, with the argument being typed
     /// highlighted, from anywhere inside its argument list (⌘P in the IntelliJ keymap). Needs a
     /// ``SignatureHelpProviding`` on ``EditorIntelligenceServices``.
@@ -267,6 +270,7 @@ public extension EditorActionID {
         .safeDelete: "Safe Delete",
         .typeHierarchy: "Type Hierarchy",
         .quickDocumentation: "Quick Documentation",
+        .showErrorDescription: "Show Error Description",
         .showParameterInfo: "Parameter Info",
         .showContextActions: "Show Context Actions",
         .optimizeImports: "Optimize Imports"

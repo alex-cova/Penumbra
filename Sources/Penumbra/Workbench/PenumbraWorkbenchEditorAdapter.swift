@@ -26,7 +26,10 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval`. See
     /// PERFORMANCE_AUDIT.md Phase 2 #1 — `selected.text = textView.text` is an O(document size)
     /// bridge, and used to run on every keystroke.
-    private static let contentRefreshDebounceNanoseconds: UInt64 = 200_000_000
+    private static let defaultContentRefreshDebounce: TimeInterval = 0.2
+    /// How long the editor must rest before the document is re-bridged and diagnostics, symbols
+    /// and the index follow (IntelliJ's "Autoreparse delay"). Read when each refresh is scheduled.
+    public var contentRefreshDebounce: TimeInterval = PenumbraWorkbenchEditorAdapter.defaultContentRefreshDebounce
 
     public init(workbench: EditorWorkbench, textView: TextView? = nil, context: EditorContext = EditorContext()) {
         self.workbench = workbench
@@ -147,7 +150,8 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     private func scheduleContentRefresh(from textView: TextView, for document: WorkbenchDocument) {
         contentRefreshTask?.cancel()
         contentRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.contentRefreshDebounceNanoseconds)
+            let delay = self?.contentRefreshDebounce ?? Self.defaultContentRefreshDebounce
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.refreshLiveDocumentContent(from: textView, for: document)
         }

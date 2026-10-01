@@ -8,4 +8,6 @@ public enum EmphasisGroup {
     public static let occurrences = "penumbra.occurrences"
     /// Cmd-hover underline for a symbol that can be navigated to.
     public static let navigation = "penumbra.navigation"
+    /// The code an in-place refactoring (rename, extract) is about to change.
+    public static let refactoring = "penumbra.refactoring"
 }

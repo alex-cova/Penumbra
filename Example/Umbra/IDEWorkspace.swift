@@ -1159,7 +1159,7 @@ public final class IDEWorkspace {
         presentWorkspaceEditPreview(plan, apply: apply)
     }
 
-    private func refreshAfterWorkspaceEdit(_ result: WorkspaceEditApplyResult) {
+    func refreshAfterWorkspaceEdit(_ result: WorkspaceEditApplyResult) {
         let parents = Set(
             result.renamedFiles.flatMap { [$0.from, $0.to] }
                 + result.deletedFiles
@@ -2947,7 +2947,8 @@ public final class IDEWorkspace {
             line: location?.lineNumber ?? 0,
             column: location?.column ?? 0
         )
-        guard let row = ProblemNavigator.step(from: position, forward: forward, in: problems.files) else {
+        let severities = ProblemNavigator.severities(for: preferences.nextErrorScope, in: problems.files)
+        guard let row = ProblemNavigator.step(from: position, forward: forward, in: problems.files, severities: severities) else {
             host.intelligenceController?.showHint(problems.errorCount + problems.warningCount == 0
                                                   ? "No problems" : "No more problems")
             return
@@ -3425,11 +3426,26 @@ public final class IDEWorkspace {
     /// Applies the preferences to the editors of this window.
     func applyPreferencesToOwnHosts() {
         for pane in workbench.panes {
-            preferences.apply(to: host(for: pane.id).textView, repaint: true)
+            let host = host(for: pane.id)
+            preferences.apply(to: host.textView, repaint: true)
+            if let controller = host.intelligenceController {
+                preferences.apply(to: controller)
+            }
         }
+        applyCodeInsightPreferences()
         if let textView = adapter?.textView {
             updateStatus(from: textView)
         }
+    }
+
+    /// The code-insight settings that live below the text views: how soon typing triggers a re-read
+    /// of the document, and how Java's Suppress fixes silence a warning.
+    func applyCodeInsightPreferences() {
+        adapter?.contentRefreshDebounce = TimeInterval(preferences.autoreparseDelayMilliseconds) / 1000
+        javaSupport.applyCodeInsightPreferences(
+            autoreparseDelay: .milliseconds(preferences.autoreparseDelayMilliseconds),
+            suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation
+        )
     }
 
     func refreshUIColorScheme() {
@@ -3759,8 +3775,15 @@ public final class IDEWorkspace {
         host.intelligenceController?.onDiagnosticsUpdated = { [weak self] report in
             self?.applyEditorDiagnostics(report)
         }
+        host.intelligenceController?.onWorkspaceEditApplied = { [weak self] result in
+            self?.refreshAfterWorkspaceEdit(result)
+        }
         _ = sharedPalette(for: host)
         preferences.apply(to: host.textView)
+        if let controller = host.intelligenceController {
+            preferences.apply(to: controller)
+        }
+        applyCodeInsightPreferences()
         return host
     }
 

@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Penumbra
 import SwiftUI
 
@@ -83,6 +84,62 @@ struct IDEPreferencesEditorPane: View {
             IDESettingsToggle("Method Separators", isOn: $preferences.showMethodSeparators)
             IDESettingsToggle("Highlight Occurrences", isOn: $preferences.highlightsOccurrencesOfSelection)
             IDESettingsToggle("Invisible Characters", isOn: $preferences.showInvisibleCharacters)
+        }
+
+        IDESettingsSection(
+            "Code Insight",
+            footer: "The error stripe ticks every problem along the trailing edge. The scope bar marks the block the caret is in, beside the fold arrows (code folding must be on). Tooltips show a problem's message, and optionally documentation, when the pointer rests on code."
+        ) {
+            IDESettingsToggle("Error Stripe", isOn: $preferences.showsErrorStripe)
+
+            IDEPreferencesIntStepper(
+                title: "Stripe Mark Height",
+                value: $preferences.errorStripeMarkMinHeight,
+                range: 1...8,
+                valueWidth: 28,
+                valueSuffix: " pt"
+            )
+            .disabled(!preferences.showsErrorStripe)
+
+            IDESettingsToggle("Highlight Current Scope", isOn: $preferences.highlightsCurrentScope)
+            IDESettingsToggle("Documentation on Hover", isOn: $preferences.showsDocumentationOnHover)
+
+            IDEPreferencesIntStepper(
+                title: "Tooltip Delay",
+                value: $preferences.tooltipDelayMilliseconds,
+                range: 0...2000,
+                step: 50,
+                valueWidth: 56,
+                valueSuffix: " ms"
+            )
+
+            IDEPreferencesIntStepper(
+                title: "Autoreparse Delay",
+                value: $preferences.autoreparseDelayMilliseconds,
+                range: 0...3000,
+                step: 50,
+                valueWidth: 56,
+                valueSuffix: " ms"
+            )
+
+            IDESettingsPicker("Next Problem (F2)", selection: $preferences.nextErrorScope) {
+                Text("All problems").tag(ProblemNavigationScope.all)
+                Text("Highest severity only").tag(ProblemNavigationScope.highestSeverity)
+            }
+        }
+
+        IDESettingsSection(
+            "Refactoring",
+            footer: "In-place mode marks the code a rename or extract will change and applies it without a preview when nothing is ambiguous. Turn it off to always review the changes first."
+        ) {
+            IDESettingsToggle("In-Place Mode", isOn: $preferences.inPlaceRefactoring)
+            IDESettingsToggle("Preselect Name on Rename", isOn: $preferences.preselectsRenamedName)
+            IDESettingsToggle("Confirm Inline Variable", isOn: $preferences.confirmsInlineVariable)
+            IDESettingsToggle(
+                "Suppress with Comment",
+                isOn: $preferences.javaSuppressWithComment,
+                detail: "Suppress quick fixes add //noinspection above the statement instead of @SuppressWarnings."
+            )
         }
 
         IDESettingsSection("Rendering") {

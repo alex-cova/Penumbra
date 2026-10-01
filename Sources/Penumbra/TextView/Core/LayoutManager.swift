@@ -124,6 +124,10 @@ final class LayoutManager {
         }
     }
     weak var codeFoldingManager: CodeFoldingManager?
+    /// Rows of the block the caret is in; drawn as a bar in the fold ribbon.
+    var scopeHighlightRows: ClosedRange<Int>? {
+        didSet { foldRibbonView.scopeRows = scopeHighlightRows }
+    }
     weak var focusModeController: FocusModeController?
     var lineSelectionDisplayType: LineSelectionDisplayType = .disabled {
         didSet {
@@ -1568,6 +1572,7 @@ extension LayoutManager {
 
     private func applyFoldRibbonTheme() {
         foldRibbonView.chevronColor = theme.lineNumberColor
+        foldRibbonView.scopeColor = theme.textColor.withAlphaComponent(0.5)
     }
 
     /// The line-number gutter uses the editor fill, not ``Theme/gutterBackgroundColor``, so it
