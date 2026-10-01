@@ -52,6 +52,7 @@ enum JavaInspectionRegistry {
         JavaEqualInsteadOfEqualsInspection.self,
         JavaSubtractionInCompareToInspection.self,
         JavaSuspiciousIndentationInspection.self,
+        JavaTextLabelInSwitchInspection.self,
         // Verbose or redundant code constructs
         JavaUnnecessaryReturnInspection.self,
         JavaUnnecessaryContinueInspection.self,
@@ -61,10 +62,12 @@ enum JavaInspectionRegistry {
         JavaConcatenationWithEmptyStringInspection.self,
         JavaManualMinMaxInspection.self,
         JavaUnnecessarilyEscapedCharacterInspection.self,
+        JavaReplacementHasNoEffectInspection.self,
         // Declaration redundancy
         JavaUnusedLabelInspection.self,
         JavaDuplicateThrowsInspection.self,
         JavaEmptyClassInitializerInspection.self,
+        JavaRedundantCloseInspection.self,
     ]
 
     static let typedInspections: [any JavaTypedInspection.Type] = [

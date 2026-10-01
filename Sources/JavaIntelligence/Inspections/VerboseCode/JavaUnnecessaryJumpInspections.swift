@@ -130,6 +130,8 @@ enum JavaUnusedLabelInspection: JavaNodeInspection {
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
         guard let label = node.namedChild(at: 0), label.type == "identifier", let body = node.namedChild(at: 1) else { return }
+        // A label straight inside an old-style switch is `text-label-in-switch`'s to report.
+        guard node.parent?.type != "switch_block_statement_group" else { return }
         var used = false
         body.forEachDescendant { descendant in
             guard descendant.type == "break_statement" || descendant.type == "continue_statement" else { return }

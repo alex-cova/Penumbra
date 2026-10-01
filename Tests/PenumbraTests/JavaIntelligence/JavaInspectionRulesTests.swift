@@ -196,6 +196,35 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes("class A { void f() { { } } }"), [], "a nested block is not an initializer")
     }
 
+    func testTextLabelInSwitch() throws {
+        let typo = "class A { void f(int x) { switch (x) { case 1: foo(); break; defalt: bar(); } } void foo() { } void bar() { } }"
+        XCTAssertEqual(try codes(typo), ["text-label-in-switch"])
+        let intended = "class A { void f(int x) { switch (x) { case 1: outer: for (;;) { break outer; } default: break; } } }"
+        XCTAssertEqual(try codes(intended).filter { $0 == "text-label-in-switch" }, [])
+        XCTAssertEqual(try codes("class A { void f(int x) { outer: for (;;) { break; } } }").filter { $0 == "text-label-in-switch" }, [])
+    }
+
+    func testRedundantClose() throws {
+        let source = "class A {\n    void f() throws Exception {\n        try (java.io.Reader r = open()) {\n            r.read();\n            r.close();\n        }\n    }\n}\n"
+        XCTAssertEqual(try codes(source), ["redundant-close"])
+        XCTAssertEqual(try fixed(source, rule: .redundantClose)?.contains("r.close()"), false)
+        XCTAssertEqual(try fixed(source, rule: .redundantClose)?.contains("r.read();"), true)
+        XCTAssertEqual(try codes("class A { void f() throws Exception { try (java.io.Reader r = open()) { r.close(); r.read(); } } }"), [], "not the last statement")
+        XCTAssertEqual(try codes("class A { void f(java.io.Reader o) throws Exception { try (java.io.Reader r = open()) { o.close(); } } }"), [], "not a resource")
+        XCTAssertEqual(try codes("class A { void f() throws Exception { java.io.Reader r = open(); try { r.close(); } finally { } } }"), [])
+    }
+
+    func testReplacementHasNoEffect() throws {
+        XCTAssertEqual(try codes(body("        String r = s.replace(\"a\", \"a\");")), ["replacement-has-no-effect"])
+        XCTAssertEqual(try codes(body("        String r = s.replaceAll(\"ab\", \"ab\");")), ["replacement-has-no-effect"])
+        XCTAssertEqual(try codes(body("        String r = s.replace('x', 'x');")), ["replacement-has-no-effect"])
+        XCTAssertEqual(try codes(body("        String r = s.replaceAll(\".\", \".\");")), [], "every character becomes a dot")
+        XCTAssertEqual(try codes(body("        String r = s.replace(\"a\", \"b\");")), [])
+        XCTAssertEqual(try codes(body("        String r = s.replace(\"\", \"\");")), [])
+        XCTAssertEqual(try codes(body("        String r = n.replace(\"a\", \"a\");".replacingOccurrences(of: "n.replace", with: "t.replace").replacingOccurrences(of: "t.replace", with: "make().replace"), members: "    String make() { return null; }")), [], "receiver type unknown")
+        XCTAssertEqual(try fixed(body("        String r = s.replace(\"a\", \"a\");"), rule: .replacementHasNoEffect)?.contains("String r = s;"), true)
+    }
+
     func testCleanCodeProducesNoFindings() throws {
         let source = """
         import java.util.List;

@@ -102,3 +102,49 @@ enum JavaUnnecessarilyEscapedCharacterInspection: JavaNodeInspection {
         return []
     }
 }
+
+/// `s.replace("a", "a")`: the result is `s`. For the regex forms the text must have no regex or
+/// replacement meaning, or `replaceAll(".", ".")` (every character becomes a dot) would be flagged.
+enum JavaReplacementHasNoEffectInspection: JavaNodeInspection {
+    static let rule = JavaInspectionRule.replacementHasNoEffect
+    static let nodeTypes: Set<String> = ["method_invocation"]
+    private static let regexSpecials = Set("\\.[]{}()*+-?^$|")
+
+    private static func literalBody(_ node: SyntaxNode) -> String? {
+        let argument = node.unparenthesized
+        switch argument.type {
+        case "string_literal":
+            let text = argument.text
+            return text.hasPrefix("\"\"\"") ? nil : String(text.dropFirst().dropLast())
+        case "character_literal":
+            return String(argument.text.dropFirst().dropLast())
+        default:
+            return nil
+        }
+    }
+
+    private static func analyze(_ node: SyntaxNode) -> SyntaxNode? {
+        guard let name = node.child(byFieldName: "name")?.text, ["replace", "replaceAll", "replaceFirst"].contains(name),
+              let receiver = node.child(byFieldName: "object"), JavaDeclaredTypes.type(of: receiver) == .string,
+              let arguments = node.child(byFieldName: "arguments"), arguments.namedChildCount == 2,
+              let target = arguments.namedChild(at: 0), let replacement = arguments.namedChild(at: 1) else { return nil }
+        guard let targetText = literalBody(target), targetText == literalBody(replacement) else { return nil }
+        if name != "replace", targetText.contains(where: { regexSpecials.contains($0) }) { return nil }
+        // An empty target "matches" between every character, so the result is not the receiver.
+        return targetText.isEmpty ? nil : receiver
+    }
+
+    static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
+        guard analyze(node) != nil, let name = node.child(byFieldName: "name")?.text else { return }
+        report(JavaInspectionSupport.inspection(
+            rule, message: "'\(name)()' replaces text with itself and has no effect", node: node, fixTitle: "Remove the call"
+        ))
+    }
+
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
+        guard let call = JavaInspectionSupport.node(of: "method_invocation", for: diagnostic, tree: tree, source: source),
+              let receiver = analyze(call) else { return [] }
+        let edit = JavaInspectionSupport.edit(replacingBytes: call.byteRange, with: receiver.text, in: tree)
+        return [CodeAction(title: "Remove the call", kind: "quickfix", edits: [edit], isPreferred: true)]
+    }
+}

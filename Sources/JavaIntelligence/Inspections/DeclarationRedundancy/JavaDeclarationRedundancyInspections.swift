@@ -46,3 +46,31 @@ enum JavaEmptyClassInitializerInspection: JavaNodeInspection {
         return []
     }
 }
+
+enum JavaRedundantCloseInspection: JavaNodeInspection {
+    static let rule = JavaInspectionRule.redundantClose
+    static let nodeTypes: Set<String> = ["try_with_resources_statement"]
+
+    static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
+        guard let call = closeCall(in: node) else { return }
+        report(JavaInspectionSupport.inspection(
+            rule, message: "Redundant 'close()': the resource is closed automatically", node: call, fixTitle: "Remove 'close()'"
+        ))
+    }
+
+    /// `name.close();` as the last statement of the body, where `name` is one of the resources.
+    private static func closeCall(in node: SyntaxNode) -> SyntaxNode? {
+        guard let resources = node.child(byFieldName: "resources"), let body = node.child(byFieldName: "body"),
+              let last = body.namedChildren.last(where: { !["line_comment", "block_comment"].contains($0.type) }),
+              last.type == "expression_statement", let call = last.namedChild(at: 0), call.type == "method_invocation",
+              call.child(byFieldName: "name")?.text == "close", call.child(byFieldName: "arguments")?.namedChildCount == 0,
+              let object = call.child(byFieldName: "object"), object.type == "identifier" else { return nil }
+        let names = resources.namedChildren(ofType: "resource").compactMap { $0.child(byFieldName: "name")?.text }
+        return names.contains(object.text) ? last : nil
+    }
+
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
+        guard let statement = JavaInspectionSupport.node(of: "expression_statement", for: diagnostic, tree: tree, source: source) else { return [] }
+        return JavaJumpStatements.removeFix(title: "Remove 'close()'", node: statement, in: tree)
+    }
+}
