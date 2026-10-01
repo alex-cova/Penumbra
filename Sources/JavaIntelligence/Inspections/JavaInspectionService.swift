@@ -3,9 +3,11 @@ import Foundation
 
 /// One static analysis warning surfaced in the Problems panel.
 public struct JavaInspection: Sendable, Equatable {
-    public enum Severity: Sendable {
+    public enum Severity: String, Sendable, CaseIterable {
+        case error
         case warning
         case weakWarning
+        case info
     }
 
     public let id: String
@@ -22,10 +24,14 @@ public struct JavaInspection: Sendable, Equatable {
         self.fixTitle = fixTitle
     }
 
+    func withSeverity(_ severity: Severity) -> JavaInspection {
+        JavaInspection(id: id, message: message, severity: severity, range: range, fixTitle: fixTitle)
+    }
+
     func asDiagnostic() -> Diagnostic {
         Diagnostic(
             id: UUID(),
-            severity: severity == .warning ? .warning : .hint,
+            severity: severity.diagnosticSeverity,
             message: message,
             range: range,
             source: "java-inspection",
@@ -34,13 +40,15 @@ public struct JavaInspection: Sendable, Equatable {
     }
 }
 
-public enum JavaInspectionRule: String, CaseIterable, Sendable {
-    case unusedImport
-    case duplicateImport
-    case unresolvedImport
-    case missingOverride
-    case unresolvedType
-    case classFileNameMismatch
+extension JavaInspection.Severity {
+    var diagnosticSeverity: DiagnosticSeverity {
+        switch self {
+        case .error: return .error
+        case .warning: return .warning
+        case .weakWarning: return .hint
+        case .info: return .information
+        }
+    }
 }
 
 /// Debounced static inspections for open Java files.
@@ -52,6 +60,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
     private var enabledRules: Set<JavaInspectionRule>
+    private var severityOverrides: [JavaInspectionRule: JavaInspection.Severity] = [:]
     private var idleDelay: Duration
     private var cache: [URL: CachedResult] = [:]
     private var pending: [URL: Task<Void, Never>] = [:]
@@ -84,6 +93,12 @@ public actor JavaInspectionService: DiagnosticProvider {
 
     public func setEnabledRules(_ rules: Set<JavaInspectionRule>) {
         enabledRules = rules
+        cache.removeAll()
+    }
+
+    /// Severity per rule where the user changed it from the rule's default.
+    public func setSeverityOverrides(_ overrides: [JavaInspectionRule: JavaInspection.Severity]) {
+        severityOverrides = overrides
         cache.removeAll()
     }
 
@@ -151,12 +166,21 @@ public actor JavaInspectionService: DiagnosticProvider {
             if enabledRules.contains(.classFileNameMismatch) {
                 found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
             }
+            found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabledRules))
             return found
         }
-        let diagnostics = suppressionFiltered(inspections, text: text).map { $0.asDiagnostic() }
+        let diagnostics = applySeverityOverrides(suppressionFiltered(inspections, text: text)).map { $0.asDiagnostic() }
         cache[url] = CachedResult(textHash: hash, diagnostics: diagnostics)
         pending[url] = nil
         resultHandler?(url, diagnostics)
+    }
+
+    private func applySeverityOverrides(_ inspections: [JavaInspection]) -> [JavaInspection] {
+        guard !severityOverrides.isEmpty else { return inspections }
+        return inspections.map { inspection in
+            guard let rule = JavaInspectionRule(code: inspection.id), let severity = severityOverrides[rule] else { return inspection }
+            return inspection.withSeverity(severity)
+        }
     }
 
     /// Drops what an `@SuppressWarnings` or `//noinspection` in the file silences.

@@ -13,6 +13,8 @@ public final class JavaSyntaxTree: @unchecked Sendable {
     /// every node's `startByte`/`endByte` indexes directly into this array.
     let sourceBytes: [UInt8]
     private let tree: OpaquePointer
+    /// Memoized declaration lookups for the inspections; belongs to this exact parse.
+    let declarationCache = JavaDeclarationCache()
 
     fileprivate init(tree: OpaquePointer, sourceBytes: [UInt8]) {
         self.tree = tree

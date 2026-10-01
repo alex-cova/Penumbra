@@ -41,6 +41,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
             var actions = await importActions(in: text, at: position, diagnostics: diagnostics)
             actions.append(contentsOf: overrideActions(in: text, at: position, diagnostics: diagnostics))
             actions.append(contentsOf: inspectionImportFixes(in: text, at: position, diagnostics: diagnostics))
+            actions.append(contentsOf: registeredInspectionFixes(in: text, at: position, diagnostics: diagnostics))
             actions.append(contentsOf: suppressionActions(in: text, at: position, diagnostics: diagnostics))
             let organized = JavaImportOrganizer.edits(in: text)
             if !organized.isEmpty {
@@ -101,6 +102,21 @@ public actor JavaCodeActionProvider: CodeActionProviding {
             }
         }
         return actions
+    }
+
+    /// Fixes from `JavaInspectionRegistry` for the `java-inspection` warnings on the caret's line.
+    private func registeredInspectionFixes(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
+        let ns = text as NSString
+        let caret = min(max(0, position.utf16Offset), ns.length)
+        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
+        let candidates = diagnostics.filter { diagnostic in
+            guard diagnostic.source == "java-inspection", let code = diagnostic.code,
+                  let rule = JavaInspectionRule(code: code), JavaInspectionRegistry.inspection(for: rule) != nil else { return false }
+            let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
+            return NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0
+        }
+        guard !candidates.isEmpty, let tree = JavaSyntaxParser().parse(text) else { return [] }
+        return candidates.flatMap { JavaInspectionRegistry.fixes(for: $0, tree: tree, source: text) }
     }
 
     /// "Suppress for method / class…" (or a `//noinspection` comment) for each warning on the

@@ -165,6 +165,15 @@ final class IDEJavaSupport {
     /// Called after the index's sources change (project indexed, sync finished, files re-indexed
     /// after changing on disk), so results that depend on other files can be refreshed.
     @ObservationIgnored var onIndexSourcesPublished: (@MainActor () -> Void)?
+    /// Called once the inspection service has taken a changed rule set or severity, so the open
+    /// files can be analysed again without waiting for an edit.
+    @ObservationIgnored var onInspectionConfigurationChanged: (@MainActor () -> Void)?
+    private var appliedInspectionConfiguration: InspectionConfiguration?
+
+    private struct InspectionConfiguration: Equatable {
+        let enabled: Set<JavaInspectionRule>
+        let severities: [JavaInspectionRule: JavaInspection.Severity]
+    }
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
     /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
     /// tab in the bottom panel. Reset at the start of every sync.
@@ -300,11 +309,33 @@ final class IDEJavaSupport {
     }
 
     /// Applies the code-insight settings the Java services own: how long a file rests before its
-    /// inspections run again, and what a Suppress quick fix writes.
-    func applyCodeInsightPreferences(autoreparseDelay: Duration, suppressionStyle: JavaSuppressionStyle) {
+    /// inspections run again, which inspections run and at what severity, and what a Suppress
+    /// quick fix writes.
+    func applyCodeInsightPreferences(
+        autoreparseDelay: Duration,
+        suppressionStyle: JavaSuppressionStyle,
+        enabledInspections: Set<JavaInspectionRule>,
+        inspectionSeverities: [JavaInspectionRule: JavaInspection.Severity]
+    ) {
+        let configuration = InspectionConfiguration(enabled: enabledInspections, severities: inspectionSeverities)
+        let previous = appliedInspectionConfiguration
+        appliedInspectionConfiguration = configuration
+        let changed = previous != configuration
         Task { [inspectionService, codeActionProvider] in
             await inspectionService.setIdleDelay(autoreparseDelay)
             await codeActionProvider.setSuppressionStyle(suppressionStyle)
+            guard changed else { return }
+            await inspectionService.setEnabledRules(enabledInspections)
+            await inspectionService.setSeverityOverrides(inspectionSeverities)
+            // The first application only installs the saved settings; there is nothing to refresh.
+            if previous != nil { onInspectionConfigurationChanged?() }
+        }
+    }
+
+    /// Analyses `documents` again with the current inspection settings.
+    func reanalyzeInspections(_ documents: [EditorIntelligence.Document]) {
+        Task { [inspectionService] in
+            for document in documents { await inspectionService.analyzeNow(document, force: true) }
         }
     }
 

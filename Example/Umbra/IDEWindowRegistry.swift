@@ -271,6 +271,17 @@ final class IDEWindowRegistry {
         }
     }
 
+    /// Like `applyPreferencesToAllWindows`, for the settings that live below the text views.
+    func applyCodeInsightPreferencesToAllWindows(including workspace: IDEWorkspace) {
+        var targets = workspaces
+        if !targets.contains(where: { $0 === workspace }) {
+            targets.append(workspace)
+        }
+        for target in targets {
+            target.applyCodeInsightPreferences()
+        }
+    }
+
     /// Quitting with unsaved editors in any window asks once for all of them, where closing each
     /// window would ask per window. Nothing to ask when everything is saved.
     func confirmQuit() -> Bool {

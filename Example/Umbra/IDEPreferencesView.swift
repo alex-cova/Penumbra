@@ -146,6 +146,8 @@ public struct IDEPreferencesView: View {
             IDEPreferencesProjectPane(preferences: preferences)
         case .java:
             IDEPreferencesJavaPane(preferences: preferences)
+        case .inspections:
+            IDEPreferencesInspectionsPane(preferences: preferences)
         }
     }
 }

@@ -530,6 +530,10 @@ public final class IDEWorkspace {
             }
         }
         wireAdapter()
+        intelligenceServices.javaSupport.onInspectionConfigurationChanged = { [weak self] in
+            guard let self else { return }
+            javaSupport.reanalyzeInspections(openJavaDocuments())
+        }
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         refreshPresentation()
@@ -3444,8 +3448,16 @@ public final class IDEWorkspace {
         adapter?.contentRefreshDebounce = TimeInterval(preferences.autoreparseDelayMilliseconds) / 1000
         javaSupport.applyCodeInsightPreferences(
             autoreparseDelay: .milliseconds(preferences.autoreparseDelayMilliseconds),
-            suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation
+            suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation,
+            enabledInspections: preferences.enabledJavaInspections,
+            inspectionSeverities: preferences.javaInspectionSeverityOverrides
         )
+    }
+
+    /// A Java inspection was switched or re-graded in Settings. Every window's analysis follows,
+    /// without repainting any editor.
+    func javaInspectionPreferencesChanged() {
+        IDEWindowRegistry.shared.applyCodeInsightPreferencesToAllWindows(including: self)
     }
 
     func refreshUIColorScheme() {

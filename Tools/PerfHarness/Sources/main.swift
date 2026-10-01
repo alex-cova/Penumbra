@@ -37,6 +37,7 @@ func printUsageAndExit() -> Never {
       snapshot-metal <path|synthetic> [--out DIR]
       java-completion synthetic
       java-members <java-source-directory>
+      java-inspections <path|synthetic> [--lines N] [--samples N]
       enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
       markdown-preview <path|synthetic> [--sections N] [--samples N]
 
@@ -73,7 +74,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion"
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections"
     || command == "enter-session" || command == "markdown-preview"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
@@ -90,6 +91,12 @@ do {
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "java-completion":
         try JavaCompletionProfile.run()
+    case "java-inspections":
+        try JavaInspectionsProfile.run(
+            pathOrSynthetic: path,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        )
     case "java-members":
         JavaMembersProfile.run(root: path)
     case "enter-session":

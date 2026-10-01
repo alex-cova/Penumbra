@@ -51,6 +51,8 @@ public final class IDEPreferences {
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
         static let showsErrorStripe = "com.umbra.editor.showsErrorStripe"
+        static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
+        static let javaInspectionSeverities = "com.umbra.editor.javaInspectionSeverities"
         static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
         static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
@@ -323,6 +325,54 @@ public final class IDEPreferences {
         didSet {
             UserDefaults.standard.set(javaDecompilerAgreementAccepted, forKey: Keys.javaDecompilerAgreementAccepted)
         }
+    /// Codes of the Java inspections the user turned off (every rule is on by default). Stored by
+    /// code so a renamed enum case cannot lose a choice. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaDisabledInspections: Set<String> {
+        didSet { UserDefaults.standard.set(javaDisabledInspections.sorted(), forKey: Keys.javaDisabledInspections) }
+    }
+
+    /// Severity per inspection code, only where it differs from the rule's default.
+    var javaInspectionSeverities: [String: String] {
+        didSet { UserDefaults.standard.set(javaInspectionSeverities, forKey: Keys.javaInspectionSeverities) }
+    }
+
+    var enabledJavaInspections: Set<JavaInspectionRule> {
+        Set(JavaInspectionRule.allCases.filter { !javaDisabledInspections.contains($0.code) })
+    }
+
+    var javaInspectionSeverityOverrides: [JavaInspectionRule: JavaInspection.Severity] {
+        var overrides: [JavaInspectionRule: JavaInspection.Severity] = [:]
+        for rule in JavaInspectionRule.allCases {
+            if let raw = javaInspectionSeverities[rule.code], let severity = JavaInspection.Severity(rawValue: raw) {
+                overrides[rule] = severity
+            }
+        }
+        return overrides
+    }
+
+    func isEnabled(_ rule: JavaInspectionRule) -> Bool { !javaDisabledInspections.contains(rule.code) }
+
+    func setEnabled(_ isEnabled: Bool, for rule: JavaInspectionRule) {
+        if isEnabled { javaDisabledInspections.remove(rule.code) } else { javaDisabledInspections.insert(rule.code) }
+    }
+
+    func severity(of rule: JavaInspectionRule) -> JavaInspection.Severity {
+        javaInspectionSeverityOverrides[rule] ?? rule.defaultSeverity
+    }
+
+    func setSeverity(_ severity: JavaInspection.Severity, for rule: JavaInspectionRule) {
+        if severity == rule.defaultSeverity {
+            javaInspectionSeverities[rule.code] = nil
+        } else {
+            javaInspectionSeverities[rule.code] = severity.rawValue
+        }
+    }
+
+    func resetJavaInspections() {
+        javaDisabledInspections = []
+        javaInspectionSeverities = [:]
+    }
+
     }
 
     private init() {
@@ -409,6 +459,8 @@ public final class IDEPreferences {
         textView.showSpaces = showInvisibleCharacters
         textView.showPageGuide = showPageGuide
         textView.pageGuideColumn = pageGuideColumn
+        javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? [])
+        javaInspectionSeverities = defaults.dictionary(forKey: Keys.javaInspectionSeverities) as? [String: String] ?? [:]
         textView.showReformattingGuideShading = false
         textView.lineHeightMultiplier = CGFloat(lineHeightMultiplier)
         textView.isTypewriterScrollingEnabled = isTypewriterScrollingEnabled
