@@ -11,6 +11,11 @@ final class JavaInspectionRulesTests: XCTestCase {
         return JavaInspectionRunner.run(context: context, enabled: Set(JavaInspectionRule.allCases))
     }
 
+    /// Codes of the rule under test only, for sources that trip a neighbouring rule too.
+    private func ruleCodes(_ source: String, file: StaticString = #filePath, line: UInt = #line) throws -> [String] {
+        try codes(source, file: file, line: line).filter { $0 == "subtraction-in-compareto" }
+    }
+
     private func codes(_ source: String, file: StaticString = #filePath, line: UInt = #line) throws -> [String] {
         try findings(source, file: file, line: line).map(\.id)
     }
@@ -120,10 +125,10 @@ final class JavaInspectionRulesTests: XCTestCase {
     }
 
     func testSubtractionInCompareTo() throws {
-        XCTAssertEqual(try codes("class A implements Comparable<A> { int v; public int compareTo(A o) { return v - o.v; } }"), ["subtraction-in-compareto"])
-        XCTAssertEqual(try codes("class A implements Comparable<A> { int v; public int compareTo(A o) { return Integer.compare(v, o.v); } }"), [])
-        XCTAssertEqual(try codes("class A implements Comparable<A> { String n; public int compareTo(A o) { return n.length() - o.n.length(); } }"), [])
-        XCTAssertEqual(try codes("class A { char c; int g(A o) { return c - o.c; } }"), [])
+        XCTAssertEqual(try ruleCodes("class A implements Comparable<A> { int v; public int compareTo(A o) { return v - o.v; } }"), ["subtraction-in-compareto"])
+        XCTAssertEqual(try ruleCodes("class A implements Comparable<A> { int v; public int compareTo(A o) { return Integer.compare(v, o.v); } }"), [])
+        XCTAssertEqual(try ruleCodes("class A implements Comparable<A> { String n; public int compareTo(A o) { return n.length() - o.n.length(); } }"), [])
+        XCTAssertEqual(try ruleCodes("class A { char c; int g(A o) { return c - o.c; } }"), [])
     }
 
     func testSuspiciousIndentation() throws {
@@ -395,6 +400,134 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes("class A { void f(int n) { while (n > 0) { if (n == 2) continue; g(); break; } } void g() { } }"), [])
         XCTAssertEqual(try codes("class A { int f(java.util.List<Integer> l) { for (int x : l) { return x; } return -1; } }"), [], "first-element idiom")
         XCTAssertEqual(try codes("class A { void f(int n) { while (n > 0) { g(); } } void g() { } }"), [])
+    }
+
+    // MARK: More probable bugs
+
+    func testAssertRules() throws {
+        XCTAssertEqual(try codes(body("        assert n++ > 0;")), ["assert-side-effects"])
+        XCTAssertEqual(try codes(body("        assert (m = n) > 0 : \"set\";")), ["assert-side-effects"])
+        XCTAssertEqual(try codes(body("        assert n > 0 : \"positive\";")), [])
+        XCTAssertEqual(try codes(body("        assert true;")), ["constant-assert-condition"])
+        XCTAssertEqual(try codes(body("        assert false : \"unreachable\";")), [])
+        XCTAssertEqual(try fixed(body("        assert true;\n        n++;"), rule: .constantAssertCondition), body("        n++;"))
+    }
+
+    func testNonShortCircuitBoolean() throws {
+        XCTAssertEqual(try codes(body("        boolean x = n > 0 & m > 0;")), ["non-short-circuit-boolean"])
+        XCTAssertEqual(try codes(body("        boolean x = n > 0 | m > 0;")), ["non-short-circuit-boolean"])
+        XCTAssertEqual(try codes(body("        int r = n & m;")), [])
+        XCTAssertEqual(try fixed(body("        boolean x = n > 0 & m > 0;"), rule: .nonShortCircuitBoolean)?.contains("n > 0 && m > 0"), true)
+        XCTAssertEqual(try fixed(body("        boolean x = n > 0 | m > 0;"), rule: .nonShortCircuitBoolean)?.contains("n > 0 || m > 0"), true)
+        XCTAssertEqual(try codes(body("        boolean x = n > 0 & check();", members: "    boolean check() { return true; }")), [], "the call on the right is meant to run")
+        XCTAssertEqual(try codes(body("        boolean y = true;\n        y |= check();", members: "    boolean check() { return true; }")), [], "accumulating a call's result")
+        XCTAssertEqual(try codes(body("        boolean y = true;\n        y &= n > 0;")), ["non-short-circuit-boolean"])
+        XCTAssertNil(try fixed(body("        boolean y = true;\n        y &= n > 0;"), rule: .nonShortCircuitBoolean))
+    }
+
+    func testComparableWithoutEquals() throws {
+        XCTAssertEqual(try codes("class A implements Comparable<A> { public int compareTo(A o) { return 0; } }"), ["comparable-without-equals"])
+        XCTAssertEqual(try codes("class A implements Comparable<A> { public int compareTo(A o) { return 0; } public boolean equals(Object o) { return true; } public int hashCode() { return 1; } }"), [])
+        XCTAssertEqual(try codes("class A extends B implements Comparable<A> { public int compareTo(A o) { return 0; } }"), [], "a superclass may supply equals")
+    }
+
+    func testIteratorHasNextCallsNext() throws {
+        XCTAssertEqual(try codes("class A implements java.util.Iterator<String> { public boolean hasNext() { return next() != null; } public String next() { return null; } }"), ["iterator-hasnext-calls-next"])
+        XCTAssertEqual(try codes("class A { Object f() { return new java.util.Iterator<String>() { public boolean hasNext() { return next() != null; } public String next() { return null; } }; } }"), ["iterator-hasnext-calls-next"])
+        XCTAssertEqual(try codes("class A implements java.util.Iterator<String> { int i; public boolean hasNext() { return i < 3; } public String next() { return null; } }"), [])
+        XCTAssertEqual(try codes("class A { int i; public boolean hasNext() { return next() != null; } String next() { return null; } }"), [], "not an Iterator")
+    }
+
+    func testMismatchedStringCase() throws {
+        XCTAssertEqual(try codes(body("        boolean x = s.toLowerCase().contains(\"ABC\");")), ["mismatched-string-case"])
+        XCTAssertEqual(try codes(body("        boolean x = s.toUpperCase().equals(\"abc\");")), ["mismatched-string-case"])
+        XCTAssertEqual(try codes(body("        boolean x = s.toLowerCase().startsWith(\"abc\\n\");")), [])
+        XCTAssertEqual(try codes(body("        boolean x = s.toLowerCase().contains(t);")), [])
+    }
+
+    func testMissingWhitespaceInConcatenation() throws {
+        XCTAssertEqual(try codes(body("        String q = \"select a\"\n            + \"from t\";")), ["missing-whitespace-in-concatenation"])
+        XCTAssertEqual(try codes(body("        String q = \"select a \"\n            + \"from t\";")), [])
+        XCTAssertEqual(try codes(body("        String q = \"select a\" + \"from t\";")), [], "same line")
+        XCTAssertEqual(try codes(body("        String q = \"select a\"\n            + \"(x)\";")), [])
+        XCTAssertEqual(try codes(body("        String q = \"and so on\\n\"\n            + \"that is all\";")), [], "ends in a newline escape")
+        XCTAssertEqual(try codes(body("        String q = \"IO\"\n            + \"IOT\";")), [], "a table of codes is not prose")
+        XCTAssertEqual(try codes(body("        String q = \"select a \"\n            + \"from b\"\n            + \"where c\";")), ["missing-whitespace-in-concatenation"])
+    }
+
+    func testClassNewInstance() throws {
+        XCTAssertEqual(try codes(body("        Object o = c.newInstance();", members: "    Class<?> c;")), ["class-new-instance"])
+        XCTAssertEqual(try codes(body("        Object o = Foo.class.newInstance();")), ["class-new-instance"])
+        XCTAssertEqual(try codes(body("        Object o = Class.forName(s).newInstance();")), ["class-new-instance"])
+        XCTAssertEqual(try codes(body("        Object o = ctor.newInstance();")), [])
+    }
+
+    func testRoundingOfIntegers() throws {
+        XCTAssertEqual(try codes(body("        double r = Math.floor(n);")), ["rounding-of-integers"])
+        XCTAssertEqual(try codes(body("        double r = Math.ceil(n / m);")), ["rounding-of-integers", "integer-division-in-floating-context"].filter { $0 == "rounding-of-integers" })
+        XCTAssertEqual(try codes(body("        double r = Math.floor(d);")), [])
+        XCTAssertEqual(try codes(body("        double r = Math.ceil(d / n);")), [])
+    }
+
+    func testIntegerDivisionInFloatingContext() throws {
+        XCTAssertEqual(try codes(body("        double r = n / m;")), ["integer-division-in-floating-context"])
+        XCTAssertEqual(try codes(body("        double r = 1 / 2;")), ["integer-division-in-floating-context"])
+        XCTAssertEqual(try codes(body("        d = n / m;")), ["integer-division-in-floating-context"])
+        XCTAssertEqual(try codes(body("        double r = (double) (n / m);")), ["integer-division-in-floating-context"])
+        XCTAssertEqual(try codes(body("        double r = n / d;")), [])
+        XCTAssertEqual(try codes(body("        int r = n / m;")), [])
+        XCTAssertEqual(try fixed(body("        double r = n / m;"), rule: .integerDivisionInFloatingContext)?.contains("double r = (double) n / m;"), true)
+        XCTAssertEqual(try fixed(body("        float r = (n + 1) / m;"), rule: .integerDivisionInFloatingContext)?.contains("float r = (float) (n + 1) / m;"), true)
+    }
+
+    func testStringConcatenationInFormat() throws {
+        XCTAssertEqual(try codes(body("        String r = String.format(\"id \" + s);")), ["string-concatenation-in-format"])
+        XCTAssertEqual(try codes(body("        String r = String.format(\"id %s\", s);")), [])
+        XCTAssertEqual(try codes(body("        String r = String.format(\"id \" + \"x\");")), [])
+        XCTAssertEqual(try codes(body("        out.printf(\"id \" + s);")), ["string-concatenation-in-format"])
+        XCTAssertEqual(try codes(body("        String r = String.format(locale, \"id \" + s);", members: "    java.util.Locale locale;")), ["string-concatenation-in-format"])
+    }
+
+    func testCollectionAddedToItself() throws {
+        XCTAssertEqual(try codes(body("        items.add(items);", members: "    java.util.List<Object> items;")), ["collection-added-to-itself"])
+        XCTAssertEqual(try codes(body("        items.addAll(items);", members: "    java.util.List<Object> items;")), ["collection-added-to-itself"])
+        XCTAssertEqual(try codes(body("        items.add(s);", members: "    java.util.List<Object> items;")), [])
+        XCTAssertEqual(try codes(body("        sb.append(sb);", members: "    StringBuilder sb;")), [])
+    }
+
+    func testResultOfCallIgnored() throws {
+        XCTAssertEqual(try codes(body("        s.trim();")), ["result-of-call-ignored"])
+        XCTAssertEqual(try codes(body("        s.toLowerCase();")), ["result-of-call-ignored"])
+        XCTAssertEqual(try codes(body("        Math.max(n, m);")), ["result-of-call-ignored"])
+        XCTAssertEqual(try codes(body("        price.add(price);", members: "    java.math.BigDecimal price;")), ["result-of-call-ignored"])
+        XCTAssertEqual(try codes(body("        String r = s.trim();")), [])
+        XCTAssertEqual(try codes(body("        sb.append(s);", members: "    StringBuilder sb;")), [])
+        XCTAssertEqual(try codes(body("        int r = switch (n) { case 1 -> Math.max(n, m); default -> 0; };")), [], "a switch arm yields the value")
+    }
+
+    func testOverwrittenElement() throws {
+        XCTAssertEqual(try codes(body("        a[0] = 1;\n        a[0] = 2;")), ["overwritten-element"])
+        XCTAssertEqual(try codes(body("        a[0] = 1;\n        a[0] = a[0] + 1;")), [])
+        XCTAssertEqual(try codes(body("        a[0] = 1;\n        a[1] = 2;")), [])
+        XCTAssertEqual(try codes(body("        map.put(\"k\", 1);\n        map.put(\"k\", 2);", members: "    java.util.Map<String, Integer> map;")), ["overwritten-element"])
+        XCTAssertEqual(try codes(body("        map.put(\"k\", 1);\n        map.put(\"k\", map.get(\"k\") + 1);", members: "    java.util.Map<String, Integer> map;")), [])
+        XCTAssertEqual(try codes(body("        map.put(\"k\", 1);\n        map.put(\"j\", 2);", members: "    java.util.Map<String, Integer> map;")), [])
+    }
+
+    func testInfiniteRecursion() throws {
+        XCTAssertEqual(try codes("class A { void f(int x) { f(x); } }"), ["infinite-recursion"])
+        XCTAssertEqual(try codes("class A { int g(int x) { log(); return g(x); } void log() { } }"), ["infinite-recursion"])
+        XCTAssertEqual(try codes("class A { void h(int x) { h(x - 1); } }"), [])
+        XCTAssertEqual(try codes("class A { void k(int x) { if (x > 0) k(x); } }"), [])
+        XCTAssertEqual(try codes("class A { void p(int x) { p((long) x); } void p(long x) { } }"), [])
+        XCTAssertEqual(try codes("class A { int q() { return q(); } }"), ["infinite-recursion"])
+    }
+
+    func testDuplicatedDelimiters() throws {
+        XCTAssertEqual(try codes(body("        Object t = new StringTokenizer(s, \"aa\");")), ["duplicated-delimiters"])
+        XCTAssertEqual(try codes(body("        Object t = new StringTokenizer(s, \"\\n\\n\");")), ["duplicated-delimiters"])
+        XCTAssertEqual(try codes(body("        Object t = new StringTokenizer(s, \" \\t\\n\");")), [])
+        XCTAssertEqual(try codes(body("        Object t = new StringTokenizer(s);")), [])
     }
 
     func testCleanCodeProducesNoFindings() throws {

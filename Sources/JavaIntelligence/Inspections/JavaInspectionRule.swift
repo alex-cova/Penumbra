@@ -89,6 +89,22 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case constantCondition
     case infiniteLoop
     case loopDoesNotLoop
+    case assertWithSideEffects
+    case constantAssertCondition
+    case nonShortCircuitBoolean
+    case comparableWithoutEquals
+    case iteratorHasNextCallsNext
+    case mismatchedStringCase
+    case missingWhitespaceInConcatenation
+    case classNewInstance
+    case roundingOfIntegers
+    case integerDivisionInFloatingContext
+    case stringConcatenationInFormat
+    case collectionAddedToItself
+    case resultOfCallIgnored
+    case overwrittenElement
+    case infiniteRecursion
+    case duplicatedDelimiters
 
     private struct Info {
         let code: String
@@ -158,6 +174,22 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .constantCondition: Info(code: "constant-condition", title: "Constant condition", group: .controlFlow, severity: .warning, summary: "Reports 'if (true)', 'while (false)' and '?:' on a boolean literal."),
         .infiniteLoop: Info(code: "infinite-loop", title: "Infinite loop statement", group: .controlFlow, severity: .warning, summary: "Reports 'while (true)' and 'for (;;)' with no break, return or throw that leaves it."),
         .loopDoesNotLoop: Info(code: "loop-does-not-loop", title: "Loop does not loop", group: .controlFlow, severity: .warning, summary: "Reports a loop whose body always ends with break, return or throw."),
+        .assertWithSideEffects: Info(code: "assert-side-effects", title: "'assert' statement with side effects", group: .probableBugs, severity: .warning, summary: "Reports assignments and increments in an assert condition, which vanish when assertions are off."),
+        .constantAssertCondition: Info(code: "constant-assert-condition", title: "Constant condition in 'assert' statement", group: .probableBugs, severity: .weakWarning, summary: "Reports 'assert true', which checks nothing."),
+        .nonShortCircuitBoolean: Info(code: "non-short-circuit-boolean", title: "Non-short-circuit boolean expression", group: .probableBugs, severity: .warning, summary: "Reports '&' and '|' between booleans, which evaluate both sides."),
+        .comparableWithoutEquals: Info(code: "comparable-without-equals", title: "'Comparable' implemented but 'equals()' not overridden", group: .probableBugs, severity: .warning, summary: "Reports a class with compareTo() and no equals(), so sorted and hashed collections disagree."),
+        .iteratorHasNextCallsNext: Info(code: "iterator-hasnext-calls-next", title: "'Iterator.hasNext()' which calls 'next()'", group: .probableBugs, severity: .warning, summary: "Reports hasNext() that advances the iterator."),
+        .mismatchedStringCase: Info(code: "mismatched-string-case", title: "Mismatched case in 'String' operation", group: .probableBugs, severity: .warning, summary: "Reports toLowerCase().contains(\"ABC\") and similar, which can never match."),
+        .missingWhitespaceInConcatenation: Info(code: "missing-whitespace-in-concatenation", title: "Whitespace may be missing in string concatenation", group: .probableBugs, severity: .warning, summary: "Reports two string literals on different lines that join a word to the next."),
+        .classNewInstance: Info(code: "class-new-instance", title: "Unsafe call to 'Class.newInstance()'", group: .probableBugs, severity: .warning, summary: "Reports Class.newInstance(), which rethrows constructor exceptions unchecked."),
+        .roundingOfIntegers: Info(code: "rounding-of-integers", title: "Math rounding of an integer", group: .probableBugs, severity: .warning, summary: "Reports Math.floor/ceil/round/rint on an integer or an integer division."),
+        .integerDivisionInFloatingContext: Info(code: "integer-division-in-floating-context", title: "Integer division in floating-point context", group: .probableBugs, severity: .warning, summary: "Reports 'a / b' on integers stored in a double or float, which truncates first."),
+        .stringConcatenationInFormat: Info(code: "string-concatenation-in-format", title: "String concatenation as argument to 'format()' call", group: .probableBugs, severity: .warning, summary: "Reports a format string built with '+', which breaks on a stray '%'."),
+        .collectionAddedToItself: Info(code: "collection-added-to-itself", title: "Collection added to itself", group: .probableBugs, severity: .warning, summary: "Reports 'list.add(list)' and 'list.addAll(list)'."),
+        .resultOfCallIgnored: Info(code: "result-of-call-ignored", title: "Result of method call ignored", group: .probableBugs, severity: .warning, summary: "Reports String, Math and BigDecimal calls whose result is dropped, as in 's.trim();'."),
+        .overwrittenElement: Info(code: "overwritten-element", title: "Overwritten array or map element", group: .probableBugs, severity: .warning, summary: "Reports 'a[i] = x; a[i] = y;' and two puts of one key in a row."),
+        .infiniteRecursion: Info(code: "infinite-recursion", title: "Infinite recursion", group: .probableBugs, severity: .warning, summary: "Reports a method that calls itself with its own parameters and has no way out."),
+        .duplicatedDelimiters: Info(code: "duplicated-delimiters", title: "Duplicated delimiters in 'StringTokenizer'", group: .probableBugs, severity: .warning, summary: "Reports a delimiter string that repeats a character."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

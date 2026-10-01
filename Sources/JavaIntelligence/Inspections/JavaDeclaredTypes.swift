@@ -121,8 +121,17 @@ enum JavaDeclaredTypes {
             return JavaDeclaredType(name: last == "f" || last == "F" ? "float" : "double", isArray: false)
         case "binary_expression":
             // `"a" + x` is a String whatever x is.
-            guard node.operatorText == "+", let left = node.child(byFieldName: "left"), let right = node.child(byFieldName: "right") else { return nil }
-            return type(of: left) == .string || type(of: right) == .string ? .string : nil
+            guard let op = node.operatorText, let left = node.child(byFieldName: "left"), let right = node.child(byFieldName: "right") else { return nil }
+            let leftType = type(of: left)
+            let rightType = type(of: right)
+            if op == "+", leftType == .string || rightType == .string { return .string }
+            // Arithmetic on declared numbers: floating wins, else `long` wins, else `int`.
+            guard ["+", "-", "*", "/", "%"].contains(op), let leftType, let rightType, !leftType.isArray, !rightType.isArray else { return nil }
+            let names = [leftType.name, rightType.name]
+            if names.contains(where: { ["double", "Double"].contains($0) }) { return JavaDeclaredType(name: "double", isArray: false) }
+            if names.contains(where: { ["float", "Float"].contains($0) }) { return JavaDeclaredType(name: "float", isArray: false) }
+            guard leftType.isIntegral, rightType.isIntegral else { return nil }
+            return JavaDeclaredType(name: names.contains(where: { ["long", "Long"].contains($0) }) ? "long" : "int", isArray: false)
         case "identifier":
             return variableType(named: node.text, at: node)
         case "field_access":
