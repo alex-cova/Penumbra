@@ -18,6 +18,20 @@ extension JavaNodeInspection {
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] { [] }
 }
 
+/// An inspection that needs types resolved through the index. It receives every candidate node of
+/// its `nodeTypes` at once, so it can skip repeats (one resolution per receiver type and method,
+/// not per call) and stop at a budget. Skipped for very large files (`JavaInspectionRunner.maxTypedLineCount`).
+protocol JavaTypedInspection {
+    static var rule: JavaInspectionRule { get }
+    static var nodeTypes: Set<String> { get }
+    static func check(nodes: [SyntaxNode], context: JavaInspectionContext, report: (JavaInspection) -> Void) async
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction]
+}
+
+extension JavaTypedInspection {
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] { [] }
+}
+
 /// Every node inspection, in the order their findings are reported.
 enum JavaInspectionRegistry {
     static let nodeInspections: [any JavaNodeInspection.Type] = [
@@ -53,15 +67,29 @@ enum JavaInspectionRegistry {
         JavaEmptyClassInitializerInspection.self,
     ]
 
+    static let typedInspections: [any JavaTypedInspection.Type] = [
+        JavaAccessStaticViaInstanceInspection.self,
+        JavaRedundantArrayCreationInspection.self,
+    ]
+
     static func inspection(for rule: JavaInspectionRule) -> (any JavaNodeInspection.Type)? {
         nodeInspections.first { $0.rule == rule }
     }
 
+    static func typedInspection(for rule: JavaInspectionRule) -> (any JavaTypedInspection.Type)? {
+        typedInspections.first { $0.rule == rule }
+    }
+
+    /// Whether a registered inspection (node or typed) can produce fixes for `rule`.
+    static func isRegistered(_ rule: JavaInspectionRule) -> Bool {
+        inspection(for: rule) != nil || typedInspection(for: rule) != nil
+    }
+
     /// Quick fixes for a `java-inspection` diagnostic whose rule is a registered node inspection.
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
-        guard let code = diagnostic.code, let rule = JavaInspectionRule(code: code),
-              let inspection = inspection(for: rule) else { return [] }
-        return inspection.fixes(for: diagnostic, tree: tree, source: source)
+        guard let code = diagnostic.code, let rule = JavaInspectionRule(code: code) else { return [] }
+        if let inspection = inspection(for: rule) { return inspection.fixes(for: diagnostic, tree: tree, source: source) }
+        return typedInspection(for: rule)?.fixes(for: diagnostic, tree: tree, source: source) ?? []
     }
 }
 
@@ -93,8 +121,53 @@ enum JavaInspectionRunner {
     }
 }
 
+extension JavaInspectionRunner {
+    /// Typed inspections look every call up in the index, so a file this long skips them.
+    static let maxTypedLineCount = 20_000
+
+    static func runTyped(
+        context: JavaInspectionContext,
+        enabled: Set<JavaInspectionRule>,
+        inspections: [any JavaTypedInspection.Type] = JavaInspectionRegistry.typedInspections
+    ) async -> [JavaInspection] {
+        let active = inspections.filter { enabled.contains($0.rule) }
+        guard !active.isEmpty else { return [] }
+        let lineCount = context.tree.sourceBytes.reduce(0) { $0 + ($1 == JavaSourceBytes.newline ? 1 : 0) }
+        guard lineCount <= maxTypedLineCount else { return [] }
+        var wanted = Set<String>()
+        for inspection in active { wanted.formUnion(inspection.nodeTypes) }
+        var nodesByType: [String: [SyntaxNode]] = [:]
+        var stack = [context.tree.rootNode]
+        while let node = stack.popLast() {
+            if wanted.contains(node.type) { nodesByType[node.type, default: []].append(node) }
+            for index in (0..<node.namedChildCount).reversed() {
+                if let child = node.namedChild(at: index) { stack.append(child) }
+            }
+        }
+        var found: [JavaInspection] = []
+        for inspection in active {
+            var nodes: [SyntaxNode] = []
+            for type in inspection.nodeTypes { nodes.append(contentsOf: nodesByType[type] ?? []) }
+            nodes.sort { $0.startByte < $1.startByte }
+            guard !nodes.isEmpty else { continue }
+            await inspection.check(nodes: nodes, context: context) { found.append($0) }
+        }
+        return found
+    }
+}
+
 /// Helpers shared by node inspections and their fixes.
 enum JavaInspectionSupport {
+    /// A navigation session positioned at `byteOffset`, for resolving types and overloads there.
+    static func session(for context: JavaInspectionContext, at byteOffset: Int) -> JavaNavigationSession {
+        JavaNavigationSession(
+            source: context.source, fileURL: context.url, tree: context.tree, byteOffset: byteOffset,
+            fileStubs: context.file, index: context.index, jdkHome: nil,
+            cacheRoot: FileManager.default.temporaryDirectory, openBuffer: nil,
+            decompile: JavaDecompileGate(policy: .denied)
+        )
+    }
+
     static func position(forByte byteOffset: Int, in tree: JavaSyntaxTree) -> TextPosition {
         tree.declarationCache.positionIndex(for: tree.sourceBytes).position(forByteOffset: byteOffset)
     }

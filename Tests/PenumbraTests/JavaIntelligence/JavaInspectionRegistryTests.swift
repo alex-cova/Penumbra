@@ -18,11 +18,15 @@ final class JavaInspectionRegistryTests: XCTestCase {
 
     func testEveryNonLegacyRuleHasExactlyOneRegisteredInspection() {
         for rule in JavaInspectionRule.allCases where !legacy.contains(rule) {
-            let matches = JavaInspectionRegistry.nodeInspections.filter { $0.rule == rule }
-            XCTAssertEqual(matches.count, 1, "\(rule.code) is registered \(matches.count) times")
+            let matches = JavaInspectionRegistry.nodeInspections.filter { $0.rule == rule }.count
+                + JavaInspectionRegistry.typedInspections.filter { $0.rule == rule }.count
+            XCTAssertEqual(matches, 1, "\(rule.code) is registered \(matches) times")
         }
-        for inspection in JavaInspectionRegistry.nodeInspections {
-            XCTAssertFalse(legacy.contains(inspection.rule))
+        var registered: [JavaInspectionRule] = []
+        for inspection in JavaInspectionRegistry.nodeInspections { registered.append(inspection.rule) }
+        for inspection in JavaInspectionRegistry.typedInspections { registered.append(inspection.rule) }
+        for rule in registered {
+            XCTAssertFalse(legacy.contains(rule))
         }
     }
 

@@ -57,6 +57,8 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case unusedLabel
     case duplicateThrows
     case emptyClassInitializer
+    case accessStaticViaInstance
+    case redundantArrayCreation
 
     private struct Info {
         let code: String
@@ -100,6 +102,8 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .unusedLabel: Info(code: "unused-label", title: "Unused label", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports labels that no break or continue refers to."),
         .duplicateThrows: Info(code: "duplicate-throws", title: "Duplicate throws", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports an exception listed twice in a throws clause."),
         .emptyClassInitializer: Info(code: "empty-class-initializer", title: "Empty class initializer", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports initializer blocks with no statements."),
+        .accessStaticViaInstance: Info(code: "access-static-via-instance", title: "Access static member via instance reference", group: .declarationRedundancy, severity: .warning, summary: "Reports static methods called through a variable instead of the class."),
+        .redundantArrayCreation: Info(code: "redundant-array-creation", title: "Redundant array creation for calling varargs method", group: .verboseCode, severity: .weakWarning, summary: "Reports 'new T[]{a, b}' passed where the varargs method accepts 'a, b'."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

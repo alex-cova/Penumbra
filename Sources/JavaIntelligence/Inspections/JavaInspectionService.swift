@@ -167,6 +167,7 @@ public actor JavaInspectionService: DiagnosticProvider {
                 found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
             }
             found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabledRules))
+            found.append(contentsOf: await JavaInspectionRunner.runTyped(context: context, enabled: enabledRules))
             return found
         }
         let diagnostics = applySeverityOverrides(suppressionFiltered(inspections, text: text)).map { $0.asDiagnostic() }

@@ -111,7 +111,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
         let candidates = diagnostics.filter { diagnostic in
             guard diagnostic.source == "java-inspection", let code = diagnostic.code,
-                  let rule = JavaInspectionRule(code: code), JavaInspectionRegistry.inspection(for: rule) != nil else { return false }
+                  let rule = JavaInspectionRule(code: code), JavaInspectionRegistry.isRegistered(rule) else { return false }
             let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
             return NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0
         }
