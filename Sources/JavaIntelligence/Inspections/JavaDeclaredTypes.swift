@@ -7,6 +7,8 @@ struct JavaDeclaredType: Equatable {
     /// Simple name without generics or package (`String`, `int`, `Integer`, `List`).
     let name: String
     let isArray: Bool
+    /// Declared with type arguments (`List<String>`), so a raw `(List) x` is not the same type.
+    var hasTypeArguments = false
 
     static let string = JavaDeclaredType(name: "String", isArray: false)
 
@@ -30,6 +32,25 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var fieldTables: [Int: [String: JavaDeclaredType]] = [:]
     private var expressionTypes: [Range<Int>: Resolved] = [:]
     private var positions: JavaPositionIndex?
+    private var typeParameters: Set<String>?
+
+    /// Every type-parameter name declared anywhere in the file. Two scopes can reuse a name for
+    /// different types (`V` of a class and `V` of its nested entry), so a type variable is never "the same type".
+    func typeParameterNames(root: SyntaxNode) -> Set<String> {
+        lock.lock()
+        if let typeParameters { lock.unlock(); return typeParameters }
+        lock.unlock()
+        var names = Set<String>()
+        var stack = [root]
+        while let node = stack.popLast() {
+            if node.type == "type_parameter", let name = node.firstNamedChild(ofType: "type_identifier") { names.insert(name.text) }
+            stack.append(contentsOf: node.namedChildren)
+        }
+        lock.lock()
+        typeParameters = names
+        lock.unlock()
+        return names
+    }
 
     func positionIndex(for bytes: [UInt8]) -> JavaPositionIndex {
         lock.lock()
@@ -213,7 +234,7 @@ enum JavaDeclaredTypes {
         let element = type.type == "array_type" ? (type.child(byFieldName: "element") ?? type) : type
         let name = simpleName(of: element)
         guard !name.isEmpty, name != "var" else { return nil }
-        return JavaDeclaredType(name: name, isArray: isArray)
+        return JavaDeclaredType(name: name, isArray: isArray, hasTypeArguments: element.type == "generic_type")
     }
 
     /// `java.util.List<String>` → `List`.

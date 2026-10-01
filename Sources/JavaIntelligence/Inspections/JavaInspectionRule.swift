@@ -13,6 +13,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case codeMaturity
     case controlFlow
     case namingConventions
+    case performance
 
     public var title: String {
         switch self {
@@ -27,6 +28,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .codeMaturity: return "Code maturity"
         case .controlFlow: return "Control flow issues"
         case .namingConventions: return "Naming conventions"
+        case .performance: return "Performance"
         }
     }
 }
@@ -116,6 +118,13 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case enumConstantNamingConvention
     case nonConstantFieldNamedLikeConstant
     case methodNameSameAsClass
+    case sizeComparisonWithZero
+    case redundantTypeCast
+    case deprecatedBoxedConstructor
+    case deprecatedApiUsage
+    case equalsEmptyString
+    case explicitTypeArguments
+    case stringConcatenationInLoop
 
     private struct Info {
         let code: String
@@ -210,6 +219,13 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .enumConstantNamingConvention: Info(code: "enum-constant-naming-convention", title: "Enum constant naming convention", group: .namingConventions, severity: .weakWarning, summary: "Reports an enum constant not in UPPER_SNAKE_CASE."),
         .nonConstantFieldNamedLikeConstant: Info(code: "non-constant-field-named-like-constant", title: "Non-constant field with a constant's name", group: .namingConventions, severity: .weakWarning, summary: "Reports a field in UPPER_SNAKE_CASE that is not static final."),
         .methodNameSameAsClass: Info(code: "method-name-same-as-class", title: "Method name is the same as its class name", group: .namingConventions, severity: .warning, summary: "Reports a method with a return type named like its class, which is probably a misspelt constructor."),
+        .sizeComparisonWithZero: Info(code: "size-comparison-with-zero", title: "'size()' or 'length()' compared with zero", group: .verboseCode, severity: .weakWarning, summary: "Reports 'c.size() == 0' and similar where the type has 'isEmpty()'."),
+        .redundantTypeCast: Info(code: "redundant-type-cast", title: "Redundant type cast", group: .verboseCode, severity: .weakWarning, summary: "Reports '(T) x' where x is already declared as T."),
+        .deprecatedBoxedConstructor: Info(code: "deprecated-boxed-constructor", title: "Deprecated boxed-type constructor", group: .codeMaturity, severity: .warning, summary: "Reports 'new Integer(x)' and the other wrapper constructors, deprecated for removal; valueOf() replaces them."),
+        .deprecatedApiUsage: Info(code: "deprecated-api-usage", title: "Deprecated API usage", group: .codeMaturity, severity: .warning, summary: "Reports a call to a method the library marks @Deprecated."),
+        .equalsEmptyString: Info(code: "equals-empty-string", title: "'equals(\"\")' call", group: .verboseCode, severity: .weakWarning, summary: "Reports 's.equals(\"\")', which 's.isEmpty()' states directly."),
+        .explicitTypeArguments: Info(code: "explicit-type-arguments", title: "Explicit type arguments can be replaced with '<>'", group: .verboseCode, severity: .weakWarning, summary: "Reports 'new ArrayList<String>()' assigned to a 'List<String>'."),
+        .stringConcatenationInLoop: Info(code: "string-concatenation-in-loop", title: "String concatenation in a loop", group: .performance, severity: .weakWarning, summary: "Reports 's += x' on a String inside a loop, which copies the string each pass."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

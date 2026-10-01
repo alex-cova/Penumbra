@@ -88,6 +88,12 @@ enum JavaInspectionRegistry {
         JavaJumpOutOfFinallyInspection.self,
         JavaEmptyFinallyBlockInspection.self,
         JavaEmptyTryBlockInspection.self,
+        // Types read from declarations
+        JavaRedundantTypeCastInspection.self,
+        JavaDeprecatedBoxedConstructorInspection.self,
+        JavaEqualsEmptyStringInspection.self,
+        JavaExplicitTypeArgumentsInspection.self,
+        JavaStringConcatenationInLoopInspection.self,
         // Naming conventions
         JavaClassNamingInspection.self,
         JavaMethodNamingInspection.self,
@@ -123,6 +129,8 @@ enum JavaInspectionRegistry {
     static let typedInspections: [any JavaTypedInspection.Type] = [
         JavaAccessStaticViaInstanceInspection.self,
         JavaRedundantArrayCreationInspection.self,
+        JavaSizeComparisonWithZeroInspection.self,
+        JavaDeprecatedApiInspection.self,
     ]
 
     static func inspection(for rule: JavaInspectionRule) -> (any JavaNodeInspection.Type)? {

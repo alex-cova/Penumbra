@@ -587,6 +587,57 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes("class Widget { Widget() { } }"), [])
     }
 
+    // MARK: Types read from declarations
+
+    func testRedundantTypeCast() throws {
+        XCTAssertEqual(try codes(body("        String r = (String) s;")), ["redundant-type-cast"])
+        XCTAssertEqual(try codes(body("        int r = (int) n;")), ["redundant-type-cast"])
+        XCTAssertEqual(try codes(body("        Object r = (Object) s;")), [])
+        XCTAssertEqual(try codes(body("        long r = (long) n;")), [])
+        XCTAssertEqual(try codes(body("        String r = (String) o;", members: "    Object o;")), [])
+        XCTAssertEqual(try codes(body("        Object r = (List) items;", members: "    List<String> items;")), [], "a raw cast drops the type arguments")
+        XCTAssertEqual(try codes("class Box<V> { V value; V f(Box<?> other) { return (V) other.value; } }"), [], "a type variable named like ours is not ours")
+        XCTAssertEqual(try codes(body("        int r = (int) (n + m);")), ["redundant-type-cast"])
+        XCTAssertEqual(try fixed(body("        int r = (int) (n + m);"), rule: .redundantTypeCast)?.contains("int r = (n + m);"), true)
+        XCTAssertEqual(try fixed(body("        String r = (String) s;"), rule: .redundantTypeCast)?.contains("String r = s;"), true)
+    }
+
+    func testDeprecatedBoxedConstructor() throws {
+        XCTAssertEqual(try codes(body("        Object r = new Integer(n);")), ["deprecated-boxed-constructor"])
+        XCTAssertEqual(try codes(body("        Object r = new Boolean(\"true\");")), ["deprecated-boxed-constructor"])
+        XCTAssertEqual(try codes(body("        Object r = new Float(d);")), ["deprecated-boxed-constructor"])
+        XCTAssertEqual(try codes(body("        Object r = Integer.valueOf(n);")), [])
+        XCTAssertEqual(try codes(body("        Object r = new StringBuilder(s);")), [])
+        XCTAssertEqual(try fixed(body("        Object r = new Integer(n);"), rule: .deprecatedBoxedConstructor)?.contains("Integer.valueOf(n)"), true)
+        XCTAssertNil(try fixed(body("        Object r = new Float(d);"), rule: .deprecatedBoxedConstructor), "no valueOf(double) exists")
+    }
+
+    func testEqualsEmptyString() throws {
+        XCTAssertEqual(try codes(body("        boolean r = s.equals(\"\");")), ["equals-empty-string"])
+        XCTAssertEqual(try codes(body("        boolean r = \"\".equals(s);")), [])
+        XCTAssertEqual(try codes(body("        boolean r = s.equals(\"a\");")), [])
+        XCTAssertEqual(try fixed(body("        boolean r = !s.equals(\"\");"), rule: .equalsEmptyString)?.contains("!s.isEmpty()"), true)
+    }
+
+    func testExplicitTypeArguments() throws {
+        let diamond = "List<String> l = new ArrayList<String>();"
+        XCTAssertEqual(try codes(body("        " + diamond)), ["explicit-type-arguments"])
+        XCTAssertEqual(try fixed(body("        " + diamond), rule: .explicitTypeArguments)?.contains("new ArrayList<>()"), true)
+        XCTAssertEqual(try codes(body("        List<String> l = new ArrayList<>();")), [])
+        XCTAssertEqual(try codes(body("        List<Object> l = new ArrayList<String>();")), [])
+        XCTAssertEqual(try codes(body("        Map<String, List<String>> m = new HashMap<String, List<String>>();")), ["explicit-type-arguments"])
+        XCTAssertEqual(try codes(body("        List<String> l = new ArrayList<String>() { };")), [], "an anonymous class needs the arguments before Java 9")
+    }
+
+    func testStringConcatenationInLoop() throws {
+        XCTAssertEqual(try codes(body("        String acc = \"\";\n        for (int k = 0; k < n; k++) { acc += s; }")), ["string-concatenation-in-loop"])
+        XCTAssertEqual(try codes(body("        String acc = \"\";\n        while (n > 0) { acc = acc + s; n--; }")), ["string-concatenation-in-loop"])
+        XCTAssertEqual(try codes(body("        for (int k = 0; k < n; k++) { String line = \"\"; line += s; }")), [], "declared inside the loop")
+        XCTAssertEqual(try codes(body("        String acc = \"\";\n        acc += s;")), [], "not in a loop")
+        XCTAssertEqual(try codes(body("        StringBuilder sb = new StringBuilder();\n        for (int k = 0; k < n; k++) { sb.append(s); }")), [])
+        XCTAssertEqual(try codes(body("        String acc = \"\";\n        for (int k = 0; k < n; k++) { Runnable r = () -> { String q = acc; }; }")), [])
+    }
+
     func testCleanCodeProducesNoFindings() throws {
         let source = """
         import java.util.List;

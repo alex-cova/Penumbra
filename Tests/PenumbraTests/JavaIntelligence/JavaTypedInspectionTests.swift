@@ -17,9 +17,25 @@ final class JavaTypedInspectionTests: XCTestCase {
     }
 
     /// An index holding the classes declared in `libraries`, then the typed findings for `source`.
-    private func findings(_ source: String, libraries: String) async throws -> [JavaInspection] {
+    private func findings(_ source: String, libraries: String, deprecated: Set<String> = []) async throws -> [JavaInspection] {
         let shard = scratch.appendingPathComponent("\(UUID().uuidString).idx")
-        let stubs = JavaSourceStubBuilder.build(source: libraries, url: scratch.appendingPathComponent("Lib.java")).classes
+        let built = JavaSourceStubBuilder.build(source: libraries, url: scratch.appendingPathComponent("Lib.java")).classes
+        // Source stubs do not carry `@Deprecated`, which class-file stubs do; mark the named methods.
+        let stubs = built.map { stub in
+            JavaClassStub(
+                binaryName: stub.binaryName, qualifiedName: stub.qualifiedName, simpleName: stub.simpleName, packageName: stub.packageName,
+                outerQualifiedName: stub.outerQualifiedName, kind: stub.kind, modifiers: stub.modifiers, typeParameters: stub.typeParameters,
+                superclass: stub.superclass, interfaces: stub.interfaces, fields: stub.fields,
+                methods: stub.methods.map { method in
+                    guard deprecated.contains(method.name) else { return method }
+                    return JavaMethodStub(
+                        name: method.name, typeParameters: method.typeParameters, parameters: method.parameters, returnType: method.returnType,
+                        thrownTypes: method.thrownTypes, modifiers: method.modifiers.union(.deprecatedFlag), isConstructor: method.isConstructor
+                    )
+                },
+                innerTypeNames: stub.innerTypeNames, origin: stub.origin
+            )
+        }
         try JavaIndexShardWriter().write(stubs, stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
         let index = JavaIndex()
         await index.setSources([.init(precedence: 1, reader: try JavaIndexShardReader(url: shard))])
@@ -104,6 +120,34 @@ final class JavaTypedInspectionTests: XCTestCase {
         XCTAssertEqual(wrappedFindings.count, 0)
         XCTAssertEqual(mismatchFindings.count, 0)
         XCTAssertEqual(emptyFindings.count, 0)
+    }
+
+    private let bag = """
+    class Bag { int size() { return 0; } boolean isEmpty() { return true; } }
+    class Counter { int size() { return 0; } }
+    """
+
+    func testSizeComparedWithZeroOnATypeWithIsEmpty() async throws {
+        let source = "class T { boolean f(Bag b, Counter c) { return b.size() == 0 || b.size() > 0 || b.size() >= 1 || b.size() < 1 || b.size() == 5 || c.size() == 0; } }"
+        let found = try await findings(source, libraries: bag)
+        XCTAssertEqual(found.map(\.id), Array(repeating: "size-comparison-with-zero", count: 4))
+        XCTAssertEqual(found.map(\.message), [
+            "'size()' compared with zero; use 'b.isEmpty()'", "'size()' compared with zero; use '!b.isEmpty()'",
+            "'size()' compared with zero; use '!b.isEmpty()'", "'size()' compared with zero; use 'b.isEmpty()'",
+        ])
+        let negated = "class T { boolean f(Bag b) { return b.size() != 0; } }"
+        let negatedFindings = try await findings(negated, libraries: bag)
+        XCTAssertEqual(try fixed(negated, try XCTUnwrap(negatedFindings.first)), "class T { boolean f(Bag b) { return !b.isEmpty(); } }")
+    }
+
+    func testDeprecatedMethodsOnTypedReceivers() async throws {
+        let library = "class Util { void old() { } void fresh() { } static void legacy() { } }"
+        let source = "class T { void f(Util u) { u.old(); u.fresh(); Util.legacy(); } @Deprecated void g(Util u) { u.old(); } }"
+        let found = try await findings(source, libraries: library, deprecated: ["old", "legacy"])
+        XCTAssertEqual(found.map(\.id), ["deprecated-api-usage", "deprecated-api-usage"])
+        XCTAssertEqual(found.map(\.message), ["'old()' is deprecated", "'legacy()' is deprecated"])
+        let none = try await findings(source, libraries: library)
+        XCTAssertEqual(none.count, 0)
     }
 
     func testTypedRulesSkipVeryLargeFiles() async throws {
