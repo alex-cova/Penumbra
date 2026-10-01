@@ -62,6 +62,8 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case textLabelInSwitch
     case redundantClose
     case replacementHasNoEffect
+    case unnecessaryDefaultForEnumSwitch
+    case redundantFileCreation
 
     private struct Info {
         let code: String
@@ -110,6 +112,8 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .textLabelInSwitch: Info(code: "text-label-in-switch", title: "Text label in 'switch' statement", group: .probableBugs, severity: .warning, summary: "Reports an unused label directly inside an old-style switch, often a mistyped 'case' or 'default'."),
         .redundantClose: Info(code: "redundant-close", title: "Redundant 'close()'", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports 'close()' as the last statement of a try-with-resources body."),
         .replacementHasNoEffect: Info(code: "replacement-has-no-effect", title: "Replacement operation has no effect", group: .verboseCode, severity: .warning, summary: "Reports String 'replace' calls that replace text with itself."),
+        .unnecessaryDefaultForEnumSwitch: Info(code: "unnecessary-default-for-enum-switch", title: "Unnecessary 'default' for enum 'switch'", group: .verboseCode, severity: .weakWarning, summary: "Reports a 'default' rule in an arrow-form switch that already covers every constant of an enum declared in the file."),
+        .redundantFileCreation: Info(code: "redundant-file-creation", title: "Redundant 'File' instance creation", group: .verboseCode, severity: .weakWarning, summary: "Reports 'new FileReader(new File(path))' where the stream or reader takes the path itself."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

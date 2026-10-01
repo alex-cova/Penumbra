@@ -63,6 +63,8 @@ enum JavaInspectionRegistry {
         JavaManualMinMaxInspection.self,
         JavaUnnecessarilyEscapedCharacterInspection.self,
         JavaReplacementHasNoEffectInspection.self,
+        JavaUnnecessaryEnumDefaultInspection.self,
+        JavaRedundantFileCreationInspection.self,
         // Declaration redundancy
         JavaUnusedLabelInspection.self,
         JavaDuplicateThrowsInspection.self,

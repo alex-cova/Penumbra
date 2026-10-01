@@ -225,6 +225,33 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try fixed(body("        String r = s.replace(\"a\", \"a\");"), rule: .replacementHasNoEffect)?.contains("String r = s;"), true)
     }
 
+    func testUnnecessaryDefaultForEnumSwitch() throws {
+        let enumDecl = "enum Color { RED, GREEN }\n"
+        let full = enumDecl + "class A { int f(Color c) { return switch (c) { case RED -> 1; case GREEN -> 2; default -> 0; }; } }"
+        XCTAssertEqual(try codes(full), ["unnecessary-default-for-enum-switch"])
+        let partial = enumDecl + "class A { int f(Color c) { return switch (c) { case RED -> 1; default -> 0; }; } }"
+        XCTAssertEqual(try codes(partial), [])
+        let colon = enumDecl + "class A { void f(Color c) { switch (c) { case RED: break; case GREEN: break; default: break; } } }"
+        XCTAssertEqual(try codes(colon), [])
+        let unknown = "class A { int f(Other c) { return switch (c) { case RED -> 1; default -> 0; }; } }"
+        XCTAssertEqual(try codes(unknown), [])
+        let grouped = enumDecl + "class A { int f(Color c) { return switch (c) { case RED, GREEN -> 1; default -> 0; }; } }"
+        XCTAssertEqual(try codes(grouped), ["unnecessary-default-for-enum-switch"])
+        let fixedText = try XCTUnwrap(try fixed(full, rule: .unnecessaryDefaultForEnumSwitch))
+        XCTAssertFalse(fixedText.contains("default"))
+        XCTAssertTrue(fixedText.contains("case GREEN -> 2;"))
+    }
+
+    func testRedundantFileCreation() throws {
+        XCTAssertEqual(try codes(body("        Object r = new java.io.FileReader(new java.io.File(s));").replacingOccurrences(of: "java.io.", with: "")), ["redundant-file-creation"])
+        XCTAssertEqual(try codes(body("        Object r = new FileInputStream(new File(\"a.txt\"));")), ["redundant-file-creation"])
+        XCTAssertEqual(try codes(body("        Object r = new FileReader(new File(s, t));")), [], "two-argument File")
+        XCTAssertEqual(try codes(body("        Object r = new FileReader(new File(parent()));", members: "    String parent() { return \"\"; }")), [], "path type unknown")
+        XCTAssertEqual(try codes(body("        Object r = new FileReader(s);")), [])
+        XCTAssertEqual(try codes(body("        Object r = new Thread(new File(s));")), [])
+        XCTAssertEqual(try fixed(body("        Object r = new FileWriter(new File(s), true);"), rule: .redundantFileCreation)?.contains("new FileWriter(s, true)"), true)
+    }
+
     func testCleanCodeProducesNoFindings() throws {
         let source = """
         import java.util.List;

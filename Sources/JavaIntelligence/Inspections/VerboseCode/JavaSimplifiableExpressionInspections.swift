@@ -148,3 +148,97 @@ enum JavaReplacementHasNoEffectInspection: JavaNodeInspection {
         return [CodeAction(title: "Remove the call", kind: "quickfix", edits: [edit], isPreferred: true)]
     }
 }
+
+/// `case A -> …; case B -> …; default -> …` over an enum declared in this file whose constants
+/// are all named. Old-style (colon) switches are left alone: there a `default` also guards
+/// against constants added later.
+enum JavaUnnecessaryEnumDefaultInspection: JavaNodeInspection {
+    static let rule = JavaInspectionRule.unnecessaryDefaultForEnumSwitch
+    static let nodeTypes: Set<String> = ["switch_expression"]
+
+    private static func constantNames(of enumBody: SyntaxNode) -> Set<String> {
+        Set(enumBody.namedChildren(ofType: "enum_constant").compactMap { $0.child(byFieldName: "name")?.text })
+    }
+
+    /// The constants a rule's label names (`case A, B` or `case Color.A`), or `nil` for a pattern.
+    private static func labelledConstants(_ label: SyntaxNode) -> [String]? {
+        let text = label.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("case"), !text.contains("("), !text.contains(" when "), !text.contains("null") else { return nil }
+        return text.dropFirst(4).split(separator: ",").map {
+            String($0.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".").last ?? "")
+        }
+    }
+
+    private static func analysis(of node: SyntaxNode) -> (defaultRule: SyntaxNode, label: SyntaxNode)? {
+        guard let selector = node.child(byFieldName: "condition")?.unparenthesized,
+              let declared = JavaDeclaredTypes.type(of: selector), !declared.isArray,
+              let enumDeclaration = JavaDeclaredTypes.typeDeclaration(named: declared.name, in: node.tree.rootNode),
+              enumDeclaration.type == "enum_declaration", let enumBody = enumDeclaration.child(byFieldName: "body"),
+              let block = node.child(byFieldName: "body") else { return nil }
+        let rules = block.namedChildren(ofType: "switch_rule")
+        guard !rules.isEmpty, rules.count == block.namedChildren.filter({ $0.type != "line_comment" && $0.type != "block_comment" }).count else { return nil }
+        var covered = Set<String>()
+        var defaultRule: SyntaxNode?
+        var defaultLabel: SyntaxNode?
+        for rule in rules {
+            guard let label = rule.firstNamedChild(ofType: "switch_label") else { return nil }
+            if label.text.trimmingCharacters(in: .whitespaces) == "default" {
+                defaultRule = rule
+                defaultLabel = label
+            } else {
+                guard let names = labelledConstants(label) else { return nil }
+                covered.formUnion(names)
+            }
+        }
+        guard let defaultRule, let defaultLabel, covered == constantNames(of: enumBody) else { return nil }
+        return (defaultRule, defaultLabel)
+    }
+
+    static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
+        guard let (_, label) = analysis(of: node) else { return }
+        report(JavaInspectionSupport.inspection(
+            rule, message: "'default' branch is unnecessary: every enum constant is handled", node: label, fixTitle: "Remove 'default' branch"
+        ))
+    }
+
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
+        guard let label = JavaInspectionSupport.node(of: "switch_label", for: diagnostic, tree: tree, source: source),
+              let rule = label.parent, rule.type == "switch_rule" else { return [] }
+        return JavaJumpStatements.removeFix(title: "Remove 'default' branch", node: rule, in: tree)
+    }
+}
+
+/// `new FileReader(new File(path))` where `path` is a String: `new FileReader(path)` does the same.
+enum JavaRedundantFileCreationInspection: JavaNodeInspection {
+    static let rule = JavaInspectionRule.redundantFileCreation
+    static let nodeTypes: Set<String> = ["object_creation_expression"]
+    private static let acceptsPath: Set<String> = [
+        "FileInputStream", "FileOutputStream", "FileReader", "FileWriter", "PrintStream", "PrintWriter", "RandomAccessFile",
+    ]
+
+    /// The inner `new File(path)` and its path argument.
+    private static func redundantFile(in node: SyntaxNode) -> (file: SyntaxNode, path: SyntaxNode)? {
+        guard let type = node.child(byFieldName: "type"), acceptsPath.contains(JavaDeclaredTypes.simpleName(of: type)),
+              let arguments = node.child(byFieldName: "arguments"), let first = arguments.namedChild(at: 0),
+              first.type == "object_creation_expression", let fileType = first.child(byFieldName: "type"),
+              JavaDeclaredTypes.simpleName(of: fileType) == "File", first.namedChildren(ofType: "class_body").isEmpty,
+              let fileArguments = first.child(byFieldName: "arguments"), fileArguments.namedChildCount == 1,
+              let path = fileArguments.namedChild(at: 0), JavaDeclaredTypes.type(of: path) == .string else { return nil }
+        return (first, path)
+    }
+
+    static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
+        guard let (file, _) = redundantFile(in: node), let type = node.child(byFieldName: "type") else { return }
+        report(JavaInspectionSupport.inspection(
+            rule, message: "Redundant 'File' creation: '\(JavaDeclaredTypes.simpleName(of: type))' accepts the path directly",
+            node: file, fixTitle: "Remove 'File' creation"
+        ))
+    }
+
+    static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
+        guard let file = JavaInspectionSupport.node(of: "object_creation_expression", for: diagnostic, tree: tree, source: source),
+              let outer = file.parent?.parent, let (_, path) = redundantFile(in: outer), outer.type == "object_creation_expression" else { return [] }
+        let edit = JavaInspectionSupport.edit(replacingBytes: file.byteRange, with: path.text, in: tree)
+        return [CodeAction(title: "Remove 'File' creation", kind: "quickfix", edits: [edit], isPreferred: true)]
+    }
+}
