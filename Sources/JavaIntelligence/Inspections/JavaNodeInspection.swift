@@ -72,6 +72,15 @@ enum JavaInspectionRegistry {
         JavaJumpOutOfFinallyInspection.self,
         JavaEmptyFinallyBlockInspection.self,
         JavaEmptyTryBlockInspection.self,
+        // Control flow
+        JavaRedundantIfStatementInspection.self,
+        JavaSimplifiableConditionalInspection.self,
+        JavaIdenticalBranchesInspection.self,
+        JavaDuplicateSwitchBranchesInspection.self,
+        JavaPointlessBooleanInspection.self,
+        JavaConstantConditionInspection.self,
+        JavaInfiniteLoopInspection.self,
+        JavaLoopDoesNotLoopInspection.self,
         // Code maturity
         JavaPrintStackTraceInspection.self,
         JavaSystemOutErrInspection.self,

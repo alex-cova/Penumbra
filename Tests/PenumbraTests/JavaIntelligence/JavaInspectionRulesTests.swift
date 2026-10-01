@@ -152,9 +152,9 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { break outer; } } }"), ["unnecessary-label-on-break"])
         XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { for (;;) { break outer; } } } }"), [])
         XCTAssertEqual(try codes("class A { void f(int x) { outer: for (;;) { switch (x) { case 1: break outer; default: break; } } } }"), [])
-        XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { continue outer; } } }"), ["unnecessary-label-on-continue"])
-        XCTAssertEqual(try codes("class A { void f(int x) { outer: for (;;) { switch (x) { case 1: continue outer; default: break; } } } }"), ["unnecessary-label-on-continue"])
-        XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { g(); } } void g() { } }"), ["unused-label"])
+        XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { continue outer; } } }").filter { $0 != "infinite-loop" }, ["unnecessary-label-on-continue"])
+        XCTAssertEqual(try codes("class A { void f(int x) { outer: for (;;) { switch (x) { case 1: continue outer; default: break; } } } }").filter { $0 != "infinite-loop" }, ["unnecessary-label-on-continue"])
+        XCTAssertEqual(try codes("class A { void f() { outer: for (;;) { g(); } } void g() { } }").filter { $0 != "infinite-loop" }, ["unused-label"])
         XCTAssertEqual(try fixed("class A { void f() { outer: for (;;) { g(); } } void g() { } }", rule: .unusedLabel)?.contains("{ for (;;)"), true)
         XCTAssertEqual(try fixed("class A { void f() { outer: for (;;) { break outer; } } }", rule: .unnecessaryLabelOnBreak)?.contains("break; }"), true)
     }
@@ -309,6 +309,92 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes(body("        Object l = new ArrayList<String>();")), [])
         XCTAssertEqual(try codes("class A { protected void finalize() throws Throwable { } }"), ["finalize-declared"])
         XCTAssertEqual(try codes("class A { void finalize(int x) { } }"), [])
+    }
+
+    // MARK: Control flow
+
+    func testRedundantIfStatement() throws {
+        XCTAssertEqual(try codes("class A { boolean f(int n) { if (n > 0) return true; else return false; } }"), ["redundant-if-statement"])
+        XCTAssertEqual(try codes("class A { boolean f(int n) { if (n > 0) { return false; } return true; } }"), ["redundant-if-statement"])
+        XCTAssertEqual(try codes("class A { boolean f(int n) { if (n > 0) { return true; } else { return true; } } }"), ["identical-branches"])
+        XCTAssertEqual(try codes("class A { int f(int n) { if (n > 0) return 1; else return 0; } }"), [])
+        XCTAssertEqual(try codes("class A { boolean f(int n) { if (n > 0) return true; log(); return false; } void log() { } }"), [])
+        XCTAssertEqual(try fixed("class A { boolean f(int n) { if (n > 0) return true; else return false; } }", rule: .redundantIfStatement),
+                       "class A { boolean f(int n) { return n > 0; } }")
+        XCTAssertEqual(try fixed("class A { boolean f(int n) { if (n > 0 && n < 9) { return false; } return true; } }", rule: .redundantIfStatement),
+                       "class A { boolean f(int n) { return !(n > 0 && n < 9); } }")
+        XCTAssertEqual(try fixed("class A { boolean f(boolean b) { if (!b) return false; return true; } }", rule: .redundantIfStatement),
+                       "class A { boolean f(boolean b) { return b; } }")
+    }
+
+    func testSimplifiableConditionalExpression() throws {
+        XCTAssertEqual(try codes(body("        boolean x = n > m ? true : false;")), ["simplifiable-conditional-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = n > m ? false : true;")), ["simplifiable-conditional-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = n > m ? true : true;")), ["identical-branches"])
+        XCTAssertEqual(try codes(body("        boolean x = n > m ? s.isEmpty() : false;")), [])
+        XCTAssertEqual(try fixed(body("        boolean x = n > m ? false : true;"), rule: .simplifiableConditional)?.contains("boolean x = !(n > m);"), true)
+        XCTAssertEqual(try fixed(body("        boolean x = n > m ? true : false;"), rule: .simplifiableConditional)?.contains("boolean x = n > m;"), true)
+    }
+
+    func testIdenticalBranches() throws {
+        XCTAssertEqual(try codes(body("        if (n > 0) { m = 1; } else { m = 1; }")), ["identical-branches"])
+        XCTAssertEqual(try codes(body("        int r = n > 0 ? m : m;")), ["identical-branches"])
+        XCTAssertEqual(try codes(body("        if (n > 0) { m = 1; } else { m = 2; }")), [])
+        XCTAssertEqual(try codes(body("        if (n > 0) { m = 1; } else { // same\n m = 1; }")), [], "comments make it deliberate")
+    }
+
+    func testDuplicateSwitchBranches() throws {
+        let duplicate = "class A { int f(int x) { return switch (x) { case 1 -> 10; case 2 -> 20; case 3 -> 10; default -> 0; }; } }"
+        XCTAssertEqual(try codes(duplicate), ["duplicate-switch-branches"])
+        let distinct = "class A { int f(int x) { return switch (x) { case 1 -> 10; case 2 -> 20; default -> 0; }; } }"
+        XCTAssertEqual(try codes(distinct), [])
+        let defaults = "class A { int f(int x) { return switch (x) { case 1 -> 0; default -> 0; }; } }"
+        XCTAssertEqual(try codes(defaults), [], "default cannot be merged into a case list")
+        let nullLabel = "class A { int f(String x) { return switch (x) { case \"a\" -> 1; case null -> 1; default -> 0; }; } }"
+        XCTAssertEqual(try codes(nullLabel), [], "null cannot be merged into a case list")
+        let empty = "class A { void f(int x) { switch (x) { case 1 -> { } case 2 -> { } default -> g(); } } void g() { } }"
+        XCTAssertEqual(try codes(empty), [])
+    }
+
+    func testPointlessBooleanExpression() throws {
+        XCTAssertEqual(try codes(body("        boolean x = n > 0 && true;")), ["pointless-boolean-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = false || n > 0;")), ["pointless-boolean-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = s.isEmpty() == true;")), ["pointless-boolean-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = s.isEmpty() != true;")), ["pointless-boolean-expression"])
+        XCTAssertEqual(try codes(body("        boolean x = n > 0 && s.isEmpty();")), [])
+        XCTAssertEqual(try fixed(body("        boolean x = s.isEmpty() == false;"), rule: .pointlessBooleanExpression)?.contains("boolean x = !s.isEmpty();"), true)
+        XCTAssertEqual(try fixed(body("        boolean x = (n > 0 || m > 0) && true;"), rule: .pointlessBooleanExpression)?.contains("boolean x = (n > 0 || m > 0);"), true)
+        // The call would be lost, so there is a warning but no fix.
+        XCTAssertEqual(try codes(body("        boolean x = s.isEmpty() || true;")), ["pointless-boolean-expression"])
+        XCTAssertNil(try fixed(body("        boolean x = s.isEmpty() || true;"), rule: .pointlessBooleanExpression))
+        XCTAssertEqual(try fixed(body("        boolean x = n > 0 && false;"), rule: .pointlessBooleanExpression) == nil, true, "the other side is not a plain reference")
+    }
+
+    func testConstantCondition() throws {
+        XCTAssertEqual(try codes(body("        if (true) { n++; }")), ["constant-condition"])
+        XCTAssertEqual(try codes(body("        while (false) { n++; }")), ["constant-condition"])
+        XCTAssertEqual(try codes(body("        int r = false ? n : m;")), ["constant-condition"])
+        XCTAssertEqual(try codes(body("        if (n > 0) { n++; }")), [])
+    }
+
+    func testInfiniteLoop() throws {
+        XCTAssertEqual(try codes("class A { void f() { while (true) { g(); } } void g() { } }"), ["infinite-loop"])
+        XCTAssertEqual(try codes("class A { void f() { for (;;) { g(); } } void g() { } }"), ["infinite-loop"])
+        XCTAssertEqual(try codes("class A { void f() { while (true) { if (g()) break; } } boolean g() { return true; } }"), [])
+        XCTAssertEqual(try codes("class A { int f() { while (true) { if (g()) return 1; } } boolean g() { return true; } }"), [])
+        XCTAssertEqual(try codes("class A { void f() { while (true) { g(); throw new IllegalStateException(); } } void g() { } }").filter { $0 == "infinite-loop" }, [])
+        XCTAssertEqual(try codes("class A { void f() { while (true) { for (int i = 0; i < 3; i++) { break; } } } }").filter { $0 == "infinite-loop" }, ["infinite-loop"], "that break only leaves the inner loop")
+        XCTAssertEqual(try codes("class A { void f() { while (true) { Runnable r = () -> { return; }; r.run(); } } }"), ["infinite-loop"], "a lambda's return is not ours")
+        XCTAssertEqual(try codes("class A { void f() { while (true) { System.exit(0); } } }").filter { $0 == "infinite-loop" }, [])
+        XCTAssertEqual(try codes("class A { void f() { while (g()) { } } boolean g() { return true; } }").filter { $0 == "infinite-loop" }, [])
+    }
+
+    func testLoopDoesNotLoop() throws {
+        XCTAssertEqual(try codes("class A { void f(int n) { while (n > 0) { g(); break; } } void g() { } }"), ["loop-does-not-loop"])
+        XCTAssertEqual(try codes("class A { int f(int n) { for (int i = 0; i < n; i++) { return i; } return -1; } }"), ["loop-does-not-loop"])
+        XCTAssertEqual(try codes("class A { void f(int n) { while (n > 0) { if (n == 2) continue; g(); break; } } void g() { } }"), [])
+        XCTAssertEqual(try codes("class A { int f(java.util.List<Integer> l) { for (int x : l) { return x; } return -1; } }"), [], "first-element idiom")
+        XCTAssertEqual(try codes("class A { void f(int n) { while (n > 0) { g(); } } void g() { } }"), [])
     }
 
     func testCleanCodeProducesNoFindings() throws {

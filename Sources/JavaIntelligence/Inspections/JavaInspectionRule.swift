@@ -11,6 +11,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case compilerIssues
     case errorHandling
     case codeMaturity
+    case controlFlow
 
     public var title: String {
         switch self {
@@ -23,6 +24,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .compilerIssues: return "Compiler issues"
         case .errorHandling: return "Error handling"
         case .codeMaturity: return "Code maturity"
+        case .controlFlow: return "Control flow issues"
         }
     }
 }
@@ -79,6 +81,14 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case systemGcCall
     case obsoleteCollection
     case finalizeDeclared
+    case redundantIfStatement
+    case simplifiableConditional
+    case identicalBranches
+    case duplicateSwitchBranches
+    case pointlessBooleanExpression
+    case constantCondition
+    case infiniteLoop
+    case loopDoesNotLoop
 
     private struct Info {
         let code: String
@@ -140,6 +150,14 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .systemGcCall: Info(code: "system-gc-call", title: "Call to 'System.gc()' or 'Runtime.gc()'", group: .codeMaturity, severity: .warning, summary: "Reports explicit garbage-collection requests."),
         .obsoleteCollection: Info(code: "obsolete-collection", title: "Use of obsolete collection type", group: .codeMaturity, severity: .weakWarning, summary: "Reports new Vector, Hashtable and Stack; ArrayList, HashMap and ArrayDeque replace them."),
         .finalizeDeclared: Info(code: "finalize-declared", title: "'finalize()' declared", group: .codeMaturity, severity: .warning, summary: "Reports finalize(), which is deprecated for removal."),
+        .redundantIfStatement: Info(code: "redundant-if-statement", title: "Redundant 'if' statement", group: .controlFlow, severity: .weakWarning, summary: "Reports 'if (c) return true; else return false;', which is 'return c;'."),
+        .simplifiableConditional: Info(code: "simplifiable-conditional-expression", title: "Simplifiable conditional expression", group: .controlFlow, severity: .weakWarning, summary: "Reports 'c ? true : false' and 'c ? false : true'."),
+        .identicalBranches: Info(code: "identical-branches", title: "'if' or '?:' with identical branches", group: .controlFlow, severity: .warning, summary: "Reports a conditional whose two branches are the same code."),
+        .duplicateSwitchBranches: Info(code: "duplicate-switch-branches", title: "Duplicate branches in 'switch'", group: .controlFlow, severity: .weakWarning, summary: "Reports arrow-form switch rules with the same body, which could share one 'case' list."),
+        .pointlessBooleanExpression: Info(code: "pointless-boolean-expression", title: "Pointless boolean expression", group: .controlFlow, severity: .warning, summary: "Reports 'x && true', 'x == false' and similar, where the literal changes nothing or decides the result."),
+        .constantCondition: Info(code: "constant-condition", title: "Constant condition", group: .controlFlow, severity: .warning, summary: "Reports 'if (true)', 'while (false)' and '?:' on a boolean literal."),
+        .infiniteLoop: Info(code: "infinite-loop", title: "Infinite loop statement", group: .controlFlow, severity: .warning, summary: "Reports 'while (true)' and 'for (;;)' with no break, return or throw that leaves it."),
+        .loopDoesNotLoop: Info(code: "loop-does-not-loop", title: "Loop does not loop", group: .controlFlow, severity: .warning, summary: "Reports a loop whose body always ends with break, return or throw."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
