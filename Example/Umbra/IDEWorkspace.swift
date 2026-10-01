@@ -1621,7 +1621,8 @@ public final class IDEWorkspace {
                         suspendOnStart: configuration.suspendOnStart,
                         breakpoints: breakpoints,
                         muted: muted,
-                        sourceRoots: roots
+                        sourceRoots: roots,
+                        gradleIsRunning: { [weak self] in self?.javaSupport.isRunningGradleTasks ?? false }
                     )
                 }
                 showGradleOutput()

@@ -122,7 +122,7 @@ final class GradleCommandRunnerTests: XCTestCase {
         let command = try XCTUnwrap(capturedCommand)
         XCTAssertEqual(command.executable, dir.appendingPathComponent("gradlew"))
         XCTAssertEqual(command.currentDirectory, dir)
-        XCTAssertEqual(command.arguments, ["--console=plain", "-PoutputFile=/tmp/model.json", "umbraProjectModel"])
+        XCTAssertEqual(command.arguments, ["--console=plain", "umbraProjectModel", "-PoutputFile=/tmp/model.json"])
         XCTAssertEqual(command.environment["JAVA_HOME"], javaHome.path)
     }
 

@@ -232,17 +232,22 @@ final class JavaDebugSession {
     }
 
     /// Attaches to the Gradle-spawned JVM, applies breakpoints, and optionally resumes.
-    /// - Parameter classpath: the program's runtime classpath, for evaluations that need compiling.
+    /// - Parameters:
+    ///   - classpath: the program's runtime classpath, for evaluations that need compiling.
+    ///   - gradleIsRunning: whether the Gradle run that starts the JVM is still going. The JVM
+    ///     only listens once Gradle has configured and compiled, which can take minutes, so the
+    ///     attach keeps trying until Gradle ends rather than for a fixed time.
     func attachForGradle(
         port: Int = JavaLaunchCommand.gradleDebugJdwpPort,
         suspendOnStart: Bool,
         breakpoints: [JavaBreakpoint],
         muted: Bool = false,
         sourceRoots: [URL] = [],
-        classpath: [URL] = []
+        classpath: [URL] = [],
+        gradleIsRunning: @escaping @MainActor () -> Bool = { true }
     ) async {
         do {
-            try await attachWithRetry(port: port, maxAttempts: 60, sourceRoots: sourceRoots, classpath: classpath)
+            try await attachWithRetry(port: port, sourceRoots: sourceRoots, classpath: classpath, keepTrying: gradleIsRunning)
             await sync(breakpoints, muted: muted)
             if !suspendOnStart {
                 // The JVM held at startup for the debugger; there is no stop to show.
@@ -612,9 +617,22 @@ final class JavaDebugSession {
         state = .terminated
     }
 
-    private func attachWithRetry(port: Int, maxAttempts: Int, sourceRoots: [URL], classpath: [URL]) async throws {
+    /// Tries every 250 ms while `keepTrying` holds, for at most `maxAttempts` (10 minutes). The
+    /// first seconds are always tried: the Gradle run may not have been marked started yet.
+    private func attachWithRetry(
+        port: Int,
+        maxAttempts: Int = 2400,
+        sourceRoots: [URL],
+        classpath: [URL],
+        keepTrying: @MainActor () -> Bool
+    ) async throws {
         var lastError: Error = JavaDebugProcessError.launchFailed("could not attach")
-        for _ in 0..<maxAttempts {
+        for attempt in 0..<maxAttempts {
+            // Stopped, or a newer session replaced this one's adapter.
+            guard inputHandle != nil, !Task.isCancelled else { throw JavaDebugProcessError.disconnected }
+            if attempt >= 20, !keepTrying() {
+                throw JavaDebugProcessError.launchFailed("Gradle finished before the program's JVM started listening on port \(port). See the Gradle tab.")
+            }
             do {
                 _ = try await send([
                     "command": "attach",

@@ -156,9 +156,11 @@ public actor GradleCommandRunner {
             environment["JAVA_HOME"] = javaHome.path
         }
 
+        // Tasks before the arguments: task options (`--tests`, `--debug-jvm`, `--args`) apply to
+        // the task named just before them, and Gradle rejects them ahead of every task name.
         let command = GradleCommand(
             executable: executable,
-            arguments: leadingArguments + ["--console=plain"] + arguments + tasks,
+            arguments: leadingArguments + ["--console=plain"] + tasks + arguments,
             currentDirectory: projectDirectory,
             environment: environment
         )

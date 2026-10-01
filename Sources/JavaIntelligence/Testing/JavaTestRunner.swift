@@ -74,7 +74,7 @@ public enum JavaTestRunner {
         }
     }
 
-    /// Gradle CLI arguments after `--console=plain` and before the task path.
+    /// Gradle CLI arguments; the runner puts them after the task paths, where task options apply.
     public static func gradleArguments(for request: JavaTestRunRequest, continueOnFailure: Bool = true, debug: Bool = false) -> [String] {
         var args = ["--no-configuration-cache"]
         if continueOnFailure { args.append("--continue") }

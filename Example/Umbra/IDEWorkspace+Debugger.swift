@@ -438,7 +438,8 @@ extension IDEWorkspace {
                     breakpoints: breakpoints,
                     muted: muted,
                     sourceRoots: roots,
-                    classpath: classpath
+                    classpath: classpath,
+                    gradleIsRunning: { [weak self] in self?.javaSupport.isRunningGradleTasks ?? false }
                 )
             }
             javaSupport.runTests(scope: scope, debug: true)

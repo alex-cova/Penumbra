@@ -6,6 +6,17 @@ enum JavaDebugProcessError: Error, Sendable {
     case disconnected
 }
 
+extension JavaDebugProcessError: LocalizedError {
+    /// Without it the panel shows "The operation couldn't be completed. (…error 0.)".
+    var errorDescription: String? {
+        switch self {
+        case .adapterNotFound: "The Java debug adapter was not found."
+        case .launchFailed(let message): message
+        case .disconnected: "The debug adapter disconnected."
+        }
+    }
+}
+
 /// Spawns the JDI debug adapter and the target JVM process.
 struct JavaDebugProcessLauncher: Sendable {
     func adapterJarURL() -> URL? {
