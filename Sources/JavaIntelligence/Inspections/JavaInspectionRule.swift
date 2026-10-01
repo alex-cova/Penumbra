@@ -9,6 +9,8 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case inheritance
     case classStructure
     case compilerIssues
+    case errorHandling
+    case codeMaturity
 
     public var title: String {
         switch self {
@@ -19,6 +21,8 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .inheritance: return "Inheritance issues"
         case .classStructure: return "Class structure"
         case .compilerIssues: return "Compiler issues"
+        case .errorHandling: return "Error handling"
+        case .codeMaturity: return "Code maturity"
         }
     }
 }
@@ -64,6 +68,17 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case replacementHasNoEffect
     case unnecessaryDefaultForEnumSwitch
     case redundantFileCreation
+    case emptyCatchBlock
+    case catchOfThrowable
+    case caughtExceptionRethrown
+    case jumpOutOfFinally
+    case emptyFinallyBlock
+    case emptyTryBlock
+    case printStackTraceCall
+    case systemOutErr
+    case systemGcCall
+    case obsoleteCollection
+    case finalizeDeclared
 
     private struct Info {
         let code: String
@@ -114,6 +129,17 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .replacementHasNoEffect: Info(code: "replacement-has-no-effect", title: "Replacement operation has no effect", group: .verboseCode, severity: .warning, summary: "Reports String 'replace' calls that replace text with itself."),
         .unnecessaryDefaultForEnumSwitch: Info(code: "unnecessary-default-for-enum-switch", title: "Unnecessary 'default' for enum 'switch'", group: .verboseCode, severity: .weakWarning, summary: "Reports a 'default' rule in an arrow-form switch that already covers every constant of an enum declared in the file."),
         .redundantFileCreation: Info(code: "redundant-file-creation", title: "Redundant 'File' instance creation", group: .verboseCode, severity: .weakWarning, summary: "Reports 'new FileReader(new File(path))' where the stream or reader takes the path itself."),
+        .emptyCatchBlock: Info(code: "empty-catch-block", title: "Empty 'catch' block", group: .errorHandling, severity: .warning, summary: "Reports a catch block with no statements and no comment, which swallows the exception."),
+        .catchOfThrowable: Info(code: "catch-of-throwable", title: "'catch' of 'Throwable'", group: .errorHandling, severity: .weakWarning, summary: "Reports catching Throwable, which also catches errors such as OutOfMemoryError."),
+        .caughtExceptionRethrown: Info(code: "caught-exception-rethrown", title: "Caught exception is immediately rethrown", group: .errorHandling, severity: .warning, summary: "Reports a catch block whose only statement rethrows the exception unchanged."),
+        .jumpOutOfFinally: Info(code: "jump-out-of-finally", title: "'return' or 'throw' inside 'finally'", group: .errorHandling, severity: .warning, summary: "Reports return and throw in a finally block, which discard any pending exception."),
+        .emptyFinallyBlock: Info(code: "empty-finally-block", title: "Empty 'finally' block", group: .errorHandling, severity: .warning, summary: "Reports a finally block with no statements."),
+        .emptyTryBlock: Info(code: "empty-try-block", title: "Empty 'try' block", group: .errorHandling, severity: .warning, summary: "Reports a try block with no statements."),
+        .printStackTraceCall: Info(code: "print-stack-trace", title: "Call to 'printStackTrace()'", group: .codeMaturity, severity: .weakWarning, summary: "Reports printStackTrace() and Thread.dumpStack(), which bypass logging."),
+        .systemOutErr: Info(code: "system-out-err", title: "Use of 'System.out' or 'System.err'", group: .codeMaturity, severity: .weakWarning, summary: "Reports System.out and System.err, which bypass logging."),
+        .systemGcCall: Info(code: "system-gc-call", title: "Call to 'System.gc()' or 'Runtime.gc()'", group: .codeMaturity, severity: .warning, summary: "Reports explicit garbage-collection requests."),
+        .obsoleteCollection: Info(code: "obsolete-collection", title: "Use of obsolete collection type", group: .codeMaturity, severity: .weakWarning, summary: "Reports new Vector, Hashtable and Stack; ArrayList, HashMap and ArrayDeque replace them."),
+        .finalizeDeclared: Info(code: "finalize-declared", title: "'finalize()' declared", group: .codeMaturity, severity: .warning, summary: "Reports finalize(), which is deprecated for removal."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(

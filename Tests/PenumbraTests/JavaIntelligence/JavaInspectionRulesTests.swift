@@ -211,7 +211,7 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try fixed(source, rule: .redundantClose)?.contains("r.read();"), true)
         XCTAssertEqual(try codes("class A { void f() throws Exception { try (java.io.Reader r = open()) { r.close(); r.read(); } } }"), [], "not the last statement")
         XCTAssertEqual(try codes("class A { void f(java.io.Reader o) throws Exception { try (java.io.Reader r = open()) { o.close(); } } }"), [], "not a resource")
-        XCTAssertEqual(try codes("class A { void f() throws Exception { java.io.Reader r = open(); try { r.close(); } finally { } } }"), [])
+        XCTAssertEqual(try codes("class A { void f() throws Exception { java.io.Reader r = open(); try { r.close(); } finally { log(); } } }"), [])
     }
 
     func testReplacementHasNoEffect() throws {
@@ -250,6 +250,65 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes(body("        Object r = new FileReader(s);")), [])
         XCTAssertEqual(try codes(body("        Object r = new Thread(new File(s));")), [])
         XCTAssertEqual(try fixed(body("        Object r = new FileWriter(new File(s), true);"), rule: .redundantFileCreation)?.contains("new FileWriter(s, true)"), true)
+    }
+
+    private func tryCatch(_ catchBody: String, parameter: String = "IOException e", rest: String = "") -> String {
+        "class A { void f() { try { g(); } catch (\(parameter)) { \(catchBody) } \(rest) } void g() throws Exception { } }"
+    }
+
+    func testEmptyCatch() throws {
+        XCTAssertEqual(try codes(tryCatch("")), ["empty-catch-block"])
+        XCTAssertEqual(try codes(tryCatch("/* nothing to do */")), [])
+        XCTAssertEqual(try codes(tryCatch("", parameter: "IOException ignored")), [])
+        XCTAssertEqual(try codes(tryCatch("", parameter: "IOException expected")), [])
+        XCTAssertEqual(try codes(tryCatch("log(e);")), [])
+        XCTAssertEqual(try codes(tryCatch("log(1);")), [], "an unused parameter is not reported")
+    }
+
+    func testCatchOfThrowable() throws {
+        XCTAssertEqual(try codes(tryCatch("log(t);", parameter: "Throwable t")), ["catch-of-throwable"])
+        XCTAssertEqual(try codes(tryCatch("log(t);", parameter: "IOException | Throwable t")), ["catch-of-throwable"])
+        XCTAssertEqual(try codes(tryCatch("log(t);", parameter: "Exception t")), [])
+    }
+
+    func testCaughtExceptionRethrown() throws {
+        XCTAssertEqual(try codes(tryCatch("throw e;")), ["caught-exception-rethrown"])
+        XCTAssertEqual(try codes(tryCatch("throw e;", rest: "catch (Exception x) { log(x); }")), [], "a broader catch follows")
+        XCTAssertEqual(try codes(tryCatch("log(e); throw e;")), [])
+        XCTAssertEqual(try codes(tryCatch("throw new RuntimeException(e);")), [])
+    }
+
+    func testJumpOutOfFinally() throws {
+        XCTAssertEqual(try codes("class A { int f() { try { g(); } finally { return 1; } } void g() { } }"), ["jump-out-of-finally"])
+        XCTAssertEqual(try codes("class A { void f() { try { g(); } finally { throw new IllegalStateException(); } } void g() { } }"), ["jump-out-of-finally"])
+        XCTAssertEqual(try codes("class A { void f() { try { g(); } finally { try { g(); } catch (RuntimeException e) { throw e; } } } void g() { } }").filter { $0 == "jump-out-of-finally" }, [], "caught by a nested try")
+        XCTAssertEqual(try codes("class A { void f() { try { g(); } finally { Runnable r = () -> { return; }; r.run(); } } void g() { } }"), [])
+    }
+
+    func testEmptyFinallyAndTry() throws {
+        XCTAssertEqual(try codes("class A { void f() { try { g(); } finally { } } void g() { } }"), ["empty-finally-block"])
+        XCTAssertEqual(try codes("class A { void f() { try { } catch (RuntimeException e) { log(e); } } }"), ["empty-try-block"])
+        XCTAssertEqual(try codes("class A { void f() { try { g(); } finally { // cleanup later\n } } void g() { } }"), [])
+        XCTAssertEqual(try fixed("class A { void f() { try { g(); } catch (RuntimeException e) { log(e); } finally { } } void g() { } }", rule: .emptyFinallyBlock),
+                       "class A { void f() { try { g(); } catch (RuntimeException e) { log(e); } } void g() { } }")
+        XCTAssertNil(try fixed("class A { void f() { try { g(); } finally { } } void g() { } }", rule: .emptyFinallyBlock), "a lone finally cannot just be dropped")
+    }
+
+    func testCodeMaturityRules() throws {
+        XCTAssertEqual(try codes(tryCatch("e.printStackTrace();")), ["print-stack-trace"])
+        XCTAssertEqual(try codes(body("        Thread.dumpStack();")), ["print-stack-trace"])
+        XCTAssertEqual(try codes(body("        log.printStackTrace(out);")), [])
+        XCTAssertEqual(try codes(body("        System.out.println(s);")), ["system-out-err"])
+        XCTAssertEqual(try codes(body("        System.err.println(s);")), ["system-out-err"])
+        XCTAssertEqual(try codes(body("        out.println(s);")), [])
+        XCTAssertEqual(try codes(body("        System.gc();")), ["system-gc-call"])
+        XCTAssertEqual(try codes(body("        Runtime.getRuntime().gc();")), ["system-gc-call"])
+        XCTAssertEqual(try codes(body("        pool.gc();")), [])
+        XCTAssertEqual(try codes(body("        Object v = new Vector<String>();")), ["obsolete-collection"])
+        XCTAssertEqual(try codes(body("        Object h = new Hashtable<String, String>(); Object k = new java.util.Stack<String>();")), ["obsolete-collection", "obsolete-collection"])
+        XCTAssertEqual(try codes(body("        Object l = new ArrayList<String>();")), [])
+        XCTAssertEqual(try codes("class A { protected void finalize() throws Throwable { } }"), ["finalize-declared"])
+        XCTAssertEqual(try codes("class A { void finalize(int x) { } }"), [])
     }
 
     func testCleanCodeProducesNoFindings() throws {

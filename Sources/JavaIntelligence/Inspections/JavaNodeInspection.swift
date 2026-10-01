@@ -65,6 +65,19 @@ enum JavaInspectionRegistry {
         JavaReplacementHasNoEffectInspection.self,
         JavaUnnecessaryEnumDefaultInspection.self,
         JavaRedundantFileCreationInspection.self,
+        // Error handling
+        JavaEmptyCatchBlockInspection.self,
+        JavaCatchOfThrowableInspection.self,
+        JavaCaughtExceptionRethrownInspection.self,
+        JavaJumpOutOfFinallyInspection.self,
+        JavaEmptyFinallyBlockInspection.self,
+        JavaEmptyTryBlockInspection.self,
+        // Code maturity
+        JavaPrintStackTraceInspection.self,
+        JavaSystemOutErrInspection.self,
+        JavaSystemGcInspection.self,
+        JavaObsoleteCollectionInspection.self,
+        JavaFinalizeDeclaredInspection.self,
         // Declaration redundancy
         JavaUnusedLabelInspection.self,
         JavaDuplicateThrowsInspection.self,
