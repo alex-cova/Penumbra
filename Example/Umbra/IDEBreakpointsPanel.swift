@@ -29,7 +29,7 @@ struct IDEBreakpointsPanel: View {
                 breakpoints: entries.sorted { $0.line < $1.line }
             ))
         }
-        func kindGroup(_ id: String, _ title: String, _ image: String, _ matches: (JavaBreakpointKind) -> Bool) {
+        func kindGroup(_ id: String, _ title: String, _ image: String, _ matches: @Sendable (JavaBreakpointKind) -> Bool) {
             let entries = workspace.breakpoints.filter { matches($0.kind) }
             if !entries.isEmpty {
                 result.append(Group(id: id, title: title, subtitle: nil, systemImage: image, breakpoints: entries.sorted { $0.title < $1.title }))
