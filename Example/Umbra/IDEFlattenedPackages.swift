@@ -74,3 +74,75 @@ enum IDEFlattenedPackages {
         }
     }
 }
+
+enum IDEExplorerSortOrder: String, CaseIterable, Identifiable {
+    case name
+    case type
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: "Sort by Name"
+        case .type: "Sort by Type"
+        }
+    }
+}
+
+/// Explorer row ordering and package compaction. Pure functions over `IDEFileNode`, applied while
+/// the tree view walks its expanded rows, so options change without rebuilding the project tree.
+enum IDEExplorerPresentation {
+    struct Options: Equatable {
+        var sortOrder: IDEExplorerSortOrder = .name
+        var foldersOnTop = true
+        var showExcluded = true
+        var compactMiddlePackages = false
+    }
+
+    /// `children` without excluded entries (when hidden), in the requested order. Folders order by
+    /// name even under Sort by Type.
+    static func ordered(_ children: [IDEFileNode], options: Options) -> [IDEFileNode] {
+        let visible = options.showExcluded ? children : children.filter { !$0.isExcluded }
+        return visible.sorted { lhs, rhs in
+            if options.foldersOnTop, lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+            if options.sortOrder == .type {
+                let lhsKey = typeKey(lhs)
+                let rhsKey = typeKey(rhs)
+                if lhsKey != rhsKey { return lhsKey < rhsKey }
+            }
+            let lhsName = lhs.displayName ?? lhs.name
+            let rhsName = rhs.displayName ?? rhs.name
+            let order = lhsName.localizedCaseInsensitiveCompare(rhsName)
+            if order != .orderedSame { return order == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private static func typeKey(_ node: IDEFileNode) -> String {
+        node.isDirectory ? "" : node.url.pathExtension.lowercased()
+    }
+
+    /// Follows single-child folder chains below `node`. Returns the deepest folder with a dotted
+    /// `displayName` when at least one folder was merged, otherwise `node` unchanged. `children`
+    /// is the already ordered/filtered list per folder, supplied by the caller.
+    static func compacted(
+        _ node: IDEFileNode,
+        children: (IDEFileNode) -> [IDEFileNode]
+    ) -> IDEFileNode {
+        guard node.isDirectory else { return node }
+        var current = node
+        var name = node.displayName ?? node.name
+        var merged = false
+        while true {
+            let kids = children(current)
+            guard kids.count == 1, let only = kids.first, only.isDirectory, !only.isExcluded else { break }
+            name += "." + (only.displayName ?? only.name)
+            current = only
+            merged = true
+        }
+        guard merged else { return node }
+        var result = current
+        result.displayName = name
+        return result
+    }
+}

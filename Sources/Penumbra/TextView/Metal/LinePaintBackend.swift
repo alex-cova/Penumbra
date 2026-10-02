@@ -32,6 +32,8 @@ struct CanvasPaintSpec {
     var pageGuideHairlineColor: NSColor
     var pageGuideShadingColor: NSColor
     var showsPageGuideShading: Bool
+    /// Full-width line bands in content space (``TextView/lineBackgrounds``), over the line selection.
+    var lineBackgroundFills: [LineBackgroundFill] = []
     /// Horizontal hairlines in content space, painted with the page-guide hairline.
     var methodSeparatorFrames: [CGRect]
     var methodSeparatorColor: NSColor

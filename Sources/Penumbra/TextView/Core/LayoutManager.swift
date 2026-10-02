@@ -34,6 +34,8 @@ final class LayoutManager {
                 // without this the y positions go nil and no hairline is ever produced.
                 methodSeparatorView.lineManager = lineManager
                 methodSeparatorView.needsDisplay = true
+                lineBackgroundView.lineManager = lineManager
+                lineBackgroundView.needsDisplay = true
                 // Same for the gutter columns: a stale weak reference draws no icons at all.
                 gutterDecorationView.lineManager = lineManager
                 gutterDecorationView.needsDisplay = true
@@ -384,6 +386,7 @@ final class LayoutManager {
         }
     }
     let methodSeparatorView = MethodSeparatorView()
+    let lineBackgroundView = LineBackgroundView()
     /// Measured width of ``pageGuideColumn`` characters; used to cap method separators at the margin.
     var pageGuideColumnOffset: CGFloat = 0
     var showMethodSeparators = false {
@@ -397,7 +400,7 @@ final class LayoutManager {
 
     // MARK: - Sizing
     private var leadingLineSpacing: CGFloat {
-        if showLineNumbers {
+        if gutterWidthService.reservesGutterSpace {
             return gutterWidthService.gutterWidth + textContainerInset.left
         } else {
             return textContainerInset.left
@@ -487,6 +490,7 @@ final class LayoutManager {
         self.lineMarkerView.lineManager = lineManager
         self.gutterAnnotationView.lineManager = lineManager
         self.methodSeparatorView.lineManager = lineManager
+        self.lineBackgroundView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
         syncGutterBackgroundWithEditor()
@@ -924,6 +928,42 @@ extension LayoutManager {
         needsLayoutLineSelection = true
     }
 
+    var lineBackgrounds: [LineBackground] {
+        get { lineBackgroundView.store.bands }
+        set {
+            guard !(newValue.isEmpty && lineBackgroundView.store.isEmpty) else { return }
+            lineBackgroundView.store.replace(with: newValue)
+            lineBackgroundsDidChange()
+        }
+    }
+
+    var hasLineBackgrounds: Bool {
+        !lineBackgroundView.store.isEmpty
+    }
+
+    /// Moves the line backgrounds through an edit; see ``LineBackgroundStore/applyEdit(_:)``.
+    func applyLineBackgroundEdit(_ edit: GutterLineMarkerEdit) {
+        if lineBackgroundView.store.applyEdit(edit) {
+            lineBackgroundsDidChange()
+        }
+    }
+
+    var lineBackgroundFillsForTesting: [LineBackgroundFill] {
+        lineBackgroundView.fills(clip: lineBackgroundView.bounds)
+    }
+
+    private func lineBackgroundsDidChange() {
+        lineBackgroundView.needsDisplay = true
+        lineBackgroundView.isHidden = lineBackgroundView.store.isEmpty || isMetalRenderingActive
+        setNeedsLayout()
+        textInputView?.setNeedsLayout()
+        guard isMetalRenderingActive else {
+            return
+        }
+        updateMetalCanvasPaintSpec()
+        presentMetalCanvasIfNeeded()
+    }
+
     /// Publish the row set the method-separator overlay should draw.
     func setMethodSeparatorRows(_ rows: [Int]) {
         guard rows != methodSeparatorView.separatorRows else {
@@ -1237,6 +1277,10 @@ extension LayoutManager {
         }
         let contentSize = contentSizeService.contentSize
         linesContainerView.frame = CGRect(x: 0, y: 0, width: contentSize.width, height: contentSize.height)
+        if !lineBackgroundView.store.isEmpty {
+            lineBackgroundView.textContainerInsetTop = textContainerInset.top
+            lineBackgroundView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, scrollViewWidth), height: contentSize.height)
+        }
         if showMethodSeparators {
             let separatorWidth = max(contentSize.width, scrollViewWidth)
             methodSeparatorView.textContainerInsetTop = textContainerInset.top
@@ -1350,6 +1394,7 @@ extension LayoutManager {
             pageGuideHairlineColor: visiblePageGuide?.hairlineColor ?? .clear,
             pageGuideShadingColor: visiblePageGuide?.shadingColor ?? .clear,
             showsPageGuideShading: visiblePageGuide?.showReformattingGuideShading ?? false,
+            lineBackgroundFills: lineBackgroundView.store.isEmpty ? [] : lineBackgroundView.fills(clip: canvasFrame),
             methodSeparatorFrames: methodSeparatorFrames(in: canvasFrame),
             methodSeparatorColor: methodSeparatorView.separatorColor,
             appearance: textInputView?.effectiveAppearance,
@@ -1497,6 +1542,7 @@ extension LayoutManager {
     private func setupViewHierarchy() {
         // Remove views from view hierarchy
         lineSelectionBackgroundView.removeFromSuperview()
+        lineBackgroundView.removeFromSuperview()
         methodSeparatorView.removeFromSuperview()
         metalCanvasView?.removeFromSuperview()
         linesContainerView.removeFromSuperview()
@@ -1514,6 +1560,8 @@ extension LayoutManager {
         // the scroll view (`gutterParentView`) — a `CAMetalLayer` inside `NSClipView` does not
         // composite, which is the blank-editor symptom.
         textInputView?.addSubview(lineSelectionBackgroundView)
+        // Over the current-line band (bands are translucent), under the glyphs.
+        textInputView?.addSubview(lineBackgroundView)
         // Behind the glyph canvas (and its selection overlay), in front of the line-selection band.
         textInputView?.addSubview(methodSeparatorView)
         if isMetalRenderingActive {
@@ -1566,6 +1614,7 @@ extension LayoutManager {
         gutterAnnotationView.isHidden = !hasGutterAnnotations
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
+        lineBackgroundView.isHidden = lineBackgroundView.store.isEmpty || isMetalRenderingActive
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing
         lineSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !isEditing || selectedLength > 0
     }

@@ -20,7 +20,7 @@ struct IDEPreferencesInspectionsPane: View {
     }
 
     private var hasChanges: Bool {
-        !preferences.javaDisabledInspections.isEmpty || !preferences.javaInspectionSeverities.isEmpty
+        preferences.javaDisabledInspections != IDEPreferences.defaultDisabledInspections || !preferences.javaInspectionSeverities.isEmpty || !preferences.javaInspectionLimits.isEmpty || !preferences.javaTreatsPublicApiAsUsed
     }
 
     var body: some View {
@@ -31,6 +31,9 @@ struct IDEPreferencesInspectionsPane: View {
             HStack(spacing: IDEAppearance.Spacing.md) {
                 TextField("Filter inspections", text: $query)
                     .textFieldStyle(.roundedBorder)
+                Toggle("Treat public API as used", isOn: publicApiBinding)
+                    .toggleStyle(.checkbox)
+                    .help("Unused declaration, weaker access, void return and constant parameter checks skip public and protected members")
                 Button("Restore Defaults") {
                     preferences.resetJavaInspections()
                     workspace.javaInspectionPreferencesChanged()
@@ -81,6 +84,15 @@ struct IDEPreferencesInspectionsPane: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 20)
+            if let limit = rule.limit {
+                Stepper(value: limitBinding(rule), in: limit.range, step: limit.step) {
+                    Text("\(limit.label): \(preferences.limit(of: rule))")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                }
+                .disabled(!isEnabled)
+                .padding(.leading, 20)
+            }
         }
     }
 
@@ -89,6 +101,24 @@ struct IDEPreferencesInspectionsPane: View {
             preferences.isEnabled(rule)
         } set: { isOn in
             preferences.setEnabled(isOn, for: rule)
+            workspace.javaInspectionPreferencesChanged()
+        }
+    }
+
+    private var publicApiBinding: Binding<Bool> {
+        Binding {
+            preferences.javaTreatsPublicApiAsUsed
+        } set: { value in
+            preferences.javaTreatsPublicApiAsUsed = value
+            workspace.javaInspectionPreferencesChanged()
+        }
+    }
+
+    private func limitBinding(_ rule: JavaInspectionRule) -> Binding<Int> {
+        Binding {
+            preferences.limit(of: rule)
+        } set: { value in
+            preferences.setLimit(value, for: rule)
             workspace.javaInspectionPreferencesChanged()
         }
     }

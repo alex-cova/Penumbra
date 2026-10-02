@@ -72,6 +72,9 @@ public final class IDEWorkspace {
     let workbench = EditorWorkbench()
     private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
     let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
+    /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
+    @ObservationIgnored
+    var diffSessions: [UUID: IDEDiffSession] = [:]
     private let intelligenceServices = IDEIntelligenceServices()
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
@@ -179,6 +182,7 @@ public final class IDEWorkspace {
         }
         gitStatus.onRefreshed = { [weak self] in
             self?.refreshBlameInOpenEditors()
+            self?.reloadDiffSessions()
         }
     }
 
@@ -460,17 +464,28 @@ public final class IDEWorkspace {
     }
 
     func focusActiveEditor() {
-        host(for: workbench.activePaneID).textView.focusTextInputWhenReady()
+        let host = host(for: workbench.activePaneID)
+        if workbench.activePane.selectedDocument?.contentKind == .diff {
+            host.diffViewer.focus()
+            return
+        }
+        host.textView.focusTextInputWhenReady()
     }
 
     /// Used when ⌘Z / ⌘⇧Z is not delivered to the focused control (a SwiftUI host with no
     /// `undo:` implementation). The editor's own undo manager is the stack those shortcuts edit.
     func undoActiveEditor() {
-        host(for: workbench.activePaneID).textView.undoManager?.undo()
+        activeEditingTextView.undoManager?.undo()
     }
 
     func redoActiveEditor() {
-        host(for: workbench.activePaneID).textView.undoManager?.redo()
+        activeEditingTextView.undoManager?.redo()
+    }
+
+    /// The text view keyboard edits go to: a diff tab's working-tree side, else the pane's editor.
+    private var activeEditingTextView: TextView {
+        let host = host(for: workbench.activePaneID)
+        return workbench.activePane.selectedDocument?.contentKind == .diff ? host.diffViewer.rightTextView : host.textView
     }
 
     func bootstrap() {
@@ -515,6 +530,10 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
             self?.javaGutterIconsPreferenceChanged()
         }
+        intelligenceServices.javaSupport.onInspectionConfigurationChanged = { [weak self] in
+            guard let self else { return }
+            javaSupport.reanalyzeInspections(openJavaDocuments())
+        }
         // First use restores the saved preferences and recent lists.
         _ = IDEAppState.shared
         // A window opened with none other open (launch, or Dock reopen after closing the last one)
@@ -530,10 +549,6 @@ public final class IDEWorkspace {
             }
         }
         wireAdapter()
-        intelligenceServices.javaSupport.onInspectionConfigurationChanged = { [weak self] in
-            guard let self else { return }
-            javaSupport.reanalyzeInspections(openJavaDocuments())
-        }
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         refreshPresentation()
@@ -670,6 +685,7 @@ public final class IDEWorkspace {
         javaStructureRefreshTask?.cancel()
         javaStructureRefreshTask = nil
         blame.cancelAll()
+        closeAllDiffSessions()
         notifications.dismissToast()
         projectAccess.end()
         window = nil
@@ -1016,6 +1032,10 @@ public final class IDEWorkspace {
     public func saveActiveDocument() async {
         let pane = workbench.activePane
         guard let document = pane.selectedDocument else { return }
+        if document.contentKind == .diff {
+            diffSessions[document.id]?.save()
+            return
+        }
         let textView = host(for: pane.id).textView
         var destination = document.url
         if destination == nil {
@@ -1830,7 +1850,7 @@ public final class IDEWorkspace {
 
     func configureDebugSession() {
         debugSession.onStopped = { [weak self] file, line in
-            self?.revealDebugStop(file: file, line: line)
+            self?.revealDebugStop(file: file, line: line, selectsLine: false)
         }
         debugSession.onBreakpointRemovedByHit = { [weak self] id in
             guard let self else { return }
@@ -1850,12 +1870,15 @@ public final class IDEWorkspace {
             self?.refreshBreakpointGutters()
         }
         debugSession.onVariablesChanged = { [weak self] in
+            self?.refreshExecutionLineBackgrounds()
             self?.refreshInlineDebugValues()
         }
     }
 
-    /// Opens the file the program stopped in and selects the stopped line.
-    func revealDebugStop(file: URL, line: Int) {
+    /// Opens the file the program stopped in and selects the stopped line. The execution point
+    /// passes `selectsLine: false`: it puts the caret at the line's start and leaves the line to
+    /// the background band of `refreshExecutionLineBackgrounds`.
+    func revealDebugStop(file: URL, line: Int, selectsLine: Bool = true) {
         let text = openBufferText(for: file) ?? (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         let start = TextPosition(line: max(0, line - 1), column: 0, utf16Offset: 0)
         let end = TextPosition(line: max(0, line - 1), column: Int.max / 2, utf16Offset: 0)
@@ -1866,7 +1889,9 @@ public final class IDEWorkspace {
             url: file,
             range: EditorIntelligence.TextRange(
                 start: TextPosition(line: start.line, column: 0, utf16Offset: nsRange.location),
-                end: TextPosition(line: start.line, column: nsRange.length, utf16Offset: nsRange.location + nsRange.length)
+                end: selectsLine
+                    ? TextPosition(line: start.line, column: nsRange.length, utf16Offset: nsRange.location + nsRange.length)
+                    : TextPosition(line: start.line, column: 0, utf16Offset: nsRange.location)
             ),
             displayName: file.lastPathComponent
         ))
@@ -2225,7 +2250,7 @@ public final class IDEWorkspace {
         return url
     }
 
-    private func showGitNotice(_ title: String, _ detail: String) {
+    func showGitNotice(_ title: String, _ detail: String) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = detail
@@ -2853,7 +2878,7 @@ public final class IDEWorkspace {
             )
             let files = Set(planned.entries.map(\.url)).count
             findInFilesStatus = "\(planned.entries.count) replacement\(planned.entries.count == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s"): review and apply"
-            presentWorkspaceEditPreview(plan, style: .diff) { [weak self] edit in
+            presentWorkspaceEditPreview(plan, style: .diff) { [weak self = self] edit in
                 await self?.applyReplacement(edit, plan: plan) ?? WorkspaceEditApplyResult()
             }
         }
@@ -3427,6 +3452,12 @@ public final class IDEWorkspace {
         IDEWindowRegistry.shared.applyPreferencesToAllWindows(including: self)
     }
 
+    /// A Java inspection was switched or re-graded in Settings. Every window's analysis follows,
+    /// without repainting any editor.
+    func javaInspectionPreferencesChanged() {
+        IDEWindowRegistry.shared.applyCodeInsightPreferencesToAllWindows(including: self)
+    }
+
     /// Applies the preferences to the editors of this window.
     func applyPreferencesToOwnHosts() {
         for pane in workbench.panes {
@@ -3450,14 +3481,10 @@ public final class IDEWorkspace {
             autoreparseDelay: .milliseconds(preferences.autoreparseDelayMilliseconds),
             suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation,
             enabledInspections: preferences.enabledJavaInspections,
-            inspectionSeverities: preferences.javaInspectionSeverityOverrides
+            inspectionSeverities: preferences.javaInspectionSeverityOverrides,
+            inspectionThresholds: preferences.javaInspectionThresholds,
+            projectInspectionOptions: JavaProjectInspectionOptions(treatsPublicApiAsUsed: preferences.javaTreatsPublicApiAsUsed)
         )
-    }
-
-    /// A Java inspection was switched or re-graded in Settings. Every window's analysis follows,
-    /// without repainting any editor.
-    func javaInspectionPreferencesChanged() {
-        IDEWindowRegistry.shared.applyCodeInsightPreferencesToAllWindows(including: self)
     }
 
     func refreshUIColorScheme() {
@@ -3735,6 +3762,7 @@ public final class IDEWorkspace {
             guard let self else { return [] }
             let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
+                + self.diffContextMenuItems(url: url)
         }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
@@ -3976,8 +4004,12 @@ public final class IDEWorkspace {
         pane.selectDocument(documentID)
         showDocument(in: pane, host: host)
         refreshPresentation()
-        guard pane.selectedDocument?.contentKind != .image else {
-            host.imageViewerController.focusForInteraction()
+        guard pane.selectedDocument?.contentKind == .text else {
+            if pane.selectedDocument?.contentKind == .image {
+                host.imageViewerController.focusForInteraction()
+            } else {
+                host.diffViewer.focus()
+            }
             return true
         }
         if let location = host.textView.location(at: entry.location) {
@@ -4307,6 +4339,7 @@ public final class IDEWorkspace {
     }
 
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
+        closeDiffSession(documentID, in: pane)
         let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
         pane.closeDocument(documentID)
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
@@ -5198,10 +5231,10 @@ public final class IDEWorkspace {
     }
 
     private func updateStatus(from textView: TextView) {
-        if workbench.activePane.selectedDocument?.contentKind == .image {
+        if let kind = workbench.activePane.selectedDocument?.contentKind, kind != .text {
             statusLine = 1
             statusColumn = 1
-            statusLanguage = "Image"
+            statusLanguage = kind == .image ? "Image" : "Diff"
             statusSelectionLength = 0
             javaFileCanRun = false
             javaRunFileURL = nil
@@ -5458,9 +5491,15 @@ public final class IDEWorkspace {
     ) {
         guard let document = pane.selectedDocument else { return }
         if document.contentKind == .image {
+            host.diffViewer.hide()
             showImageDocument(document, in: pane, host: host)
             return
         }
+        if document.contentKind == .diff {
+            showDiffDocument(document, in: pane, host: host)
+            return
+        }
+        host.diffViewer.hide()
         host.imageViewerController.hide()
         host.textView.languageIdentifier = document.languageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
@@ -5519,6 +5558,48 @@ public final class IDEWorkspace {
                 self.applyState(state, for: document, in: pane, host: host)
             }
         )
+    }
+
+    /// Puts a diff tab's viewer over the pane's editor, keeping the text document it replaces.
+    private func showDiffDocument(
+        _ document: WorkbenchDocument,
+        in pane: EditorPane,
+        host: IDEEditorPaneHost
+    ) {
+        guard let session = diffSessions[document.id] else { return }
+        if let previousID = host.loadedDocumentID,
+           previousID != document.id,
+           let previous = pane.documents.first(where: { $0.id == previousID }),
+           previous.contentKind == .text {
+            syncTextViewToDocument(host.textView, document: previous, from: host)
+            previous.pendingState = host.textView.makeCapturedState()
+        }
+        host.markdownPreviewController.closeIfNotMarkdown()
+        host.imageViewerController.hide()
+        host.diffViewer.onJumpToSource = { [weak self] path, line in
+            self?.openDiffSource(path: path, line: line)
+        }
+        host.diffViewer.show(session, preferences: preferences)
+        host.loadedDocumentID = document.id
+        host.loadedGeneration = document.contentGeneration
+        if pane.id == workbench.activePaneID {
+            host.diffViewer.focus()
+        }
+    }
+
+    /// Opens a diff tab (already set up with its session) in the active pane.
+    func presentDiffDocument(_ document: WorkbenchDocument) {
+        workbench.openDocument(document)
+        isSettingsVisible = false
+        showsWelcome = false
+        rebuildLayoutHosts()
+        activatePane(workbench.activePaneID)
+        refreshPresentation()
+    }
+
+    /// Re-shows the tab bar after a diff tab's title changed.
+    func refreshTabPresentation() {
+        refreshPresentation()
     }
 
     private func showImageDocument(

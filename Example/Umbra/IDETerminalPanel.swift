@@ -436,9 +436,9 @@ struct IDETerminalPanel: View {
                         command: isSelected ? workspace.pendingTerminalCommand : nil,
                         // Weak: a running shell keeps its terminal view alive, and a strong capture
                         // here would keep the whole workspace alive through it after the window closes.
-                        onTitleUpdate: { [weak workspace] in workspace?.updateTerminalTabTitle(tab.id, title: $0) },
-                        onDirectoryUpdate: { [weak workspace] in workspace?.updateTerminalTabDirectory(tab.id, url: $0) },
-                        onHostCreated: { [weak workspace] in workspace?.registerTerminalHost($0) }
+                        onTitleUpdate: { [weak workspace = workspace] in workspace?.updateTerminalTabTitle(tab.id, title: $0) },
+                        onDirectoryUpdate: { [weak workspace = workspace] in workspace?.updateTerminalTabDirectory(tab.id, url: $0) },
+                        onHostCreated: { [weak workspace = workspace] in workspace?.registerTerminalHost($0) }
                     )
                     .id(tab.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

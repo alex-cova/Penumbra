@@ -20,14 +20,24 @@ final class JavaInspectionRegistryTests: XCTestCase {
         for rule in JavaInspectionRule.allCases where !legacy.contains(rule) {
             let matches = JavaInspectionRegistry.nodeInspections.filter { $0.rule == rule }.count
                 + JavaInspectionRegistry.typedInspections.filter { $0.rule == rule }.count
+                + JavaInspectionRegistry.flowRules.filter { $0 == rule }.count
+                + JavaInspectionRegistry.projectRules.filter { $0 == rule }.count
             XCTAssertEqual(matches, 1, "\(rule.code) is registered \(matches) times")
         }
         var registered: [JavaInspectionRule] = []
         for inspection in JavaInspectionRegistry.nodeInspections { registered.append(inspection.rule) }
         for inspection in JavaInspectionRegistry.typedInspections { registered.append(inspection.rule) }
+        registered.append(contentsOf: JavaInspectionRegistry.flowRules)
+        registered.append(contentsOf: JavaInspectionRegistry.projectRules)
         for rule in registered {
             XCTAssertFalse(legacy.contains(rule))
         }
+    }
+
+    func testNoisyStyleRulesStartDisabled() {
+        let off = Set(JavaInspectionRule.allCases.filter { !$0.isEnabledByDefault })
+        XCTAssertEqual(off, [.publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass, .declarationUsesConcreteClass, .classMayBeInterface])
+        XCTAssertEqual(JavaInspectionRule.enabledByDefault, Set(JavaInspectionRule.allCases).subtracting(off))
     }
 
     func testPositionIndexMatchesTheSlowConversion() throws {

@@ -127,16 +127,42 @@ struct IDESourceControlPanel: View {
             list
                 .frame(maxHeight: .infinity)
         } secondary: {
-            IDESourceControlDiffView(
-                text: text,
-                fontName: workspace.preferences.fontName,
-                fontSize: workspace.preferences.fontSize
-            )
+            VStack(spacing: 0) {
+                if !gitStatus.selectedCommitFiles.isEmpty {
+                    commitFiles
+                    Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
+                }
+                IDESourceControlDiffView(
+                    text: text,
+                    fontName: workspace.preferences.fontName,
+                    fontSize: workspace.preferences.fontSize
+                )
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } divider: {
             Splitter.rule()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The selected commit's files; a click opens one against the commit's parent in a diff tab.
+    private var commitFiles: some View {
+        let files = gitStatus.selectedCommitFiles
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(files) { file in
+                    IDECommitFileRow(file: file) { openCommitFile(file, in: files) }
+                }
+            }
+            .padding(.vertical, IDEAppearance.Spacing.xs)
+        }
+        .frame(maxHeight: min(CGFloat(files.count) * 22 + 8, 140))
+    }
+
+    private func openCommitFile(_ file: GitChangedFile, in files: [GitChangedFile]) {
+        guard let hash = gitStatus.selectedCommitHash else { return }
+        let shortHash = gitStatus.commits.first { $0.hash == hash }?.shortHash ?? String(hash.prefix(7))
+        workspace.openCommitDiff(hash: hash, shortHash: shortHash, file: file, files: files)
     }
 
     private var historyList: some View {
@@ -164,7 +190,8 @@ struct IDESourceControlPanel: View {
 
 /// The sidebar's Changes tab, top to bottom: the commit message, Commit with an options menu, the
 /// collapsible list of changed files (the selected file's diff opens under it), and at the bottom
-/// the unsynced commits against the upstream with Pull and Push. Double-clicking a file opens it.
+/// the unsynced commits against the upstream with Pull and Push. Double-clicking a file opens its
+/// diff in a tab.
 struct IDEChangesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @Bindable private var gitStatus: IDEGitStatusModel
@@ -392,6 +419,9 @@ struct IDEChangesPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            IDEExplorerToolbarButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Open in Diff Viewer") {
+                openSelectedDiff()
+            }
             IDEExplorerToolbarButton(systemImage: "xmark", help: "Close Diff") {
                 gitStatus.selectChange(nil)
             }
@@ -420,7 +450,8 @@ struct IDEChangesPanel: View {
                                 isSelected: gitStatus.selectedChangePaths.contains(change.path),
                                 showsStage: false,
                                 onSelect: { select(change, in: stagedChanges) },
-                                onOpen: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
+                                onOpen: { workspace.openChangeDiff(path: change.path, staged: true) },
+                                onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
                                 onStage: {},
                                 onUnstage: { gitStatus.unstage(path: change.path) },
                                 onRevert: { revert(from: change) }
@@ -435,7 +466,8 @@ struct IDEChangesPanel: View {
                                 isSelected: gitStatus.selectedChangePaths.contains(change.path),
                                 showsStage: true,
                                 onSelect: { select(change, in: unstagedChanges) },
-                                onOpen: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
+                                onOpen: { workspace.openChangeDiff(path: change.path, staged: false) },
+                                onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
                                 onStage: { gitStatus.stage(path: change.path) },
                                 onUnstage: {},
                                 onRevert: { revert(from: change) }
@@ -446,6 +478,13 @@ struct IDEChangesPanel: View {
             }
             .padding(.vertical, IDEAppearance.Spacing.sm)
         }
+    }
+
+    /// The selected row's diff in a tab: its unstaged changes when it has any, else its staged ones.
+    private func openSelectedDiff() {
+        guard let path = gitStatus.selectedChangePath,
+              let change = gitStatus.changes.first(where: { $0.path == path }) else { return }
+        workspace.openChangeDiff(path: path, staged: change.unstaged == nil)
     }
 
     /// Plain click selects one row, ⌘-click toggles it, ⇧-click extends from the primary row.
@@ -638,6 +677,43 @@ private struct IDEUnsyncedRow: View {
     }
 }
 
+/// One file of a commit: its status letter and path. Clicking opens its diff.
+private struct IDECommitFileRow: View {
+    let file: GitChangedFile
+    let onOpen: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Text(String(file.status))
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(statusColor)
+                .frame(width: 12)
+            Text(file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
+                .font(IDEAppearance.Typography.tabLabel)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .frame(height: 22)
+        .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { isHovering = $0 }
+        .help("Show Diff")
+    }
+
+    private var statusColor: Color {
+        switch file.status {
+        case "A": IDEAppearance.ColorToken.gitAdded
+        case "D": IDEAppearance.ColorToken.error
+        default: IDEAppearance.ColorToken.gitModified
+        }
+    }
+}
+
 private enum IDEGitGraphMetrics {
     static let laneWidth: CGFloat = 12
     static let rowHeight: CGFloat = 38
@@ -734,7 +810,9 @@ private struct IDESourceControlChangeRow: View {
     let isSelected: Bool
     let showsStage: Bool
     let onSelect: () -> Void
+    /// Double-click: the change in a diff tab.
     let onOpen: () -> Void
+    let onOpenFile: () -> Void
     let onStage: () -> Void
     let onUnstage: () -> Void
     let onRevert: () -> Void
@@ -777,6 +855,9 @@ private struct IDESourceControlChangeRow: View {
         .onTapGesture(count: 2, perform: onOpen)
         .onHover { isHovering = $0 }
         .contextMenu {
+            Button("Show Diff", action: onOpen)
+            Button("Open File", action: onOpenFile)
+            Divider()
             Button("Revert…", action: onRevert)
         }
         .padding(.horizontal, IDEAppearance.Spacing.xs)

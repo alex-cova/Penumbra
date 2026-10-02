@@ -129,16 +129,12 @@ final class IDEPaletteFileIndexer {
 
     // MARK: - Walking
 
-    nonisolated private static let buildOutputNames: Set<String> = ["build", "out", "target"]
-    nonisolated private static let buildMarkers = [
-        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"
-    ]
+    nonisolated private static let buildOutputNames = IDEProjectModel.buildOutputNames
 
     /// `build`, `out` and `target` are generated output only next to a build script, so a real
     /// package or folder with one of those names in a plain project is still listed.
     nonisolated private static func isBuildOutput(name: String, parentPath: String) -> Bool {
-        guard buildOutputNames.contains(name) else { return false }
-        return buildMarkers.contains { FileManager.default.fileExists(atPath: parentPath + "/" + $0) }
+        IDEProjectModel.isBuildOutput(name: name, parentPath: parentPath)
     }
 
     nonisolated private static func buildIndex(root: URL, model: JavaGradleProjectModel?) -> PaletteFileIndex? {

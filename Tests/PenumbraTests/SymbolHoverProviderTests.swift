@@ -37,7 +37,7 @@ final class SymbolHoverProviderTests: XCTestCase {
         XCTAssertEqual(plain?.contents, "Greets the user.")
     }
 
-    func testFallsBackToSignatureThenName() async {
+    func testFallsBackToSignature() async {
         let index = SymbolIndex()
         let documentID = DocumentID()
         let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
@@ -54,6 +54,19 @@ final class SymbolHoverProviderTests: XCTestCase {
         let context = makeHoverContext(documentID: documentID, text: "add(1, 2)", offset: 1)
         let result = await provider.provide(context: context)
         XCTAssertEqual(result?.contents, "add(_ a: Int, _ b: Int) -> Int")
+    }
+
+    func testReturnsNilForSymbolWithoutDocumentationOrSignature() async {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        await index.index([Symbol(
+            name: "conciliator", kind: .word, documentID: documentID,
+            range: TextRange(start: position, end: position)
+        )], for: documentID)
+        let context = makeHoverContext(documentID: documentID, text: "conciliator", offset: 5, languageIdentifier: "http")
+        let result = await SymbolHoverProvider(index: index).provide(context: context)
+        XCTAssertNil(result)
     }
 
     func testReturnsNilForUnknownWord() async {

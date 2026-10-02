@@ -10,13 +10,17 @@ struct IDEFileNode: Identifiable, Hashable {
     var isExpanded: Bool
     /// Overrides `name` in the Explorer, e.g. a dotted package name when packages are flattened.
     var displayName: String?
+    /// A build output (`build/`, `out/`, `target/` next to a build file, or `.gradle`). Shown dimmed,
+    /// or hidden when the Explorer's "Show Excluded Files" is off.
+    var isExcluded: Bool
 
     init(
         url: URL,
         isDirectory: Bool,
         children: [IDEFileNode]? = nil,
         isExpanded: Bool = false,
-        displayName: String? = nil
+        displayName: String? = nil,
+        isExcluded: Bool = false
     ) {
         self.id = url.path
         self.url = url
@@ -25,6 +29,7 @@ struct IDEFileNode: Identifiable, Hashable {
         self.children = children
         self.isExpanded = isExpanded
         self.displayName = displayName
+        self.isExcluded = isExcluded
     }
 }
 
@@ -59,6 +64,29 @@ final class IDEProjectModel {
     nonisolated static let ignoredDirectoryNames: Set<String> = [
         ".git", ".build", "node_modules", "DerivedData", ".swiftpm", "Pods", ".cursor"
     ]
+
+    nonisolated static let buildOutputNames: Set<String> = ["build", "out", "target"]
+    nonisolated private static let buildMarkers = [
+        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"
+    ]
+    /// Dot-folders the Explorer lists (dimmed) although other dotfiles stay hidden.
+    nonisolated private static let visibleHiddenNames: Set<String> = [".gradle"]
+
+    /// `build`/`out`/`target` directly under a Gradle or Maven project.
+    nonisolated static func isBuildOutput(name: String, parentPath: String) -> Bool {
+        guard buildOutputNames.contains(name) else { return false }
+        return buildMarkers.contains { FileManager.default.fileExists(atPath: parentPath + "/" + $0) }
+    }
+
+    /// Directories the Explorer marks as excluded: build outputs and Gradle's `.gradle` cache.
+    nonisolated static func isExcludedDirectory(name: String, parentPath: String) -> Bool {
+        visibleHiddenNames.contains(name) || isBuildOutput(name: name, parentPath: parentPath)
+    }
+
+    nonisolated private static func isListed(_ name: String) -> Bool {
+        guard !ignoredDirectoryNames.contains(name) else { return false }
+        return !name.hasPrefix(".") || visibleHiddenNames.contains(name)
+    }
 
     func setRoot(_ url: URL?) {
         rootURL = url
@@ -342,19 +370,25 @@ final class IDEProjectModel {
 
     /// One level of `directory` as the Explorer lists it: hidden and ignored names skipped, folders
     /// first, then case-insensitive by name. `nil` when the folder can't be read.
-    nonisolated static func visibleEntries(of directory: URL) -> [(url: URL, isDirectory: Bool)]? {
+    nonisolated static func visibleEntries(
+        of directory: URL,
+        includingExcluded: Bool = false
+    ) -> [(url: URL, isDirectory: Bool, isExcluded: Bool)]? {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else {
             return nil
         }
-        return entries.compactMap { entry -> (url: URL, isDirectory: Bool)? in
+        let parentPath = directory.path
+        return entries.compactMap { entry -> (url: URL, isDirectory: Bool, isExcluded: Bool)? in
             let name = entry.lastPathComponent
-            guard !name.hasPrefix("."), !ignoredDirectoryNames.contains(name) else { return nil }
+            guard isListed(name) else { return nil }
             let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-            return (entry, isDirectory)
+            let excluded = isDirectory && isExcludedDirectory(name: name, parentPath: parentPath)
+            if excluded, !includingExcluded { return nil }
+            return (entry, isDirectory, excluded)
         }
         .sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
@@ -365,11 +399,11 @@ final class IDEProjectModel {
     /// One level of `path`, filtered and sorted like `buildNode`. Children whose id and kind match
     /// `known` are returned without a node so the caller keeps its existing subtree.
     nonisolated private static func listDirectory(_ path: String, known: [String: Bool]) -> DirectoryListing? {
-        guard let visible = visibleEntries(of: URL(fileURLWithPath: path)) else { return nil }
+        guard let visible = visibleEntries(of: URL(fileURLWithPath: path), includingExcluded: true) else { return nil }
         let listed = visible.map { item -> DirectoryListing.Entry in
             let id = item.url.path
             if known[id] == item.isDirectory { return .init(id: id, node: nil) }
-            return .init(id: id, node: buildNode(at: item.url, isDirectory: item.isDirectory))
+            return .init(id: id, node: buildNode(at: item.url, isDirectory: item.isDirectory, isExcluded: item.isExcluded))
         }
         return DirectoryListing(path: path, entries: listed)
     }
@@ -401,38 +435,16 @@ final class IDEProjectModel {
         return paths
     }
 
-    nonisolated private static func buildNode(at url: URL, isDirectory: Bool) -> IDEFileNode? {
+    nonisolated private static func buildNode(at url: URL, isDirectory: Bool, isExcluded: Bool = false) -> IDEFileNode? {
         guard isDirectory else {
             return IDEFileNode(url: url, isDirectory: false)
         }
-        let fileManager = FileManager.default
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return IDEFileNode(url: url, isDirectory: true, children: [])
+        guard let entries = visibleEntries(of: url, includingExcluded: true) else {
+            return IDEFileNode(url: url, isDirectory: true, children: [], isExcluded: isExcluded)
         }
-
-        let children = entries
-            .filter { entry in
-                let name = entry.lastPathComponent
-                return !name.hasPrefix(".") && !ignoredDirectoryNames.contains(name)
-            }
-            .compactMap { entry -> IDEFileNode? in
-                let values = try? entry.resourceValues(forKeys: [.isDirectoryKey])
-                let isDir = values?.isDirectory == true
-                return buildNode(at: entry, isDirectory: isDir)
-            }
-            .sorted { lhs, rhs in
-                switch (lhs.isDirectory, rhs.isDirectory) {
-                case (true, false): return true
-                case (false, true): return false
-                default:
-                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                }
-            }
-
-        return IDEFileNode(url: url, isDirectory: true, children: children)
+        let children = entries.compactMap { entry in
+            buildNode(at: entry.url, isDirectory: entry.isDirectory, isExcluded: entry.isExcluded)
+        }
+        return IDEFileNode(url: url, isDirectory: true, children: children, isExcluded: isExcluded)
     }
 }

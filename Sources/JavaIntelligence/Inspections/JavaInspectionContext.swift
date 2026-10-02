@@ -8,14 +8,16 @@ struct JavaInspectionContext {
     let url: URL
     let index: JavaIndex
     let walker: JavaSemanticWalker
+    let thresholds: JavaInspectionThresholds
 
-    init?(source: String, tree: JavaSyntaxTree, url: URL, index: JavaIndex) {
+    init?(source: String, tree: JavaSyntaxTree, url: URL, index: JavaIndex, thresholds: JavaInspectionThresholds = .standard) {
         guard !tree.rootNode.hasError else { return nil }
         self.source = source
         self.tree = tree
         self.file = JavaSourceStubBuilder.build(tree: tree, url: url)
         self.url = url
         self.index = index
+        self.thresholds = thresholds
         self.walker = JavaSemanticWalker(tree: tree, source: source)
         _ = self.walker.run()
     }

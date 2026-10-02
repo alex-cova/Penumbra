@@ -8,8 +8,14 @@ final class JavaInspectionRulesTests: XCTestCase {
     private func findings(_ source: String, file: StaticString = #filePath, line: UInt = #line) throws -> [JavaInspection] {
         let tree = try XCTUnwrap(JavaSyntaxParser().parse(source), file: file, line: line)
         let context = try XCTUnwrap(JavaInspectionContext(source: source, tree: tree, url: url, index: JavaIndex()), "source must parse", file: file, line: line)
-        return JavaInspectionRunner.run(context: context, enabled: Set(JavaInspectionRule.allCases))
+        return JavaInspectionRunner.run(context: context, enabled: Set(JavaInspectionRule.allCases).subtracting(Self.coveredElsewhere))
     }
+
+    /// Style and usage rules fire on almost any sample body, so `JavaStyleUsageInspectionTests` runs them alone.
+    private static let coveredElsewhere: Set<JavaInspectionRule> = [
+        .localCanBeFinal, .unusedAssignment, .mismatchedCollectionQueryUpdate, .unusedPrivateMember, .forCanBeForeach, .tryFinallyCanBeTryWithResources,
+        .cyclomaticComplexity, .nestingDepth, .parameterCount, .methodLength, .classLength,
+    ]
 
     /// Codes of the rule under test only, for sources that trip a neighbouring rule too.
     private func ruleCodes(_ source: String, file: StaticString = #filePath, line: UInt = #line) throws -> [String] {
@@ -107,7 +113,8 @@ final class JavaInspectionRulesTests: XCTestCase {
         XCTAssertEqual(try codes(body("        boolean x = a.equals(b);")), ["array-object-method-call"])
         XCTAssertEqual(try codes(body("        int h = a.hashCode();")), ["array-object-method-call"])
         XCTAssertEqual(try codes(body("        String x = a.toString();")), ["array-object-method-call"])
-        XCTAssertEqual(try codes(body("        String x = s.toString();")), [])
+        // `s.toString()` on a String is not an array call, but it is redundant.
+        XCTAssertEqual(try codes(body("        String x = s.toString();")), ["redundant-string-operation"])
         XCTAssertEqual(try fixed(body("        String x = a.toString();"), rule: .arrayObjectMethodCall)?.contains("java.util.Arrays.toString(a)"), true)
     }
 

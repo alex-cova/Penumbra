@@ -224,7 +224,7 @@ struct IDEDebugPanel: View {
                 set: { index in
                     session.selectFrame(index)
                     if let frame = session.stackFrames.first(where: { $0.index == index }), frame.filePath.hasPrefix("/") {
-                        workspace.revealDebugStop(file: URL(fileURLWithPath: frame.filePath), line: frame.line)
+                        workspace.revealDebugStop(file: URL(fileURLWithPath: frame.filePath), line: frame.line, selectsLine: false)
                     }
                 }
             )) { frame in

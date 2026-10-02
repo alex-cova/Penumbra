@@ -11,7 +11,7 @@ final class CaretRectService {
     private let lineControllerStorage: LineControllerStorage
     private let gutterWidthService: GutterWidthService
     private var leadingLineSpacing: CGFloat {
-        if showLineNumbers {
+        if gutterWidthService.reservesGutterSpace {
             return gutterWidthService.gutterWidth + textContainerInset.left
         } else {
             return textContainerInset.left

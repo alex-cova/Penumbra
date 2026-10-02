@@ -104,6 +104,27 @@ enum JavaInspectionRegistry {
         JavaEnumConstantNamingInspection.self,
         JavaNonConstantFieldNamedLikeConstantInspection.self,
         JavaMethodNameSameAsClassInspection.self,
+        // Class structure
+        JavaUtilityClassConstructorInspection.self,
+        JavaPublicFieldInspection.self,
+        JavaMissingSerialVersionUIDInspection.self,
+        JavaCloneWithoutCloneableInspection.self,
+        JavaFinalMethodInFinalClassInspection.self,
+        JavaProtectedMemberInFinalClassInspection.self,
+        JavaClassMayBeInterfaceInspection.self,
+        JavaDeclarationUsesConcreteClassInspection.self,
+        JavaStaticViaSubclassInspection.self,
+        // Redundant code
+        JavaRedundantLocalVariableInspection.self,
+        JavaRedundantStringOperationInspection.self,
+        // Concurrency and collections
+        JavaOverridableMethodInConstructorInspection.self,
+        JavaSynchronizationOnStringLiteralInspection.self,
+        JavaSynchronizationOnThisInspection.self,
+        JavaWaitNotInLoopInspection.self,
+        JavaSortedCollectionNonComparableInspection.self,
+        JavaSuspiciousToArrayInspection.self,
+        JavaListRemoveInLoopInspection.self,
         // Control flow
         JavaRedundantIfStatementInspection.self,
         JavaSimplifiableConditionalInspection.self,
@@ -124,6 +145,22 @@ enum JavaInspectionRegistry {
         JavaDuplicateThrowsInspection.self,
         JavaEmptyClassInitializerInspection.self,
         JavaRedundantCloseInspection.self,
+        // Style and usage
+        JavaLocalCanBeFinalInspection.self,
+        JavaMismatchedCollectionQueryUpdateInspection.self,
+        JavaUnusedPrivateMemberInspection.self,
+        JavaForCanBeForeachInspection.self,
+        JavaTryFinallyCanBeTryWithResourcesInspection.self,
+        // Metrics
+        JavaCyclomaticComplexityInspection.self,
+        JavaNestingDepthInspection.self,
+        JavaParameterCountInspection.self,
+        JavaMethodLengthInspection.self,
+        JavaClassLengthInspection.self,
+        // Javadoc
+        JavaJavadocMissingParamInspection.self,
+        JavaJavadocMissingReturnInspection.self,
+        JavaJavadocInvalidParamInspection.self,
     ]
 
     static let typedInspections: [any JavaTypedInspection.Type] = [
@@ -131,6 +168,15 @@ enum JavaInspectionRegistry {
         JavaRedundantArrayCreationInspection.self,
         JavaSizeComparisonWithZeroInspection.self,
         JavaDeprecatedApiInspection.self,
+        JavaAnonymousCanBeLambdaInspection.self,
+    ]
+
+    /// Rules `JavaProjectInspector` produces: they need usages across the project, so they run on save, not per keystroke.
+    static let projectRules: [JavaInspectionRule] = [.unusedDeclaration, .declarationAccessCanBeWeaker, .methodCanBeVoid, .parameterAlwaysSameValue]
+
+    /// Rules the data-flow analyzer produces (`JavaDataFlowAnalyzer`), which has no per-rule type.
+    static let flowRules: [JavaInspectionRule] = [
+        .nullDereference, .nullableDereference, .constantConditionFlow, .redundantNullCheck, .unreachableCode, .resourceNotClosed, .unusedAssignment,
     ]
 
     static func inspection(for rule: JavaInspectionRule) -> (any JavaNodeInspection.Type)? {

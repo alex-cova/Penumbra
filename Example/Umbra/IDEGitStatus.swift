@@ -55,6 +55,8 @@ final class IDEGitStatusModel {
     private(set) var diffText: String?
     private(set) var commits: [IDEGitCommit] = []
     private(set) var commitDetailText: String?
+    /// The files the selected commit changed (all of them, also in a file's history).
+    private(set) var selectedCommitFiles: [GitChangedFile] = []
     private(set) var branches: [String] = []
     private(set) var localBranches: [String] = []
     /// The current branch against its upstream; nil without one (a branch never pushed).
@@ -125,6 +127,7 @@ final class IDEGitStatusModel {
         commits = []
         selectedCommitHash = nil
         commitDetailText = nil
+        selectedCommitFiles = []
         historyFilePath = nil
         needsAnotherPass = false
         rootURL = url?.standardizedFileURL
@@ -225,14 +228,17 @@ final class IDEGitStatusModel {
         commitDetailTask?.cancel()
         guard let hash, let rootURL else {
             commitDetailText = nil
+            selectedCommitFiles = []
             return
         }
         let existing = repository
         let filePath = historyFilePath.flatMap { relativePath(for: $0) }
         commitDetailTask = Task { [weak self] in
             let text = await Self.loadShow(root: rootURL, existing: existing, hash: hash, filePath: filePath)
+            let files = await Self.loadCommitFiles(root: rootURL, existing: existing, hash: hash)
             guard let self, !Task.isCancelled, self.selectedCommitHash == hash else { return }
             self.commitDetailText = text
+            self.selectedCommitFiles = files
         }
     }
 
@@ -429,6 +435,63 @@ final class IDEGitStatusModel {
             guard let self, !Task.isCancelled, self.selectedChangePath == path else { return }
             self.diffText = text
         }
+    }
+
+    // MARK: - Diff viewer
+
+    /// One side of a diff tab: a version git stores, or the file on disk (empty when it is gone).
+    func diffContent(_ source: IDEDiffSource) async -> IDEDiffContent {
+        switch source {
+        case .text(let text):
+            return .text(text)
+        case .workingTree(let path):
+            return await Task.detached(priority: .userInitiated) {
+                guard let data = FileManager.default.contents(atPath: path) else { return IDEDiffContent.text("") }
+                return Self.diffContent(of: data)
+            }.value
+        case .revision(let revision, let path):
+            guard let rootURL else { return .failed("This folder is not a git repository.") }
+            return await Self.loadRevision(root: rootURL, existing: repository, revision: revision, path: path)
+        }
+    }
+
+    /// Stages one hunk (or, with `reverse`, unstages it) and refreshes. Returns git's complaint, or nil.
+    func applyHunk(_ patch: String, reverse: Bool) async -> String? {
+        guard let rootURL else { return "This folder is not a git repository." }
+        do {
+            let repo = try await Self.repository(for: rootURL, existing: repository)
+            try await repo.applyPatch(patch, toIndex: true, reverse: reverse)
+            refresh()
+            return nil
+        } catch {
+            return Self.describe(error)
+        }
+    }
+
+    /// `path` (absolute) relative to the repository root, or nil outside it.
+    func repositoryRelativePath(for path: String) -> String? {
+        relativePath(for: path)
+    }
+
+    nonisolated private static func loadCommitFiles(root: URL, existing: GitRepository?, hash: String) async -> [GitChangedFile] {
+        guard let repo = try? await repository(for: root, existing: existing) else { return [] }
+        return (try? await repo.commitChanges(hash: hash)) ?? []
+    }
+
+    nonisolated private static func loadRevision(root: URL, existing: GitRepository?, revision: GitRevision, path: String) async -> IDEDiffContent {
+        do {
+            let repo = try await repository(for: root, existing: existing)
+            guard let data = try await repo.fileContents(at: revision, path: path) else { return .text("") }
+            return diffContent(of: data)
+        } catch {
+            return .failed(describe(error))
+        }
+    }
+
+    /// Text, unless a NUL in the first 8 KB says it is binary (git's own test).
+    nonisolated static func diffContent(of data: Data) -> IDEDiffContent {
+        if data.prefix(8_000).contains(0) { return .binary }
+        return .text(String(decoding: data, as: UTF8.self))
     }
 
     private func runGitAction(

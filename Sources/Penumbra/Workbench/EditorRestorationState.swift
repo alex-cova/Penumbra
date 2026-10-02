@@ -159,12 +159,19 @@ public struct EditorPaneSnapshot: Equatable, Codable, Sendable {
     }
 
     public init(pane: EditorPane) {
+        // Diff tabs belong to the host and the session that made them; they are not restored.
+        let kept = pane.documents.filter { $0.contentKind != .diff }
+        let keptIDs = Set(kept.map(\.id))
         self.id = pane.id
-        self.documents = pane.documents.map(WorkbenchDocumentSnapshot.init)
-        self.selectedDocumentID = pane.selectedDocumentID
-        self.temporaryDocumentID = pane.temporaryDocumentID
-        self.tabHistoryEntries = pane.tabHistory.snapshotEntries()
-        self.tabHistoryOffset = pane.tabHistory.snapshotOffset()
+        self.documents = kept.map(WorkbenchDocumentSnapshot.init)
+        self.selectedDocumentID = pane.selectedDocumentID.flatMap { keptIDs.contains($0) ? $0 : nil } ?? kept.last?.id
+        self.temporaryDocumentID = pane.temporaryDocumentID.flatMap { keptIDs.contains($0) ? $0 : nil }
+        let entries = pane.tabHistory.snapshotEntries()
+        let keptEntries = entries.filter { keptIDs.contains($0) }
+        self.tabHistoryEntries = keptEntries
+        self.tabHistoryOffset = keptEntries.count == entries.count
+            ? pane.tabHistory.snapshotOffset()
+            : max(0, keptEntries.count - 1)
     }
 
     public func makePane(languageResolver: (WorkbenchDocumentSnapshot) -> TreeSitterLanguage? = { _ in nil }) -> EditorPane {

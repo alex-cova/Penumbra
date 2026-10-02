@@ -14,6 +14,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case controlFlow
     case namingConventions
     case performance
+    case javadoc
 
     public var title: String {
         switch self {
@@ -29,6 +30,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .controlFlow: return "Control flow issues"
         case .namingConventions: return "Naming conventions"
         case .performance: return "Performance"
+        case .javadoc: return "Javadoc"
         }
     }
 }
@@ -125,6 +127,49 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case equalsEmptyString
     case explicitTypeArguments
     case stringConcatenationInLoop
+    case localCanBeFinal
+    case unusedAssignment
+    case mismatchedCollectionQueryUpdate
+    case unusedPrivateMember
+    case forCanBeForeach
+    case tryFinallyCanBeTryWithResources
+    case cyclomaticComplexity
+    case nestingDepth
+    case parameterCount
+    case methodLength
+    case classLength
+    case javadocMissingParam
+    case javadocMissingReturn
+    case javadocInvalidParam
+    case nullDereference
+    case nullableDereference
+    case constantConditionFlow
+    case redundantNullCheck
+    case unreachableCode
+    case resourceNotClosed
+    case unusedDeclaration
+    case declarationAccessCanBeWeaker
+    case methodCanBeVoid
+    case parameterAlwaysSameValue
+    case utilityClassWithPublicConstructor
+    case publicField
+    case missingSerialVersionUID
+    case cloneWithoutCloneable
+    case finalMethodInFinalClass
+    case protectedMemberInFinalClass
+    case classMayBeInterface
+    case redundantLocalVariable
+    case redundantStringOperation
+    case declarationUsesConcreteClass
+    case staticViaSubclass
+    case anonymousCanBeLambda
+    case overridableMethodCalledInConstructor
+    case synchronizationOnStringLiteral
+    case synchronizationOnThis
+    case waitNotInLoop
+    case sortedCollectionNonComparable
+    case suspiciousToArray
+    case listRemoveInLoop
 
     private struct Info {
         let code: String
@@ -226,6 +271,49 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .equalsEmptyString: Info(code: "equals-empty-string", title: "'equals(\"\")' call", group: .verboseCode, severity: .weakWarning, summary: "Reports 's.equals(\"\")', which 's.isEmpty()' states directly."),
         .explicitTypeArguments: Info(code: "explicit-type-arguments", title: "Explicit type arguments can be replaced with '<>'", group: .verboseCode, severity: .weakWarning, summary: "Reports 'new ArrayList<String>()' assigned to a 'List<String>'."),
         .stringConcatenationInLoop: Info(code: "string-concatenation-in-loop", title: "String concatenation in a loop", group: .performance, severity: .weakWarning, summary: "Reports 's += x' on a String inside a loop, which copies the string each pass."),
+        .localCanBeFinal: Info(code: "local-can-be-final", title: "Local variable can be final", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a local variable that is initialized once and never assigned again."),
+        .unusedAssignment: Info(code: "unused-assignment", title: "Unused assignment", group: .probableBugs, severity: .warning, summary: "Reports a value assigned to a local that is overwritten or goes out of scope before it is read."),
+        .mismatchedCollectionQueryUpdate: Info(code: "mismatched-collection-query-update", title: "Mismatched query and update of collection", group: .probableBugs, severity: .warning, summary: "Reports a collection or StringBuilder that is only queried but never updated, or only updated but never queried."),
+        .unusedPrivateMember: Info(code: "unused-private-member", title: "Unused private member", group: .declarationRedundancy, severity: .warning, summary: "Reports a private field, method, constructor or nested class that nothing in the file uses."),
+        .forCanBeForeach: Info(code: "for-can-be-foreach", title: "'for' loop can be replaced with enhanced 'for'", group: .verboseCode, severity: .weakWarning, summary: "Reports an index or iterator loop that only reads each element."),
+        .tryFinallyCanBeTryWithResources: Info(code: "try-finally-can-be-twr", title: "'try' / 'finally' can use try-with-resources", group: .verboseCode, severity: .weakWarning, summary: "Reports a resource closed in 'finally' that try-with-resources would close."),
+        .cyclomaticComplexity: Info(code: "cyclomatic-complexity", title: "Overly complex method", group: .classStructure, severity: .weakWarning, summary: "Reports a method whose cyclomatic complexity (decision points plus one) exceeds the limit."),
+        .nestingDepth: Info(code: "nesting-depth", title: "Overly nested method", group: .classStructure, severity: .weakWarning, summary: "Reports a method with control structures nested deeper than the limit."),
+        .parameterCount: Info(code: "parameter-count", title: "Method with too many parameters", group: .classStructure, severity: .weakWarning, summary: "Reports a method or constructor with more parameters than the limit."),
+        .methodLength: Info(code: "method-length", title: "Overly long method", group: .classStructure, severity: .weakWarning, summary: "Reports a method longer than the limit, in lines."),
+        .classLength: Info(code: "class-length", title: "Overly long class", group: .classStructure, severity: .weakWarning, summary: "Reports a class, interface, enum or record longer than the limit, in lines."),
+        .javadocMissingParam: Info(code: "javadoc-missing-param", title: "Missing '@param' tag", group: .javadoc, severity: .weakWarning, summary: "Reports a parameter or type parameter a Javadoc comment does not describe."),
+        .javadocMissingReturn: Info(code: "javadoc-missing-return", title: "Missing '@return' tag", group: .javadoc, severity: .weakWarning, summary: "Reports a Javadoc comment of a method that returns a value but has no '@return' tag."),
+        .javadocInvalidParam: Info(code: "javadoc-invalid-param", title: "Invalid '@param' tag", group: .javadoc, severity: .warning, summary: "Reports an '@param' tag that names no parameter or type parameter of the method."),
+        .nullDereference: Info(code: "null-dereference", title: "Null pointer dereference", group: .probableBugs, severity: .warning, summary: "Reports a local that is certainly null where a method is called on it or a member is read."),
+        .nullableDereference: Info(code: "nullable-dereference", title: "Possible null pointer dereference", group: .probableBugs, severity: .weakWarning, summary: "Reports a local that is null on some path (a 'null' assigned in one branch, a failed null check) where a method is called on it or a member is read."),
+        .constantConditionFlow: Info(code: "condition-always-constant", title: "Condition is always true or false", group: .controlFlow, severity: .warning, summary: "Reports a condition that the values assigned earlier in the method already decide."),
+        .redundantNullCheck: Info(code: "redundant-null-check", title: "Redundant null check", group: .controlFlow, severity: .warning, summary: "Reports a comparison with null whose result is known from earlier assignments or checks."),
+        .unreachableCode: Info(code: "unreachable-code", title: "Unreachable statement", group: .controlFlow, severity: .warning, summary: "Reports a statement after 'return', 'throw', 'break', 'continue' or an endless loop."),
+        .resourceNotClosed: Info(code: "resource-not-closed", title: "Resource not closed", group: .probableBugs, severity: .warning, summary: "Reports a stream, reader or socket created with 'new' that is not closed on every path."),
+        .unusedDeclaration: Info(code: "unused-declaration", title: "Unused declaration", group: .declarationRedundancy, severity: .warning, summary: "Reports a class, method or field that nothing in the project uses. Public and protected members count as used unless 'Treat public API as used' is off."),
+        .declarationAccessCanBeWeaker: Info(code: "declaration-access-can-be-weaker", title: "Declaration access can be weaker", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a member that is only used inside its own top-level class and could be private."),
+        .methodCanBeVoid: Info(code: "method-can-be-void", title: "Method can be made void", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a method whose return value no caller uses."),
+        .parameterAlwaysSameValue: Info(code: "parameter-always-same-value", title: "Parameter always has the same value", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a parameter that every call passes the same literal for."),
+        .utilityClassWithPublicConstructor: Info(code: "utility-class-with-public-constructor", title: "Utility class with a public constructor", group: .classStructure, severity: .weakWarning, summary: "Reports a class that only has static members but can be instantiated through a public constructor."),
+        .publicField: Info(code: "public-field", title: "Public field", group: .classStructure, severity: .weakWarning, summary: "Reports a non-final public field, which exposes the class's state."),
+        .missingSerialVersionUID: Info(code: "missing-serial-version-uid", title: "Missing 'serialVersionUID'", group: .classStructure, severity: .warning, summary: "Reports a class that implements Serializable without declaring serialVersionUID."),
+        .cloneWithoutCloneable: Info(code: "clone-without-cloneable", title: "'clone()' without 'Cloneable'", group: .classStructure, severity: .warning, summary: "Reports a class that declares clone() but does not implement Cloneable."),
+        .finalMethodInFinalClass: Info(code: "final-method-in-final-class", title: "'final' method in 'final' class", group: .classStructure, severity: .weakWarning, summary: "Reports a final method in a class (or record) that cannot be extended."),
+        .protectedMemberInFinalClass: Info(code: "protected-member-in-final-class", title: "'protected' member in 'final' class", group: .classStructure, severity: .weakWarning, summary: "Reports a protected member of a class (or record) that cannot be extended."),
+        .classMayBeInterface: Info(code: "class-may-be-interface", title: "Abstract class may be an interface", group: .classStructure, severity: .weakWarning, summary: "Reports an abstract class with only abstract methods and constants."),
+        .redundantLocalVariable: Info(code: "redundant-local-variable", title: "Redundant local variable", group: .verboseCode, severity: .weakWarning, summary: "Reports a local variable that is returned or thrown right after its declaration."),
+        .redundantStringOperation: Info(code: "redundant-string-operation", title: "Redundant 'String' operation", group: .verboseCode, severity: .weakWarning, summary: "Reports toString() on a String, new String(s) of a String and substring(0)."),
+        .declarationUsesConcreteClass: Info(code: "declaration-uses-concrete-class", title: "Declaration uses a concrete collection class", group: .classStructure, severity: .weakWarning, summary: "Reports a local or private field declared as ArrayList, HashMap or HashSet where List, Map or Set would do."),
+        .staticViaSubclass: Info(code: "static-via-subclass", title: "Static member accessed via subclass", group: .declarationRedundancy, severity: .warning, summary: "Reports a static member of a class referenced through a subclass that does not declare it."),
+        .anonymousCanBeLambda: Info(code: "anonymous-can-be-lambda", title: "Anonymous class can be replaced with lambda", group: .verboseCode, severity: .weakWarning, summary: "Reports an anonymous class that implements a functional interface with one method."),
+        .overridableMethodCalledInConstructor: Info(code: "overridable-method-called-in-constructor", title: "Overridable method called during object construction", group: .probableBugs, severity: .warning, summary: "Reports a constructor that calls a non-final, non-private method of its own class; a subclass override runs before the subclass is initialized."),
+        .synchronizationOnStringLiteral: Info(code: "synchronization-on-string-literal", title: "Synchronization on a String literal", group: .probableBugs, severity: .warning, summary: "Reports synchronized(\"...\"): interned strings are shared by unrelated code."),
+        .synchronizationOnThis: Info(code: "synchronization-on-this", title: "Synchronization on 'this'", group: .probableBugs, severity: .weakWarning, summary: "Reports synchronized(this), which lets any caller take the same lock."),
+        .waitNotInLoop: Info(code: "wait-not-in-loop", title: "'wait()' not called in a loop", group: .probableBugs, severity: .warning, summary: "Reports wait() outside a loop; a wakeup can be spurious or the condition can change again."),
+        .sortedCollectionNonComparable: Info(code: "sorted-collection-non-comparable", title: "Sorted collection with non-comparable elements", group: .probableBugs, severity: .warning, summary: "Reports a TreeSet, TreeMap or PriorityQueue without a comparator whose element class in this file is not Comparable."),
+        .suspiciousToArray: Info(code: "suspicious-to-array", title: "Suspicious 'Collection.toArray()' call", group: .probableBugs, severity: .warning, summary: "Reports (T[]) c.toArray(), which always fails, and toArray(new T[0]) with an array type that cannot hold the elements."),
+        .listRemoveInLoop: Info(code: "list-remove-in-loop", title: "Collection modified while it is iterated", group: .probableBugs, severity: .warning, summary: "Reports remove() or add() on the list a loop is iterating over, which throws or skips elements."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
@@ -242,8 +330,68 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     public var group: JavaInspectionGroup { info.group }
     public var defaultSeverity: JavaInspection.Severity { info.severity }
 
+    /// Rules that are stylistic or fire on most real code start switched off; Settings can turn them on.
+    public var isEnabledByDefault: Bool { !Self.disabledByDefault.contains(self) }
+
+    private static let disabledByDefault: Set<JavaInspectionRule> = [
+        .publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass,
+        .declarationUsesConcreteClass, .classMayBeInterface,
+    ]
+
+    /// The rules a new service or fresh preferences run with.
+    public static var enabledByDefault: Set<JavaInspectionRule> { Set(allCases.filter(\.isEnabledByDefault)) }
+
     public init?(code: String) {
         guard let rule = Self.byCode[code] else { return nil }
         self = rule
     }
+}
+
+/// A rule with a number the user can tune (the largest acceptable complexity, nesting depth, …).
+public struct JavaInspectionLimit: Sendable, Equatable {
+    public let label: String
+    public let defaultValue: Int
+    public let range: ClosedRange<Int>
+    public let step: Int
+}
+
+extension JavaInspectionRule {
+    /// The threshold Settings offers for this rule; nil for rules without one.
+    public var limit: JavaInspectionLimit? {
+        switch self {
+        case .cyclomaticComplexity: JavaInspectionLimit(label: "Maximum complexity", defaultValue: 10, range: 2...100, step: 1)
+        case .nestingDepth: JavaInspectionLimit(label: "Maximum nesting depth", defaultValue: 5, range: 2...20, step: 1)
+        case .parameterCount: JavaInspectionLimit(label: "Maximum parameters", defaultValue: 7, range: 2...30, step: 1)
+        case .methodLength: JavaInspectionLimit(label: "Maximum lines", defaultValue: 100, range: 3...2000, step: 10)
+        case .classLength: JavaInspectionLimit(label: "Maximum lines", defaultValue: 1500, range: 3...20000, step: 100)
+        default: nil
+        }
+    }
+}
+
+/// The user's values for the rules that have a ``JavaInspectionRule/limit``; a rule not listed uses its default.
+public struct JavaInspectionThresholds: Sendable, Equatable {
+    public var values: [JavaInspectionRule: Int]
+
+    public init(_ values: [JavaInspectionRule: Int] = [:]) { self.values = values }
+
+    public static let standard = JavaInspectionThresholds()
+
+    /// The value for `rule`, kept inside its range.
+    public func value(for rule: JavaInspectionRule) -> Int {
+        guard let limit = rule.limit else { return 0 }
+        return min(max(values[rule] ?? limit.defaultValue, limit.range.lowerBound), limit.range.upperBound)
+    }
+}
+
+/// Settings for the project-wide rules (`unused-declaration`, `declaration-access-can-be-weaker`,
+/// `method-can-be-void`, `parameter-always-same-value`).
+public struct JavaProjectInspectionOptions: Sendable, Equatable {
+    /// Public and protected members are API that code outside the project may use, so they are
+    /// never reported. Turn off for an application, where nothing outside calls them.
+    public var treatsPublicApiAsUsed: Bool
+
+    public init(treatsPublicApiAsUsed: Bool = true) { self.treatsPublicApiAsUsed = treatsPublicApiAsUsed }
+
+    public static let standard = JavaProjectInspectionOptions()
 }

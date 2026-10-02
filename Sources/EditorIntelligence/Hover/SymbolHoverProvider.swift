@@ -20,9 +20,11 @@ public actor SymbolHoverProvider: HoverProvider {
         }
         let word = context.document.wordAtCursor()
         guard !word.isEmpty else { return nil }
+        // Only symbols with something to say: a bare name (every indexed word in a plain-text or
+        // `.http` buffer) would just echo the word under the caret back.
         let symbols = await index.search(exact: word)
-        guard let symbol = symbols.first else { return nil }
-        let contents = symbol.documentation ?? symbol.signature ?? symbol.name
+        guard let symbol = symbols.first(where: { $0.documentation != nil || $0.signature != nil }),
+              let contents = symbol.documentation ?? symbol.signature else { return nil }
         return HoverResult(
             contents: contents,
             range: symbol.range,

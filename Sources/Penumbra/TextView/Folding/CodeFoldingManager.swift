@@ -43,8 +43,23 @@ final class CodeFoldingManager {
         refreshEngine()
     }
 
+    /// When set, the only provider, in place of the language's: for a host that knows the regions
+    /// itself (a diff viewer folding unchanged lines).
+    var overrideProvider: FoldingProviding? {
+        didSet {
+            setProviders(primary: languagePrimaryProvider)
+            scheduleUpdate(full: true)
+        }
+    }
+
+    private var languagePrimaryProvider: FoldingProviding?
+
     func setProviders(primary: FoldingProviding?, fallback: FoldingProviding = IndentationFoldingProvider()) {
-        if let primary {
+        languagePrimaryProvider = primary
+        if let overrideProvider {
+            foldingProvider = overrideProvider
+            foldingEngine = FoldingEngine(providers: [overrideProvider])
+        } else if let primary {
             foldingProvider = primary
             foldingEngine = FoldingEngine(providers: [primary, fallback])
         } else {

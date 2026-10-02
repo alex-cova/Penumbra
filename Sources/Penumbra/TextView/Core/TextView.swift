@@ -508,6 +508,33 @@ public struct DocumentTextExport: Sendable {
         set { textInputView.contextMenuItemsProvider = newValue }
     }
 
+    /// Full-width bands behind whole lines, for example a diff's added and removed lines. Bands
+    /// must not overlap. They follow line insertions and removals until the host replaces them,
+    /// and are cleared by ``setState(_:addUndoAction:)``. Painting costs the visible rows only.
+    public var lineBackgrounds: [LineBackground] {
+        get { textInputView.lineBackgrounds }
+        set { textInputView.lineBackgrounds = newValue }
+    }
+
+    /// Top of 1-based `line` in the text content's coordinates (see ``caretRect(at:)``), folds
+    /// included. Past the last line it is the bottom of the document's last line.
+    public func yPosition(ofLine line: Int) -> CGFloat {
+        textInputView.yPosition(ofRow: line - 1)
+    }
+
+    /// The 1-based line at `y` in the text content's coordinates, clamped to the document.
+    public func line(atYPosition y: CGFloat) -> Int {
+        textInputView.row(atYPosition: y) + 1
+    }
+
+    /// Replaces the language's fold regions with the ones `provider` reports, for a host that knows
+    /// them itself (a diff viewer folding unchanged lines). Folding must be enabled
+    /// (``isLineFoldingEnabled``) for them to show. `nil` goes back to the language's regions.
+    public var foldingProviderOverride: FoldingProviding? {
+        get { textInputView.foldingProviderOverride }
+        set { textInputView.foldingProviderOverride = newValue }
+    }
+
     /// Icons in the line-marker column, between the line numbers and the folding ribbon (for
     /// example "overrides a method"). The column is only shown while there are markers. Markers
     /// follow line insertions and removals until the host replaces them, and are cleared by
@@ -1258,6 +1285,9 @@ public struct DocumentTextExport: Sendable {
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { textInputView.foldLineRangesForTesting }
     var methodSeparatorRowsForTesting: [Int] { textInputView.methodSeparatorRowsForTesting }
+    var lineBackgroundFillsForTesting: [LineBackgroundFill] { textInputView.lineBackgroundFillsForTesting }
+    var collapsedFoldLineRangesForTesting: [ClosedRange<Int>] { textInputView.collapsedFoldLineRangesForTesting }
+    func updateFoldsForTesting() async { await textInputView.updateFoldsForTesting() }
 
     func foldPreviewContentForTesting(headerRow row: Int, maximumLines: Int = 20) -> FoldPreviewContent? {
         textInputView.foldPreviewContentForTesting(headerRow: row, maximumLines: maximumLines)

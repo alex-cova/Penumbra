@@ -33,6 +33,19 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var expressionTypes: [Range<Int>: Resolved] = [:]
     private var positions: JavaPositionIndex?
     private var typeParameters: Set<String>?
+    private var symbolTable: JavaFileSymbolTable?
+
+    /// Locals with their uses and every identifier by name, built once per tree on first use.
+    func fileSymbols(context: JavaInspectionContext) -> JavaFileSymbolTable {
+        lock.lock()
+        if let symbolTable { lock.unlock(); return symbolTable }
+        lock.unlock()
+        let built = JavaFileSymbolTable.build(tree: context.tree, source: context.source)
+        lock.lock()
+        symbolTable = built
+        lock.unlock()
+        return built
+    }
 
     /// Every type-parameter name declared anywhere in the file. Two scopes can reuse a name for
     /// different types (`V` of a class and `V` of its nested entry), so a type variable is never "the same type".

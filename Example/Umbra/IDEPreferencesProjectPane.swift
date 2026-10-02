@@ -20,6 +20,31 @@ struct IDEPreferencesProjectPane: View {
                 isOn: $preferences.flattenJavaPackages,
                 detail: "Shows Java packages under each source root as single dotted rows."
             )
+            IDESettingsToggle(
+                "Hide Empty Middle Packages",
+                isOn: $preferences.explorerCompactMiddlePackages,
+                detail: "Joins folders that hold only one folder, such as com/example/app, into one row inside a source root."
+            )
+            IDESettingsToggle(
+                "Show Excluded Files",
+                isOn: $preferences.explorerShowExcludedFiles,
+                detail: "Lists build outputs (build, out, target, .gradle) dimmed. Off hides them."
+            )
+            IDESettingsPicker("Sort", selection: $preferences.explorerSortOrder) {
+                ForEach(IDEExplorerSortOrder.allCases) { order in
+                    Text(order.title).tag(order)
+                }
+            }
+            IDESettingsToggle(
+                "Folders Always on Top",
+                isOn: $preferences.explorerFoldersOnTop,
+                detail: "Off mixes folders and files in one sorted list."
+            )
+            IDESettingsToggle(
+                "Always Select Opened File",
+                isOn: $preferences.explorerAutoReveal,
+                detail: "Selects and scrolls to the active tab's file whenever the tab changes."
+            )
         }
     }
 }

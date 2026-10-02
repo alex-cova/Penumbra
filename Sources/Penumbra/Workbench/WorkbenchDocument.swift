@@ -6,6 +6,8 @@ import Foundation
 public enum WorkbenchDocumentContentKind: String, Codable, Sendable, Equatable {
     case text
     case image
+    /// A host-drawn comparison of two texts (Umbra's diff viewer). Not restored with the session.
+    case diff
 }
 
 /// In-memory document tracked by an ``EditorPane``.

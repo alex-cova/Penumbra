@@ -30,6 +30,7 @@ extension IDEWorkspace {
         // A refresh that finishes after the pane moved to another file must not paint this one's.
         guard documentURL(shownIn: textView) == gutter.fileURL.standardizedFileURL else { return }
         textView.alwaysShowGutterDecorationColumn = true
+        applyExecutionLineBackground(to: textView, shownFile: gutter.fileURL)
         let fileBreakpoints = breakpointStore.breakpoints(forFile: gutter.fileURL, project: project.rootURL)
         var decorations = fileBreakpoints.map(breakpointDecoration)
         var occupied = Set(fileBreakpoints.map(\.line))
@@ -605,7 +606,42 @@ extension IDEWorkspace {
     /// Show Execution Point (⌥F10): back to the line the program is stopped at.
     func showExecutionPoint() {
         guard case .stopped(let file, let line, _) = debugSession.state, file.path.hasPrefix("/") else { return }
-        revealDebugStop(file: file, line: line)
+        revealDebugStop(file: file, line: line, selectsLine: false)
+    }
+
+    // MARK: - Execution line
+
+    /// The band behind the line the program is stopped at, as IntelliJ paints it.
+    nonisolated static let executionLineColor = NSColor.systemRed.withAlphaComponent(0.28).cgColor
+
+    /// The band for a text view showing `shownFile`: the stopped line when it is that file's.
+    nonisolated static func executionLineBackgrounds(stopFile: URL?, stopLine: Int?, shownFile: URL?) -> [LineBackground] {
+        guard let stopFile, let stopLine, stopLine >= 1, let shownFile,
+              stopFile.standardizedFileURL == shownFile.standardizedFileURL else { return [] }
+        return [LineBackground(line: stopLine, lineCount: 1, color: executionLineColor)]
+    }
+
+    /// The selected frame's file and line while the program is stopped. Frames only, not the
+    /// session state: a teardown reports empty frames before the state changes.
+    private var executionPoint: (file: URL, line: Int)? {
+        guard isDebuggerStopped,
+              let frame = debugSession.stackFrames.first(where: { $0.index == debugSession.selectedFrameIndex }),
+              frame.filePath.hasPrefix("/") else { return nil }
+        return (URL(fileURLWithPath: frame.filePath), frame.line)
+    }
+
+    /// Paints the execution line in every editor showing the stopped file and clears the others.
+    func refreshExecutionLineBackgrounds() {
+        for pane in workbench.panes {
+            guard let textView = hostCache.peek(pane.id)?.textView else { continue }
+            applyExecutionLineBackground(to: textView, shownFile: pane.selectedDocument?.url)
+        }
+    }
+
+    func applyExecutionLineBackground(to textView: TextView, shownFile: URL?) {
+        let point = executionPoint
+        let bands = Self.executionLineBackgrounds(stopFile: point?.file, stopLine: point?.line, shownFile: shownFile)
+        if textView.lineBackgrounds != bands { textView.lineBackgrounds = bands }
     }
 
     // MARK: - Inline values

@@ -3,6 +3,14 @@ import EditorIntelligence
 import Penumbra
 import SwiftUI
 
+/// `undo:` and `redo:` are what Edit menus send down the responder chain. AppKit no longer
+/// declares them on `NSResponder` (`TextInputView` provides them). This type only exists so
+/// those selectors can be formed; nothing sends the actions to it.
+private final class IDEEditMenuAction: NSObject {
+    @objc(undo:) func undo(_ sender: Any?) {}
+    @objc(redo:) func redo(_ sender: Any?) {}
+}
+
 /// The menu bar. Every item acts on the focused window's workspace (`IDEWorkspace` is published
 /// per window with `focusedSceneValue`); with no window focused the items are disabled or absent,
 /// except New Window, which always works.
@@ -37,13 +45,13 @@ struct IDEAppCommands: Commands {
             // so the focused editor (or a focused text field) uses its own stack.
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {
-                    if !NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) {
+                    if !NSApp.sendAction(#selector(IDEEditMenuAction.undo(_:)), to: nil, from: nil) {
                         workspace?.undoActiveEditor()
                     }
                 }
                 .keyboardShortcut("z", modifiers: .command)
                 Button("Redo") {
-                    if !NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) {
+                    if !NSApp.sendAction(#selector(IDEEditMenuAction.redo(_:)), to: nil, from: nil) {
                         workspace?.redoActiveEditor()
                     }
                 }
@@ -347,6 +355,16 @@ private struct IDEGitCommands: View {
         Button("Revert File…", action: { workspace?.revertActiveFile() })
             .menuShortcut(.gitRevert, in: preset)
             .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Divider()
+        Button("Show Diff with HEAD", action: { workspace?.openWorkingTreeDiff(against: .head, title: "HEAD") })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Menu("Compare with Branch") {
+            ForEach(workspace?.gitStatus.branches ?? [], id: \.self) { branch in
+                Button(branch, action: { workspace?.openWorkingTreeDiff(against: .ref(branch), title: branch) })
+            }
+        }
+        .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Button("Compare with Clipboard", action: { workspace?.compareActiveFileWithClipboard() })
         Divider()
         Button("Show Source Control", action: { workspace?.showSourceControl() })
             .disabled(!(workspace?.gitStatus.isRepository ?? false))

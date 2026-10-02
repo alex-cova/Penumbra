@@ -18,6 +18,10 @@ struct IDEFileTreeView: View {
     let onOpenFile: (URL) -> Void
     var flattenPackages = false
     var javaSourceRootPaths: Set<String> = []
+    var sortOrder: IDEExplorerSortOrder = .name
+    var foldersOnTop = true
+    var showExcludedFiles = true
+    var compactMiddlePackages = false
     var nameFilter = ""
     var gitStatus: IDEGitStatusModel?
     var openPaths: Set<String> = []
@@ -49,6 +53,7 @@ struct IDEFileTreeView: View {
                                     isSelected: project.selectedPath == item.node.id,
                                     isOpen: openPaths.contains(item.node.id),
                                     isRoot: item.depth == 0,
+                                    isExcluded: item.isExcluded,
                                     isRenaming: project.renamingPath == item.node.id,
                                     actions: actions,
                                     filterQuery: filterNeedle,
@@ -186,13 +191,37 @@ struct IDEFileTreeView: View {
         /// Folder with matching descendants. Its disclosure uses `collapsedWhileFiltering`.
         let revealedByFilter: Bool
         let canDisclose: Bool
+        /// A build output, or something inside one. Drawn dimmed.
+        var isExcluded = false
         var id: String { node.id }
     }
 
     private func flattenedNodes(root: IDEFileNode) -> [FlatNode] {
         var result: [FlatNode] = []
-        _ = collect(root, depth: 0, needle: filterNeedle, into: &result)
+        _ = collect(root, depth: 0, needle: filterNeedle, underSourceRoot: false, insideExcluded: false, into: &result)
         return result
+    }
+
+    private var presentationOptions: IDEExplorerPresentation.Options {
+        .init(
+            sortOrder: sortOrder,
+            foldersOnTop: foldersOnTop,
+            showExcluded: showExcludedFiles,
+            compactMiddlePackages: compactMiddlePackages && !flattenPackages
+        )
+    }
+
+    /// `node`'s children as the Explorer shows them: excluded entries hidden when asked, in the
+    /// chosen order, with single-child package chains merged under a source root.
+    private func displayChildren(of node: IDEFileNode, underSourceRoot: Bool) -> [IDEFileNode] {
+        let options = presentationOptions
+        let ordered = IDEExplorerPresentation.ordered(node.children ?? [], options: options)
+        guard options.compactMiddlePackages, underSourceRoot else { return ordered }
+        return ordered.map { child in
+            IDEExplorerPresentation.compacted(child) {
+                IDEExplorerPresentation.ordered($0.children ?? [], options: options)
+            }
+        }
     }
 
     /// While filtering, a row is kept when its name matches or a descendant does. Children of a
@@ -203,23 +232,31 @@ struct IDEFileTreeView: View {
         _ node: IDEFileNode,
         depth: Int,
         needle: String,
+        underSourceRoot: Bool,
+        insideExcluded: Bool,
         into result: inout [FlatNode]
     ) -> Bool {
         let filtering = !needle.isEmpty
+        let excluded = insideExcluded || node.isExcluded
+        let inSourceRoot = underSourceRoot
+            || (node.isDirectory && IDEFlattenedPackages.isSourceRoot(node.url, sourceRootPaths: javaSourceRootPaths))
         let name = node.displayName ?? node.name
         let nameMatched = filtering && name.range(of: needle, options: Self.matchOptions) != nil
 
         if !node.isDirectory {
             guard !filtering || nameMatched else { return false }
-            result.append(FlatNode(node: node, depth: depth, revealedByFilter: false, canDisclose: false))
+            result.append(FlatNode(node: node, depth: depth, revealedByFilter: false, canDisclose: false, isExcluded: excluded))
             return true
         }
 
         if !filtering {
-            result.append(FlatNode(node: node, depth: depth, revealedByFilter: false, canDisclose: true))
+            result.append(FlatNode(node: node, depth: depth, revealedByFilter: false, canDisclose: true, isExcluded: excluded))
             if project.isExpanded(node) {
-                for child in node.children ?? [] {
-                    _ = collect(child, depth: depth + 1, needle: "", into: &result)
+                for child in displayChildren(of: node, underSourceRoot: inSourceRoot) {
+                    _ = collect(
+                        child, depth: depth + 1, needle: "",
+                        underSourceRoot: inSourceRoot, insideExcluded: excluded, into: &result
+                    )
                 }
             }
             return true
@@ -227,8 +264,11 @@ struct IDEFileTreeView: View {
 
         var descendantRows: [FlatNode] = []
         var matchedDescendant = false
-        for child in node.children ?? [] {
-            if collect(child, depth: depth + 1, needle: needle, into: &descendantRows) {
+        for child in displayChildren(of: node, underSourceRoot: inSourceRoot) {
+            if collect(
+                child, depth: depth + 1, needle: needle,
+                underSourceRoot: inSourceRoot, insideExcluded: excluded, into: &descendantRows
+            ) {
                 matchedDescendant = true
             }
         }
@@ -240,7 +280,8 @@ struct IDEFileTreeView: View {
                 node: node,
                 depth: depth,
                 revealedByFilter: matchedDescendant,
-                canDisclose: matchedDescendant
+                canDisclose: matchedDescendant,
+                isExcluded: excluded
             )
         )
         if matchedDescendant, expanded {
@@ -307,6 +348,7 @@ private struct IDEFileTreeRow: View {
     var isSelected = false
     var isOpen = false
     var isRoot = false
+    var isExcluded = false
     var isRenaming = false
     var actions: IDEFileTreeActions?
     var filterQuery = ""
@@ -455,13 +497,13 @@ private struct IDEFileTreeRow: View {
     /// Ignored wins over everything so ignored folders stay dim; otherwise a folder role tints
     /// folders and git status tints files.
     private var titleColor: Color {
-        if gitStatus == .ignored { return IDEAppearance.ColorToken.gitIgnored }
+        if isExcluded || gitStatus == .ignored { return IDEAppearance.ColorToken.gitIgnored }
         if node.isDirectory { return roleColor ?? gitColor ?? IDEAppearance.ColorToken.foreground }
         return gitColor ?? IDEAppearance.ColorToken.foreground
     }
 
     private var iconColor: Color {
-        if gitStatus == .ignored { return IDEAppearance.ColorToken.gitIgnored }
+        if isExcluded || gitStatus == .ignored { return IDEAppearance.ColorToken.gitIgnored }
         return roleColor ?? gitColor ?? IDEAppearance.ColorToken.muted
     }
 }

@@ -29,6 +29,10 @@ public final class IDEPreferences {
         static let showScrollbars = "com.umbra.editor.showScrollbars"
         static let flattenJavaPackages = "com.umbra.editor.flattenJavaPackages"
         static let explorerAutoReveal = "com.umbra.editor.explorerAutoReveal"
+        static let explorerSortOrder = "com.umbra.editor.explorerSortOrder"
+        static let explorerFoldersOnTop = "com.umbra.editor.explorerFoldersOnTop"
+        static let explorerCompactMiddlePackages = "com.umbra.editor.explorerCompactMiddlePackages"
+        static let explorerShowExcludedFiles = "com.umbra.editor.explorerShowExcludedFiles"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let openFoldersIn = "com.umbra.editor.openFoldersIn"
@@ -47,12 +51,14 @@ public final class IDEPreferences {
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
+        static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
+        static let javaInspectionSeverities = "com.umbra.editor.javaInspectionSeverities"
+        static let javaInspectionLimits = "com.umbra.editor.javaInspectionLimits"
+        static let javaTreatsPublicApiAsUsed = "com.umbra.editor.javaTreatsPublicApiAsUsed"
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
         static let showsErrorStripe = "com.umbra.editor.showsErrorStripe"
-        static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
-        static let javaInspectionSeverities = "com.umbra.editor.javaInspectionSeverities"
         static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
         static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
@@ -152,6 +158,27 @@ public final class IDEPreferences {
     /// Explorer selects and scrolls to the active editor tab's file whenever the tab changes.
     var explorerAutoReveal: Bool {
         didSet { UserDefaults.standard.set(explorerAutoReveal, forKey: Keys.explorerAutoReveal) }
+    }
+
+    /// Explorer row order within a folder: by name, or by file extension then name.
+    var explorerSortOrder: IDEExplorerSortOrder {
+        didSet { UserDefaults.standard.set(explorerSortOrder.rawValue, forKey: Keys.explorerSortOrder) }
+    }
+
+    /// Explorer lists folders above files. Off intermixes them in one sorted list.
+    var explorerFoldersOnTop: Bool {
+        didSet { UserDefaults.standard.set(explorerFoldersOnTop, forKey: Keys.explorerFoldersOnTop) }
+    }
+
+    /// Explorer joins chains of single-child folders under a source root into one dotted row
+    /// (IntelliJ's "Compact Middle Packages").
+    var explorerCompactMiddlePackages: Bool {
+        didSet { UserDefaults.standard.set(explorerCompactMiddlePackages, forKey: Keys.explorerCompactMiddlePackages) }
+    }
+
+    /// Explorer lists build outputs (dimmed). Off hides them.
+    var explorerShowExcludedFiles: Bool {
+        didSet { UserDefaults.standard.set(explorerShowExcludedFiles, forKey: Keys.explorerShowExcludedFiles) }
     }
 
     var isMetalRenderingEnabled: Bool {
@@ -300,31 +327,6 @@ public final class IDEPreferences {
         Set(JavaLineMarkerKind.allCases).subtracting(javaDisabledGutterIcons)
     }
 
-    /// Colour Java identifiers by what they are (types by kind, methods, fields, parameters, locals)
-    /// on top of the syntax highlighting. Machine-local: not part of `IDEPreferencesSnapshot`.
-    var semanticHighlighting: Bool {
-        didSet { UserDefaults.standard.set(semanticHighlighting, forKey: Keys.semanticHighlighting) }
-    }
-
-    /// Remove unused imports from a Java file each time it is saved. Off by default: saving never
-    /// edits the file unless this is on. Machine-local: not part of `IDEPreferencesSnapshot`.
-    var javaOptimizeImportsOnSave: Bool {
-        didSet { UserDefaults.standard.set(javaOptimizeImportsOnSave, forKey: Keys.javaOptimizeImportsOnSave) }
-    }
-
-    /// How long one Gradle project-model sync may run before it is killed. A first sync may
-    /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
-    var javaGradleSyncTimeoutSeconds: Int {
-        didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
-    }
-
-    /// Standing consent for decompiling `.class` files with no attached source using Sunflower
-    /// (FernflowerKit). Set once the user accepts ``JavaDecompilerAgreement`` at a Go to
-    /// Definition. Machine-local: not part of `IDEPreferencesSnapshot`.
-    var javaDecompilerAgreementAccepted: Bool {
-        didSet {
-            UserDefaults.standard.set(javaDecompilerAgreementAccepted, forKey: Keys.javaDecompilerAgreementAccepted)
-        }
     /// Codes of the Java inspections the user turned off (every rule is on by default). Stored by
     /// code so a renamed enum case cannot lose a choice. Machine-local: not part of `IDEPreferencesSnapshot`.
     var javaDisabledInspections: Set<String> {
@@ -334,6 +336,38 @@ public final class IDEPreferences {
     /// Severity per inspection code, only where it differs from the rule's default.
     var javaInspectionSeverities: [String: String] {
         didSet { UserDefaults.standard.set(javaInspectionSeverities, forKey: Keys.javaInspectionSeverities) }
+    }
+
+    /// The user's threshold per metric rule code (maximum complexity, nesting, …), only where it differs from the default.
+    var javaInspectionLimits: [String: Int] {
+        didSet { UserDefaults.standard.set(javaInspectionLimits, forKey: Keys.javaInspectionLimits) }
+    }
+
+    /// Public and protected members are API someone else may call, so the project-wide rules leave
+    /// them alone. Off for an application whose code nothing outside uses.
+    var javaTreatsPublicApiAsUsed: Bool {
+        didSet { UserDefaults.standard.set(javaTreatsPublicApiAsUsed, forKey: Keys.javaTreatsPublicApiAsUsed) }
+    }
+
+    var javaInspectionThresholds: JavaInspectionThresholds {
+        var values: [JavaInspectionRule: Int] = [:]
+        for rule in JavaInspectionRule.allCases where rule.limit != nil {
+            if let value = javaInspectionLimits[rule.code] { values[rule] = value }
+        }
+        return JavaInspectionThresholds(values)
+    }
+
+    func limit(of rule: JavaInspectionRule) -> Int { javaInspectionThresholds.value(for: rule) }
+
+    func setLimit(_ value: Int, for rule: JavaInspectionRule) {
+        guard let limit = rule.limit else { return }
+        let clamped = min(max(value, limit.range.lowerBound), limit.range.upperBound)
+        javaInspectionLimits[rule.code] = clamped == limit.defaultValue ? nil : clamped
+    }
+
+    /// Codes of the rules that start switched off.
+    static var defaultDisabledInspections: Set<String> {
+        Set(JavaInspectionRule.allCases.filter { !$0.isEnabledByDefault }.map(\.code))
     }
 
     var enabledJavaInspections: Set<JavaInspectionRule> {
@@ -369,10 +403,37 @@ public final class IDEPreferences {
     }
 
     func resetJavaInspections() {
-        javaDisabledInspections = []
+        javaDisabledInspections = Self.defaultDisabledInspections
         javaInspectionSeverities = [:]
+        javaInspectionLimits = [:]
+        javaTreatsPublicApiAsUsed = true
     }
 
+    /// Colour Java identifiers by what they are (types by kind, methods, fields, parameters, locals)
+    /// on top of the syntax highlighting. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var semanticHighlighting: Bool {
+        didSet { UserDefaults.standard.set(semanticHighlighting, forKey: Keys.semanticHighlighting) }
+    }
+
+    /// Remove unused imports from a Java file each time it is saved. Off by default: saving never
+    /// edits the file unless this is on. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaOptimizeImportsOnSave: Bool {
+        didSet { UserDefaults.standard.set(javaOptimizeImportsOnSave, forKey: Keys.javaOptimizeImportsOnSave) }
+    }
+
+    /// How long one Gradle project-model sync may run before it is killed. A first sync may
+    /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
+    var javaGradleSyncTimeoutSeconds: Int {
+        didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
+    }
+
+    /// Standing consent for decompiling `.class` files with no attached source using Sunflower
+    /// (FernflowerKit). Set once the user accepts ``JavaDecompilerAgreement`` at a Go to
+    /// Definition. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaDecompilerAgreementAccepted: Bool {
+        didSet {
+            UserDefaults.standard.set(javaDecompilerAgreementAccepted, forKey: Keys.javaDecompilerAgreementAccepted)
+        }
     }
 
     private init() {
@@ -400,6 +461,10 @@ public final class IDEPreferences {
         showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
         flattenJavaPackages = defaults.object(forKey: Keys.flattenJavaPackages) as? Bool ?? false
         explorerAutoReveal = defaults.object(forKey: Keys.explorerAutoReveal) as? Bool ?? true
+        explorerSortOrder = defaults.string(forKey: Keys.explorerSortOrder).flatMap(IDEExplorerSortOrder.init(rawValue:)) ?? .name
+        explorerFoldersOnTop = defaults.object(forKey: Keys.explorerFoldersOnTop) as? Bool ?? true
+        explorerCompactMiddlePackages = defaults.object(forKey: Keys.explorerCompactMiddlePackages) as? Bool ?? true
+        explorerShowExcludedFiles = defaults.object(forKey: Keys.explorerShowExcludedFiles) as? Bool ?? true
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
@@ -430,6 +495,10 @@ public final class IDEPreferences {
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
+        javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? Array(Self.defaultDisabledInspections))
+        javaInspectionSeverities = defaults.dictionary(forKey: Keys.javaInspectionSeverities) as? [String: String] ?? [:]
+        javaInspectionLimits = defaults.dictionary(forKey: Keys.javaInspectionLimits) as? [String: Int] ?? [:]
+        javaTreatsPublicApiAsUsed = defaults.object(forKey: Keys.javaTreatsPublicApiAsUsed) as? Bool ?? true
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
@@ -459,8 +528,6 @@ public final class IDEPreferences {
         textView.showSpaces = showInvisibleCharacters
         textView.showPageGuide = showPageGuide
         textView.pageGuideColumn = pageGuideColumn
-        javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? [])
-        javaInspectionSeverities = defaults.dictionary(forKey: Keys.javaInspectionSeverities) as? [String: String] ?? [:]
         textView.showReformattingGuideShading = false
         textView.lineHeightMultiplier = CGFloat(lineHeightMultiplier)
         textView.isTypewriterScrollingEnabled = isTypewriterScrollingEnabled

@@ -768,6 +768,9 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         if let lineSelectionRect = spec.lineSelectionRect {
             updated.append(solid(lineSelectionRect, spec.lineSelectionColor))
         }
+        for fill in spec.lineBackgroundFills where fill.frame.width > 0 && fill.frame.height > 0 {
+            updated.append(solid(fill.frame, NSColor(cgColor: fill.color) ?? .clear))
+        }
         // Same stroke as the page-guide hairline, drawn across the text column.
         for frame in spec.methodSeparatorFrames where frame.width > 0 && frame.height > 0 {
             updated.append(solid(frame, spec.methodSeparatorColor))

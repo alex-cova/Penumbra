@@ -173,6 +173,8 @@ final class IDEJavaSupport {
     private struct InspectionConfiguration: Equatable {
         let enabled: Set<JavaInspectionRule>
         let severities: [JavaInspectionRule: JavaInspection.Severity]
+        let thresholds: JavaInspectionThresholds
+        let projectOptions: JavaProjectInspectionOptions
     }
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
     /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
@@ -226,7 +228,7 @@ final class IDEJavaSupport {
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         callHierarchyProvider = JavaCallHierarchyProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)
-        inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache)
+        inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache, usageProvider: findUsagesProvider)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
         lineMarkerProvider = JavaLineMarkerProvider(index: javaIndex, indexPaths: paths)
@@ -315,9 +317,13 @@ final class IDEJavaSupport {
         autoreparseDelay: Duration,
         suppressionStyle: JavaSuppressionStyle,
         enabledInspections: Set<JavaInspectionRule>,
-        inspectionSeverities: [JavaInspectionRule: JavaInspection.Severity]
+        inspectionSeverities: [JavaInspectionRule: JavaInspection.Severity],
+        inspectionThresholds: JavaInspectionThresholds,
+        projectInspectionOptions: JavaProjectInspectionOptions
     ) {
-        let configuration = InspectionConfiguration(enabled: enabledInspections, severities: inspectionSeverities)
+        let configuration = InspectionConfiguration(
+            enabled: enabledInspections, severities: inspectionSeverities, thresholds: inspectionThresholds, projectOptions: projectInspectionOptions
+        )
         let previous = appliedInspectionConfiguration
         appliedInspectionConfiguration = configuration
         let changed = previous != configuration
@@ -327,6 +333,8 @@ final class IDEJavaSupport {
             guard changed else { return }
             await inspectionService.setEnabledRules(enabledInspections)
             await inspectionService.setSeverityOverrides(inspectionSeverities)
+            await inspectionService.setThresholds(inspectionThresholds)
+            await inspectionService.setProjectOptions(projectInspectionOptions)
             // The first application only installs the saved settings; there is nothing to refresh.
             if previous != nil { onInspectionConfigurationChanged?() }
         }
@@ -335,7 +343,10 @@ final class IDEJavaSupport {
     /// Analyses `documents` again with the current inspection settings.
     func reanalyzeInspections(_ documents: [EditorIntelligence.Document]) {
         Task { [inspectionService] in
-            for document in documents { await inspectionService.analyzeNow(document, force: true) }
+            for document in documents {
+                await inspectionService.analyzeNow(document, force: true)
+                await inspectionService.runProjectInspections(for: document)
+            }
         }
     }
 
@@ -380,6 +391,7 @@ final class IDEJavaSupport {
             for document in documents {
                 await compilerDiagnostics.compileNow(document, force: force)
                 await inspectionService.analyzeNow(document, force: force)
+                await inspectionService.runProjectInspections(for: document)
             }
         }
     }
@@ -1258,7 +1270,7 @@ final class IDEJavaSupport {
             }
             // Shared with every other window: one indexing run and one parsed shard per JDK. Only
             // the window that starts the run hears its progress.
-            let reader = await shardHub.shard(for: root, at: shardURL) { [weak self] progress in
+            let reader = await shardHub.shard(for: root, at: shardURL) { [weak self = self] progress in
                 guard let self, noteToConsole, !Task.isCancelled else { return }
                 switch progress {
                 case .rootFinished(let id, let classCount):

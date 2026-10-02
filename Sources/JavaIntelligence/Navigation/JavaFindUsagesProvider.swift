@@ -52,14 +52,27 @@ public actor JavaFindUsagesProvider: NavigationProvider {
 
     /// Usages (declarations excluded) of the symbol at `utf16Offset`, sorted by file then position.
     public func findUsages(source: String, url: URL?, utf16Offset: Int) async -> [JavaUsage] {
+        await declarationUsages(source: source, url: url, utf16Offset: utf16Offset)?.usages ?? []
+    }
+
+    /// What project-wide inspections need about one symbol: its identity, its usages, and how many
+    /// methods share its override family (1 when it overrides and is overridden by nothing).
+    public struct SymbolUsages: Sendable {
+        public let id: JavaSymbolID
+        public let usages: [JavaUsage]
+        public let familyCount: Int
+    }
+
+    public func declarationUsages(source: String, url: URL?, utf16Offset: Int) async -> SymbolUsages? {
         let environment = JavaReferenceEnvironment(
             index: index, jdkHome: jdkHome, cacheRoot: indexPaths.root, openBuffer: openBuffer,
             gradleModel: classpathModel, indexPaths: classpathModel == nil ? nil : indexPaths
         )
         guard let id = await JavaSymbolIdentity.symbolID(at: utf16Offset, in: source, url: url, environment: environment) else {
-            return []
+            return nil
         }
         var all: [JavaUsage]
+        var familyCount = 1
         if case .local = id {
             all = JavaLocalUsages.usages(of: id, in: source)
         } else {
@@ -76,10 +89,11 @@ public actor JavaFindUsagesProvider: NavigationProvider {
                     }
                 }
             }
+            familyCount = targets.count
             var seen = Set<String>()
             all = []
             for target in targets {
-                if Task.isCancelled { return [] }
+                if Task.isCancelled { return nil }
                 let found = await JavaUsageSearch.collect(
                     target, candidates: candidates, roots: searchRoots, environment: environment, includeDeclarations: false
                 )
@@ -88,10 +102,17 @@ public actor JavaFindUsagesProvider: NavigationProvider {
                 }
             }
         }
-        return all.filter { $0.kind != .declaration }.sorted {
+        let usages = all.filter { $0.kind != .declaration }.sorted {
             if $0.url.path != $1.url.path { return $0.url.path < $1.url.path }
             return $0.byteRange.lowerBound < $1.byteRange.lowerBound
         }
+        return SymbolUsages(id: id, usages: usages, familyCount: familyCount)
+    }
+
+    /// The text of a project file as the editor sees it: an open buffer, else the file on disk.
+    public func text(of file: URL) async -> String? {
+        if let openBuffer, let text = await openBuffer(file) { return text }
+        return try? String(contentsOf: file, encoding: .utf8)
     }
 
     private func familyIDs(of id: JavaSymbolID) async -> [JavaSymbolID] {

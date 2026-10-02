@@ -466,4 +466,58 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(diverged.outgoing.map(\.subject), ["local"])
         XCTAssertEqual(diverged.incoming.map(\.subject), ["remote"])
     }
+
+    func testFileContentsAtEachRevision() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "one\n")
+        _ = try await repo.commit(message: "first", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        let log = try await repo.log(scope: .head)
+        let first = try XCTUnwrap(log.first?.hash)
+        try write("a.txt", "two\n")
+        try await repo.stage(paths: ["a.txt"])
+        try write("a.txt", "three\n")
+
+        func text(_ revision: GitRevision) async throws -> String? {
+            try await repo.fileContents(at: revision, path: "a.txt").map { String(decoding: $0, as: UTF8.self) }
+        }
+        let head = try await text(.head)
+        let index = try await text(.index)
+        let commit = try await text(.commit(first))
+        let rootParent = try await text(.parent(of: first))
+        let branch = try await text(.ref("main"))
+        XCTAssertEqual(head, "one\n")
+        XCTAssertEqual(index, "two\n")
+        XCTAssertEqual(commit, "one\n")
+        XCTAssertNil(rootParent)
+        XCTAssertEqual(branch, "one\n")
+        let missing = try await repo.fileContents(at: .head, path: "nope.txt")
+        XCTAssertNil(missing)
+    }
+
+    func testApplyPatchStagesAndUnstagesOneHunk() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "1\n2\n3\n4\n5\n6\n7\n8\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        try write("a.txt", "1\nTWO\n3\n4\n5\n6\nSEVEN\n8\n")
+        let patch = """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -2 +2 @@
+        -2
+        +TWO
+
+        """
+        try await repo.applyPatch(patch, toIndex: true)
+        var staged = try await repo.stagedDiff(path: "a.txt")
+        XCTAssertTrue(staged.contains("+TWO"))
+        XCTAssertFalse(staged.contains("+SEVEN"))
+        let unstaged = try await repo.unstagedDiff(path: "a.txt")
+        XCTAssertTrue(unstaged.contains("+SEVEN"))
+        XCTAssertFalse(unstaged.contains("+TWO"))
+
+        try await repo.applyPatch(patch, toIndex: true, reverse: true)
+        staged = try await repo.stagedDiff(path: "a.txt")
+        XCTAssertTrue(staged.isEmpty)
+    }
 }

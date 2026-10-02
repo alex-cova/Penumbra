@@ -650,7 +650,10 @@ final class IDEWindowConfiguratorView: NSView {
 @MainActor
 final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
     weak var workspace: IDEWorkspace?
-    private weak var upstream: NSWindowDelegate?
+    /// SwiftUI's original delegate. Weak so a closed window can release it.
+    /// `nonisolated(unsafe)` because `responds(to:)` and `forwardingTarget(for:)` are nonisolated
+    /// `NSObject` hooks; AppKit calls them on the main thread, where `install(on:)` writes this.
+    private nonisolated(unsafe) weak var upstream: NSWindowDelegate?
 
     func install(on window: NSWindow) {
         guard window.delegate !== self else { return }
@@ -672,7 +675,11 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
     // does not handle goes to the original delegate; without that SwiftUI never hears the window
     // closed and keeps its scene, hosting view and workspace alive for the rest of the run.
     override func responds(to aSelector: Selector!) -> Bool {
-        super.responds(to: aSelector) || (upstream?.responds(to: aSelector) ?? false)
+        if super.responds(to: aSelector) {
+            return true
+        }
+        guard let upstream else { return false }
+        return upstream.responds(to: aSelector)
     }
 
     override func forwardingTarget(for aSelector: Selector!) -> Any? {

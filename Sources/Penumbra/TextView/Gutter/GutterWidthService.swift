@@ -71,6 +71,12 @@ final class GutterWidthService {
     }
     var gutterLeadingPadding: CGFloat = 0
     var gutterTrailingPadding: CGFloat = 0
+    /// Whether the text starts after the gutter. Without line numbers the gutter's other columns
+    /// overlay the text, except the annotation column, which needs the room (a diff's old and new
+    /// line numbers).
+    var reservesGutterSpace: Bool {
+        showLineNumbers || annotationColumnWidth > 0
+    }
     var gutterWidth: CGFloat {
         var width: CGFloat = 0
         if showLineNumbers {

@@ -193,6 +193,14 @@ final class TextInputView: EditorView {
             }
         }
     }
+    var foldingProviderOverride: FoldingProviding? {
+        get { codeFoldingManager.overrideProvider }
+        set {
+            codeFoldingManager.overrideProvider = newValue
+            layoutManager.setNeedsLayout()
+            setNeedsLayout()
+        }
+    }
     var isFocusModeEnabled = false {
         didSet {
             if isFocusModeEnabled != oldValue {
@@ -955,6 +963,11 @@ final class TextInputView: EditorView {
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { foldingModel.regions.map(\.lineRange) }
     var methodSeparatorRowsForTesting: [Int] { methodSeparatorController.separatorRows }
+    var lineBackgroundFillsForTesting: [LineBackgroundFill] { layoutManager.lineBackgroundFillsForTesting }
+    var collapsedFoldLineRangesForTesting: [ClosedRange<Int>] {
+        foldingModel.regions.filter(\.isCollapsed).map(\.lineRange)
+    }
+    func updateFoldsForTesting() async { await codeFoldingManager.updateSynchronously() }
     /// Test hook — the hover-preview content of the fold whose header is at `row`.
     func foldPreviewContentForTesting(headerRow row: Int, maximumLines: Int = 20) -> FoldPreviewContent? {
         guard let region = foldingModel.regions.first(where: { $0.lineRange.lowerBound == row }) else {
@@ -1393,6 +1406,7 @@ final class TextInputView: EditorView {
         if !inlayHints.isEmpty { inlayHints = [] }
         if !supplementaryInlayHints.isEmpty { supplementaryInlayHints = [] }
         if layoutManager.hasLineMarkers { lineMarkers = [] }
+        if layoutManager.hasLineBackgrounds { layoutManager.lineBackgrounds = [] }
         layoutManager.clearGutterAnnotations()
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
@@ -1743,6 +1757,29 @@ final class TextInputView: EditorView {
     func gutterLineForClick(at point: CGPoint) -> Int? {
         guard layoutManager.gutterLineClickHandler != nil else { return nil }
         return layoutManager.gutterLine(at: point)
+    }
+
+    var lineBackgrounds: [LineBackground] {
+        get { layoutManager.lineBackgrounds }
+        set { layoutManager.lineBackgrounds = newValue }
+    }
+
+    /// Top of the 0-based `row` in this view's coordinates; past the end, the bottom of the last line.
+    func yPosition(ofRow row: Int) -> CGFloat {
+        let lineCount = lineManager.lineCount
+        guard lineCount > 0 else { return textContainerInset.top }
+        if row >= lineCount {
+            let last = lineCount - 1
+            return textContainerInset.top + lineManager.yPosition(ofRow: last) + lineManager.lineInfo(atRow: last).lineHeight
+        }
+        return textContainerInset.top + lineManager.yPosition(ofRow: max(row, 0))
+    }
+
+    /// The 0-based row at `y` in this view's coordinates, clamped to the document.
+    func row(atYPosition y: CGFloat) -> Int {
+        let lineCount = lineManager.lineCount
+        guard lineCount > 0 else { return 0 }
+        return lineManager.row(containingYOffset: y - textContainerInset.top) ?? (y <= textContainerInset.top ? 0 : lineCount - 1)
     }
 
     /// Kept on their lines through edits, and dropped when the document is replaced.
@@ -3115,6 +3152,7 @@ extension TextInputView {
         var markerEdit: GutterLineMarkerEdit?
         let lineCountBeforeEdit = lineManager.lineCount
         let followsLineBreaks = layoutManager.hasLineMarkers || layoutManager.hasGutterDecorations
+            || layoutManager.hasLineBackgrounds
         let hasLineBreak = followsLineBreaks || layoutManager.hasGutterAnnotations
             ? Self.containsLineBreak(newString) || Self.containsLineBreak(currentText)
             : false
@@ -3154,6 +3192,9 @@ extension TextInputView {
             }
             if layoutManager.hasGutterDecorations, hasLineBreak {
                 layoutManager.applyGutterDecorationEdit(markerEdit)
+            }
+            if layoutManager.hasLineBackgrounds, hasLineBreak {
+                layoutManager.applyLineBackgroundEdit(markerEdit)
             }
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)

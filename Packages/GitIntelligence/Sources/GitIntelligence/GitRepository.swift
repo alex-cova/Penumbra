@@ -190,6 +190,16 @@ public struct GitRepository: Sendable {
         try await readOnly(["diff", "--cached", "--", path]).text
     }
 
+    /// The file at `path` (relative to the root) as stored in `revision`, or nil when that version
+    /// has no such file (added or deleted there, a root commit's parent, an unknown ref).
+    public func fileContents(at revision: GitRevision, path: String) async throws -> Data? {
+        do {
+            return try await readOnly(["cat-file", "blob", revision.objectName(path: path)]).stdout
+        } catch GitError.failed {
+            return nil
+        }
+    }
+
     /// `git show --stat --patch` for the commit detail pane.
     public func show(hash: String) async throws -> String {
         try await readOnly(["show", "--no-color", "--stat", "--patch", hash]).text
@@ -243,6 +253,16 @@ public struct GitRepository: Sendable {
 
     public func unstageAll() async throws {
         _ = try await runner.run(["restore", "--staged", "."], in: root, stdin: nil, environment: nil)
+    }
+
+    /// Applies a patch with zero context lines (one hunk from the diff viewer). `toIndex` changes
+    /// only the index (stage or, with `reverse`, unstage the hunk); otherwise only the working tree.
+    public func applyPatch(_ patch: String, toIndex: Bool, reverse: Bool = false) async throws {
+        var args = ["apply", "--unidiff-zero", "--whitespace=nowarn"]
+        if toIndex { args.append("--cached") }
+        if reverse { args.append("--reverse") }
+        args.append("-")
+        _ = try await runner.run(args, in: root, stdin: Data(patch.utf8), environment: nil)
     }
 
     /// Commits only `paths` (plus any `untrackedPaths`, which are added first), whatever else is staged.

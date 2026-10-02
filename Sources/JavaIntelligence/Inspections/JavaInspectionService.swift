@@ -61,6 +61,11 @@ public actor JavaInspectionService: DiagnosticProvider {
     private var classpathPaths: JavaIndexPaths?
     private var enabledRules: Set<JavaInspectionRule>
     private var severityOverrides: [JavaInspectionRule: JavaInspection.Severity] = [:]
+    private var thresholds = JavaInspectionThresholds.standard
+    private var projectOptions = JavaProjectInspectionOptions.standard
+    private let usageProvider: JavaFindUsagesProvider?
+    /// Project-wide findings per file, valid for the text they were computed from.
+    private var projectResults: [URL: (hash: Int, inspections: [JavaInspection])] = [:]
     private var idleDelay: Duration
     private var cache: [URL: CachedResult] = [:]
     private var pending: [URL: Task<Void, Never>] = [:]
@@ -74,9 +79,11 @@ public actor JavaInspectionService: DiagnosticProvider {
     public init(
         index: JavaIndex,
         parseCache: JavaDocumentParseCache = JavaDocumentParseCache(),
-        enabledRules: Set<JavaInspectionRule> = Set(JavaInspectionRule.allCases),
-        idleDelay: Duration = .milliseconds(800)
+        enabledRules: Set<JavaInspectionRule> = JavaInspectionRule.enabledByDefault,
+        idleDelay: Duration = .milliseconds(800),
+        usageProvider: JavaFindUsagesProvider? = nil
     ) {
+        self.usageProvider = usageProvider
         self.index = index
         self.parseCache = parseCache
         self.enabledRules = enabledRules
@@ -100,6 +107,41 @@ public actor JavaInspectionService: DiagnosticProvider {
     public func setSeverityOverrides(_ overrides: [JavaInspectionRule: JavaInspection.Severity]) {
         severityOverrides = overrides
         cache.removeAll()
+    }
+
+    /// The numbers behind the metric rules (complexity, nesting, parameter count, lengths).
+    public func setThresholds(_ thresholds: JavaInspectionThresholds) {
+        guard thresholds != self.thresholds else { return }
+        self.thresholds = thresholds
+        cache.removeAll()
+    }
+
+    public func setProjectOptions(_ options: JavaProjectInspectionOptions) {
+        guard options != projectOptions else { return }
+        projectOptions = options
+        projectResults.removeAll()
+        cache.removeAll()
+    }
+
+    /// Runs the rules that need usages from the whole project (unused declarations, access that
+    /// can be weaker, return values nobody reads, parameters that never vary) for one file and
+    /// folds their findings into the file's diagnostics. Meant for a save or an index change: one
+    /// usage search per declaration. The findings are dropped as soon as the text changes.
+    public func runProjectInspections(for document: Document) async {
+        guard let usageProvider, document.languageIdentifier == "java", let url = document.url,
+              !enabledRules.isDisjoint(with: JavaInspectionRegistry.projectRules) else { return }
+        let text = JavaNavigationText.fullText(of: document)
+        let hash = text.hashValue
+        let scope = scope(for: url)
+        let found: [JavaInspection] = await JavaIndex.$queryScope.withValue(scope) {
+            guard let tree = await parseCache.tree(for: document, edits: nil) else { return [] }
+            return await JavaProjectInspector.inspect(
+                source: text, url: url, tree: tree, provider: usageProvider, enabled: enabledRules, options: projectOptions
+            )
+        }
+        guard !Task.isCancelled else { return }
+        projectResults[url] = (hash, found)
+        await analyzeNow(document, force: true)
     }
 
     public var documentParseCache: JavaDocumentParseCache { parseCache }
@@ -144,7 +186,7 @@ public actor JavaInspectionService: DiagnosticProvider {
             } else {
                 tree = JavaSyntaxParser().parse(text)
             }
-            guard let tree, let context = JavaInspectionContext(source: text, tree: tree, url: url, index: index) else {
+            guard let tree, let context = JavaInspectionContext(source: text, tree: tree, url: url, index: index, thresholds: thresholds) else {
                 return [JavaInspection]()
             }
             var found: [JavaInspection] = []
@@ -167,6 +209,12 @@ public actor JavaInspectionService: DiagnosticProvider {
                 found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
             }
             found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabledRules))
+            found.append(contentsOf: JavaInspectionRunner.runFlow(context: context, enabled: enabledRules))
+            if let stored = projectResults[url], stored.hash == hash {
+                found.append(contentsOf: stored.inspections.filter { inspection in
+                    JavaInspectionRule(code: inspection.id).map(enabledRules.contains) == true
+                })
+            }
             found.append(contentsOf: await JavaInspectionRunner.runTyped(context: context, enabled: enabledRules))
             return found
         }

@@ -156,4 +156,41 @@ final class JavaTypedInspectionTests: XCTestCase {
         let found = try await findings(source, libraries: util)
         XCTAssertEqual(found.count, 0)
     }
+
+    private let functional = """
+    interface Job { int run(int n); }
+    interface Two { void a(); void b(); }
+    interface Base { void go(); }
+    interface Derived extends Base { String toString(); boolean equals(Object o); default void more() { } }
+    abstract class Task { abstract void run(); }
+    """
+
+    func testAnonymousClassOfAFunctionalInterfaceCanBeALambda() async throws {
+        let source = "class T { Job j = new Job() { @Override public int run(int n) { return n + 1; } }; }"
+        let found = try await findings(source, libraries: functional).filter { $0.id == "anonymous-can-be-lambda" }
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(try fixed(source, try XCTUnwrap(found.first)), "class T { Job j = n -> n + 1; }")
+        let inherited = "class T { Derived d = new Derived() { public void go() { System.out.println(1); } }; }"
+        let derived = try await findings(inherited, libraries: functional).filter { $0.id == "anonymous-can-be-lambda" }
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(try fixed(inherited, try XCTUnwrap(derived.first)), "class T { Derived d = () -> System.out.println(1); }")
+    }
+
+    func testAnonymousClassStaysWhenALambdaCannotReplaceIt() async throws {
+        let bodies = [
+            "new Two() { public void a() { } }",
+            "new Task() { void run() { } }",
+            "new Mystery() { public void run() { } }",
+            "new Job() { public int run(int n) { return this.hashCode(); } }",
+            "new Job() { int calls; public int run(int n) { return n; } }",
+            "new Job() { public int run(int n) { return n; } public void extra() { } }",
+            "new Job() { public int run(int k) { return k; } }",
+            "new Base() { public void go() { } void other() { } }",
+        ]
+        for body in bodies {
+            let source = "class T { void f(int k) { Object o = \(body); } }"
+            let found = try await findings(source, libraries: functional).filter { $0.id == "anonymous-can-be-lambda" }
+            XCTAssertEqual(found.count, 0, body)
+        }
+    }
 }

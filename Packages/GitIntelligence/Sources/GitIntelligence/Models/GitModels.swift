@@ -114,3 +114,26 @@ public struct GitBlameLine: Sendable, Hashable {
         self.isUncommitted = isUncommitted
     }
 }
+
+/// A version of a file that ``GitRepository/fileContents(at:path:)`` can read.
+public enum GitRevision: Sendable, Hashable {
+    case head
+    /// The staged version.
+    case index
+    case commit(String)
+    /// The commit's first parent; a root commit has none.
+    case parent(of: String)
+    /// A branch, tag or any other name `git rev-parse` accepts.
+    case ref(String)
+
+    /// The `<rev>:<path>` object name git reads the file from.
+    func objectName(path: String) -> String {
+        switch self {
+        case .head: "HEAD:" + path
+        case .index: ":" + path
+        case .commit(let hash): hash + ":" + path
+        case .parent(let hash): hash + "^:" + path
+        case .ref(let name): name + ":" + path
+        }
+    }
+}

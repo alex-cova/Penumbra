@@ -171,7 +171,7 @@ final class IDERetentionGuardTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(callbacks.count, 3, "the panel's terminal callbacks moved; update this guard")
         for callback in callbacks {
             XCTAssertTrue(
-                callback.text.contains("[weak workspace]"),
+                callback.text.contains("[weak workspace = workspace]"),
                 "line \(callback.number) captures the workspace strongly: \(callback.text.trimmingCharacters(in: .whitespaces))"
             )
         }

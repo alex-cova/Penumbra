@@ -25,6 +25,12 @@ struct IDESidebarPanel: View {
                         action: { workspace.createExplorerFolder() }
                     )
                     IDEExplorerToolbarButton(
+                        systemImage: "scope",
+                        help: "Select Opened File",
+                        action: { workspace.revealActiveFileInExplorer() }
+                    )
+                    .disabled(workspace.workbench.activePane.selectedDocument?.url == nil)
+                    IDEExplorerToolbarButton(
                         systemImage: "rectangle.expand.vertical",
                         help: "Expand All",
                         action: expandAll
@@ -35,6 +41,21 @@ struct IDESidebarPanel: View {
                         action: collapseAll
                     )
                 }
+
+                Menu {
+                    IDEExplorerOptionsMenu(preferences: preferences)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Explorer Options")
+                .accessibilityLabel("Explorer Options")
 
                 IDEExplorerToolbarButton(
                     systemImage: "magnifyingglass",
@@ -48,8 +69,7 @@ struct IDESidebarPanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
-                Toggle("Flatten Packages", isOn: $preferences.flattenJavaPackages)
-                Toggle("Auto-Reveal Active File", isOn: $preferences.explorerAutoReveal)
+                IDEExplorerOptionsMenu(preferences: preferences)
             }
 
             if isSearchPresented {
@@ -66,6 +86,10 @@ struct IDESidebarPanel: View {
                 },
                 flattenPackages: preferences.flattenJavaPackages,
                 javaSourceRootPaths: workspace.javaSupport.javaSourceRootPaths,
+                sortOrder: preferences.explorerSortOrder,
+                foldersOnTop: preferences.explorerFoldersOnTop,
+                showExcludedFiles: preferences.explorerShowExcludedFiles,
+                compactMiddlePackages: preferences.explorerCompactMiddlePackages,
                 nameFilter: searchQuery,
                 gitStatus: workspace.gitStatus,
                 openPaths: workspace.openDocumentPaths,
@@ -122,6 +146,34 @@ struct IDESidebarPanel: View {
         workspace.project.collapseAll()
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         collapsedWhileFiltering = needle.isEmpty ? [] : workspace.project.allDirectoryPaths()
+    }
+}
+
+/// The Explorer's view options (IntelliJ's Project tool window gear menu), shared by the header's
+/// ⋯ menu and its context menu.
+struct IDEExplorerOptionsMenu: View {
+    @Bindable var preferences: IDEPreferences
+
+    var body: some View {
+        Section("Appearance") {
+            Toggle("Flatten Packages", isOn: $preferences.flattenJavaPackages)
+            Toggle("Hide Empty Middle Packages", isOn: $preferences.explorerCompactMiddlePackages)
+                .disabled(preferences.flattenJavaPackages)
+            Toggle("Show Excluded Files", isOn: $preferences.explorerShowExcludedFiles)
+        }
+        Section("Sort") {
+            Picker("Sort", selection: $preferences.explorerSortOrder) {
+                ForEach(IDEExplorerSortOrder.allCases) { order in
+                    Text(order.title).tag(order)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Toggle("Folders Always on Top", isOn: $preferences.explorerFoldersOnTop)
+        }
+        Section("Behavior") {
+            Toggle("Always Select Opened File", isOn: $preferences.explorerAutoReveal)
+        }
     }
 }
 
