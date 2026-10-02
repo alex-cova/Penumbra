@@ -1289,6 +1289,8 @@ public struct DocumentTextExport: Sendable {
     var errorStripeViewForTesting: ErrorStripeView { errorStripeController.view }
     /// Test hook — how many `LineController`s are currently kept.
     var lineControllerCountForTesting: Int { textInputView.lineControllerCount }
+    /// Test hook — the line index, so tests can read heights of lines not yet laid out.
+    var lineManagerForTesting: LineManager { textInputView.lineManager }
     /// Test hook — the selection highlight rects the overlay currently draws.
     var selectionRectsForTesting: [TextSelectionRect] { textInputView.selectionRectsForTesting }
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.

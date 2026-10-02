@@ -155,10 +155,11 @@ final class IDEDiffViewerView: NSView {
 
     private func state(for text: String) -> TextViewState {
         let theme = IDEEditorTheme.shared.current
+        let lineHeightMultiplier = preferences.map { CGFloat($0.lineHeightMultiplier) } ?? TextView.defaultLineHeightMultiplier
         if let language {
-            return TextViewState(text: text, theme: theme, language: language)
+            return TextViewState(text: text, theme: theme, lineHeightMultiplier: lineHeightMultiplier, language: language)
         }
-        return TextViewState(text: text, theme: theme)
+        return TextViewState(text: text, theme: theme, lineHeightMultiplier: lineHeightMultiplier)
     }
 
     private func loadTexts() {

@@ -60,6 +60,7 @@ public enum PenumbraStateBuilder {
     public static func makeState(
         text: String,
         theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport
@@ -69,23 +70,25 @@ public enum PenumbraStateBuilder {
             state = TextViewState(
                 text: text,
                 theme: theme,
+                lineHeightMultiplier: lineHeightMultiplier,
                 language: language,
                 languageProvider: languageProvider,
                 parsePolicy: parsePolicy
             )
         } else {
-            state = TextViewState(text: text, theme: theme)
+            state = TextViewState(text: text, theme: theme, lineHeightMultiplier: lineHeightMultiplier)
         }
         return PreparedState(state)
     }
 
-    /// Loads a document from disk via ``TextViewState/load(contentsOf:theme:language:languageProvider:parsePolicy:encoding:io:progress:)``.
+    /// Loads a document from disk via ``TextViewState/load(contentsOf:theme:lineHeightMultiplier:language:languageProvider:parsePolicy:encoding:io:progress:)``.
     ///
     /// Defaults to ``DocumentLoadIO/memoryMapped`` ingest and ``SyntaxParsePolicy/viewport`` parse
     /// so a host can open a large file without `String(contentsOf:)` and without a full-document tree.
     public static func load(
         contentsOf url: URL,
         theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
@@ -96,6 +99,7 @@ public enum PenumbraStateBuilder {
         let state = try await TextViewState.load(
             contentsOf: url,
             theme: theme,
+            lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
             parsePolicy: parsePolicy,
@@ -114,6 +118,7 @@ public enum PenumbraStateBuilder {
     public static func prepareAndApply(
         text: String,
         theme: Theme,
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage?,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
@@ -130,6 +135,7 @@ public enum PenumbraStateBuilder {
             let prepared = makeState(
                 text: text,
                 theme: themeBox.value,
+                lineHeightMultiplier: lineHeightMultiplier,
                 language: languageBox.value,
                 languageProvider: languageProviderBox.value,
                 parsePolicy: parsePolicy

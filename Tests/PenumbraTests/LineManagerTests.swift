@@ -102,6 +102,28 @@ final class LineManagerTests: XCTestCase {
         _ = lineManager.removeCharacters(in: NSRange(location: longest.location - 1, length: longest.data.totalLength))
         XCTAssertNil(lineManager.initialLongestLine)
     }
+
+    /// Lines keep the estimate as their height until typeset; a new estimate must reach them
+    /// (across leaves) and leave typeset and folded lines alone.
+    func testChangingEstimateMovesOnlyLinesStillAtTheOldEstimate() {
+        let lineManager = makeLineManager((0 ..< 1_000).map { "line \($0)" }.joined(separator: "\n"))
+        lineManager.estimatedLineHeight = 20
+        let typeset = lineManager.line(atRow: 500)
+        lineManager.setHeight(of: typeset, to: 33)
+        lineManager.setHeight(of: lineManager.line(atRow: 700), to: 0)
+
+        lineManager.estimatedLineHeight = 16
+
+        XCTAssertEqual(lineManager.lineInfo(atRow: 0).lineHeight, 16)
+        XCTAssertEqual(lineManager.lineInfo(atRow: 999).lineHeight, 16)
+        XCTAssertEqual(lineManager.lineInfo(atRow: 500).lineHeight, 33)
+        XCTAssertEqual(lineManager.lineInfo(atRow: 700).lineHeight, 0)
+        XCTAssertEqual(typeset.data.lineHeight, 33)
+        XCTAssertEqual(lineManager.line(atRow: 1).data.lineHeight, 16)
+        XCTAssertEqual(lineManager.contentHeight, 998 * 16 + 33, accuracy: 0.01)
+        XCTAssertEqual(lineManager.yPosition(ofRow: 999), 997 * 16 + 33, accuracy: 0.01)
+        XCTAssertEqual(lineManager.row(containingYOffset: 501 * 16 + 33 + 1), 502)
+    }
 }
 
 private extension LineManagerTests {

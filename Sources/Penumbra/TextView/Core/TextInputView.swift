@@ -464,7 +464,7 @@ final class TextInputView: EditorView {
                 selectionRectService.lineHeightMultiplier = lineHeightMultiplier
                 layoutManager.lineHeightMultiplier = lineHeightMultiplier
                 invalidateLines()
-                lineManager.estimatedLineHeight = estimatedLineHeight
+                applyEstimatedLineHeight()
                 layoutManager.setNeedsLayout()
                 setNeedsLayout()
             }
@@ -1872,7 +1872,7 @@ final class TextInputView: EditorView {
 private extension TextInputView {
     private func applyThemeToChildren() {
         gutterWidthService.font = theme.lineNumberFont
-        lineManager.estimatedLineHeight = estimatedLineHeight
+        applyEstimatedLineHeight()
         indentController.indentFont = theme.font
         pageGuideController.font = theme.font
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
@@ -2009,6 +2009,15 @@ private extension TextInputView {
         invalidateLines()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
+    }
+
+    /// Lines not yet typeset take the new estimate as their height, so the document height moves.
+    private func applyEstimatedLineHeight() {
+        guard lineManager.estimatedLineHeight != estimatedLineHeight else {
+            return
+        }
+        lineManager.estimatedLineHeight = estimatedLineHeight
+        contentSizeService.invalidateContentSize()
     }
 
     private func invalidateLines() {

@@ -3863,6 +3863,7 @@ public final class IDEWorkspace {
         let document = try await WorkbenchDocument.load(
             contentsOf: url,
             theme: IDEEditorTheme.shared.current,
+            lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
             language: language,
             languageIdentifier: identifier,
             languageProvider: Self.languageProvider
@@ -5554,6 +5555,7 @@ public final class IDEWorkspace {
         PenumbraStateBuilder.prepareAndApply(
             text: sourceText(for: document),
             theme: IDEEditorTheme.shared.current,
+            lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
             language: document.language,
             languageProvider: Self.languageProvider,
             generation: generation,

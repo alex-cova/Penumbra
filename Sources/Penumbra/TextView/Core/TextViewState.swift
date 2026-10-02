@@ -70,6 +70,9 @@ public final class TextViewState: @unchecked Sendable {
     /// - Parameters:
     ///   - text: The text to display in the text view.
     ///   - theme: The theme to use when syntax highlighting the text.
+    ///   - lineHeightMultiplier: The ``TextView/lineHeightMultiplier`` of the text view the state
+    ///     is for. Lines are sized with it until they are laid out; a different value still works,
+    ///     but ``TextView/setState(_:addUndoAction:)`` then resizes every line once.
     ///   - language: The language to use when parsing the text.
     ///   - languageProvider: Object that can provide embedded languages on demand. A strong reference will be stored to the language provider.
     ///   - parsePolicy: Whether to parse before `init` returns (``SyntaxParsePolicy/eager``, the
@@ -77,6 +80,7 @@ public final class TextViewState: @unchecked Sendable {
     public convenience init(
         text: String,
         theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .eager
@@ -84,6 +88,7 @@ public final class TextViewState: @unchecked Sendable {
         self.init(
             stringView: StringView(string: text),
             theme: theme,
+            lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
             parsePolicy: parsePolicy,
@@ -98,10 +103,17 @@ public final class TextViewState: @unchecked Sendable {
     /// - Parameters:
     ///   - text: The text to display in the text view.
     ///   - theme: The theme to use when syntax highlighting the text.
-    public convenience init(text: String, theme: Theme = DefaultTheme()) {
+    ///   - lineHeightMultiplier: The ``TextView/lineHeightMultiplier`` of the text view the state
+    ///     is for. Lines are sized with it until they are laid out.
+    public convenience init(
+        text: String,
+        theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier
+    ) {
         self.init(
             stringView: StringView(string: text),
             theme: theme,
+            lineHeightMultiplier: lineHeightMultiplier,
             language: nil,
             languageProvider: nil,
             parsePolicy: .eager,
@@ -121,9 +133,13 @@ public final class TextViewState: @unchecked Sendable {
     /// and does not build a full-document tree for large files.
     ///
     /// Only UTF-8 is supported. Cancellation via `Task.cancel()` throws ``DocumentLoadError/cancelled``.
+    ///
+    /// Pass the text view's ``TextView/lineHeightMultiplier`` so the line index is built at the
+    /// height the view lays lines out with.
     public static func load(
         contentsOf url: URL,
         theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
@@ -135,12 +151,13 @@ public final class TextViewState: @unchecked Sendable {
             from: url,
             encoding: encoding,
             io: io,
-            estimatedLineHeight: theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier,
+            estimatedLineHeight: theme.font.totalLineHeight * lineHeightMultiplier,
             progress: progress
         )
         return TextViewState(
             stringView: StringView(pieceTree: loaded.pieceTree),
             theme: theme,
+            lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
             parsePolicy: parsePolicy,
@@ -189,6 +206,7 @@ public final class TextViewState: @unchecked Sendable {
     private init(
         stringView: StringView,
         theme: Theme,
+        lineHeightMultiplier: CGFloat,
         language: TreeSitterLanguage?,
         languageProvider: TreeSitterLanguageProvider?,
         parsePolicy: SyntaxParsePolicy,
@@ -197,8 +215,9 @@ public final class TextViewState: @unchecked Sendable {
     ) {
         self.theme = theme
         self.stringView = stringView
+        let estimatedLineHeight = theme.font.totalLineHeight * lineHeightMultiplier
         if let packedIndex {
-            packedIndex.estimatedLineHeight = theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier
+            packedIndex.setEstimatedLineHeight(estimatedLineHeight)
             self.lineManager = LineManager(stringView: stringView, packedIndex: packedIndex)
         } else {
             self.lineManager = LineManager(stringView: stringView)
@@ -214,14 +233,14 @@ public final class TextViewState: @unchecked Sendable {
         } else {
             self.languageMode = PlainTextInternalLanguageMode()
         }
-        prepare(lineMetrics: lineMetrics, hasPackedIndex: packedIndex != nil)
+        prepare(estimatedLineHeight: estimatedLineHeight, lineMetrics: lineMetrics, hasPackedIndex: packedIndex != nil)
     }
 }
 
 private extension TextViewState {
-    private func prepare(lineMetrics: [LineMetric]?, hasPackedIndex: Bool) {
+    private func prepare(estimatedLineHeight: CGFloat, lineMetrics: [LineMetric]?, hasPackedIndex: Bool) {
         PenumbraSignposts.interval("TextViewState.prepare") {
-            lineManager.estimatedLineHeight = theme.font.totalLineHeight * TextView.defaultLineHeightMultiplier
+            lineManager.estimatedLineHeight = estimatedLineHeight
             if hasPackedIndex {
                 lengthOfLongestLine = lineManager.initialLongestLine?.data.totalLength
             } else if let lineMetrics {

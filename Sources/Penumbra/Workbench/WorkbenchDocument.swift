@@ -73,6 +73,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     public static func load(
         contentsOf url: URL,
         theme: Theme = DefaultTheme(),
+        lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage? = nil,
         languageIdentifier: String? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
@@ -82,6 +83,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         let prepared = try await PenumbraStateBuilder.load(
             contentsOf: url,
             theme: theme,
+            lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
             parsePolicy: parsePolicy,

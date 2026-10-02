@@ -123,7 +123,8 @@ typealias PackedLeafNode = RedBlackTreeNode<PackedLeafID, Int, PackedLeafData>
 final class PackedLineIndex {
     private let tree: PackedLeafTree
     private var nextID: UInt32 = 1
-    var estimatedLineHeight: CGFloat
+    /// Height of a line that has not been typeset. Change it with `setEstimatedLineHeight(_:)`.
+    private(set) var estimatedLineHeight: CGFloat
     private(set) var longestRow = 0
     private var streamingPacked: [[PackedLine]] = []
     private var streamingCurrent: [PackedLine] = []
@@ -151,6 +152,49 @@ final class PackedLineIndex {
         data.totalLineHeight = estimatedLineHeight
         data.nodeTotalByteCount = ByteCount(0)
         tree.root.value = 0
+    }
+
+    /// Changes the estimate and moves every line still at the old one onto it. A line keeps the
+    /// estimate as its height until it is typeset, so without this a later change (a state
+    /// prepared at the default line-height multiplier, a new font or multiplier) leaves those
+    /// lines at the stale height: the document's height drifts as it is scrolled, and rows not
+    /// yet typeset sit at a different pitch from typeset ones (visible as uneven minimap rows).
+    /// O(lines), and only when the estimate actually changes.
+    /// - Returns: The stored height lines had before, if any line moved.
+    @discardableResult
+    func setEstimatedLineHeight(_ newValue: CGFloat) -> Float32? {
+        let oldHeight = Float32(estimatedLineHeight)
+        let newHeight = Float32(newValue)
+        estimatedLineHeight = newValue
+        guard oldHeight != newHeight, replaceHeights(oldHeight, with: newHeight, in: tree.root) else {
+            return nil
+        }
+        return oldHeight
+    }
+
+    /// Post-order, so each node's totals are rebuilt from children that are already up to date
+    /// instead of `updateAfterChangingChildren` walking to the root once per leaf.
+    private func replaceHeights(_ oldHeight: Float32, with newHeight: Float32, in node: PackedLeafNode?) -> Bool {
+        guard let node else {
+            return false
+        }
+        let leftChanged = replaceHeights(oldHeight, with: newHeight, in: node.left)
+        let rightChanged = replaceHeights(oldHeight, with: newHeight, in: node.right)
+        // One assignment: every write to `lines` recomputes the leaf's sums.
+        var lines = node.data.lines
+        var leafChanged = false
+        for index in lines.indices where lines[index].height == oldHeight {
+            lines[index].height = newHeight
+            leafChanged = true
+        }
+        if leafChanged {
+            node.data.lines = lines
+        }
+        guard leafChanged || leftChanged || rightChanged else {
+            return false
+        }
+        _ = tree.childrenUpdater?.updateAfterChangingChildren(of: node)
+        return true
     }
 
     func rebuild(from metrics: [LineMetric], estimatedLineHeight: CGFloat) {

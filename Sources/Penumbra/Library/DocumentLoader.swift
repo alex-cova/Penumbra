@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// Errors thrown by ``TextViewState/load(contentsOf:theme:language:languageProvider:parsePolicy:encoding:io:progress:)``.
+/// Errors thrown by ``TextViewState/load(contentsOf:theme:lineHeightMultiplier:language:languageProvider:parsePolicy:encoding:io:progress:)``.
 public enum DocumentLoadError: Error, Equatable {
     /// The load task was cancelled.
     case cancelled
@@ -13,7 +13,7 @@ public enum DocumentLoadError: Error, Equatable {
     case fileChanged
 }
 
-/// How ``TextViewState/load(contentsOf:theme:language:languageProvider:parsePolicy:encoding:io:progress:)``
+/// How ``TextViewState/load(contentsOf:theme:lineHeightMultiplier:language:languageProvider:parsePolicy:encoding:io:progress:)``
 /// pulls bytes off disk.
 ///
 /// Both strategies produce a live file-backed ``PieceTree`` (private clone or copied temp, then

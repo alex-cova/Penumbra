@@ -106,9 +106,17 @@ final class LineManager {
     var contentHeight: CGFloat {
         packed.contentHeight
     }
+    /// Height of a line until it is typeset. Changing it moves every line still at the old
+    /// estimate onto the new one, which changes `contentHeight`.
     var estimatedLineHeight: CGFloat = 12 {
         didSet {
-            packed.estimatedLineHeight = estimatedLineHeight
+            guard let oldHeight = packed.setEstimatedLineHeight(estimatedLineHeight) else {
+                return
+            }
+            let newHeight = CGFloat(Float32(estimatedLineHeight))
+            for handle in handles.values where handle.data.lineHeight == CGFloat(oldHeight) {
+                handle.data.lineHeight = newHeight
+            }
         }
     }
     var firstLine: DocumentLineNode {
