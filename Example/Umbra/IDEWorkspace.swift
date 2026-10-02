@@ -4251,9 +4251,9 @@ public final class IDEWorkspace {
         let key = ObjectIdentifier(host.textView)
         lineMarkerTasks[key]?.cancel()
         let kinds = preferences.enabledJavaGutterIcons
-        // The icons arrive later; their columns exist from the first layout so the text stays put.
-        host.textView.reservedLineMarkerSlots = languageIdentifier == "java" && !kinds.isEmpty ? TextView.maximumLineMarkerSlots : 0
-        if languageIdentifier == "java" { host.textView.alwaysShowGutterDecorationColumn = true }
+        // The icons arrive later; their column exists from the first layout so the text stays put.
+        // Run buttons share it, so it is kept even with every marker kind turned off.
+        host.textView.reservedLineMarkerSlots = languageIdentifier == "java" ? TextView.maximumLineMarkerSlots : 0
         guard languageIdentifier == "java", !kinds.isEmpty else {
             lineMarkerTasks[key] = nil
             javaLineMarkers[key] = nil
@@ -5282,7 +5282,7 @@ public final class IDEWorkspace {
         let locations = HTTPRequestParser.requestLocations(in: textView.text)
         httpFileCanSend = !locations.isEmpty
         textView.setGutterDecorations(locations.map {
-            GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request")
+            GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn)
         })
         textView.gutterDecorationHandler = { [weak self, weak textView] line in
             guard let self, let textView else { return }
@@ -5336,8 +5336,8 @@ public final class IDEWorkspace {
 
     /// The Java gutter: breakpoints, test run buttons in a test source (one per test method, one on
     /// the class), and a run button on every `main`. A click on a breakpoint removes it, a click on
-    /// a run button opens its Run / Debug menu, and a click on any other line (or its number) adds
-    /// a breakpoint; a right click opens the breakpoint's properties or the line's menu.
+    /// a run button opens its Run / Debug menu, and a click on any other line number adds a
+    /// breakpoint; a right click opens the breakpoint's properties or the line's menu.
     func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
         guard isJava, let fileURL else {
             javaFileCanTest = false

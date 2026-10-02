@@ -123,6 +123,24 @@ final class GutterLineClickTests: XCTestCase {
         XCTAssertEqual(lineClicks, [3])
     }
 
+    func testClickOnADecorationInPlaceOfALineNumberIsALineClick() throws {
+        let textView = makeTextView("one\ntwo\nthree")
+        var lineClicks: [Int] = []
+        var decorationClicks: [Int] = []
+        textView.gutterLineClickHandler = { lineClicks.append($0.line); return true }
+        textView.gutterDecorationHandler = { decorationClicks.append($0) }
+        textView.setGutterDecorations([
+            GutterDecoration(line: 2, symbolName: "circle.fill", accessibilityLabel: "Breakpoint", placement: .lineNumber)
+        ])
+        textView.layoutSubtreeIfNeeded()
+        let point = try gutterPoint(row: 1, x: textView.gutterWidth - 8, in: textView)
+        let view = try hitView(at: point)
+        view.mouseDown(with: try event(.leftMouseDown, at: point))
+        view.mouseUp(with: try event(.leftMouseUp, at: point))
+        XCTAssertEqual(lineClicks, [2])
+        XCTAssertTrue(decorationClicks.isEmpty)
+    }
+
     func testDecorationsDrawWithoutRetainingLineHandles() throws {
         let text = (1 ... 2000).map { "line \($0)" }.joined(separator: "\n")
         let textView = makeTextView(text)

@@ -107,6 +107,7 @@ final class LayoutManager {
     var showLineNumbers = false {
         didSet {
             if showLineNumbers != oldValue {
+                updateGutterDecorationPlacement()
                 updateShownViews()
                 setNeedsLayout()
             }
@@ -227,10 +228,11 @@ final class LayoutManager {
     private let gutterDecorationView = GutterDecorationView()
     var gutterDecorations: [GutterDecoration] = [] {
         didSet {
-            gutterDecorationView.decorations = gutterDecorations
-            updateGutterDecorationColumnVisibility()
+            updateGutterDecorationPlacement()
         }
     }
+    /// The decorations drawn in place of a line number, by 1-based line.
+    private var lineNumberDecorations: [Int: GutterDecoration] = [:]
     /// Keeps the decoration column (and so the text's x position) while there are no decorations.
     var alwaysShowGutterDecorationColumn = false {
         didSet {
@@ -240,7 +242,10 @@ final class LayoutManager {
         }
     }
     var gutterDecorationHandler: ((Int) -> Void)? {
-        didSet { gutterDecorationView.onLineClicked = gutterDecorationHandler }
+        didSet {
+            gutterDecorationView.onLineClicked = gutterDecorationHandler
+            lineMarkerView.onDecorationClicked = gutterDecorationHandler
+        }
     }
     var hasGutterDecorations: Bool {
         !gutterDecorations.isEmpty
@@ -273,10 +278,44 @@ final class LayoutManager {
 
     /// Clicks in the line-number column, and in the decoration column away from a decoration.
     var gutterLineClickHandler: ((GutterLineClick) -> Bool)? {
-        didSet { gutterDecorationView.onGutterLineClicked = gutterLineClickHandler }
+        didSet {
+            gutterDecorationView.onGutterLineClicked = gutterLineClickHandler
+            lineMarkerView.onGutterLineClicked = gutterLineClickHandler
+        }
     }
     private var showsGutterDecorationColumn: Bool {
-        alwaysShowGutterDecorationColumn || !gutterDecorations.isEmpty
+        alwaysShowGutterDecorationColumn || !gutterDecorationView.decorations.isEmpty
+    }
+    /// Splits the decorations between the decoration column, the line numbers they replace and the
+    /// line-marker column. Without line numbers the line-number ones go in the decoration column.
+    private func updateGutterDecorationPlacement() {
+        var columnDecorations: [GutterDecoration] = []
+        var lineNumberDecorations: [Int: GutterDecoration] = [:]
+        var markerColumnDecorations: [GutterDecoration] = []
+        for decoration in gutterDecorations {
+            switch decoration.placement {
+            case .lineNumber where showLineNumbers:
+                if lineNumberDecorations[decoration.line] == nil {
+                    lineNumberDecorations[decoration.line] = decoration
+                }
+            case .lineMarkerColumn:
+                markerColumnDecorations.append(decoration)
+            case .decorationColumn, .lineNumber:
+                columnDecorations.append(decoration)
+            }
+        }
+        self.lineNumberDecorations = lineNumberDecorations
+        gutterDecorationView.decorations = columnDecorations
+        updateGutterDecorationColumnVisibility()
+        // Stable, so the first decoration on a line is the one shown.
+        let sortedMarkerColumnDecorations = markerColumnDecorations.enumerated()
+            .sorted { ($0.element.line, $0.offset) < ($1.element.line, $1.offset) }
+            .map(\.element)
+        if sortedMarkerColumnDecorations != lineMarkerView.decorations {
+            lineMarkerView.decorations = sortedMarkerColumnDecorations
+            updateLineMarkerColumnWidth()
+            lineMarkerView.isHidden = !showsLineMarkerColumn
+        }
     }
     private func updateGutterDecorationColumnVisibility() {
         gutterWidthService.showGutterDecorations = showsGutterDecorationColumn
@@ -360,6 +399,10 @@ final class LayoutManager {
     var hasLineMarkers: Bool {
         !lineMarkerStore.isEmpty
     }
+    /// Markers, or decorations placed in their column (run buttons).
+    private var showsLineMarkerColumn: Bool {
+        hasLineMarkers || !lineMarkerView.decorations.isEmpty
+    }
 
     /// Moves the line markers through an edit; see ``GutterLineMarkerStore/applyEdit(_:)``.
     func applyLineMarkerEdit(_ edit: GutterLineMarkerEdit) {
@@ -380,14 +423,15 @@ final class LayoutManager {
     }
 
     private func updateLineMarkerColumnWidth() {
-        let slots = min(max(lineMarkerStore.slotCount, reservedLineMarkerSlots), GutterLineMarkerView.maximumSlots)
+        let decorationSlots = lineMarkerView.decorations.isEmpty ? 0 : 1
+        let slots = min(max(lineMarkerStore.slotCount, reservedLineMarkerSlots, decorationSlots), GutterLineMarkerView.maximumSlots)
         gutterWidthService.lineMarkerColumnWidth = CGFloat(slots) * GutterLineMarkerView.slotWidth
     }
 
     private func lineMarkersDidChange() {
         lineMarkerView.markersDidChange()
         updateLineMarkerColumnWidth()
-        lineMarkerView.isHidden = lineMarkerStore.isEmpty
+        lineMarkerView.isHidden = !showsLineMarkerColumn
         setNeedsLayout()
     }
     var lineMarkerHandler: ((GutterLineMarker, CGRect) -> Void)? {
@@ -1357,6 +1401,8 @@ extension LayoutManager {
         lineNumberView.text = "\(line.index + 1)"
         lineNumberView.font = theme.lineNumberFont
         lineNumberView.textColor = theme.lineNumberColor
+        lineNumberView.decorationColor = gutterDecorationView.iconColor
+        lineNumberView.decoration = lineNumberDecorations.isEmpty ? nil : lineNumberDecorations[line.index + 1]
         lineNumberView.frame = CGRect(x: xPosition, y: yPosition, width: gutterWidthService.lineNumberWidth, height: fontLineHeight)
     }
 
@@ -1626,7 +1672,7 @@ extension LayoutManager {
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
         gutterDecorationView.isHidden = !showsGutterDecorationColumn
-        lineMarkerView.isHidden = !hasLineMarkers
+        lineMarkerView.isHidden = !showsLineMarkerColumn
         gutterAnnotationView.isHidden = !hasGutterAnnotations
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive

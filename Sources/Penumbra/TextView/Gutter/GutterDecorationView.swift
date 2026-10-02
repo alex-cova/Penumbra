@@ -39,7 +39,8 @@ final class GutterDecorationView: EditorView {
             return
         }
         if event.modifierFlags.contains(.control) {
-            if onGutterLineClicked?(GutterLineClick(line: line, isSecondary: true, event: event)) != true {
+            let decoration = decorations.first { $0.line == line }
+            if onGutterLineClicked?(GutterLineClick(line: line, isSecondary: true, event: event, decoration: decoration)) != true {
                 super.mouseDown(with: event)
             }
             return
@@ -56,17 +57,16 @@ final class GutterDecorationView: EditorView {
     override func rightMouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard let line = anyLine(atLocalY: point.y),
-              onGutterLineClicked?(GutterLineClick(line: line, isSecondary: true, event: event)) == true else {
+              onGutterLineClicked?(GutterLineClick(
+                  line: line, isSecondary: true, event: event, decoration: decorations.first { $0.line == line }
+              )) == true else {
             super.rightMouseDown(with: event)
             return
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext,
-              let lineManager else { return }
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .regular)
-        let badgeConfig = NSImage.SymbolConfiguration(pointSize: iconSize * 0.55, weight: .bold)
+        guard let lineManager else { return }
         let lineCount = lineManager.lineCount
         for decoration in decorations {
             guard decoration.line >= 1, decoration.line <= lineCount else { continue }
@@ -74,19 +74,7 @@ final class GutterDecorationView: EditorView {
             let y = textContainerInsetTop + lineManager.yPosition(ofRow: decoration.line - 1) + 2
             let rect = CGRect(x: (bounds.width - iconSize) / 2, y: y, width: iconSize, height: iconSize)
             guard rect.intersects(dirtyRect) else { continue }
-            guard let image = NSImage(systemSymbolName: decoration.symbolName, accessibilityDescription: decoration.accessibilityLabel)?
-                .withSymbolConfiguration(symbolConfig) else { continue }
-            let color = decoration.tintColor.flatMap { NSColor(cgColor: $0) } ?? iconColor
-            context.saveGState()
-            image.tinted(with: color).draw(in: rect)
-            if let badgeName = decoration.badgeSymbolName,
-               let badge = NSImage(systemSymbolName: badgeName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(badgeConfig) {
-                let side = iconSize * 0.6
-                let badgeRect = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
-                badge.tinted(with: .white).draw(in: badgeRect)
-            }
-            context.restoreGState()
+            decoration.drawIcon(in: rect, defaultColor: iconColor)
         }
     }
 
@@ -98,6 +86,28 @@ final class GutterDecorationView: EditorView {
         let info = lineManager.lineInfo(atRow: row)
         guard contentY < lineManager.yPosition(ofRow: row) + info.lineHeight else { return nil }
         return row + 1
+    }
+}
+
+extension GutterDecoration {
+    /// Draws the icon, and its badge, filling the square `rect`.
+    func drawIcon(in rect: CGRect, defaultColor: NSColor) {
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: rect.height, weight: .regular)
+        guard let context = NSGraphicsContext.current?.cgContext,
+              let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)?
+                .withSymbolConfiguration(symbolConfig) else { return }
+        let color = tintColor.flatMap { NSColor(cgColor: $0) } ?? defaultColor
+        context.saveGState()
+        image.tinted(with: color).draw(in: rect)
+        let badgeConfig = NSImage.SymbolConfiguration(pointSize: rect.height * 0.55, weight: .bold)
+        if let badgeSymbolName,
+           let badge = NSImage(systemSymbolName: badgeSymbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(badgeConfig) {
+            let side = rect.height * 0.6
+            let badgeRect = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+            badge.tinted(with: .white).draw(in: badgeRect)
+        }
+        context.restoreGState()
     }
 }
 

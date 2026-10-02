@@ -514,6 +514,9 @@ public final class IDEPreferences {
     func apply(to textView: TextView, repaint: Bool = false) {
         textView.indentStrategy = useSpacesForTab ? .space(length: tabWidth) : .tab(length: tabWidth)
         textView.showLineNumbers = showLineNumbers
+        // 4 pt more than Penumbra's default, so the numbers (and a breakpoint in place of one)
+        // clear the gutter's left edge.
+        textView.gutterLeadingPadding = 6
         textView.isLineFoldingEnabled = isLineFoldingEnabled
         textView.isLineWrappingEnabled = wrapLines
         textView.showMinimap = showMinimap

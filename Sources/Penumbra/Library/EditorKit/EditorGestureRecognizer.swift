@@ -102,6 +102,16 @@ open class EditorLabel: EditorView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// With `.onSetNeedsDisplay` a resize reuses the old drawing, stretched to the new size, so a
+    /// right-aligned number moved sideways when the gutter's digit column changed width.
+    override open func setFrameSize(_ newSize: NSSize) {
+        let sizeChanged = newSize != frame.size
+        super.setFrameSize(newSize)
+        if sizeChanged {
+            needsDisplay = true
+        }
+    }
+
     override open var intrinsicContentSize: NSSize {
         // Always no-metric — LineNumberView frames the label manually.
         // Returning live text metrics feeds SwiftUI/AppKit measuring loops.

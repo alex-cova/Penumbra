@@ -225,4 +225,68 @@ final class GutterLineMarkerTests: XCTestCase {
         hit?.mouseDown(with: event)
         XCTAssertEqual(clicked, [4])
     }
+
+    // MARK: - Run buttons in the column
+
+    private func runButton(line: Int) -> GutterDecoration {
+        GutterDecoration(line: line, symbolName: "play.fill", accessibilityLabel: "Run", placement: .lineMarkerColumn)
+    }
+
+    func testRunButtonsAloneOpenTheColumnInsteadOfTheDecorationColumn() {
+        let textView = makeTextView("one\ntwo\nthree")
+        let plain = textView.gutterWidth
+        textView.setGutterDecorations([runButton(line: 2)])
+        XCTAssertEqual(textView.gutterWidth, plain + GutterLineMarkerView.slotWidth, accuracy: 0.5)
+        // Markers share the slot.
+        textView.setLineMarkers([marker(0, line: 1)])
+        XCTAssertEqual(textView.gutterWidth, plain + GutterLineMarkerView.slotWidth, accuracy: 0.5)
+        textView.setLineMarkers([])
+        textView.setGutterDecorations([])
+        XCTAssertEqual(textView.gutterWidth, plain, accuracy: 0.5)
+    }
+
+    func testARunButtonTakesItsLineFromTheMarkersAndReachesTheDecorationHandler() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        let textView = makeTextView("one\ntwo\nthree")
+        window.contentView = textView
+        var markerClicks: [Int] = []
+        var decorationClicks: [Int] = []
+        var secondaryClicks: [(line: Int, decoration: GutterDecoration?)] = []
+        textView.lineMarkerHandler = { marker, _ in markerClicks.append(marker.id) }
+        textView.gutterDecorationHandler = { decorationClicks.append($0) }
+        textView.gutterLineClickHandler = { secondaryClicks.append(($0.line, $0.decoration)); return true }
+        textView.setLineMarkers([marker(4, line: 1), marker(5, line: 2)])
+        textView.setGutterDecorations([runButton(line: 2), runButton(line: 3)])
+        textView.layoutSubtreeIfNeeded()
+        let view = try XCTUnwrap(firstSubview(of: GutterLineMarkerView.self, in: textView))
+        let lineManager = try XCTUnwrap(view.lineManager)
+        func point(row: Int) -> CGPoint {
+            CGPoint(x: GutterLineMarkerView.slotWidth / 2,
+                    y: view.textContainerInsetTop + lineManager.yPosition(ofRow: row) + view.rowHeight / 2 - view.frame.minY)
+        }
+        XCTAssertEqual(view.marker(at: point(row: 0))?.marker.id, 4)
+        XCTAssertNil(view.decoration(at: point(row: 0)))
+        XCTAssertNil(view.marker(at: point(row: 1)), "the run button hides line 2's marker")
+        XCTAssertEqual(view.decoration(at: point(row: 1))?.line, 2)
+        for row in [0, 1, 2] {
+            let inWindow = view.convert(point(row: row), to: nil)
+            let frameView = try XCTUnwrap(window.contentView?.superview)
+            let hit = frameView.hitTest(frameView.convert(inWindow, from: nil))
+            XCTAssertTrue(hit === view, "hit \(String(describing: hit))")
+            hit?.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            )))
+        }
+        XCTAssertEqual(markerClicks, [4])
+        XCTAssertEqual(decorationClicks, [2, 3])
+        // A right click names the run button, so the host can tell it from the line's number.
+        let inWindow = view.convert(point(row: 2), to: nil)
+        view.rightMouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        )))
+        XCTAssertEqual(secondaryClicks.map(\.line), [3])
+        XCTAssertEqual(secondaryClicks.first?.decoration?.placement, .lineMarkerColumn)
+    }
 }

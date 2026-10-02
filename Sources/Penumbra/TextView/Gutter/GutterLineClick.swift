@@ -10,11 +10,15 @@ public struct GutterLineClick {
     public let isSecondary: Bool
     /// The mouse-down event, for positioning a menu or popover at the click.
     public let event: NSEvent
+    /// The decoration a secondary click landed on in the decoration or line-marker column (a run
+    /// button); `nil` on a line number, even one a decoration replaces.
+    public let decoration: GutterDecoration?
 
-    public init(line: Int, isSecondary: Bool, event: NSEvent) {
+    public init(line: Int, isSecondary: Bool, event: NSEvent, decoration: GutterDecoration? = nil) {
         self.line = line
         self.isSecondary = isSecondary
         self.event = event
+        self.decoration = decoration
     }
 }
 

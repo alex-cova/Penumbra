@@ -29,28 +29,32 @@ extension IDEWorkspace {
     func applyJavaGutter(_ gutter: JavaGutterContent, to textView: TextView) {
         // A refresh that finishes after the pane moved to another file must not paint this one's.
         guard documentURL(shownIn: textView) == gutter.fileURL.standardizedFileURL else { return }
-        textView.alwaysShowGutterDecorationColumn = true
         applyExecutionLineBackground(to: textView, shownFile: gutter.fileURL)
         let fileBreakpoints = breakpointStore.breakpoints(forFile: gutter.fileURL, project: project.rootURL)
         var decorations = fileBreakpoints.map(breakpointDecoration)
-        var occupied = Set(fileBreakpoints.map(\.line))
+        // One run button per line. A breakpoint's line keeps its run button: the breakpoint is
+        // drawn in the line number and the button right of it.
+        var occupied = Set<Int>()
         let green = NSColor.systemGreen.cgColor
         if let testClass = gutter.testClass, !testClass.methods.isEmpty {
             if let line = gutter.classLine, occupied.insert(line).inserted {
                 decorations.append(GutterDecoration(
                     line: line, symbolName: "play.circle.fill",
-                    accessibilityLabel: "Run the tests in \(Self.simpleName(testClass.qualifiedName))", tintColor: green
+                    accessibilityLabel: "Run the tests in \(Self.simpleName(testClass.qualifiedName))", tintColor: green,
+                    placement: .lineMarkerColumn
                 ))
             }
             for method in testClass.methods where occupied.insert(method.line).inserted {
                 decorations.append(GutterDecoration(
-                    line: method.line, symbolName: "play.circle", accessibilityLabel: "Run \(method.displayName)", tintColor: green
+                    line: method.line, symbolName: "play.circle", accessibilityLabel: "Run \(method.displayName)", tintColor: green,
+                    placement: .lineMarkerColumn
                 ))
             }
         }
         for main in gutter.mains where occupied.insert(main.line).inserted {
             decorations.append(GutterDecoration(
-                line: main.line, symbolName: "play.fill", accessibilityLabel: "Run \(main.simpleClassName).main()", tintColor: green
+                line: main.line, symbolName: "play.fill", accessibilityLabel: "Run \(main.simpleClassName).main()", tintColor: green,
+                placement: .lineMarkerColumn
             ))
         }
         textView.setGutterDecorations(decorations)
@@ -71,7 +75,8 @@ extension IDEWorkspace {
     }
 
     /// Red for a breakpoint that stops, orange for one that only logs, grey when disabled or
-    /// muted; a `?` when it has a condition, a check once the debugger placed it.
+    /// muted; a `?` when it has a condition, a check once the debugger placed it. Drawn in place
+    /// of the line number, so a click on it reaches `javaGutterLineClicked`.
     func breakpointDecoration(_ breakpoint: JavaBreakpoint) -> GutterDecoration {
         let active = breakpoint.isEnabled && !breakpointsMuted
         let logOnly = breakpoint.suspendPolicy == .none
@@ -91,16 +96,14 @@ extension IDEWorkspace {
             accessibilityLabel: label,
             tintColor: color.cgColor,
             badgeSymbolName: badge,
+            placement: .lineNumber,
             id: Self.breakpointDecorationPrefix + breakpoint.id.uuidString
         )
     }
 
-    /// A click on a decoration: a breakpoint goes, a run button opens its Run / Debug menu.
+    /// A click on a decoration: a run button opens its Run / Debug menu, a breakpoint goes. The
+    /// run button wins on a line with both; a breakpoint only lands here without line numbers.
     private func javaGutterDecorationClicked(line: Int, gutter: JavaGutterContent, textView: TextView) {
-        if let breakpoint = lineBreakpoint(at: line, file: gutter.fileURL) {
-            removeBreakpoint(breakpoint)
-            return
-        }
         if let testClass = gutter.testClass {
             if gutter.classLine == line {
                 showTestRunMenu(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName), in: textView)
@@ -113,15 +116,20 @@ extension IDEWorkspace {
         }
         if gutter.mains.contains(where: { $0.line == line }) {
             showMainRunMenu(atLine: line, file: gutter.fileURL, in: textView)
+            return
+        }
+        if let breakpoint = lineBreakpoint(at: line, file: gutter.fileURL) {
+            removeBreakpoint(breakpoint)
         }
     }
 
     /// A click on a line number or an empty part of the decoration column adds or removes a
-    /// breakpoint; a right click opens the breakpoint's properties, or the line's menu.
+    /// breakpoint; a right click opens the breakpoint's properties, or the line's menu. A right
+    /// click on a run button opens the line's menu even when the line has a breakpoint.
     private func javaGutterLineClicked(_ click: GutterLineClick, gutter: JavaGutterContent, textView: TextView) -> Bool {
         let breakpoint = lineBreakpoint(at: click.line, file: gutter.fileURL)
         if click.isSecondary {
-            if let breakpoint {
+            if let breakpoint, click.decoration?.placement != .lineMarkerColumn {
                 showBreakpointPopover(breakpoint, in: textView, focusCondition: false)
             } else {
                 showGutterLineMenu(click, gutter: gutter, textView: textView)
@@ -141,7 +149,11 @@ extension IDEWorkspace {
         menu.autoenablesItems = false
         let toggle = IDEClosureMenuItem(title: "Toggle Line Breakpoint") { [weak self, weak textView] in
             guard let self, let textView else { return }
-            self.addLineBreakpoint(atLine: click.line, file: gutter.fileURL, in: textView)
+            if let breakpoint = self.lineBreakpoint(at: click.line, file: gutter.fileURL) {
+                self.removeBreakpoint(breakpoint)
+            } else {
+                self.addLineBreakpoint(atLine: click.line, file: gutter.fileURL, in: textView)
+            }
         }
         IDERunGutterMenu.showShortcut(IDEMenuShortcuts.shortcut(for: .toggleBreakpoint, in: preferences.keymapPreset), on: toggle)
         menu.addItem(toggle)
