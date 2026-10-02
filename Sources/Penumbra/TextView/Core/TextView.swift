@@ -2444,10 +2444,23 @@ private extension TextView {
                         self.contentSize = preferred
                         self.contentOffset = oldContentOffset
                     }
+                    self.clampVerticalContentOffsetToContent()
                     self.setNeedsLayout()
                 }
             }
         }
+    }
+
+    /// Pulls `contentOffset` back inside the scrollable range once the size is known. A caret
+    /// reveal made while the view is still short (a restored session applies its selection before
+    /// the window has its final height) scrolls the last line to the top; nothing moved it back
+    /// when the view grew, so a short file opened blank until the first scroll.
+    private func clampVerticalContentOffsetToContent() {
+        let clampedY = min(max(contentOffset.y, minimumContentOffset.y), maximumContentOffset.y)
+        guard clampedY != contentOffset.y else {
+            return
+        }
+        contentOffset = CGPoint(x: contentOffset.x, y: clampedY)
     }
 
     private func syncContentSizeIfNeeded() {
