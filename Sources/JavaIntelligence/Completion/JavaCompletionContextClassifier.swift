@@ -183,7 +183,10 @@ public enum JavaCompletionContextClassifier {
             switch node.type {
             case "line_comment", "block_comment", "comment":
                 return offset > node.startByte && (node.type != "line_comment" || offset <= node.endByte)
-            case "string_literal", "character_literal", "text_block", "string_fragment":
+            case "string_fragment", "multiline_string_fragment":
+                // The text between the quotes, so its own edges are inside the string.
+                return offset >= node.startByte && offset <= node.endByte
+            case "string_literal", "character_literal", "text_block":
                 return offset > node.startByte && offset < node.endByte
             case "block", "class_body", "program":
                 return false

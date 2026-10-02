@@ -165,7 +165,34 @@ public actor JavaCompletionProvider: CompletionProvider {
         let location = min(max(0, utf16Offset), ns.length)
         let restOfLine = ns.substring(from: location).prefix { $0 != "\n" && $0 != "\r\n" }
         let closesStatement = restOfLine.allSatisfy { $0 == " " || $0 == "\t" } && isInsideMethodBody(ns.substring(to: location))
-        return ns.substring(to: location) + dummyIdentifier + (closesStatement ? ";" : "") + ns.substring(from: location)
+        let closers = closesStatement ? unclosedParentheses(onLineEndingAt: location, in: ns) : 0
+        return ns.substring(to: location) + dummyIdentifier + String(repeating: ")", count: closers) + (closesStatement ? ";" : "") + ns.substring(from: location)
+    }
+
+    /// How many `(` the caret's line leaves open (`if (a instanceof B b && b.__penumbra__`).
+    /// Without the closing parentheses the grammar's error recovery reads the tail as a type and
+    /// drops the pattern variable. Strings and character literals are skipped; a line that closes
+    /// more than it opens counts as balanced.
+    private static func unclosedParentheses(onLineEndingAt location: Int, in text: NSString) -> Int {
+        var lineStart = location
+        while lineStart > 0, text.character(at: lineStart - 1) != 0x0A { lineStart -= 1 }
+        var depth = 0
+        var quote: unichar?
+        var index = lineStart
+        while index < location {
+            let character = text.character(at: index)
+            if let open = quote {
+                if character == 0x5C { index += 1 } else if character == open { quote = nil }
+            } else if character == 0x22 || character == 0x27 {
+                quote = character
+            } else if character == 0x28 {
+                depth += 1
+            } else if character == 0x29, depth > 0 {
+                depth -= 1
+            }
+            index += 1
+        }
+        return depth
     }
 
     /// Cheap check that the caret is inside a block rather than at class-body level, where a

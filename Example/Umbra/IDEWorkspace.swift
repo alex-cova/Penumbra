@@ -784,7 +784,7 @@ public final class IDEWorkspace {
         if pane.id == workbench.activePaneID {
             statusLanguage = identifier
         }
-        scheduleSemanticHighlighting(host: host, languageIdentifier: identifier)
+        scheduleSemanticHighlighting(host: host, languageIdentifier: identifier, delay: 0)
         Task { await workspaceBridge.syncPane(pane) }
     }
 
@@ -4200,14 +4200,16 @@ public final class IDEWorkspace {
 
     func semanticHighlightingPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier)
+            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
         }
     }
 
     /// Recolours a pane's Java file once typing pauses. A newer request replaces the pending one,
     /// and the result is dropped if the text changed while it was computed, so it never paints
     /// stale offsets and never blocks typing (the pass runs off the main actor).
-    private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?) {
+    /// `delay` debounces typing; opening a file or switching to one passes 0 so the semantic
+    /// colours land with the first frames instead of repainting the tree-sitter ones later.
+    private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 250_000_000) {
         let key = ObjectIdentifier(host.textView)
         semanticHighlightTasks[key]?.cancel()
         guard preferences.semanticHighlighting, languageIdentifier == "java" else {
@@ -4217,7 +4219,7 @@ public final class IDEWorkspace {
         }
         let provider = javaSupport.semanticTokenProvider
         semanticHighlightTasks[key] = Task { [weak host] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             guard !Task.isCancelled, let textView = host?.textView else { return }
             let generation = textView.contentGeneration
             let export = textView.exportDocumentText()
@@ -5671,7 +5673,7 @@ public final class IDEWorkspace {
         // from the previous document in this pane would otherwise keep showing stale content
         // until the next keystroke.
         host.markdownPreviewController.refresh()
-        scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier)
+        scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
         // `setState` cleared the blame column; bring it back for a file that has blame on.

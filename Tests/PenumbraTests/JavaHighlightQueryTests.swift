@@ -7,7 +7,7 @@ import TreeSitterJavaPenumbra
 /// The Java highlights query lists specific patterns before the `(identifier) @variable`
 /// fallback. On a tie the earlier pattern must be the one applied last.
 final class JavaHighlightQueryTests: XCTestCase {
-    private let source = """
+    private let source = #"""
     import java.util.List;
     import static java.util.Objects.requireNonNull;
 
@@ -17,7 +17,23 @@ final class JavaHighlightQueryTests: XCTestCase {
         @javax.annotation.Nullable
         public String name() { return String.valueOf(List.of(1)); }
     }
-    """
+
+    sealed interface Shape permits Circle {}
+    record Circle(double radius) implements Shape {}
+    enum Color { RED, Green }
+    class Holder {
+        int count;
+        void run(int amount) {
+            var total = Color.Green;
+            String text = """
+                hi
+                """;
+            boolean match = shapeValue instanceof Circle(double radiusValue) && radiusValue > 0;
+            String escaped = "tab\there";
+            int r = switch (amount) { default -> { yield count; } };
+        }
+    }
+    """#
 
     func testAnnotationNamesAreAttributes() {
         XCTAssertEqual(winningCapture(for: "Deprecated"), "attribute")
@@ -33,6 +49,33 @@ final class JavaHighlightQueryTests: XCTestCase {
     func testImportedClassIsAType() {
         XCTAssertEqual(winningCapture(for: "List"), "type")
         XCTAssertEqual(winningCapture(for: "util"), "variable")
+    }
+
+    func testModernKeywords() {
+        for word in ["sealed", "permits", "record", "yield", "var"] {
+            XCTAssertEqual(winningCapture(for: word), "keyword", word)
+        }
+    }
+
+    func testRecordNameAndComponents() {
+        XCTAssertEqual(winningCapture(for: "Circle", occurrence: 0), "type")
+        XCTAssertEqual(winningCapture(for: "radius"), "variable.parameter")
+    }
+
+    func testEnumConstantFieldAndParameter() {
+        XCTAssertEqual(winningCapture(for: "RED"), "constant")
+        XCTAssertEqual(winningCapture(for: "Green"), "constant")
+        XCTAssertEqual(winningCapture(for: "Green", occurrence: 1), "property")
+        XCTAssertEqual(winningCapture(for: "count"), "property")
+        XCTAssertEqual(winningCapture(for: "amount"), "variable.parameter")
+    }
+
+    func testGrammarCoversJava21Syntax() {
+        XCTAssertEqual(winningCapture(for: "Circle", occurrence: 1), "type")
+        XCTAssertEqual(winningCapture(for: "double", occurrence: 1), "type.builtin")
+        XCTAssertEqual(winningCapture(for: "\\t"), "string.escape")
+        // A text block is one string, not an error.
+        XCTAssertEqual(winningCapture(for: "hi"), nil)
     }
 
     /// Name of the capture applied last (the one that paints) at the `occurrence`th `word`.

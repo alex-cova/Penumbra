@@ -23,6 +23,10 @@
 
 ; Types
 
+; `var` is parsed as a type name; it is a reserved type name, so colour it like a keyword.
+((type_identifier) @keyword
+ (#eq? @keyword "var"))
+
 (type_identifier) @type
 
 (interface_declaration
@@ -30,6 +34,10 @@
 (class_declaration
   name: (identifier) @type)
 (enum_declaration
+  name: (identifier) @type)
+(record_declaration
+  name: (identifier) @type)
+(annotation_type_declaration
   name: (identifier) @type)
 
 ((field_access
@@ -61,6 +69,28 @@
   (void_type)
 ] @type.builtin
 
+; Declarations. These sit before the `(identifier)` fallbacks so the name wins, and they use
+; the same names as the Java semantic pass so its colours land on top without a visible change.
+
+(enum_constant
+  name: (identifier) @constant)
+(field_declaration
+  declarator: (variable_declarator
+    name: (identifier) @property))
+(field_access
+  field: (identifier) @property)
+(formal_parameter
+  name: (identifier) @variable.parameter)
+(spread_parameter
+  (variable_declarator
+    name: (identifier) @variable.parameter))
+(catch_formal_parameter
+  name: (identifier) @variable.parameter)
+(inferred_parameters
+  (identifier) @variable.parameter)
+(lambda_expression
+  parameters: (identifier) @variable.parameter)
+
 ; Variables
 
 ((identifier) @constant
@@ -79,6 +109,9 @@
   (decimal_floating_point_literal)
   (hex_floating_point_literal)
 ] @number
+
+
+(escape_sequence) @string.escape
 
 [
   (character_literal)
@@ -127,10 +160,12 @@
   "open"
   "opens"
   "package"
+  "permits"
   "private"
   "protected"
   "provides"
   "public"
+  "record"
   "requires"
   "return"
   "sealed"
@@ -148,4 +183,5 @@
   "volatile"
   "while"
   "with"
+  "yield"
 ] @keyword
