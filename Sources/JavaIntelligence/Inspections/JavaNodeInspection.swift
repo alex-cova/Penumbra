@@ -34,7 +34,8 @@ extension JavaTypedInspection {
 
 /// Every node inspection, in the order their findings are reported.
 enum JavaInspectionRegistry {
-    static let nodeInspections: [any JavaNodeInspection.Type] = [
+    /// Immutable metatype lists. Existential metatypes are not `Sendable`, but they hold no shared state.
+    nonisolated(unsafe) static let nodeInspections: [any JavaNodeInspection.Type] = [
         // Probable bugs
         JavaStringComparisonInspection.self,
         JavaNumberComparisonInspection.self,
@@ -163,7 +164,7 @@ enum JavaInspectionRegistry {
         JavaJavadocInvalidParamInspection.self,
     ]
 
-    static let typedInspections: [any JavaTypedInspection.Type] = [
+    nonisolated(unsafe) static let typedInspections: [any JavaTypedInspection.Type] = [
         JavaAccessStaticViaInstanceInspection.self,
         JavaRedundantArrayCreationInspection.self,
         JavaSizeComparisonWithZeroInspection.self,
