@@ -9,9 +9,9 @@ import Foundation
 /// redraw — after scrolling, an edit or new markers — paints the visible rows' markers, found by a
 /// binary search into the ``GutterLineMarkerStore``, without line handles.
 final class GutterLineMarkerView: EditorView {
-    nonisolated static let maximumSlots = 2
-    static let slotWidth: CGFloat = 18
-    static let iconSize: CGFloat = 15
+    nonisolated static let maximumSlots = 1
+    static let slotWidth: CGFloat = 16
+    static let iconSize: CGFloat = 14
 
     weak var lineManager: LineManager?
     var textContainerInsetTop: CGFloat = 0

@@ -46,14 +46,15 @@ final class GutterLineMarkerTests: XCTestCase {
         XCTAssertEqual(indent.markers.map(\.line), [2, 3])
     }
 
-    func testJoiningLinesMergesTheMarkersOntoOneLineAndWidensTheColumn() {
+    func testJoiningLinesMergesTheMarkersOntoOneLineWithoutWideningTheColumn() {
         // Backspace at the start of line 3 joins it onto line 2.
         let markers = store([marker(0, line: 2), marker(1, line: 3), marker(2, line: 9)])
         XCTAssertEqual(markers.slotCount, 1)
         markers.applyEdit(edit(startRow: 1, removedRows: 1, lineDelta: -1, endsAtLineStart: true))
         XCTAssertEqual(markers.markers.map(\.line), [2, 2, 8])
         XCTAssertEqual(markers.markers.map(\.id), [0, 1, 2])
-        XCTAssertEqual(markers.slotCount, 2)
+        // The column is one slot wide at most, so the gutter stays within its width cap.
+        XCTAssertEqual(markers.slotCount, 1)
     }
 
     func testMultiLineDeletionDropsInnerLinesAndShiftsTheRest() {
@@ -81,7 +82,7 @@ final class GutterLineMarkerTests: XCTestCase {
     func testReplaceSortsOnlyUnorderedMarkers() {
         let markers = store([marker(2, line: 5), marker(0, line: 1), marker(1, line: 5)])
         XCTAssertEqual(markers.markers.map(\.id), [0, 1, 2])
-        XCTAssertEqual(markers.slotCount, 2)
+        XCTAssertEqual(markers.slotCount, 1)
     }
 
     func testSlotCountFollowsTheBusiestLineAndIsCapped() {
@@ -93,7 +94,7 @@ final class GutterLineMarkerTests: XCTestCase {
 
     // MARK: - View
 
-    func testHitTestingFindsEachIconOnALine() throws {
+    func testHitTestingFindsTheIconOnALineAndIgnoresTheOverflow() throws {
         let text = "a\nb\nc\n"
         let lineManager = LineManager(stringView: StringView(string: text))
         lineManager.insert(text as NSString, at: 0)
@@ -105,9 +106,8 @@ final class GutterLineMarkerTests: XCTestCase {
         let lineTwoY = lineManager.yPosition(ofRow: 1) + view.rowHeight / 2
         let first = try XCTUnwrap(view.marker(at: CGPoint(x: GutterLineMarkerView.slotWidth / 2, y: lineTwoY)))
         XCTAssertEqual(first.marker.id, 7)
-        let second = try XCTUnwrap(view.marker(at: CGPoint(x: GutterLineMarkerView.slotWidth * 1.5, y: lineTwoY)))
-        XCTAssertEqual(second.marker.id, 8)
-        XCTAssertGreaterThan(second.rect.minX, first.rect.minX)
+        // Only `maximumSlots` icons fit per line; the next one has no slot.
+        XCTAssertNil(view.marker(at: CGPoint(x: GutterLineMarkerView.slotWidth * 1.5, y: lineTwoY)))
         let lineOneY = lineManager.yPosition(ofRow: 0) + view.rowHeight / 2
         XCTAssertNil(view.marker(at: CGPoint(x: GutterLineMarkerView.slotWidth / 2, y: lineOneY)))
     }
@@ -129,7 +129,7 @@ final class GutterLineMarkerTests: XCTestCase {
         textView.setLineMarkers([marker(0, line: 1)])
         XCTAssertEqual(textView.gutterWidth, plain + GutterLineMarkerView.slotWidth, accuracy: 0.5)
         textView.setLineMarkers([marker(0, line: 1), marker(1, line: 1)])
-        XCTAssertEqual(textView.gutterWidth, plain + GutterLineMarkerView.slotWidth * 2, accuracy: 0.5)
+        XCTAssertEqual(textView.gutterWidth, plain + GutterLineMarkerView.slotWidth, accuracy: 0.5)
         textView.setLineMarkers([])
         XCTAssertEqual(textView.gutterWidth, plain, accuracy: 0.5)
     }

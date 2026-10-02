@@ -389,7 +389,7 @@ final class TextInputView: EditorView {
             }
         }
     }
-    var gutterLeadingPadding: CGFloat = 8 {
+    var gutterLeadingPadding: CGFloat = 2 {
         didSet {
             if gutterLeadingPadding != oldValue {
                 gutterWidthService.gutterLeadingPadding = gutterLeadingPadding
@@ -398,7 +398,7 @@ final class TextInputView: EditorView {
             }
         }
     }
-    var gutterTrailingPadding: CGFloat = 6 {
+    var gutterTrailingPadding: CGFloat = 2 {
         didSet {
             if gutterTrailingPadding != oldValue {
                 gutterWidthService.gutterTrailingPadding = gutterTrailingPadding
@@ -407,7 +407,7 @@ final class TextInputView: EditorView {
             }
         }
     }
-    var gutterMinimumCharacterCount: Int = 3 {
+    var gutterMinimumCharacterCount: Int = 2 {
         didSet {
             if gutterMinimumCharacterCount != oldValue {
                 gutterWidthService.gutterMinimumCharacterCount = gutterMinimumCharacterCount
@@ -1740,6 +1740,15 @@ final class TextInputView: EditorView {
         set {
             guard newValue != layoutManager.alwaysShowGutterDecorationColumn else { return }
             layoutManager.alwaysShowGutterDecorationColumn = newValue
+            setNeedsLayout()
+        }
+    }
+
+    var reservedLineMarkerSlots: Int {
+        get { layoutManager.reservedLineMarkerSlots }
+        set {
+            guard newValue != layoutManager.reservedLineMarkerSlots else { return }
+            layoutManager.reservedLineMarkerSlots = newValue
             setNeedsLayout()
         }
     }

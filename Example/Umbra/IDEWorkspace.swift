@@ -4248,6 +4248,9 @@ public final class IDEWorkspace {
         let key = ObjectIdentifier(host.textView)
         lineMarkerTasks[key]?.cancel()
         let kinds = preferences.enabledJavaGutterIcons
+        // The icons arrive later; their columns exist from the first layout so the text stays put.
+        host.textView.reservedLineMarkerSlots = languageIdentifier == "java" && !kinds.isEmpty ? TextView.maximumLineMarkerSlots : 0
+        if languageIdentifier == "java" { host.textView.alwaysShowGutterDecorationColumn = true }
         guard languageIdentifier == "java", !kinds.isEmpty else {
             lineMarkerTasks[key] = nil
             javaLineMarkers[key] = nil

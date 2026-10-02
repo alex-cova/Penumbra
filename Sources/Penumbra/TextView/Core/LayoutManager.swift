@@ -368,9 +368,25 @@ final class LayoutManager {
         }
     }
 
+    /// Marker slots the column keeps while there are fewer (or no) markers, so the text does not
+    /// move when markers computed later arrive.
+    var reservedLineMarkerSlots = 0 {
+        didSet {
+            if reservedLineMarkerSlots != oldValue {
+                updateLineMarkerColumnWidth()
+                setNeedsLayout()
+            }
+        }
+    }
+
+    private func updateLineMarkerColumnWidth() {
+        let slots = min(max(lineMarkerStore.slotCount, reservedLineMarkerSlots), GutterLineMarkerView.maximumSlots)
+        gutterWidthService.lineMarkerColumnWidth = CGFloat(slots) * GutterLineMarkerView.slotWidth
+    }
+
     private func lineMarkersDidChange() {
         lineMarkerView.markersDidChange()
-        gutterWidthService.lineMarkerColumnWidth = CGFloat(lineMarkerStore.slotCount) * GutterLineMarkerView.slotWidth
+        updateLineMarkerColumnWidth()
         lineMarkerView.isHidden = lineMarkerStore.isEmpty
         setNeedsLayout()
     }

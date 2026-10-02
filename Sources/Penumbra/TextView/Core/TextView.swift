@@ -550,6 +550,15 @@ public struct DocumentTextExport: Sendable {
         set { textInputView.lineMarkerHandler = newValue }
     }
 
+    /// Slots (icons per line, at most two) the line-marker column keeps while there are fewer
+    /// markers, so the text does not move sideways when markers that are computed later arrive.
+    public static var maximumLineMarkerSlots: Int { GutterLineMarkerView.maximumSlots }
+
+    public var reservedLineMarkerSlots: Int {
+        get { textInputView.reservedLineMarkerSlots }
+        set { textInputView.reservedLineMarkerSlots = newValue }
+    }
+
     public func setLineMarkers(_ markers: [GutterLineMarker]) {
         lineMarkers = markers
     }

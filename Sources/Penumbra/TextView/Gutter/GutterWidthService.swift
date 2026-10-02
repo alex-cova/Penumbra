@@ -39,7 +39,7 @@ final class GutterWidthService {
             }
         }
     }
-    var gutterDecorationColumnWidth: CGFloat = 20 {
+    var gutterDecorationColumnWidth: CGFloat = 16 {
         didSet {
             if gutterDecorationColumnWidth != oldValue {
                 sendGutterWidthUpdatedIfNeeded()
@@ -62,7 +62,7 @@ final class GutterWidthService {
             }
         }
     }
-    var foldingRibbonWidth: CGFloat = 14 {
+    var foldingRibbonWidth: CGFloat = 12 {
         didSet {
             if foldingRibbonWidth != oldValue {
                 sendGutterWidthUpdatedIfNeeded()
@@ -100,7 +100,19 @@ final class GutterWidthService {
             }
         }
     }
+    /// Width of the digits, limited so the whole gutter stays within ``maximumGutterWidth``.
     var lineNumberWidth: CGFloat {
+        guard showLineNumbers else { return measuredLineNumberWidth }
+        let others = otherColumnsWidth + gutterLeadingPadding + gutterTrailingPadding
+        return min(measuredLineNumberWidth, max(0, Self.maximumGutterWidth - others))
+    }
+    private var otherColumnsWidth: CGFloat {
+        var width: CGFloat = annotationColumnWidth + lineMarkerColumnWidth
+        if showGutterDecorations { width += gutterDecorationColumnWidth }
+        if showFoldingRibbon { width += foldingRibbonWidth }
+        return width
+    }
+    private var measuredLineNumberWidth: CGFloat {
         let lineCount = lineManager.lineCount
         let hasLineCountChanged = lineCount != previousLineCount
         // Read for every laid-out line: compare identity first, `!=` is an `isEqual:` round trip.
@@ -116,6 +128,9 @@ final class GutterWidthService {
             return lineNumberWidth
         }
     }
+    /// Upper bound for the whole gutter. The line-number column gives way to the other columns
+    /// (decorations, annotations, markers, ribbon), so digits that do not fit are clipped.
+    static let maximumGutterWidth: CGFloat = 70
     let didUpdateGutterWidth = PassthroughSubject<Void, Never>()
 
     private var _lineNumberWidth: CGFloat?
