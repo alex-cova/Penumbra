@@ -89,6 +89,12 @@ final class IDEAgentController {
         host = nil
     }
 
+    var projectRoot: URL? { host?.agentProjectRoot }
+
+    /// What the list above the composer offers for `/` and `@`. Nothing yet: the built-in commands
+    /// and the project's files are added with them.
+    func suggestions(for trigger: IDEAgentComposerTrigger) -> [IDEAgentSuggestion] { [] }
+
     // MARK: - History
 
     /// Brings back the project's most recent conversation the first time the agent is used in a

@@ -8,7 +8,9 @@ struct IDEAgentPanel: View {
     let agent: IDEAgentController
     @State private var isSettingsPresented = false
     @State private var isModelsPresented = false
-    @FocusState private var isComposerFocused: Bool
+    @State private var composerState = IDEAgentComposerState()
+    @State private var composerHeight: CGFloat = 22
+    @State private var acceptRequest = 0
 
     private var settings: IDEAgentSettings { agent.settings }
 
@@ -128,18 +130,29 @@ struct IDEAgentPanel: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
             }
+            if composerState.isShowingSuggestions {
+                IDEAgentSuggestionList(state: composerState) { index in
+                    composerState.selectedIndex = index
+                    acceptRequest += 1
+                }
+            }
             HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
                 @Bindable var agent = agent
-                TextField("Ask about this project…", text: $agent.draft, axis: .vertical)
-                    .focused($isComposerFocused)
-                    .onChange(of: agent.composerFocusRequest) { isComposerFocused = true }
-                    .textFieldStyle(.plain)
-                    .font(IDEAppearance.Typography.body)
-                    .lineLimit(1...8)
-                    .onSubmit { agent.send() }
-                    .padding(IDEAppearance.Spacing.sm)
-                    .background(IDEAppearance.ColorToken.card)
-                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+                IDEAgentComposerField(
+                    text: $agent.draft, height: $composerHeight, placeholder: "Ask about this project…",
+                    state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
+                    suggestions: { agent.suggestions(for: $0) },
+                    onSend: { if agent.canSend { agent.send() } },
+                    onStop: { if agent.isRunning { agent.stop() } },
+                    onDropFiles: { urls in
+                        urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
+                            .joined(separator: " ") + " "
+                    }
+                )
+                .frame(height: composerHeight)
+                .padding(IDEAppearance.Spacing.sm)
+                .background(IDEAppearance.ColorToken.card)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
 
                 if agent.isRunning {
                     IDEAgentIconButton(
