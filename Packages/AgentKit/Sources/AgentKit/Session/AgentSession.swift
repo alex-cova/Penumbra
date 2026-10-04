@@ -122,6 +122,13 @@ public actor AgentSession {
         }
     }
 
+    /// Tells the session the model has been shown this file's text, so `edit_file` accepts it without
+    /// a `read_file` first. For a host that attaches files to a message. Pass exactly the text the
+    /// workspace would return for the path; a cut or partial view is not a read.
+    public func recordRead(path: String, text: String) async {
+        await ledger.record(path: path, text: text)
+    }
+
     /// Replaces the checklist, for a host that restores it from its own storage.
     public func setTodos(_ items: [TodoItem]) async {
         await todoList.replace(with: items)

@@ -34,8 +34,39 @@ extension IDEAgentController {
         switch trigger {
         case .slash(let query, _): commandSuggestions(matching: query)
         case .slashArgument(let command, let query, _): argumentSuggestions(for: command, matching: query)
-        case .mention, .none: []
+        case .mention(let query, _): mentionSuggestions(matching: query)
+        case .none: []
         }
+    }
+
+    // MARK: - Mentions
+
+    private func mentionSuggestions(matching query: String) -> [IDEAgentSuggestion] {
+        var rows: [IDEAgentSuggestion] = []
+        func special(_ name: String, _ icon: String, _ detail: String) {
+            guard query.isEmpty || FuzzyMatcher.match(query: query, in: name) != nil else { return }
+            rows.append(IDEAgentSuggestion(id: "mention:" + name, icon: icon, title: "@" + name, detail: detail, insertion: "@" + name + " "))
+        }
+        if host?.agentSelection() != nil { special("selection", "text.cursor", "The selected code, with its file and lines") }
+        if host?.agentProblems().isEmpty == false { special("problems", "exclamationmark.triangle", "The errors and warnings in the Problems panel") }
+        special("changes", "plusminus", "What git says changed")
+        if host?.agentOpenFilePaths().isEmpty == false { special("open", "doc.on.doc", "The names of the open files") }
+        special("terminal", "terminal", "The last lines of the terminal")
+        for skill in commandCatalog.skillCatalog.skills {
+            let name = "skill:" + skill.name
+            guard query.isEmpty || FuzzyMatcher.match(query: query, in: name) != nil else { continue }
+            rows.append(IDEAgentSuggestion(id: "mention:" + name, icon: "sparkles", title: "@" + name, detail: skill.description, insertion: "@" + name + " "))
+        }
+        // The specials stay short, so files still fit in the list.
+        let specials = Array(rows.prefix(8))
+        let files = (host?.agentFileSuggestions(query: query, limit: 30) ?? []).map { path -> IDEAgentSuggestion in
+            let name = (path as NSString).lastPathComponent
+            let folder = (path as NSString).deletingLastPathComponent
+            return IDEAgentSuggestion(
+                id: "file:" + path, icon: "doc", title: name, detail: folder.isEmpty ? nil : folder,
+                insertion: IDEAgentMentionToken.format(path: path) + " ")
+        }
+        return specials + files
     }
 
     private func commandSuggestions(matching query: String) -> [IDEAgentSuggestion] {

@@ -38,6 +38,8 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var liveOutput = ""
     /// For a user message that was a command or skill: the text the model was sent. The row shows what was typed.
     var detail: String?
+    /// For a user message: what its `@` mentions attached (`src/A.java · 2.1 KB`).
+    var attachments: [String] = []
 
     var isFinishedToolCall: Bool { output != nil }
 }

@@ -52,6 +52,33 @@ extension IDEWorkspace: IDEAgentHost {
         return lines.joined(separator: "\n")
     }
 
+    func agentSelection() -> IDEAgentSelection? {
+        guard let url = workbench.activePane.selectedDocument?.url else { return nil }
+        let textView = host(for: workbench.activePaneID).textView
+        let range = textView.selectedRange
+        guard range.length > 0, let selected = textView.text(in: range), !selected.isEmpty else { return nil }
+        let start = (textView.textLocation(at: range.location)?.lineNumber ?? 0) + 1
+        // A selection that ends right after a newline doesn't include the next line.
+        let trimmed = selected.hasSuffix("\n") ? String(selected.dropLast()) : selected
+        let end = start + trimmed.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+        return IDEAgentSelection(path: agentRelativePath(url), startLine: start, endLine: end, text: selected)
+    }
+
+    func agentOpenFilePaths() -> [String] {
+        var seen = Set<String>()
+        return workbench.allDocuments().compactMap(\.url).map(agentRelativePath).filter { seen.insert($0).inserted }
+    }
+
+    func agentTerminalTail(lines: Int) -> String? {
+        activeTerminalHost()?.recentText(lines: lines)
+    }
+
+    func agentFileSuggestions(query: String, limit: Int) -> [String] {
+        let index = paletteFileIndex
+        let open = workbench.allDocuments().compactMap(\.url)
+        return index.search(query, limit: limit, boosts: open).hits.map { index.entry(at: $0.index).relativePath }
+    }
+
     func agentProblems() -> [IDEAgentProblem] {
         problems.files.flatMap { file in
             file.rows.map { row in

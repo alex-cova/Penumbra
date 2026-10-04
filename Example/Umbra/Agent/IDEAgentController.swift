@@ -40,7 +40,12 @@ final class IDEAgentController {
 
     let settings: IDEAgentSettings
 
-    @ObservationIgnored private weak var host: (any IDEAgentHost)?
+    @ObservationIgnored private weak var hostReference: (any IDEAgentHost)?
+    /// The window this agent works in; weak, so a chat never keeps it alive.
+    var host: (any IDEAgentHost)? {
+        get { hostReference }
+        set { hostReference = newValue }
+    }
     @ObservationIgnored private let store: SessionStore?
     @ObservationIgnored private let appPermissionsFile: URL?
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient

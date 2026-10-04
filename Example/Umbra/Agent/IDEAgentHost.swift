@@ -48,12 +48,26 @@ protocol IDEAgentHost: AnyObject {
     func agentJavaNavigator() -> (any IDEAgentJavaNavigating)?
     /// The text of 1-based `line` of a file, from its open buffer or from disk.
     func agentLineText(url: URL, line: Int) -> String?
+
+    // Mentions. All optional (see the extension below).
+    /// The active editor's selection, or `nil` when nothing is selected.
+    func agentSelection() -> IDEAgentSelection?
+    /// Open files, project-relative, in tab order.
+    func agentOpenFilePaths() -> [String]
+    /// The last lines of the terminal the user is looking at.
+    func agentTerminalTail(lines: Int) -> String?
+    /// Project files whose path matches `query`, best first, open files leading.
+    func agentFileSuggestions(query: String, limit: Int) -> [String]
 }
 
 extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
     func agentJavaNavigator() -> (any IDEAgentJavaNavigating)? { nil }
     func agentLineText(url: URL, line: Int) -> String? { nil }
+    func agentSelection() -> IDEAgentSelection? { nil }
+    func agentOpenFilePaths() -> [String] { [] }
+    func agentTerminalTail(lines: Int) -> String? { nil }
+    func agentFileSuggestions(query: String, limit: Int) -> [String] { [] }
 }
 
 struct IDEAgentFreshProblems: Sendable, Equatable {

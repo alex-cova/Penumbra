@@ -47,6 +47,19 @@ final class IDETerminalHostView: NSView {
     private var isShutDown = false
     private var pendingFocus = false
 
+    /// Whether this is the terminal tab the user is looking at.
+    var isShownActive: Bool { isActive && !isShutDown }
+
+    /// The last `lines` non-empty lines of the screen and scrollback, as text.
+    func recentText(lines: Int) -> String? {
+        let data = terminalView.getTerminal().getBufferAsData()
+        let all = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+        var end = all.count
+        while end > 0, all[end - 1].allSatisfy(\.isWhitespace) { end -= 1 }
+        let tail = all[max(0, end - lines)..<end]
+        return tail.isEmpty ? nil : tail.joined(separator: "\n")
+    }
+
     var workingDirectory: URL?
     var onTitleUpdate: ((String) -> Void)?
     var onDirectoryUpdate: ((URL) -> Void)?

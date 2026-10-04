@@ -134,6 +134,8 @@ public final class IDEWorkspace {
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
+    /// The project's files as Go to File sees them; the agent's `@` list uses it too.
+    var paletteFileIndex: PaletteFileIndex { fileIndexer.index }
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
 
@@ -727,6 +729,11 @@ public final class IDEWorkspace {
     /// dismantle the view.
     @ObservationIgnored
     private var terminalHosts: [WeakTerminalHost] = []
+
+    /// The terminal shown now, if any.
+    func activeTerminalHost() -> IDETerminalHostView? {
+        terminalHosts.compactMap(\.host).first { $0.isShownActive }
+    }
 
     func registerTerminalHost(_ host: IDETerminalHostView) {
         terminalHosts.removeAll { $0.host == nil }

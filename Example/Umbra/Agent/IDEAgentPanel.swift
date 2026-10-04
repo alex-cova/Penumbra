@@ -227,6 +227,17 @@ private struct IDEAgentEntryView: View {
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     .textSelection(.enabled)
+                if !entry.attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(entry.attachments, id: \.self) { attachment in
+                            Label(attachment, systemImage: "paperclip")
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
                 if let detail = entry.detail {
                     DisclosureGroup("What the agent was sent") {
                         Text(detail)

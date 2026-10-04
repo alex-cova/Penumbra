@@ -66,6 +66,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var pendingOutput: [String: String] = [:]
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     @ObservationIgnored private let store: SessionStore?
+    /// The workspace the session reads and writes through, kept so mentions read files the same way.
+    @ObservationIgnored private var agentWorkspace: IDEAgentWorkspace?
     /// The app-wide permission rules file; `nil` in tests, which must not read the user's own.
     @ObservationIgnored private let appPermissionsFile: URL?
     /// Rules that last as long as this chat ("Allow for this chat").
@@ -124,7 +126,9 @@ final class IDEAgentConversation: Identifiable {
         append(entry)
         runRules = PermissionRules(allow: allowedTools.compactMap(PermissionRule.init(parsing:)))
         // The model sees the editor's state with the message; the transcript shows only the message.
-        let framed = host.agentEditorContext() + "\n\n" + (modelText ?? text)
+        let context = host.agentEditorContext()
+        let body = modelText ?? text
+        let entryID = entry.id
         isRunning = true
         status = "Thinking…"
         runTask = Task { [weak self] in
@@ -155,8 +159,58 @@ final class IDEAgentConversation: Identifiable {
             // Whatever changed since the session was made (the mode, a rules file) applies to this run.
             await activeSession.setMode(self.mode)
             await activeSession.setRules(self.currentRules(root: root))
+            let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: activeSession)
             await self.consume(await activeSession.send(framed), session: activeSession)
         }
+    }
+
+    /// What the model is sent: the editor's state, the message, and what its `@` mentions attach. Files
+    /// attached whole are recorded as read, so an edit to one needs no `read_file` first.
+    private func frame(context: String, body: String, entryID: UUID, root: URL, session: AgentSession) async -> String {
+        let resolution = await IDEAgentMentionResolver.resolve(body, sources: mentionSources(root: root))
+        if let index = entries.firstIndex(where: { $0.id == entryID }) {
+            entries[index].attachments = resolution.attachments.map(\.summary)
+        }
+        for (mention, reason) in resolution.unresolved {
+            // A bare word with no slash or dot is probably a name (@alex), not a path that failed.
+            if reason == "no such file", !mention.contains("/"), !mention.contains(".") { continue }
+            appendNotice("Could not attach \(mention): \(reason.trimmingCharacters(in: CharacterSet(charactersIn: "."))).")
+        }
+        for attachment in resolution.attachments {
+            if let read = attachment.readFile { await session.recordRead(path: read.path, text: read.text) }
+        }
+        return context + "\n\n" + body + resolution.modelBlock
+    }
+
+    private func mentionSources(root: URL) -> IDEAgentMentionSources {
+        var sources = IDEAgentMentionSources(projectRoot: root)
+        let secrets = SecretFilePolicy.patterns(from: settings.secretFilePatterns)
+        sources.secretPatterns = secrets
+        if let workspace = agentWorkspace {
+            sources.readText = { try await workspace.readText(path: $0) }
+            sources.listDirectory = { path in
+                let folder = path.hasSuffix("/") ? String(path.dropLast()) : path
+                return (try? await workspace.listDirectory(path: folder))?.map { $0.isDirectory ? $0.name + "/" : $0.name }
+            }
+        }
+        sources.selection = { [weak host] in host?.agentSelection() }
+        sources.problems = { [weak host] in host?.agentProblems() ?? [] }
+        sources.openFiles = { [weak host] in host?.agentOpenFilePaths() ?? [] }
+        sources.terminalTail = { [weak host] in host?.agentTerminalTail(lines: $0) }
+        sources.skill = { [weak self] name in self?.commandCatalog?.skillCatalog.skill(named: name) }
+        if let workspace = agentWorkspace, let host {
+            let box = IDEAgentHostBox(host)
+            let git = IDEAgentGitSource(
+                projectRoot: root, secretPatterns: secrets,
+                unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
+            sources.gitDiff = {
+                guard await GitRepository.discover(from: root, runner: git.runner) != nil else { return nil }
+                let context = ToolContext(workspace: workspace, ledger: ReadLedger(), callID: "mention")
+                let output = await IDEGitDiffTool(source: git).execute(argumentsJSON: "{}", context: context)
+                return output.isError ? nil : output.text
+            }
+        }
+        return sources
     }
 
     // MARK: - Permissions
@@ -369,6 +423,7 @@ final class IDEAgentConversation: Identifiable {
         restoredItems = nil
         let box = IDEAgentHostBox(host)
         let workspace = IDEAgentWorkspace(root: root, box: box)
+        agentWorkspace = workspace
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns) + EditingTools.all() + [IDERunCommandTool(support: support)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
