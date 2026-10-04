@@ -37,6 +37,12 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let title: String
     public let updatedAt: Date
+
+    public init(id: UUID, title: String, updatedAt: Date) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+    }
 }
 
 /// Sessions on disk: `<directory>/<hash of project root>/<session id>.json`. Conversations contain

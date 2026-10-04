@@ -7,11 +7,14 @@ enum IDENotificationAction: Equatable {
     case showGradleOutput
     case showSourceControl
     case showProblems
+    /// Open the agent panel on this chat.
+    case showAgentChat(UUID)
 }
 
 enum IDENotificationCategory: String, CaseIterable, Identifiable {
     case gradle
     case git
+    case agent
     case general
 
     var id: String { rawValue }
@@ -20,6 +23,7 @@ enum IDENotificationCategory: String, CaseIterable, Identifiable {
         switch self {
         case .gradle: "Gradle"
         case .git: "Git"
+        case .agent: "Agent"
         case .general: "General"
         }
     }

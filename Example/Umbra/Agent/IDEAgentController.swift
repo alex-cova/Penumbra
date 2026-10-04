@@ -24,6 +24,10 @@ final class IDEAgentController {
     var rewindRequest: IDEAgentRewindRequest?
     /// What this project's chats were asked, by project folder.
     @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
+    /// Whether the user is looking at this window (it is the key window). Without an answer, assume yes.
+    @ObservationIgnored var isUserWatching: (() -> Bool)?
+    /// Tells the user something about a chat they are not looking at: the chat's id, a title, a detail.
+    @ObservationIgnored var onNotify: ((_ chat: UUID, _ title: String, _ detail: String?, _ severity: IDENotificationSeverity) -> Void)?
     /// Opens Settings ▸ Agent (`/permissions`); set by the window.
     @ObservationIgnored var onOpenSettings: (() -> Void)?
     /// Saves an exported transcript: a save panel, unless a test replaces it.
@@ -96,6 +100,10 @@ final class IDEAgentController {
             guard let self, let conversation else { return }
             self.loadPendingIfNeeded(conversation)
             if conversation.id == self.selectedID { self.restoreLatestIfNeeded() }
+        }
+        conversation.onAttention = { [weak self, weak conversation] attention in
+            guard let self, let conversation else { return }
+            self.notify(attention, from: conversation)
         }
         conversation.onRunFinished = { [weak self, weak conversation] in
             guard let self, let conversation, conversation.id != self.selectedID else { return }
@@ -220,6 +228,29 @@ final class IDEAgentController {
         conversation.isUnread = false
         loadPendingIfNeeded(conversation)
         layoutChanged()
+    }
+
+    /// Whether the user can see this chat right now: the window is active, the panel is open, and it is the chat shown.
+    func isInView(_ conversation: IDEAgentConversation) -> Bool {
+        conversation.id == selectedID && isPanelVisible && (isUserWatching?() ?? true)
+    }
+
+    private func notify(_ attention: IDEAgentConversation.Attention, from conversation: IDEAgentConversation) {
+        guard !isInView(conversation) else { return }
+        switch attention {
+        case .needsYou(let what):
+            onNotify?(conversation.id, "“\(conversation.title)” needs you", what, .warning)
+        case .finished(let ending, let summary):
+            switch ending {
+            case .completed:
+                onNotify?(conversation.id, "“\(conversation.title)” finished", summary.isEmpty ? nil : summary, .success)
+            case .stopped:
+                break
+            default:
+                let reason = IDEAgentToolSummary.endingMessage(ending, iterationLimit: settings.iterationCap)?.text
+                onNotify?(conversation.id, "“\(conversation.title)” stopped", reason, .error)
+            }
+        }
     }
 
     private func layoutChanged() {

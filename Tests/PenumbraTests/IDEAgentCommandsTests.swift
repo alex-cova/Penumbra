@@ -530,7 +530,7 @@ final class IDEAgentPromptHistoryFlowTests: XCTestCase {
         XCTAssertEqual(reopened.promptHistory()?.prompts, ["first question", "second question", "/help"])
     }
 
-    func testAMessageThatWasNotSentIsNotRemembered() async throws {
+    func testBlankTextIsNotRememberedAndAQueuedMessageIs() async throws {
         let controller = makeController(store: false)
         controller.draft = "   "
         controller.submit()
@@ -538,11 +538,11 @@ final class IDEAgentPromptHistoryFlowTests: XCTestCase {
 
         controller.draft = "a slow one"
         controller.submit()
-        controller.draft = "typed while running"
-        controller.submit()  // the first is still running: this one is refused and stays in the field
-        XCTAssertEqual(controller.promptHistory()?.prompts, ["a slow one"])
-        XCTAssertEqual(controller.draft, "typed while running")
-        for _ in 0..<500 where controller.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+        controller.draft = "written while it runs"
+        controller.submit()  // queued: it will be sent, so it is remembered
+        XCTAssertEqual(controller.promptHistory()?.prompts, ["a slow one", "written while it runs"])
+        XCTAssertEqual(controller.draft, "", "the field is free for the next thing")
+        for _ in 0..<500 where controller.isRunning || !controller.selected.queue.isEmpty { try? await Task.sleep(for: .milliseconds(10)) }
     }
 
     func testUpAndDownRecallThroughTheController() async throws {
@@ -605,5 +605,195 @@ final class IDEAgentPromptHistoryFlowTests: XCTestCase {
         controller.clearHistory()
         XCTAssertTrue(controller.promptHistory()?.prompts.isEmpty == true)
         XCTAssertTrue(makeController().promptHistory()?.prompts.isEmpty == true, "and from disk")
+    }
+}
+
+@MainActor
+final class IDEAgentCompactTests: XCTestCase {
+    private var base: URL!
+    private var project: URL!
+    private var storeDirectory: URL!
+    private var workspace: IDEWorkspace!
+
+    override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        base = FileManager.default.temporaryDirectory.appendingPathComponent("agent-compact-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        project = base.appendingPathComponent("project")
+        storeDirectory = base.appendingPathComponent("store")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        workspace = IDEWorkspace()
+        workspace.project.setRoot(project)
+    }
+
+    override func tearDownWithError() throws {
+        workspace.teardown()
+        workspace = nil
+        IDEWorkspace.isSessionPersistenceEnabled = true
+        try? FileManager.default.removeItem(at: base)
+    }
+
+    private func makeController(_ turns: [MockTurn], window: Int? = 32_768) -> (IDEAgentController, MockLLMClient, IDEAgentSettings) {
+        let settings = IDEAgentSettings(
+            defaults: UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!, keyStore: IDEAgentMemoryKeyStore())
+        settings.saveAPIKey("sk-test")
+        settings.acceptDisclosure()
+        if let window { settings.contextWindowOverride = window }
+        let client = MockLLMClient(turns: turns)
+        let controller = IDEAgentController(settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        controller.newConversation()
+        return (controller, client, settings)
+    }
+
+    private func waitFor(_ message: String, _ condition: () -> Bool) async {
+        for _ in 0..<800 where !condition() { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition(), message)
+    }
+
+    private func say(_ controller: IDEAgentController, _ text: String) async {
+        controller.draft = text
+        controller.submit()
+        await waitFor("done") { !controller.isRunning && !controller.selected.isCompacting }
+    }
+
+    // MARK: - The meter
+
+    func testTheMeterFollowsWhatTheProviderReportsForTheLatestTurn() {
+        let (controller, _, _) = makeController([])
+        XCTAssertNil(controller.selected.contextFraction, "nothing has reported yet")
+        var usage = TokenUsage()
+        usage.inputTokens = 8_192
+        controller.handle(.usage(usage))
+        XCTAssertEqual(controller.selected.contextTokens, 8_192)
+        XCTAssertEqual(try XCTUnwrap(controller.selected.contextFraction), 0.25, accuracy: 0.001)
+
+        usage.inputTokens = 16_384
+        controller.handle(.usage(usage))
+        XCTAssertEqual(try XCTUnwrap(controller.selected.contextFraction), 0.5, accuracy: 0.001, "the latest turn's input, not a running total")
+        usage.inputTokens = 0
+        controller.handle(.usage(usage))
+        XCTAssertEqual(controller.selected.contextTokens, 16_384, "a turn that reported nothing changes nothing")
+    }
+
+    func testTheMeterNeverPassesFullAndNeedsAKnownWindow() {
+        let (controller, _, settings) = makeController([])
+        var usage = TokenUsage()
+        usage.inputTokens = 90_000
+        controller.handle(.usage(usage))
+        XCTAssertEqual(controller.selected.contextFraction, 1)
+        settings.contextWindowOverride = 0
+        settings.model = "some-model-with-no-known-window"
+        XCTAssertNil(controller.selected.contextFraction, "no window, no meter")
+    }
+
+    func testAShorteningResetsTheMeterAndANewConversationClearsIt() {
+        let (controller, _, _) = makeController([])
+        var usage = TokenUsage()
+        usage.inputTokens = 30_000
+        controller.handle(.usage(usage))
+        var report = CompactionReport()
+        report.stubbedOutputs = 2
+        report.summarizedItems = 5
+        report.estimatedTokensAfter = 6_000
+        controller.handle(.compacted(report))
+        XCTAssertEqual(controller.selected.contextTokens, 6_000)
+        controller.clear()
+        XCTAssertNil(controller.selected.contextTokens)
+    }
+
+    // MARK: - /compact
+
+    private func longChat(_ controller: IDEAgentController) async {
+        for index in 0..<6 { await say(controller, "question number \(index)") }
+    }
+
+    func testCompactSummarizesWithTheFocusSavesAndKeepsTheChatGoing() async throws {
+        let answers = (0..<6).map { MockTurn.text("answer \($0)") }
+        let (controller, client, _) = makeController(answers + [.text("A summary of the first questions."), .text("carrying on")])
+        await longChat(controller)
+
+        controller.draft = "/compact keep the details of question 2"
+        controller.submit()
+        await waitFor("compaction finished") { !controller.selected.isCompacting && controller.entries.contains { $0.text.contains("Context was getting full") } }
+
+        let summaryRequest = try XCTUnwrap(client.requests.dropFirst(6).first)
+        guard case .user(let asked) = try XCTUnwrap(summaryRequest.items.first) else { return XCTFail("no summary request") }
+        XCTAssertTrue(asked.contains("keep the details of question 2"))
+        XCTAssertEqual(controller.draft, "")
+
+        // The saved conversation is the shortened one.
+        let saved = try XCTUnwrap(SessionStore(directory: storeDirectory).load(controller.conversationID, projectRoot: project.path))
+        guard case .user(let first) = saved.items[0] else { return XCTFail("no summary item") }
+        XCTAssertTrue(first.hasPrefix(ConversationSummary.heading))
+
+        // Positions recorded before the summary are gone; the chat still answers.
+        XCTAssertTrue(controller.selected.rewindTargets.isEmpty)
+        await say(controller, "what now?")
+        XCTAssertEqual(controller.entries.last?.text, "carrying on")
+        let request = try XCTUnwrap(client.requests.last)
+        guard case .user(let head) = request.items[0] else { return XCTFail("no summary at the head") }
+        XCTAssertTrue(head.hasPrefix(ConversationSummary.heading))
+        XCTAssertEqual(controller.selected.rewindTargets.count, 1, "the new message has a position again")
+    }
+
+    func testCompactOnAShortChatSaysThereIsNothingToDo() async throws {
+        let (controller, client, _) = makeController([.text("hi")])
+        await say(controller, "hello")
+        controller.draft = "/compact"
+        controller.submit()
+        await waitFor("noticed") { controller.entries.last?.text.contains("nothing to summarize") == true }
+        XCTAssertEqual(client.requests.count, 1, "no summary was requested")
+    }
+
+    func testCompactOnAnEmptyChatIsHarmless() async throws {
+        let (controller, client, _) = makeController([])
+        controller.draft = "/compact"
+        controller.submit()
+        await waitFor("noticed") { controller.entries.last?.text == "There is nothing to shorten yet." }
+        XCTAssertTrue(client.requests.isEmpty)
+    }
+
+    func testAFailedSummaryIsReportedAsAnError() async throws {
+        let answers = (0..<6).map { MockTurn.text("answer \($0)") }
+        let (controller, _, _) = makeController(answers + [MockTurn([], failure: .server(status: 500, message: "down"))])
+        await longChat(controller)
+        controller.draft = "/compact"
+        controller.submit()
+        await waitFor("reported") { controller.entries.contains { $0.kind == .error && $0.text.contains("could not be written") } }
+        XCTAssertFalse(controller.selected.isCompacting)
+    }
+
+    func testNothingIsSentWhileSummarizing() async throws {
+        let answers = (0..<6).map { MockTurn.text("answer \($0)") }
+        let slow = MockTurn([.textDelta("summary text"), .finished(.completed)], delayPerEvent: .milliseconds(300))
+        let (controller, _, _) = makeController(answers + [slow, .text("later")])
+        await longChat(controller)
+        controller.draft = "/compact"
+        controller.submit()
+        await waitFor("compacting") { controller.selected.isCompacting }
+        XCTAssertFalse(controller.canSend, "a message waits for the summary")
+        controller.draft = "typed meanwhile"
+        controller.submit()
+        XCTAssertEqual(controller.draft, "typed meanwhile", "kept in the field, not sent")
+        await waitFor("done") { !controller.selected.isCompacting }
+    }
+
+    func testCompactWorksStraightAfterARelaunch() async throws {
+        let answers = (0..<6).map { MockTurn.text("answer \($0)") }
+        let (first, _, _) = makeController(answers)
+        await longChat(first)
+        let id = first.conversationID
+
+        let (reopened, client, _) = makeController([.text("Summary after relaunch."), .text("ok")])
+        reopened.resume(id)
+        XCTAssertNil(reopened.selected.currentSessionForTesting)
+        reopened.draft = "/compact"
+        reopened.submit()
+        await waitFor("compacted") { reopened.entries.contains { $0.text.contains("Context was getting full") } }
+        XCTAssertEqual(client.requests.count, 1)
+        let saved = try XCTUnwrap(SessionStore(directory: storeDirectory).load(id, projectRoot: project.path))
+        guard case .user(let head) = saved.items[0] else { return XCTFail("no summary") }
+        XCTAssertTrue(head.contains("Summary after relaunch."))
     }
 }

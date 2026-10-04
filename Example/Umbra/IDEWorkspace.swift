@@ -191,6 +191,10 @@ public final class IDEWorkspace {
             if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
         }
         agent.onLayoutChanged = { [weak self] in self?.saveSession() }
+        agent.isUserWatching = { [weak self] in self?.window?.isKeyWindow == true }
+        agent.onNotify = { [weak self] chat, title, detail, severity in
+            self?.notifications.post(title, detail: detail, category: .agent, severity: severity, action: .showAgentChat(chat))
+        }
         agent.onOpenSettings = { [weak self] in
             self?.requestedSettingsDomain = .agent
             self?.showSettings()
@@ -4146,6 +4150,9 @@ public final class IDEWorkspace {
         case .showGradleOutput: showGradleOutput()
         case .showSourceControl: showSourceControl()
         case .showProblems: showProblems()
+        case .showAgentChat(let id):
+            agent.select(id)
+            agent.showPanel()
         case nil: break
         }
     }

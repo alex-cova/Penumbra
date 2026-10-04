@@ -26,7 +26,7 @@ struct IDEAgentSlashInvocation: Equatable {
 
 /// The commands the editor itself provides.
 enum IDEAgentBuiltInCommand: String, CaseIterable {
-    case new, clear, resume, rewind, fork, plan, mode, permissions, model, export, initialize = "init", cost, rename, help
+    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, export, initialize = "init", cost, rename, help
 
     var summary: String {
         switch self {
@@ -35,6 +35,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .resume: "Open an earlier chat"
         case .rewind: "Go back to an earlier message, and optionally undo the file changes since"
         case .fork: "Continue this chat's conversation in a new tab"
+        case .compact: "Summarize the earlier conversation to free up space"
         case .plan: "Plan first: the agent only reads until you approve"
         case .mode: "Change what the agent may do without asking"
         case .permissions: "Open the permission rules"
@@ -50,6 +51,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
     var argumentHint: String? {
         switch self {
         case .resume: "[search]"
+        case .compact: "[what to keep in detail]"
         case .plan: "[what to plan]"
         case .mode: "manual | accept-edits | auto | plan"
         case .rename: "<name>"
@@ -64,6 +66,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .resume: "clock.arrow.circlepath"
         case .rewind: "arrow.uturn.backward"
         case .fork: "arrow.triangle.branch"
+        case .compact: "arrow.down.right.and.arrow.up.left"
         case .plan: "list.bullet.clipboard"
         case .mode: "slider.horizontal.3"
         case .permissions: "checkmark.shield"

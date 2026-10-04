@@ -21,6 +21,11 @@ public struct AgentConfiguration: Sendable {
     public var gate: (any PermissionGate)?
     /// Extra credential-file globs: a command that names one is never read as safe in Auto mode.
     public var secretPatterns: [GlobPattern]
+    /// Asked at every turn boundary of a run, and before a run would end, for messages the user wrote
+    /// while it was going (`itemCount` is how many items the history holds, so the host can note where
+    /// each lands). They join the history as user messages and the model sees them on its next turn;
+    /// a run that would have ended carries on with them instead. `nil`: none are taken.
+    public var pendingMessages: (@Sendable (_ itemCount: Int) async -> [String])?
 
     public init(
         model: String,
@@ -36,7 +41,8 @@ public struct AgentConfiguration: Sendable {
         mode: PermissionMode = .acceptEdits,
         permissions: PermissionRules = PermissionRules(),
         gate: (any PermissionGate)? = nil,
-        secretPatterns: [GlobPattern] = []
+        secretPatterns: [GlobPattern] = [],
+        pendingMessages: (@Sendable (_ itemCount: Int) async -> [String])? = nil
     ) {
         self.model = model
         self.systemPrompt = systemPrompt
@@ -52,6 +58,7 @@ public struct AgentConfiguration: Sendable {
         self.permissions = permissions
         self.gate = gate
         self.secretPatterns = secretPatterns
+        self.pendingMessages = pendingMessages
     }
 }
 

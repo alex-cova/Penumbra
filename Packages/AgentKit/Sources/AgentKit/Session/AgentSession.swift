@@ -246,6 +246,7 @@ public actor AgentSession {
 
         for _ in 0..<configuration.maxIterations {
             if Task.isCancelled { return .stopped }
+            await takePendingMessages()
             announceModeChange()
             await compactIfNeeded(force: false, out)
             if Task.isCancelled { return .stopped }
@@ -296,7 +297,11 @@ public actor AgentSession {
                     return .failed("The model kept writing tool calls that could not be read (\(turn.unreadable[0].detail)).")
                 }
             }
-            if turn.calls.isEmpty, turn.unreadable.isEmpty { return .completed }
+            if turn.calls.isEmpty, turn.unreadable.isEmpty {
+                // Something the user wrote meanwhile is answered in this run, not in a new one.
+                if await takePendingMessages() { continue }
+                return .completed
+            }
 
             if !turn.calls.isEmpty {
                 switch await execute(turn.calls, counts: &callCounts, out) {
@@ -314,6 +319,16 @@ public actor AgentSession {
     }
 
     static let maxUnreadableCalls = 3
+
+    /// Adds the messages the user wrote during the run. Only ever between a call's output and the next
+    /// request (or after a turn with no calls), so no message lands inside a call and its output.
+    @discardableResult
+    private func takePendingMessages() async -> Bool {
+        guard let source = configuration.pendingMessages else { return false }
+        let texts = await source(items.count)
+        for text in texts { items.append(.user(text)) }
+        return !texts.isEmpty
+    }
 
     /// Tells the model the mode changed since it last heard. Always between a call's output and the
     /// next request, never inside a pair.
@@ -345,7 +360,11 @@ public actor AgentSession {
     /// The tools the model is told about. In plan mode that is only the ones that look.
     private var offeredTools: [any AgentTool] { tools.filter { $0.isOffered(in: mode) } }
 
-    func estimatedContextTokens() -> Int {
+    /// The model's window as the host configured it, for showing how full the conversation is.
+    public var contextWindow: Int? { configuration.contextWindow }
+
+    /// Tokens the next request would carry, as best they can be known (see above).
+    public func estimatedContextTokens() -> Int {
         let fixed = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition))
         let whole = fixed + ContextBudget.tokens(items)
         guard lastInputTokens > 0, itemsAtLastReport <= items.count else { return whole }
@@ -361,7 +380,36 @@ public actor AgentSession {
         let before = estimatedContextTokens()
         let limit = Int(Double(window) * configuration.compactionThreshold)
         guard force || before > limit else { return false }
+        guard let report = await compact(window: window, force: force, manual: false, focus: nil) else { return false }
+        out.yield(.compacted(report))
+        return report.changedAnything
+    }
 
+    /// Shortens the conversation now, at the user's request, whatever the window and however short it
+    /// already is: old tool outputs become stubs and everything but the latest turns is summarized.
+    /// `focus` tells the summary what to keep in detail. The report says what changed (nothing, for a
+    /// conversation too short to shorten). Never while a run is going.
+    public func compactNow(focus: String? = nil) async throws -> CompactionReport {
+        guard !isRunning else { throw CompactionError.runInProgress }
+        let window = configuration.contextWindow.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultManualWindow
+        let report = await compact(window: window, force: true, manual: true, focus: focus)
+        return report ?? CompactionReport()
+    }
+
+    public enum CompactionError: Error, Equatable, LocalizedError {
+        case runInProgress
+
+        public var errorDescription: String? { "Wait for the current run to finish, or stop it, before shortening the conversation." }
+    }
+
+    /// What the stub and summary budgets assume when the host did not give a window.
+    static let defaultManualWindow = 128_000
+
+    /// The shared work of automatic and manual compaction. `manual` skips the "is it needed" checks and the
+    /// back-off after a failed summary. `nil` when nothing was done and nothing failed.
+    private func compact(window: Int, force: Bool, manual: Bool, focus: String?) async -> CompactionReport? {
+        let before = estimatedContextTokens()
+        let limit = Int(Double(window) * configuration.compactionThreshold)
         var policy = CompactionPolicy(contextWindow: window, threshold: configuration.compactionThreshold)
         if force {
             policy.target = 0.35
@@ -378,10 +426,11 @@ public actor AgentSession {
         }
 
         let afterStubs = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition)) + ContextBudget.tokens(items)
-        if afterStubs > (force ? Int(Double(window) * policy.target) : limit),
+        if manual { summaryBackoffUntilItems = 0 }
+        if manual || afterStubs > (force ? Int(Double(window) * policy.target) : limit),
            items.count >= summaryBackoffUntilItems,
            let cut = ConversationSummary.cutIndex(in: items, keepTurns: policy.keepRecentTurns) {
-            if let summary = await summarize(Array(items[..<cut]), window: window) {
+            if let summary = await summarize(Array(items[..<cut]), window: window, focus: focus) {
                 report.summarizedItems = cut
                 items = ConversationSummary.replacing(items, upTo: cut, with: summary)
             } else {
@@ -390,22 +439,23 @@ public actor AgentSession {
             }
         }
 
-        guard report.changedAnything || report.summaryFailed else { return false }
+        guard report.changedAnything || report.summaryFailed else { return nil }
         // Nothing the provider reported applies to the shortened conversation any more.
         lastInputTokens = 0
         itemsAtLastReport = 0
         report.estimatedTokensAfter = estimatedContextTokens()
-        out.yield(.compacted(report))
-        return report.changedAnything
+        return report
     }
 
     /// One request to the same model, asking it to condense the older part of the conversation.
-    private func summarize(_ older: [ConversationItem], window: Int) async -> String? {
+    private func summarize(_ older: [ConversationItem], window: Int, focus: String? = nil) async -> String? {
         let budgetCharacters = max(2_000, Int(Double(window) * 0.5) * 3)
         let transcript = ConversationSummary.transcript(of: older, maximumCharacters: budgetCharacters)
+        let attention = focus?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            .map { "\n\nGive particular attention to this, and keep its details: \($0)" } ?? ""
         let request = LLMRequest(
             model: configuration.model, system: ConversationSummary.systemPrompt,
-            items: [.user(transcript + "\n\nWrite the summary now.")], tools: [],
+            items: [.user(transcript + attention + "\n\nWrite the summary now.")], tools: [],
             reasoningEffort: nil, maxOutputTokens: 1_500, cacheKey: nil)
         var text = ""
         do {
@@ -739,4 +789,8 @@ public actor AgentSession {
     private static func canonical(_ arguments: String) -> String {
         (try? JSONValue(parsing: arguments).serialized()) ?? arguments
     }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

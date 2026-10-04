@@ -325,3 +325,240 @@ private final class MemoryBlobs: CheckpointBlobStore, @unchecked Sendable {
         #expect(try await agent.revertRuns([UUID()]) == RevertReport())
     }
 }
+
+@Suite struct CompactNowTests {
+    private func history(turns: Int) -> [ConversationItem] {
+        var items: [ConversationItem] = []
+        for index in 0..<turns {
+            items += [
+                .user("question \(index)"),
+                .toolCall(id: "c\(index)", name: "read_file", arguments: #"{"path":"A.txt"}"#),
+                .toolOutput(callID: "c\(index)", output: String(repeating: "line of file text\n", count: 50)),
+                .assistant("answer \(index)"),
+            ]
+        }
+        return items
+    }
+
+    private func session(_ client: MockLLMClient, history: [ConversationItem], window: Int? = 100_000) throws -> AgentSession {
+        AgentSession(
+            client: client, tools: ReadOnlyTools.all(), workspace: try TempProject().workspace,
+            configuration: AgentConfiguration(model: "m", contextWindow: window), history: history)
+    }
+
+    @Test func aConversationTooShortToShortenIsLeftAlone() async throws {
+        let client = MockLLMClient(turns: [.text("should not be asked")])
+        let agent = try session(client, history: history(turns: 1))
+        let report = try await agent.compactNow()
+        #expect(!report.changedAnything && !report.summaryFailed)
+        #expect(client.requests.isEmpty, "no summary was requested")
+        #expect(await agent.items.count == 4)
+    }
+
+    @Test func aLongerOneIsSummarizedKeepingTheLatestTurns() async throws {
+        let client = MockLLMClient(turns: [.text("The user asked five things; files were read.")])
+        let agent = try session(client, history: history(turns: 6))
+        let before = await agent.items.count
+        let report = try await agent.compactNow()
+        #expect(report.summarizedItems > 0 && report.changedAnything)
+        #expect(report.estimatedTokensAfter < report.estimatedTokensBefore)
+
+        let items = await agent.items
+        #expect(items.count < before)
+        guard case .user(let first) = items[0] else {
+            Issue.record("no summary item")
+            return
+        }
+        #expect(first.hasPrefix(ConversationSummary.heading) && first.contains("The user asked five things"))
+        #expect(items.last == .assistant("answer 5"), "the newest turn is kept as it was")
+        #expect(client.requests.count == 1)
+    }
+
+    @Test func theFocusReachesTheSummarizingRequest() async throws {
+        let client = MockLLMClient(turns: [.text("summary")])
+        let agent = try session(client, history: history(turns: 6))
+        _ = try await agent.compactNow(focus: "  the failing test in AuthTests  ")
+        guard case .user(let sent) = try #require(client.requests.first?.items.first) else {
+            Issue.record("no request")
+            return
+        }
+        #expect(sent.contains("Give particular attention to this, and keep its details: the failing test in AuthTests"))
+
+        let plain = MockLLMClient(turns: [.text("summary")])
+        _ = try await session(plain, history: history(turns: 6)).compactNow(focus: "   ")
+        guard case .user(let none) = try #require(plain.requests.first?.items.first) else {
+            Issue.record("no request")
+            return
+        }
+        #expect(!none.contains("particular attention"), "a blank focus is no focus")
+    }
+
+    @Test func itWorksWithNoWindowConfiguredAndReportsTheWindow() async throws {
+        let client = MockLLMClient(turns: [.text("summary")])
+        let agent = try session(client, history: history(turns: 6), window: nil)
+        #expect(await agent.contextWindow == nil)
+        let report = try await agent.compactNow()
+        #expect(report.summarizedItems > 0)
+        let configured = try session(MockLLMClient(turns: []), history: [], window: 32_000)
+        #expect(await configured.contextWindow == 32_000)
+    }
+
+    @Test func aFailedSummaryStillClearsOldOutputsAndSaysSo() async throws {
+        let client = MockLLMClient(turns: [MockTurn([], failure: .server(status: 500, message: "down"))])
+        let agent = try session(client, history: history(turns: 6))
+        let report = try await agent.compactNow()
+        #expect(report.summaryFailed)
+        #expect(report.stubbedOutputs > 0, "the cheap part still worked")
+        #expect(report.summarizedItems == 0)
+        let items = await agent.items
+        #expect(items.count == 24, "nothing was removed")
+    }
+
+    @Test func theConversationStillWorksAfterwards() async throws {
+        let client = MockLLMClient(turns: [.text("summary"), .text("carrying on")])
+        let agent = try session(client, history: history(turns: 6))
+        _ = try await agent.compactNow()
+        for await _ in await agent.send("what next?") {}
+        let request = try #require(client.requests.last)
+        guard case .user(let first) = request.items[0] else {
+            Issue.record("no summary")
+            return
+        }
+        #expect(first.hasPrefix(ConversationSummary.heading))
+        #expect(request.items.last == .user("what next?"))
+        // Every call still has its output.
+        var open = Set<String>()
+        for item in request.items {
+            if case .toolCall(let id, _, _) = item { open.insert(id) }
+            if case .toolOutput(let id, _) = item { open.remove(id) }
+        }
+        #expect(open.isEmpty)
+    }
+
+    @Test func itIsRefusedWhileARunIsGoing() async throws {
+        let client = MockLLMClient(turns: [MockTurn([.textDelta("slow"), .finished(.completed)], delayPerEvent: .milliseconds(300))])
+        let agent = try session(client, history: history(turns: 6))
+        let stream = await agent.send("go")
+        await #expect(throws: AgentSession.CompactionError.runInProgress) { try await agent.compactNow() }
+        for await _ in stream {}
+    }
+
+    @Test func automaticCompactionStillUsesTheSameCore() async throws {
+        // A tiny window forces the automatic path: the run's first turn compacts before it asks the model.
+        let client = MockLLMClient(turns: [.text("summary of earlier"), .text("answer")])
+        let agent = AgentSession(
+            client: client, tools: ReadOnlyTools.all(), workspace: try TempProject().workspace,
+            configuration: AgentConfiguration(model: "m", contextWindow: 600), history: history(turns: 6))
+        var compacted: CompactionReport?
+        for await event in await agent.send("go on") { if case .compacted(let report) = event { compacted = report } }
+        #expect(compacted?.changedAnything == true)
+    }
+}
+
+private final class MessageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [String] = []
+    private(set) var itemCounts: [Int] = []
+
+    func add(_ text: String) { lock.withLock { waiting.append(text) } }
+
+    func take(itemCount: Int) -> [String] {
+        lock.withLock {
+            defer { waiting = [] }
+            if !waiting.isEmpty { itemCounts.append(itemCount) }
+            return waiting
+        }
+    }
+}
+
+@Suite struct PendingMessageTests {
+    private func session(_ client: MockLLMClient, box: MessageBox, project: TempProject) -> AgentSession {
+        AgentSession(
+            client: client, tools: ReadOnlyTools.all(), workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", pendingMessages: { count in box.take(itemCount: count) }))
+    }
+
+    private func read() -> MockTurn { .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)) }
+
+    @Test func aMessageWrittenDuringATurnReachesTheModelOnItsNextTurn() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let box = MessageBox()
+        let client = MockLLMClient(turns: [read(), .text("done, and noted")])
+        let agent = session(client, box: box, project: project)
+        for await event in await agent.send("first") {
+            if case .toolCallStarted = event { box.add("also check B") }
+        }
+        let second = try #require(client.requests.last)
+        #expect(second.items.last == .user("also check B"), "after the call's output, before the model's next turn")
+        let items = await agent.items
+        guard let call = items.firstIndex(where: { if case .toolCall = $0 { true } else { false } }),
+              let output = items.firstIndex(where: { if case .toolOutput = $0 { true } else { false } })
+        else {
+            Issue.record("no call")
+            return
+        }
+        #expect(output == call + 1, "the message did not land between a call and its output")
+    }
+
+    @Test func aTurnThatWouldHaveEndedTheRunCarriesOnWithTheMessage() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let box = MessageBox()
+        // A slow first turn, so the message is written while the model is still answering.
+        let client = MockLLMClient(turns: [
+            MockTurn([.textDelta("first answer"), .finished(.completed)], delayPerEvent: .milliseconds(150)), .text("answer to the follow-up"),
+        ])
+        let agent = session(client, box: box, project: project)
+        var texts: [String] = []
+        var endings = 0
+        for await event in await agent.send("first") {
+            if case .textDelta = event, box.itemCounts.isEmpty { box.add("and one more thing") }
+            if case .assistantMessage(let text) = event { texts.append(text) }
+            if case .runEnded = event { endings += 1 }
+        }
+        #expect(texts == ["first answer", "answer to the follow-up"], "one run, two answers")
+        #expect(endings == 1)
+        #expect(await agent.items == [.user("first"), .assistant("first answer"), .user("and one more thing"), .assistant("answer to the follow-up")])
+    }
+
+    @Test func theHostIsToldWhereEachMessageLands() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let box = MessageBox()
+        let client = MockLLMClient(turns: [read(), .text("done")])
+        let agent = session(client, box: box, project: project)
+        for await event in await agent.send("first") {
+            if case .toolCallStarted = event { box.add("queued") }
+        }
+        // user, call, output are in the history when the message is taken.
+        #expect(box.itemCounts == [3])
+        #expect(await agent.items[3] == .user("queued"))
+    }
+
+    @Test func nothingPendingChangesNothingAndAHostWithoutTheHookIsUnaffected() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let client = MockLLMClient(turns: [.text("a")])
+        let plain = AgentSession(
+            client: client, tools: ReadOnlyTools.all(), workspace: project.workspace, configuration: AgentConfiguration(model: "m"))
+        for await _ in await plain.send("hi") {}
+        #expect(await plain.items == [.user("hi"), .assistant("a")])
+
+        let empty = MessageBox()
+        let again = session(MockLLMClient(turns: [.text("b")]), box: empty, project: project)
+        for await _ in await again.send("hi") {}
+        #expect(await again.items == [.user("hi"), .assistant("b")])
+    }
+
+    @Test func severalMessagesAreAddedInOrder() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let box = MessageBox()
+        let client = MockLLMClient(turns: [read(), .text("done")])
+        let agent = session(client, box: box, project: project)
+        for await event in await agent.send("first") {
+            if case .toolCallStarted = event {
+                box.add("one")
+                box.add("two")
+            }
+        }
+        let items = await agent.items
+        #expect(Array(items.suffix(3)) == [.user("one"), .user("two"), .assistant("done")])
+    }
+}

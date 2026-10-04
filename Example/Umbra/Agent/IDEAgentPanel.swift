@@ -7,6 +7,7 @@ import SwiftUI
 struct IDEAgentPanel: View {
     let agent: IDEAgentController
     @State private var isSettingsPresented = false
+    @State private var isHistoryPresented = false
     @State private var isModelsPresented = false
     @State private var lastEscape: Date?
     @State private var composerState = IDEAgentComposerState()
@@ -52,26 +53,12 @@ struct IDEAgentPanel: View {
             IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
                 agent.newConversation()
             }
-            Menu {
-                if agent.history.isEmpty {
-                    Text("No earlier conversations")
-                }
-                ForEach(agent.history) { conversation in
-                    Button {
-                        agent.resume(conversation.id)
-                    } label: {
-                        Text(conversation.title)
-                        Text(conversation.updatedAt.formatted(.relative(presentation: .named)))
-                    }
-                    .disabled(conversation.id == agent.conversationID)
-                }
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
+            IDEAgentIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
+                isHistoryPresented.toggle()
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Earlier Chats")
+            .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
+                IDEAgentHistoryPopover(agent: agent) { isHistoryPresented = false }
+            }
             .onAppear { agent.restoreLatestIfNeeded() }
             IDEAgentIconButton(
                 systemImage: settings.opensAsPage ? "sidebar.trailing" : "arrow.up.left.and.arrow.down.right",
@@ -136,6 +123,9 @@ struct IDEAgentPanel: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
             }
+            if !agent.selected.queue.isEmpty {
+                IDEAgentQueuedMessages(queue: agent.selected.queue) { agent.selected.removeQueued($0) }
+            }
             if composerState.isShowingSuggestions {
                 IDEAgentSuggestionList(state: composerState) { index in
                     composerState.selectedIndex = index
@@ -145,7 +135,8 @@ struct IDEAgentPanel: View {
             HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
                 @Bindable var agent = agent
                 IDEAgentComposerField(
-                    text: $agent.draft, height: $composerHeight, placeholder: "Ask about this project…",
+                    text: $agent.draft, height: $composerHeight,
+                    placeholder: agent.isRunning ? "Write what to do next; it is sent at the next step…" : "Ask about this project…",
                     state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
                     suggestions: { agent.suggestions(for: $0) },
                     onSend: { agent.submit() },
@@ -186,10 +177,107 @@ struct IDEAgentPanel: View {
             HStack {
                 IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
                 Spacer(minLength: 0)
+                if let fraction = agent.selected.contextFraction {
+                    IDEAgentContextMeter(
+                        fraction: fraction, tokens: agent.selected.contextTokens ?? 0, window: settings.contextWindow ?? 0,
+                        isBusy: agent.selected.isRunning || agent.selected.isCompacting
+                    ) {
+                        let chat = agent.selected
+                        Task { await chat.compact(focus: nil) }
+                    }
+                }
             }
             .padding(.horizontal, IDEAppearance.Spacing.xs)
         }
         .padding(IDEAppearance.Spacing.sm)
+    }
+}
+
+/// Messages written while the agent works, waiting for its next step. ✕ takes one back.
+private struct IDEAgentQueuedMessages: View {
+    let queue: [IDEAgentConversation.QueuedMessage]
+    let remove: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(queue) { message in
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Image(systemName: "clock")
+                        .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 1))
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    Text(message.text)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    Button {
+                        remove(message.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Take this message back")
+                    .accessibilityLabel("Remove queued message")
+                }
+            }
+            Text("Sent at the agent's next step")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+        .padding(IDEAppearance.Spacing.xs + 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.card)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+}
+
+/// How full the model's window is: a ring and a percentage, turning orange and then red as it fills.
+/// The menu summarizes the earlier conversation to make room.
+private struct IDEAgentContextMeter: View {
+    let fraction: Double
+    let tokens: Int
+    let window: Int
+    let isBusy: Bool
+    let compact: () -> Void
+
+    private var tint: Color {
+        switch fraction {
+        case ..<0.75: IDEAppearance.ColorToken.muted
+        case ..<0.9: .orange
+        default: IDEAppearance.ColorToken.error
+        }
+    }
+
+    var body: some View {
+        Menu {
+            Text("\(IDEAgentFormat.tokens(tokens)) of \(IDEAgentFormat.tokens(window)) tokens in use")
+            Button("Summarize the Earlier Conversation", action: compact)
+                .disabled(isBusy)
+        } label: {
+            HStack(spacing: 4) {
+                ZStack {
+                    Circle().stroke(IDEAppearance.ColorToken.border, lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: fraction)
+                        .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 12, height: 12)
+                Text("\(Int((fraction * 100).rounded()))%")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(tint)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("\(IDEAgentFormat.tokens(tokens)) of \(IDEAgentFormat.tokens(window)) tokens in the model's window. Older messages are summarized automatically as it fills; /compact does it now.")
+        .accessibilityLabel("Context window \(Int((fraction * 100).rounded())) percent full")
     }
 }
 

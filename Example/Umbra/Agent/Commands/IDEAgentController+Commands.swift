@@ -20,13 +20,24 @@ extension IDEAgentController {
         let text = selected.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         commandCatalog.invalidate()
+        if text.hasPrefix("!"), text.dropFirst().contains(where: { !$0.isWhitespace }) {
+            // A command of your own, as a terminal would run it. Not during a run: the agent may be using the same files.
+            guard !selected.isRunning else { return }
+            promptHistory()?.add(text)
+            selected.runShell(String(text.dropFirst()))
+            return
+        }
         if let invocation = IDEAgentSlashInvocation.parse(text), let descriptor = commandCatalog.descriptor(named: invocation.name) {
             promptHistory()?.add(text)
             selected.promptRecall.reset()
             run(descriptor, arguments: invocation.arguments)
             return
         }
-        if selected.canSend {
+        if selected.isRunning {
+            // Written during a run: it joins the conversation at the model's next turn.
+            promptHistory()?.add(text)
+            selected.enqueue(text)
+        } else if selected.canSend {
             promptHistory()?.add(text)
             selected.send()
         }
@@ -109,12 +120,7 @@ extension IDEAgentController {
         switch command.lowercased() {
         case "resume":
             let open = Set(conversations.map(\.conversationID))
-            let ranked: [(summary: SessionSummary, score: Int)] = history.compactMap { summary in
-                if trimmed.isEmpty { return (summary, 0) }
-                return FuzzyMatcher.match(query: trimmed, in: summary.title).map { (summary, $0.score) }
-            }
-            let ordered = ranked.enumerated().sorted { ($0.element.score, -$0.offset) > ($1.element.score, -$1.offset) }.map(\.element)
-            return ordered.prefix(30).map { summary, _ in
+            return IDEAgentHistorySearch.rank(history, query: trimmed).prefix(30).map { summary in
                 IDEAgentSuggestion(
                     id: "resume:" + summary.id.uuidString, icon: "bubble.left", title: summary.title,
                     detail: summary.updatedAt.formatted(.relative(presentation: .named)) + (open.contains(summary.id) ? "  ·  open" : ""),
@@ -200,6 +206,10 @@ extension IDEAgentController {
         case .fork:
             let id = selected.id
             Task { await fork(id) }
+        case .compact:
+            let focus = arguments.isEmpty ? nil : arguments
+            let chat = selected
+            Task { await chat.compact(focus: focus) }
         case .plan:
             changeMode(to: .plan)
             if !arguments.isEmpty, selected.canRunCommands { selected.submit(text: arguments) }
@@ -241,8 +251,7 @@ extension IDEAgentController {
 
     /// The saved chat whose title matches best.
     func bestChat(matching query: String) -> SessionSummary? {
-        history.compactMap { summary in FuzzyMatcher.match(query: query, in: summary.title).map { (summary, $0.score) } }
-            .max { $0.1 < $1.1 }?.0
+        IDEAgentHistorySearch.rank(history, query: query, requiresMatch: true).first
     }
 
     static func costNotice(usage: TokenUsage, cost: Double?) -> String {
@@ -262,7 +271,7 @@ extension IDEAgentController {
             if !descriptor.summary.isEmpty { line += "  —  " + descriptor.summary }
             lines.append(line)
         }
-        lines.append("@ mentions a file. ⇧Tab changes the mode. ⌥⌘T opens a new chat.")
+        lines.append("@ mentions a file. ! runs a command yourself and shows the agent its output with your next message. ⇧Tab changes the mode. ⌥⌘T opens a new chat.")
         return lines.joined(separator: "\n")
     }
 
