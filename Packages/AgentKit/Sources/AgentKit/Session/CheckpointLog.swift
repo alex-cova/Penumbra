@@ -39,6 +39,30 @@ public struct RevertReport: Sendable, Hashable {
     public var isComplete: Bool { conflicts.isEmpty && failures.isEmpty }
 }
 
+/// Where the original texts of a run's files can be kept beyond this process, so a run can still be
+/// reverted after a relaunch. Keyed by run and path: nothing is shared between runs, so there is
+/// nothing to collide. Writes are best effort; a failed one only costs that file's revert.
+public protocol CheckpointBlobStore: Sendable {
+    func put(_ text: String, run: RunID, path: String)
+    func get(run: RunID, path: String) -> String?
+}
+
+/// One file of a saved run: what is needed to find its original again and to know the user has not touched it since.
+public struct ChangeSnapshot: Codable, Sendable, Hashable {
+    public var path: String
+    public var isCreation: Bool
+    public var lastWrittenHash: UInt64?
+}
+
+/// A run's checkpoint record without the texts, small enough to keep with the conversation.
+public struct RunSnapshot: Codable, Sendable, Hashable, Identifiable {
+    public var id: RunID
+    public var label: String
+    public var startedAt: Date
+    public var isReverted: Bool
+    public var changes: [ChangeSnapshot]
+}
+
 /// Checkpoints per run, kept in memory for the window's lifetime. Before a file's first change in a
 /// run its original text is recorded; after each change the hash of what was written. The oldest
 /// runs are dropped past `maxBytes`, so they lose Revert first.
@@ -46,9 +70,13 @@ public actor CheckpointLog {
     public private(set) var runs: [RunRecord] = []
     private var labels: [RunID: String] = [:]
     private let maxBytes: Int
+    private let blobs: (any CheckpointBlobStore)?
 
-    public init(maxBytes: Int = 32_000_000) {
+    /// With a `blobs` store, every original is also written there as it is recorded, and
+    /// `snapshot()` / `restore(_:)` carry a run's record across a relaunch.
+    public init(maxBytes: Int = 32_000_000, blobs: (any CheckpointBlobStore)? = nil) {
         self.maxBytes = maxBytes
+        self.blobs = blobs
     }
 
     /// Registers a run. It only becomes a record once it changes a file.
@@ -85,6 +113,7 @@ public actor CheckpointLog {
         guard let index, !runs[index].changes.contains(where: { $0.path == path }) else { return }
         runs[index].changes.append(FileChange(
             path: path, original: original, lastWrittenHash: original.map(ReadLedger.hash)))
+        if let original { blobs?.put(original, run: id, path: path) }
         evictIfNeeded()
     }
 
@@ -142,6 +171,39 @@ public actor CheckpointLog {
         }
         if report.isComplete { runs[index].isReverted = true }
         return report
+    }
+
+    // MARK: - Across a relaunch
+
+    /// Every run that changed a file, without the texts (those are in the blob store).
+    public func snapshot() -> [RunSnapshot] {
+        runs.map { run in
+            RunSnapshot(
+                id: run.id, label: run.label, startedAt: run.startedAt, isReverted: run.isReverted,
+                changes: run.changes.map { ChangeSnapshot(path: $0.path, isCreation: $0.isCreation, lastWrittenHash: $0.lastWrittenHash) })
+        }
+    }
+
+    /// Brings saved runs back, reading each original from the blob store. A file whose original is gone
+    /// is left out (it cannot be reverted), and so is a run left with no files. Runs already known are kept as they are.
+    /// Returns the ids that came back with at least one file.
+    @discardableResult
+    public func restore(_ saved: [RunSnapshot]) -> [RunID] {
+        var restored: [RunID] = []
+        for snapshot in saved where !runs.contains(where: { $0.id == snapshot.id }) {
+            let changes: [FileChange] = snapshot.changes.compactMap { change in
+                if change.isCreation { return FileChange(path: change.path, original: nil, lastWrittenHash: change.lastWrittenHash) }
+                guard let original = blobs?.get(run: snapshot.id, path: change.path) else { return nil }
+                return FileChange(path: change.path, original: original, lastWrittenHash: change.lastWrittenHash)
+            }
+            guard !changes.isEmpty else { continue }
+            runs.append(RunRecord(
+                id: snapshot.id, label: snapshot.label, startedAt: snapshot.startedAt, changes: changes, isReverted: snapshot.isReverted))
+            restored.append(snapshot.id)
+        }
+        runs.sort { $0.startedAt < $1.startedAt }
+        evictIfNeeded()
+        return restored.filter { id in runs.contains { $0.id == id } }
     }
 
     private func evictIfNeeded() {

@@ -50,3 +50,167 @@ import Testing
         #expect(toolOutputs(await agent.items)["e"]?.hasPrefix("Error") == true)
     }
 }
+
+private final class MemoryBlobs: CheckpointBlobStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var texts: [String: String] = [:]
+
+    private func key(_ run: RunID, _ path: String) -> String { "\(run)/\(path)" }
+
+    func put(_ text: String, run: RunID, path: String) { lock.withLock { texts[key(run, path)] = text } }
+    func get(run: RunID, path: String) -> String? { lock.withLock { texts[key(run, path)] } }
+    func remove(run: RunID, path: String) { lock.withLock { _ = texts.removeValue(forKey: key(run, path)) } }
+    var count: Int { lock.withLock { texts.count } }
+}
+
+@Suite struct CheckpointPersistenceTests {
+    private func disk(_ project: TempProject, _ path: String) -> String? {
+        try? String(contentsOf: project.root.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    @Test func originalsAreWrittenToTheStoreAsTheyAreRecordedAndCreationsAreNot() async throws {
+        let blobs = MemoryBlobs()
+        let log = CheckpointLog(blobs: blobs)
+        let run = await log.beginRun(label: "go")
+        await log.willChange(run: run, path: "A.txt", original: "before")
+        await log.willChange(run: run, path: "New.txt", original: nil)
+        await log.willChange(run: run, path: "A.txt", original: "ignored: not the first change")
+        #expect(blobs.get(run: run, path: "A.txt") == "before")
+        #expect(blobs.get(run: run, path: "New.txt") == nil)
+        #expect(blobs.count == 1)
+    }
+
+    @Test func aRunCanBeRevertedAfterARelaunch() async throws {
+        let project = try TempProject(files: ["A.txt": "original\n", "Keep.txt": "same\n"])
+        let blobs = MemoryBlobs()
+        let first = CheckpointLog(blobs: blobs)
+        let run = await first.beginRun(label: "edit A")
+        await first.willChange(run: run, path: "A.txt", original: "original\n")
+        try "changed\n".write(to: project.root.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        await first.didChange(run: run, path: "A.txt", written: "changed\n")
+        await first.willChange(run: run, path: "New.txt", original: nil)
+        try "created\n".write(to: project.root.appendingPathComponent("New.txt"), atomically: true, encoding: .utf8)
+        await first.didChange(run: run, path: "New.txt", written: "created\n")
+
+        // The window is closed: only the snapshot (kept with the conversation) and the blobs survive.
+        let saved = try JSONEncoder().encode(await first.snapshot())
+        let second = CheckpointLog(blobs: blobs)
+        let restored = await second.restore(try JSONDecoder().decode([RunSnapshot].self, from: saved))
+        #expect(restored == [run])
+        #expect(await second.changes(in: run).map(\.path) == ["A.txt", "New.txt"])
+
+        let report = await second.revert(run, using: project.workspace)
+        #expect(report.isComplete)
+        #expect(Set(report.reverted) == ["A.txt", "New.txt"])
+        #expect(disk(project, "A.txt") == "original\n")
+        #expect(disk(project, "New.txt") == nil, "a file the run created goes away")
+        #expect(disk(project, "Keep.txt") == "same\n")
+    }
+
+    @Test func aFileTheUserEditedSinceStillCountsAsAConflictAfterARelaunch() async throws {
+        let project = try TempProject(files: ["A.txt": "original\n"])
+        let blobs = MemoryBlobs()
+        let first = CheckpointLog(blobs: blobs)
+        let run = await first.beginRun(label: "edit")
+        await first.willChange(run: run, path: "A.txt", original: "original\n")
+        try "agent wrote\n".write(to: project.root.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        await first.didChange(run: run, path: "A.txt", written: "agent wrote\n")
+        let snapshot = await first.snapshot()
+
+        try "the user typed this\n".write(to: project.root.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        let second = CheckpointLog(blobs: blobs)
+        await second.restore(snapshot)
+        let report = await second.revert(run, using: project.workspace)
+        #expect(report.conflicts.map(\.path) == ["A.txt"])
+        #expect(disk(project, "A.txt") == "the user typed this\n", "the user's text is never overwritten")
+    }
+
+    @Test func aFileWhoseOriginalIsGoneIsLeftOutAndAnEmptyRunIsDropped() async throws {
+        let blobs = MemoryBlobs()
+        let first = CheckpointLog(blobs: blobs)
+        let kept = await first.beginRun(label: "kept")
+        await first.willChange(run: kept, path: "A.txt", original: "a")
+        await first.willChange(run: kept, path: "B.txt", original: "b")
+        let lost = await first.beginRun(label: "lost")
+        await first.willChange(run: lost, path: "C.txt", original: "c")
+        let snapshot = await first.snapshot()
+
+        blobs.remove(run: kept, path: "B.txt")
+        blobs.remove(run: lost, path: "C.txt")
+        let second = CheckpointLog(blobs: blobs)
+        let restored = await second.restore(snapshot)
+        #expect(restored == [kept])
+        #expect(await second.changes(in: kept).map(\.path) == ["A.txt"])
+        #expect(await second.run(lost) == nil)
+    }
+
+    @Test func aRestoreDoesNotReplaceARunThatIsAlreadyKnown() async throws {
+        let blobs = MemoryBlobs()
+        let log = CheckpointLog(blobs: blobs)
+        let run = await log.beginRun(label: "live")
+        await log.willChange(run: run, path: "A.txt", original: "a")
+        let snapshot = await log.snapshot()
+        let restored = await log.restore(snapshot)
+        #expect(restored.isEmpty)
+        #expect(await log.runs.count == 1)
+    }
+
+    @Test func theRevertedFlagAndTheLabelSurvive() async throws {
+        let project = try TempProject(files: ["A.txt": "x\n"])
+        let blobs = MemoryBlobs()
+        let first = CheckpointLog(blobs: blobs)
+        let run = await first.beginRun(label: "tidy up")
+        await first.willChange(run: run, path: "A.txt", original: "x\n")
+        await first.didChange(run: run, path: "A.txt", written: "x\n")
+        _ = await first.revert(run, using: project.workspace)
+
+        let second = CheckpointLog(blobs: blobs)
+        await second.restore(await first.snapshot())
+        let record = try #require(await second.run(run))
+        #expect(record.isReverted && record.label == "tidy up")
+        #expect(await second.revert(run, using: project.workspace) == RevertReport(), "a run reverted before the relaunch is not reverted twice")
+    }
+
+    @Test func theRestoredRunsStayWithinTheMemoryBudgetKeepingTheNewest() async throws {
+        let blobs = MemoryBlobs()
+        let first = CheckpointLog(blobs: blobs)
+        var ids: [RunID] = []
+        for index in 0..<5 {
+            let run = await first.beginRun(label: "run \(index)")
+            await first.willChange(run: run, path: "f.txt", original: String(repeating: "x", count: 100))
+            ids.append(run)
+        }
+        let second = CheckpointLog(maxBytes: 250, blobs: blobs)
+        await second.restore(await first.snapshot())
+        let kept = await second.runs.map(\.id)
+        #expect(kept == Array(ids.suffix(2)), "two 100-byte originals fit in 250 bytes; the older runs lose Revert first")
+    }
+
+    @Test func aSessionTakesALogItCanRestoreInto() async throws {
+        let project = try TempProject(files: ["A.txt": "one\ntwo\n"])
+        let blobs = MemoryBlobs()
+        let log = CheckpointLog(blobs: blobs)
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
+            .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)),
+            .text("done"),
+        ])
+        let agent = AgentSession(
+            client: client, tools: ReadOnlyTools.all() + EditingTools.all(), workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m"), checkpoints: log)
+        var runID: RunID?
+        for await event in await agent.send("go") { if case .runStarted(let id) = event { runID = id } }
+        let run = try #require(runID)
+        #expect(blobs.get(run: run, path: "A.txt") == "one\ntwo\n", "the session's edit wrote its original through")
+
+        let snapshot = await log.snapshot()
+        let relaunched = CheckpointLog(blobs: blobs)
+        await relaunched.restore(snapshot)
+        let second = AgentSession(
+            client: MockLLMClient(turns: []), tools: ReadOnlyTools.all() + EditingTools.all(), workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m"), history: await agent.items, checkpoints: relaunched)
+        let report = try await second.revertRun(run)
+        #expect(report.isComplete)
+        #expect(disk(project, "A.txt") == "one\ntwo\n")
+    }
+}

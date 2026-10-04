@@ -30,7 +30,7 @@ public actor AgentSession {
     private var announcedMode: PermissionMode
     private let ledger = ReadLedger()
     /// Per-run checkpoints of every file the agent changed, for the changed-files summary and Revert.
-    public let checkpoints = CheckpointLog()
+    public let checkpoints: CheckpointLog
     private var runTask: Task<Void, Never>?
     private var currentRun: RunID?
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
@@ -46,9 +46,11 @@ public actor AgentSession {
         configuration: AgentConfiguration,
         history: [ConversationItem] = [],
         totalUsage: TokenUsage = TokenUsage(),
-        sessionID: UUID = UUID()
+        sessionID: UUID = UUID(),
+        checkpoints: CheckpointLog = CheckpointLog()
     ) {
         self.sessionID = sessionID
+        self.checkpoints = checkpoints
         self.totalUsage = totalUsage
         self.client = client
         self.tools = tools

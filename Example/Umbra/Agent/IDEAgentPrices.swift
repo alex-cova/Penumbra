@@ -71,4 +71,6 @@ struct IDEAgentSavedTranscript: Codable {
     var todos: [TodoItem]?
     /// The name the user gave the chat's tab.
     var customTitle: String?
+    /// The runs that changed files, so Revert Run still works after a relaunch (their originals are on disk).
+    var checkpoints: [RunSnapshot]?
 }

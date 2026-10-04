@@ -66,6 +66,11 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var pendingOutput: [String: String] = [:]
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     @ObservationIgnored private let store: SessionStore?
+    /// This chat's checkpoints. One for the life of the chat, so a new session (a settings change) keeps
+    /// Revert for the runs before it; its originals also go to disk, so Revert survives a relaunch.
+    @ObservationIgnored private var checkpointLog: CheckpointLog?
+    /// Runs saved with the chat, put into the log when it is first needed.
+    @ObservationIgnored private var restoredRuns: [RunSnapshot] = []
     /// The workspace the session reads and writes through, kept so mentions read files the same way.
     @ObservationIgnored private var agentWorkspace: IDEAgentWorkspace?
     /// The app-wide permission rules file; `nil` in tests, which must not read the user's own.
@@ -295,6 +300,8 @@ final class IDEAgentConversation: Identifiable {
         status = nil
         restoredItems = nil
         chatRules = PermissionRules()
+        checkpointLog = nil
+        restoredRuns = []
         conversationID = UUID()
         createdAt = Date()
         pendingLoadID = nil
@@ -343,7 +350,10 @@ final class IDEAgentConversation: Identifiable {
         guard !isRunning else { return }
         endSession()
         let saved = IDEAgentSavedTranscript.decode(snapshot.host)
-        entries = saved.entries.map(\.entry)
+        let blobs = checkpointBlobs()
+        entries = saved.entries.compactMap { $0.restoredEntry(blobs: blobs) }
+        restoredRuns = saved.checkpoints
+        checkpointLog = nil
         cost = saved.cost
         todos = saved.todos
         restoredTodos = saved.todos
@@ -359,14 +369,31 @@ final class IDEAgentConversation: Identifiable {
         status = nil
     }
 
-    private func persist(items: [ConversationItem]) {
+    /// The originals of the files agents changed, on disk beside this project's conversations.
+    private func checkpointBlobs() -> IDEAgentCheckpointBlobs? {
+        guard let store, let root = host?.agentProjectRoot else { return nil }
+        return IDEAgentCheckpointBlobs(store: store, projectRoot: root.path)
+    }
+
+    private func ensureCheckpointLog() async -> CheckpointLog {
+        if let checkpointLog { return checkpointLog }
+        let log = CheckpointLog(blobs: checkpointBlobs())
+        await log.restore(restoredRuns)
+        checkpointLog = log
+        return log
+    }
+
+    private func persist(items: [ConversationItem], checkpoints: [RunSnapshot]) {
         guard let store, let root = host?.agentProjectRoot, !items.isEmpty else { return }
         let snapshot = SessionSnapshot(
             id: conversationID, projectRoot: root.path, title: customTitle ?? SessionStore.title(from: items),
             createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage,
-            host: IDEAgentSavedTranscript.encode(entries: entries, cost: cost, todos: todos, customTitle: customTitle))
+            host: IDEAgentSavedTranscript.encode(
+                entries: entries, cost: cost, todos: todos, customTitle: customTitle, checkpoints: checkpoints))
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
+        // The originals are kept for the newest runs of the project; this chat's own are never the ones to go.
+        checkpointBlobs()?.prune(keeping: Set(checkpoints.map(\.id)))
         onPersisted?()
     }
 
@@ -375,7 +402,11 @@ final class IDEAgentConversation: Identifiable {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(80))
         Task {
-            if let session { persist(items: await session.items) } else if let restoredItems { persist(items: restoredItems) }
+            if let session {
+                persist(items: await session.items, checkpoints: await session.checkpoints.snapshot())
+            } else if let restoredItems {
+                persist(items: restoredItems, checkpoints: restoredRuns)
+            }
         }
     }
 
@@ -460,7 +491,8 @@ final class IDEAgentConversation: Identifiable {
             },
             secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns))
         let created = AgentSession(
-            client: client, tools: tools, workspace: workspace, configuration: configuration, history: history)
+            client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
+            checkpoints: await ensureCheckpointLog())
         // A restored conversation whose checklist the history no longer shows (compaction) keeps the saved one.
         if !restoredTodos.isEmpty, await created.todoList.items.isEmpty { await created.setTodos(restoredTodos) }
         restoredTodos = []
@@ -487,7 +519,7 @@ final class IDEAgentConversation: Identifiable {
         status = nil
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
-        persist(items: await session.items)
+        persist(items: await session.items, checkpoints: await session.checkpoints.snapshot())
         onRunFinished?()
     }
 
@@ -562,15 +594,25 @@ final class IDEAgentConversation: Identifiable {
     /// Puts a finished run's files back. A file the user changed after the agent wrote it is left
     /// alone and listed on the card, where Show Diff compares it with the original.
     func revert(entryID: UUID) {
-        guard !isRunning, let session,
+        guard !isRunning, let host, let root = host.agentProjectRoot,
               let entry = entries.first(where: { $0.id == entryID }), let run = entry.run, !entry.isReverted
         else { return }
         Task { [weak self] in
+            guard let self else { return }
             do {
-                let report = try await session.revertRun(run)
-                self?.finishRevert(entryID: entryID, report: report)
+                let report: RevertReport
+                if let session = self.session {
+                    report = try await session.revertRun(run)
+                } else {
+                    // After a relaunch there is no session yet, and reverting must not need one (it would
+                    // need a working provider setup): the log and the workspace are enough.
+                    let log = await self.ensureCheckpointLog()
+                    let workspace = self.agentWorkspace ?? IDEAgentWorkspace(root: root, box: IDEAgentHostBox(host))
+                    report = await log.revert(run, using: workspace)
+                }
+                self.finishRevert(entryID: entryID, report: report)
             } catch {
-                self?.append(.init(kind: .error, text: error.localizedDescription))
+                self.append(.init(kind: .error, text: error.localizedDescription))
             }
         }
     }

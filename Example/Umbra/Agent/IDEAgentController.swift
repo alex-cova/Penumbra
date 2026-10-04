@@ -178,6 +178,11 @@ final class IDEAgentController {
             guard !open.isRunning else { return }
             close(open.id)
         }
+        // The originals kept for its runs go with it.
+        if let snapshot = store.load(id, projectRoot: root.path) {
+            let blobs = IDEAgentCheckpointBlobs(store: store, projectRoot: root.path)
+            for run in IDEAgentSavedTranscript.decode(snapshot.host).checkpoints { blobs.removeRun(run.id) }
+        }
         store.delete(id, projectRoot: root.path)
         refreshHistory()
     }
@@ -186,6 +191,7 @@ final class IDEAgentController {
     func clearHistory() {
         guard let store, let root = host?.agentProjectRoot else { return }
         store.deleteAll(projectRoot: root.path)
+        IDEAgentCheckpointBlobs(store: store, projectRoot: root.path).removeAll()
         history = []
     }
 
