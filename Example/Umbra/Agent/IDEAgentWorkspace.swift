@@ -48,11 +48,17 @@ enum IDEAgentEditTranslator {
 /// an open file is edited in its buffer as one undo group and left dirty, and a closed one is
 /// rewritten atomically.
 struct IDEAgentWorkspace: AgentWorkspace {
+    /// A write that went through: the project-relative path, what the file held before (`nil` if it was
+    /// new) and after (`nil` if it was deleted). For Local History.
+    typealias WriteObserver = @Sendable (_ path: String, _ before: String?, _ after: String?) -> Void
+
     let disk: DiskAgentWorkspace
     let box: IDEAgentHostBox
+    let onWrite: WriteObserver?
 
-    init(root: URL, box: IDEAgentHostBox) {
+    init(root: URL, box: IDEAgentHostBox, onWrite: WriteObserver? = nil) {
         self.box = box
+        self.onWrite = onWrite
         disk = DiskAgentWorkspace(root: root, unsavedBuffers: {
             await box.read(default: [:]) { $0.agentUnsavedBuffers() }
         })
@@ -74,14 +80,21 @@ struct IDEAgentWorkspace: AgentWorkspace {
     }
 
     func replaceText(path: String, expecting: String, edits: [AgentTextEdit]) async throws {
-        try await box.replaceText(relativePath: try relative(path), expecting: expecting, edits: edits)
+        let relativePath = try relative(path)
+        try await box.replaceText(relativePath: relativePath, expecting: expecting, edits: edits)
+        if let onWrite, let after = try? AgentTextEdit.apply(edits, to: expecting) { onWrite(relativePath, expecting, after) }
     }
 
     func createFile(path: String, contents: String) async throws {
-        try await box.createFile(relativePath: try relative(path), contents: contents)
+        let relativePath = try relative(path)
+        try await box.createFile(relativePath: relativePath, contents: contents)
+        onWrite?(relativePath, nil, contents)
     }
 
     func trashFile(path: String) async throws {
-        try await box.trashFile(relativePath: try relative(path))
+        let relativePath = try relative(path)
+        let before = try? await disk.readText(path: relativePath)
+        try await box.trashFile(relativePath: relativePath)
+        onWrite?(relativePath, before, nil)
     }
 }

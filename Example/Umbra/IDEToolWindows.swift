@@ -90,6 +90,7 @@ extension IDEWorkspace {
         case .structure: ("⌘7", .secondary)
         case .changes: ("⌃⌘G", .green)
         case .breakpoints: (nil, .red)
+        case .history: (nil, .orange)
         }
         return IDEToolWindow(
             id: tab == .explorer ? "explorer" : tab.rawValue, systemImage: tab.systemImage, title: tab.title,

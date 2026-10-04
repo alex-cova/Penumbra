@@ -68,6 +68,10 @@ extension IDEWorkspace: IDEAgentHost {
         openUntitled(displayName: title, text: text)
     }
 
+    func agentRecordWrite(path: String, before: String?, after: String?, source: IDELocalHistorySource, group: UUID?) {
+        localHistory.record(path: path, text: after, source: source, group: group, before: before)
+    }
+
     func agentInsertAtCaret(_ text: String) -> Bool {
         guard let document = workbench.activePane.selectedDocument, document.contentKind != .diff else { return false }
         let textView = host(for: workbench.activePaneID).textView

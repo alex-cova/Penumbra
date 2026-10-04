@@ -71,6 +71,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var checkpointLog: CheckpointLog?
     /// Runs saved with the chat, put into the log when it is first needed.
     @ObservationIgnored private var restoredRuns: [RunSnapshot] = []
+    /// Set while this chat reverts files, so Local History records those writes as reverts.
+    @ObservationIgnored private let writeFlag = WriteSourceFlag()
     /// The workspace the session reads and writes through, kept so mentions read files the same way.
     @ObservationIgnored private var agentWorkspace: IDEAgentWorkspace?
     /// The app-wide permission rules file; `nil` in tests, which must not read the user's own.
@@ -190,6 +192,17 @@ final class IDEAgentConversation: Identifiable {
             if let read = attachment.readFile { await session.recordRead(path: read.path, text: read.text) }
         }
         return context + "\n\n" + body + resolution.modelBlock
+    }
+
+    /// A file was written by this chat's run: tell Local History which chat and message did it.
+    private func noteAgentWrite(path: String, before: String?, after: String?, isRevert: Bool) {
+        if isRevert {
+            host?.agentRecordWrite(path: path, before: before, after: after, source: .revert, group: nil)
+        } else {
+            let prompt = entries.last(where: { $0.kind == .user })?.text ?? ""
+            host?.agentRecordWrite(
+                path: path, before: before, after: after, source: .agent(tab: title, prompt: String(prompt.prefix(200))), group: currentRun)
+        }
     }
 
     private func mentionSources(root: URL) -> IDEAgentMentionSources {
@@ -478,7 +491,12 @@ final class IDEAgentConversation: Identifiable {
         }
         restoredItems = nil
         let box = IDEAgentHostBox(host)
-        let workspace = IDEAgentWorkspace(root: root, box: box)
+        let writeFlag = self.writeFlag
+        let workspace = IDEAgentWorkspace(root: root, box: box, onWrite: { [weak self] path, before, after in
+            // Read now, while the write is happening: a revert is over by the time the main actor gets to it.
+            let isRevert = writeFlag.isReverting
+            Task { @MainActor in self?.noteAgentWrite(path: path, before: before, after: after, isRevert: isRevert) }
+        })
         agentWorkspace = workspace
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns) + EditingTools.all() + [IDERunCommandTool(support: support)]
@@ -626,6 +644,8 @@ final class IDEAgentConversation: Identifiable {
             guard let self else { return }
             do {
                 let report: RevertReport
+                self.writeFlag.isReverting = true
+                defer { self.writeFlag.isReverting = false }
                 if let session = self.session {
                     report = try await session.revertRun(run)
                 } else {
@@ -678,6 +698,8 @@ final class IDEAgentConversation: Identifiable {
 
         var report: RevertReport?
         if scope != .conversation, !target.runs.isEmpty {
+            writeFlag.isReverting = true
+            defer { writeFlag.isReverting = false }
             if let session {
                 do { report = try await session.revertRuns(target.runs) } catch {
                     append(.init(kind: .error, text: error.localizedDescription))
@@ -909,5 +931,16 @@ final class IDEAgentConversation: Identifiable {
             entry.isStreaming = true
             append(entry)
         }
+    }
+}
+
+/// Whether the writes happening now are a revert. Read from the thread a write happens on, so it is locked.
+final class WriteSourceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reverting = false
+
+    var isReverting: Bool {
+        get { lock.withLock { reverting } }
+        set { lock.withLock { reverting = newValue } }
     }
 }

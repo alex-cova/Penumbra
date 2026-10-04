@@ -134,6 +134,8 @@ public final class IDEWorkspace {
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
+    /// Revisions of the project's files: saves, opens, agent writes.
+    let localHistory = IDELocalHistoryRecorder()
     /// The project's files as Go to File sees them; the agent's `@` list uses it too.
     var paletteFileIndex: PaletteFileIndex { fileIndexer.index }
 
@@ -182,6 +184,7 @@ public final class IDEWorkspace {
 
     public init() {
         reference.workspace = self
+        if Self.isSessionPersistenceEnabled { localHistory.enable(baseDirectory: IDELocalHistoryRecorder.defaultDirectory()) }
         agent.attach(host: self)
         agent.onPanelRequested = { [weak self] in
             // Settings only has to make room when the chat is going to cover the same area.
@@ -207,6 +210,8 @@ public final class IDEWorkspace {
     var isSidebarVisible = false
     /// The left sidebar's tab. Read `activeSidebarTab`: this may name a tab that is unavailable now.
     var selectedSidebarTab = IDESidebarTab.explorer
+    /// The History tab shows every file's recent changes instead of the active file's revisions.
+    var localHistoryShowsProject = false
     /// Tabs the user closed with ×; the sidebar's + menu brings them back.
     private(set) var closedSidebarTabs: Set<IDESidebarTab> = []
     /// The project's breakpoints, mirrored from `breakpointStore` (which is not observable) for the
@@ -1088,6 +1093,7 @@ public final class IDEWorkspace {
         if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
         do {
             _ = try await document.save(from: textView, to: destination)
+            localHistory.recordSaved(destination!)
             applyLanguageInferredFromURL(destination!, document: document, in: pane)
             recordRecentFile(destination!)
             gitStatus.refresh()
@@ -1108,6 +1114,7 @@ public final class IDEWorkspace {
         else { return false }
         do {
             _ = try await document.save(from: textView, to: url)
+            localHistory.recordSaved(url)
             gitStatus.refresh()
             refreshPresentation()
             recheckJavaAfterSave(of: url)
@@ -1274,6 +1281,7 @@ public final class IDEWorkspace {
         await optimizeImportsBeforeSaving(to: url, pane: pane)
         do {
             _ = try await document.save(from: textView, to: url)
+            localHistory.recordSaved(url)
             applyLanguageInferredFromURL(url, document: document, in: pane)
             recordRecentFile(url)
             gitStatus.refresh()
@@ -2962,7 +2970,7 @@ public final class IDEWorkspace {
         let outcome = IDEReplaceInFilesGuard.verified(edit, against: plan, texts: texts)
         var result = outcome.edit.changes.isEmpty
             ? WorkspaceEditApplyResult()
-            : await IDEWorkspaceEditApplier(host: self).apply(outcome.edit)
+            : await historyRecordingApplier(named: "Replace in Files").apply(outcome.edit)
         for (url, count) in outcome.staleCounts {
             let note = "\(count) replacement\(count == 1 ? "" : "s") skipped: the file changed since the search."
             result.failures[url] = result.failures[url].map { "\($0) \(note)" } ?? note
@@ -3302,7 +3310,7 @@ public final class IDEWorkspace {
         switch tab {
         case .structure: refreshJavaStructure()
         case .changes: gitStatus.refresh()
-        case .explorer, .breakpoints: break
+        case .explorer, .breakpoints, .history: break
         }
         saveSession()
     }
@@ -3792,6 +3800,8 @@ public final class IDEWorkspace {
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
+            // Restored files were not opened through `openDocument`, so give each its starting point too.
+            for url in workbench.allDocuments().compactMap(\.url) { localHistory.recordBaseline(url) }
             Task {
                 try? await workbench.reloadFileBackedDocuments(languageResolver: IDELanguageSupport.fileBackedLanguageResolver)
                 rebuildLayoutHosts()
@@ -3847,6 +3857,7 @@ public final class IDEWorkspace {
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
+                + self.localHistoryContextMenuItems(url: url)
         }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
@@ -3891,7 +3902,7 @@ public final class IDEWorkspace {
         }
         host.intelligenceController?.onApplyWorkspaceEdit = { [weak self] edit in
             guard let self else { return WorkspaceEditApplyResult() }
-            return await IDEWorkspaceEditApplier(host: self).apply(edit)
+            return await self.historyRecordingApplier(named: "Refactoring").apply(edit)
         }
         host.intelligenceController?.onBreadcrumbsUpdated = { [weak self] segments in
             self?.applySymbolBreadcrumbs(segments)
@@ -3979,6 +3990,7 @@ public final class IDEWorkspace {
                 activatePaneToTheRight()
             }
             workbench.openDocument(document)
+            if document.contentKind == .text { localHistory.recordBaseline(url) }
             if let range, document.contentKind == .text, let selected = workbench.activePane.selectedDocument {
                 selected.selectedRange = range
             }
@@ -4645,6 +4657,12 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleGradleSidebar() }),
             EditorCommand(id: "app.toggleAgent", title: "Toggle Agent", group: "View",
                           action: { [weak self] in self?.toggleAgentPanel() }),
+            EditorCommand(id: "history.show", title: "Show Local History", group: "Local History",
+                          action: { [weak self] in self?.showLocalHistory() }),
+            EditorCommand(id: "history.recent", title: "Recent Changes", group: "Local History",
+                          action: { [weak self] in self?.showLocalHistory(project: true) }),
+            EditorCommand(id: "history.label", title: "Put Label on This Version…", group: "Local History",
+                          action: { [weak self] in self?.putLocalHistoryLabel() }),
             EditorCommand(id: "agent.askAboutSelection", title: "Ask Agent About Selection", group: "Agent",
                           action: { [weak self] in self?.askAgentAboutActiveSelection() }),
             EditorCommand(id: "agent.newConversation", title: "New Agent Chat", group: "Agent",
@@ -4778,11 +4796,13 @@ public final class IDEWorkspace {
         // One held access per window, released when the project changes or the window closes.
         projectAccess.begin(url)
         project.setRoot(url)
+        localHistory.setRoot(url)
         gitStatus.setRoot(url)
         fileIndexer.setRoot(url)
         projectWatcher.onBatch = [{ [weak self] batch in
             guard let self else { return }
             self.project.applyChanges(in: batch.affectedDirectories)
+            self.localHistory.recordExternalChanges(batch.paths)
             self.gitStatus.refresh()
             self.fileIndexer.handle(batch)
             self.intelligenceServices.javaSupport.projectFilesChanged(batch.paths)

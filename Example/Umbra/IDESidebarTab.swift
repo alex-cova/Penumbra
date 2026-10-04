@@ -5,6 +5,7 @@ enum IDESidebarTab: String, Codable, CaseIterable, Identifiable {
     case structure
     case changes
     case breakpoints
+    case history
 
     var id: String { rawValue }
 
@@ -14,6 +15,7 @@ enum IDESidebarTab: String, Codable, CaseIterable, Identifiable {
         case .structure: "Structure"
         case .changes: "Changes"
         case .breakpoints: "Breakpoints"
+        case .history: "History"
         }
     }
 
@@ -23,6 +25,7 @@ enum IDESidebarTab: String, Codable, CaseIterable, Identifiable {
         case .structure: "list.bullet.indent"
         case .changes: "arrow.triangle.branch"
         case .breakpoints: "circle.fill"
+        case .history: "clock.arrow.circlepath"
         }
     }
 

@@ -62,6 +62,9 @@ struct IDEWorkspaceEditApplier {
     }
 
     unowned let host: IDEWorkspaceEditHost
+    /// Told when a file that is not open was rewritten, with its text before and after. For Local History:
+    /// a closed file has no editor to undo in, so this is the only record of what it was.
+    var onDiskRewrite: ((_ url: URL, _ before: String, _ after: String) -> Void)?
 
     func apply(_ edit: WorkspaceEdit) async -> WorkspaceEditApplyResult {
         var result = WorkspaceEditApplyResult()
@@ -108,7 +111,8 @@ struct IDEWorkspaceEditApplier {
                 case .live(let textView):
                     TextEditApplicator.apply(edits, in: textView)
                 case .closed:
-                    try applyOnDisk(edits, to: url)
+                    let rewrite = try applyOnDisk(edits, to: url)
+                    onDiskRewrite?(url, rewrite.before, rewrite.after)
                 case .unavailable(let reason):
                     result.failures[url] = reason
                     continue
@@ -151,7 +155,8 @@ struct IDEWorkspaceEditApplier {
     /// Rewrites `url` with `edits` (already ordered end-to-start; positions address the file's
     /// current text). The write is atomic and only allowed inside the project folder, the
     /// location the user granted access to.
-    private func applyOnDisk(_ edits: [TextEdit], to url: URL) throws {
+    @discardableResult
+    private func applyOnDisk(_ edits: [TextEdit], to url: URL) throws -> (before: String, after: String) {
         guard let root = host.editProjectRoot else { throw Failure.noProject }
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let path = url.resolvingSymlinksInPath().standardizedFileURL.path
@@ -165,5 +170,6 @@ struct IDEWorkspaceEditApplier {
         if let permissions = attributes?[.posixPermissions] {
             try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
         }
+        return (text, updated)
     }
 }

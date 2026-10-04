@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The left sidebar: one card with a tab bar (Explorer, Structure, Changes, Breakpoints) over the
+/// The left sidebar: one card with a tab bar (Explorer, Structure, Changes, Breakpoints, History) over the
 /// selected tab's content. Which tabs exist and which one shows is `IDEWorkspace`'s
 /// `sidebarTabs` / `activeSidebarTab`.
 struct IDELeftSidebar: View {
@@ -28,6 +28,8 @@ struct IDELeftSidebar: View {
                     IDEChangesPanel(gitStatus: workspace.gitStatus)
                 case .breakpoints:
                     IDEBreakpointsPanel()
+                case .history:
+                    IDELocalHistoryPanel()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -69,7 +71,7 @@ private struct IDESidebarTabBar: View {
         switch tab {
         case .changes: workspace.gitStatus.changes.count
         case .breakpoints: workspace.breakpoints.count
-        case .explorer, .structure: 0
+        case .explorer, .structure, .history: 0
         }
     }
 
