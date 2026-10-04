@@ -8,6 +8,7 @@ struct IDEAgentPanel: View {
     let agent: IDEAgentController
     @State private var isSettingsPresented = false
     @State private var isModelsPresented = false
+    @State private var lastEscape: Date?
     @State private var composerState = IDEAgentComposerState()
     @State private var composerHeight: CGFloat = 22
     @State private var acceptRequest = 0
@@ -26,6 +27,9 @@ struct IDEAgentPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.panel)
         .sheet(isPresented: $isModelsPresented) { IDELocalModelsView(store: .shared, settings: settings) }
+        .sheet(item: Bindable(agent).rewindRequest) { request in
+            IDEAgentRewindSheet(agent: agent, request: request) { agent.rewindRequest = nil }
+        }
         .onChange(of: agent.settingsRequest) { isSettingsPresented = true }
     }
 
@@ -145,7 +149,17 @@ struct IDEAgentPanel: View {
                     state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
                     suggestions: { agent.suggestions(for: $0) },
                     onSend: { agent.submit() },
-                    onStop: { if agent.isRunning { agent.stop() } },
+                    onStop: {
+                        if agent.isRunning { agent.stop(); return }
+                        // Esc twice in an empty field: go back to an earlier message.
+                        guard agent.draft.isEmpty, !agent.selected.rewindTargets.isEmpty else { return }
+                        if let last = lastEscape, Date().timeIntervalSince(last) < 0.6 {
+                            lastEscape = nil
+                            agent.rewindRequest = IDEAgentRewindRequest()
+                        } else {
+                            lastEscape = Date()
+                        }
+                    },
                     onCycleMode: { agent.selected.cycleMode() },
                     onAccept: { agent.perform($0) },
                     onDropFiles: { urls in
@@ -222,6 +236,87 @@ private struct IDEAgentEntryView: View {
     var body: some View {
         switch entry.kind {
         case .user:
+            IDEAgentUserRow(entry: entry)
+        case .assistant:
+            // Plain text while it streams; Markdown blocks once the message is complete.
+            Group {
+                if entry.isStreaming {
+                    Text(entry.text)
+                        .font(IDEAppearance.Typography.body)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                        .textSelection(.enabled)
+                } else {
+                    IDEAgentMarkdownView(text: entry.text)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolCall(let name) where name == "exit_plan_mode":
+            IDEAgentPlanCard(entry: entry)
+        case .toolCall(let name):
+            IDEAgentToolCard(name: name, entry: entry)
+        case .changes:
+            IDEAgentChangesCard(entry: entry)
+        case .notice:
+            Text(entry.text)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .error:
+            Label(entry.text, systemImage: "exclamationmark.triangle.fill")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// One of the user's messages, with Rewind and Fork when the pointer is over it.
+private struct IDEAgentUserRow: View {
+    let entry: IDEAgentEntry
+    @Environment(IDEWorkspace.self) private var workspace
+    @State private var isHovering = false
+
+    private var agent: IDEAgentController { workspace.agent }
+    private var canGoBack: Bool { entry.itemIndex != nil && !agent.selected.isRunning }
+
+    var body: some View {
+        content
+            .onHover { isHovering = $0 }
+            .overlay(alignment: .topTrailing) {
+                if isHovering, canGoBack {
+                    HStack(spacing: 2) {
+                        control("arrow.uturn.backward", "Rewind to before this message…") {
+                            agent.rewindRequest = IDEAgentRewindRequest(entryID: entry.id)
+                        }
+                        control("arrow.triangle.branch", "Fork a new chat from before this message") {
+                            let chat = agent.selected.id
+                            let entryID = entry.id
+                            Task { await agent.fork(chat, before: entryID) }
+                        }
+                    }
+                    .padding(IDEAppearance.Spacing.xs)
+                }
+            }
+    }
+
+    private func control(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 1))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 22, height: 20)
+                .background(IDEAppearance.ColorToken.controlHover)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private var content: some View {
+        Group {
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
                 Text(IDEAgentFormat.userMessage(entry.text))
                     .font(IDEAppearance.Typography.body)
@@ -254,36 +349,6 @@ private struct IDEAgentEntryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(IDEAppearance.ColorToken.card)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
-        case .assistant:
-            // Plain text while it streams; Markdown blocks once the message is complete.
-            Group {
-                if entry.isStreaming {
-                    Text(entry.text)
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                        .textSelection(.enabled)
-                } else {
-                    IDEAgentMarkdownView(text: entry.text)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .toolCall(let name) where name == "exit_plan_mode":
-            IDEAgentPlanCard(entry: entry)
-        case .toolCall(let name):
-            IDEAgentToolCard(name: name, entry: entry)
-        case .changes:
-            IDEAgentChangesCard(entry: entry)
-        case .notice:
-            Text(entry.text)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .error:
-            Label(entry.text, systemImage: "exclamationmark.triangle.fill")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.error)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

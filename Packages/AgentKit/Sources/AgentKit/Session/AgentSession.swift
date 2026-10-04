@@ -180,6 +180,43 @@ public actor AgentSession {
         public var errorDescription: String? { "Wait for the current run to finish, or stop it, before reverting." }
     }
 
+    public enum RewindError: Error, Equatable, LocalizedError {
+        case runInProgress
+        case notAUserMessage
+
+        public var errorDescription: String? {
+            switch self {
+            case .runInProgress: "Wait for the current run to finish, or stop it, before rewinding."
+            case .notAUserMessage: "That point in the conversation is not the start of a message."
+            }
+        }
+    }
+
+    /// Cuts the conversation back to just before the user message at `index` of `items`, and returns what
+    /// was cut. The files are not touched (see `revertRuns`). The model starts over from what is left, so
+    /// the read ledger is cleared (it must read a file again before editing it), the checklist goes back to
+    /// what it was then, and the token measure is forgotten. Never while a run is going.
+    @discardableResult
+    public func rewind(toBeforeItem index: Int) async throws -> [ConversationItem] {
+        guard !isRunning else { throw RewindError.runInProgress }
+        guard items.indices.contains(index), case .user = items[index] else { throw RewindError.notAUserMessage }
+        let removed = Array(items[index...])
+        items.removeSubrange(index...)
+        await ledger.removeAll()
+        lastInputTokens = 0
+        itemsAtLastReport = 0
+        summaryBackoffUntilItems = 0
+        await todoList.replace(with: TodoList.latest(in: items))
+        return removed
+    }
+
+    /// Reverts several runs, newest first, so a file several of them changed ends as it was before the oldest.
+    /// The reports are merged. Never while a run is going.
+    public func revertRuns(_ ids: [RunID]) async throws -> RevertReport {
+        guard !isRunning else { throw RevertError.runInProgress }
+        return await checkpoints.revertRuns(ids, using: workspace, ledger: ledger)
+    }
+
     /// Puts a finished run's files back: see `CheckpointLog.revert`. Never while a run is going,
     /// since the agent could be changing the same files.
     public func revertRun(_ id: RunID) async throws -> RevertReport {

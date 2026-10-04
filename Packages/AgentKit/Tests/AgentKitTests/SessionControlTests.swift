@@ -214,3 +214,114 @@ private final class MemoryBlobs: CheckpointBlobStore, @unchecked Sendable {
         #expect(disk(project, "A.txt") == "one\ntwo\n")
     }
 }
+
+@Suite struct RewindTests {
+    private func session(_ client: MockLLMClient, project: TempProject) -> AgentSession {
+        AgentSession(
+            client: client, tools: ReadOnlyTools.all() + EditingTools.all() + [TodoTool()], workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m"))
+    }
+
+    private func run(_ agent: AgentSession, _ text: String) async {
+        for await _ in await agent.send(text) {}
+    }
+
+    private func userIndex(_ agent: AgentSession, _ text: String) async -> Int? {
+        await agent.items.firstIndex { if case .user(let value) = $0 { value == text } else { false } }
+    }
+
+    @Test func theConversationIsCutBeforeTheChosenMessageAndWhatWasCutIsReturned() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let agent = session(MockLLMClient(turns: [.text("a1"), .text("a2"), .text("a3")]), project: project)
+        await run(agent, "first")
+        await run(agent, "second")
+        await run(agent, "third")
+        let index = try #require(await userIndex(agent, "second"))
+
+        let removed = try await agent.rewind(toBeforeItem: index)
+        #expect(await agent.items == [.user("first"), .assistant("a1")])
+        #expect(removed == [.user("second"), .assistant("a2"), .user("third"), .assistant("a3")])
+    }
+
+    @Test func theNextMessageContinuesFromWhatIsLeft() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let client = MockLLMClient(turns: [.text("a1"), .text("a2"), .text("again")])
+        let agent = session(client, project: project)
+        await run(agent, "first")
+        await run(agent, "second")
+        try await agent.rewind(toBeforeItem: try #require(await userIndex(agent, "second")))
+        await run(agent, "a different second")
+        #expect(client.requests.last?.items == [.user("first"), .assistant("a1"), .user("a different second")])
+    }
+
+    @Test func theChecklistGoesBackToWhatItWasThen() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "t1", name: "todo", arguments: #"{"items":["[ ] one"]}"#)), .text("a1"),
+            .toolCalls((id: "t2", name: "todo", arguments: #"{"items":["[x] one","[ ] two"]}"#)), .text("a2"),
+        ])
+        let agent = session(client, project: project)
+        await run(agent, "first")
+        await run(agent, "second")
+        #expect(await agent.todoList.items.count == 2)
+        try await agent.rewind(toBeforeItem: try #require(await userIndex(agent, "second")))
+        #expect(await agent.todoList.items.map(\.content) == ["one"])
+        try await agent.rewind(toBeforeItem: try #require(await userIndex(agent, "first")))
+        #expect(await agent.todoList.items.isEmpty)
+    }
+
+    @Test func afterARewindTheModelMustReadAFileAgainBeforeEditingIt() async throws {
+        let project = try TempProject(files: ["A.txt": "one\ntwo\n"])
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)), .text("read it"),
+            .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)), .text("tried"),
+        ])
+        let agent = session(client, project: project)
+        await run(agent, "read")
+        try await agent.rewind(toBeforeItem: 0)
+        await run(agent, "edit without reading")
+        #expect(toolOutputs(await agent.items)["e"]?.hasPrefix("Error") == true, "what it read before the rewind is forgotten")
+    }
+
+    @Test func itRefusesAMidTurnItemAnOutOfRangeIndexAndARunInProgress() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let agent = session(
+            MockLLMClient(turns: [.toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)), .text("done"), MockTurn([.textDelta("slow"), .finished(.completed)], delayPerEvent: .milliseconds(300))]),
+            project: project)
+        await run(agent, "go")
+        await #expect(throws: AgentSession.RewindError.notAUserMessage) { try await agent.rewind(toBeforeItem: 1) }
+        await #expect(throws: AgentSession.RewindError.notAUserMessage) { try await agent.rewind(toBeforeItem: 99) }
+        await #expect(throws: AgentSession.RewindError.notAUserMessage) { try await agent.rewind(toBeforeItem: -1) }
+
+        let stream = await agent.send("slow one")
+        await #expect(throws: AgentSession.RewindError.runInProgress) { try await agent.rewind(toBeforeItem: 0) }
+        for await _ in stream {}
+    }
+
+    @Test func severalRunsAreRevertedNewestFirstSoTheOldestStateWins() async throws {
+        let project = try TempProject(files: ["A.txt": "one\ntwo\nthree\n"])
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "r1", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
+            .toolCalls((id: "e1", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)), .text("first done"),
+            .toolCalls((id: "e2", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"three","new_string":"3"}"#)), .text("second done"),
+        ])
+        let agent = session(client, project: project)
+        var runs: [RunID] = []
+        for message in ["first", "second"] {
+            for await event in await agent.send(message) { if case .runStarted(let id) = event { runs.append(id) } }
+        }
+        #expect((try? String(contentsOf: project.root.appendingPathComponent("A.txt"), encoding: .utf8)) == "one\n2\n3\n")
+
+        let report = try await agent.revertRuns(runs)
+        #expect(report.isComplete)
+        #expect(report.reverted == ["A.txt", "A.txt"], "once per run")
+        #expect((try? String(contentsOf: project.root.appendingPathComponent("A.txt"), encoding: .utf8)) == "one\ntwo\nthree\n")
+    }
+
+    @Test func revertingNoRunsOrUnknownRunsChangesNothing() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let agent = session(MockLLMClient(turns: []), project: project)
+        #expect(try await agent.revertRuns([]) == RevertReport())
+        #expect(try await agent.revertRuns([UUID()]) == RevertReport())
+    }
+}

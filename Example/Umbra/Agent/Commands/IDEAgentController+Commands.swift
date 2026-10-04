@@ -172,6 +172,15 @@ extension IDEAgentController {
             } else {
                 selected.appendNotice("No saved chat matches “\(arguments)”.")
             }
+        case .rewind:
+            if selected.rewindTargets.isEmpty {
+                selected.appendNotice("There is no earlier message to go back to.")
+            } else {
+                rewindRequest = IDEAgentRewindRequest()
+            }
+        case .fork:
+            let id = selected.id
+            Task { await fork(id) }
         case .plan:
             changeMode(to: .plan)
             if !arguments.isEmpty, selected.canRunCommands { selected.submit(text: arguments) }

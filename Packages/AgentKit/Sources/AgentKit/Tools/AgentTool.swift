@@ -136,6 +136,8 @@ public actor ReadLedger {
     public init() {}
 
     public func record(path: String, text: String) { seen[path] = Self.hash(text) }
+    /// Forgets everything the model was shown, as after a rewind: it must read before it edits again.
+    public func removeAll() { seen.removeAll() }
     public func hasRead(_ path: String) -> Bool { seen[path] != nil }
     /// `true` only if the model read this file and its text is unchanged since.
     public func isCurrent(path: String, text: String) -> Bool { seen[path] == Self.hash(text) }

@@ -175,6 +175,8 @@ final class IDEAgentConversation: Identifiable {
         let resolution = await IDEAgentMentionResolver.resolve(body, sources: mentionSources(root: root))
         if let index = entries.firstIndex(where: { $0.id == entryID }) {
             entries[index].attachments = resolution.attachments.map(\.summary)
+            // Where this message will sit in the history: what rewinding cuts before.
+            entries[index].itemIndex = await session.items.count
         }
         for (mention, reason) in resolution.unresolved {
             // A bare word with no slash or dot is probably a name (@alex), not a path that failed.
@@ -343,6 +345,26 @@ final class IDEAgentConversation: Identifiable {
         conversationID = UUID()
     }
 
+    /// The history without the items only the model that wrote them may be sent back, with the positions
+    /// recorded on the user messages moved to match.
+    private func droppingOpaque(_ items: [ConversationItem]) -> [ConversationItem] {
+        var removedBefore = 0
+        var moved: [Int: Int] = [:]
+        var kept: [ConversationItem] = []
+        for (index, item) in items.enumerated() {
+            if case .opaque = item {
+                removedBefore += 1
+            } else {
+                moved[index] = index - removedBefore
+                kept.append(item)
+            }
+        }
+        for index in entries.indices {
+            if let old = entries[index].itemIndex { entries[index].itemIndex = moved[old] }
+        }
+        return kept
+    }
+
     // MARK: - Saving and loading
 
     /// Replaces the conversation with a saved one.
@@ -359,7 +381,7 @@ final class IDEAgentConversation: Identifiable {
         restoredTodos = saved.todos
         usage = snapshot.totalUsage
         // Provider items only the model that produced them may be sent back; the transcript is enough.
-        restoredItems = snapshot.items.filter { if case .opaque = $0 { false } else { true } }
+        restoredItems = droppingOpaque(snapshot.items)
         chatRules = PermissionRules()
         conversationID = snapshot.id
         createdAt = snapshot.createdAt
@@ -447,7 +469,7 @@ final class IDEAgentConversation: Identifiable {
         // or endpoint may be sent back.
         var history: [ConversationItem] = []
         if let previous = session {
-            history = await previous.items.filter { if case .opaque = $0 { false } else { true } }
+            history = droppingOpaque(await previous.items)
         } else if let restored = restoredItems {
             history = restored
         }
@@ -621,15 +643,119 @@ final class IDEAgentConversation: Identifiable {
         guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
         entries[index].conflicts = report.conflicts.map { IDEAgentFileChange(path: $0.path, original: $0.original) }
         entries[index].isReverted = report.isComplete
+        announce(report)
+    }
+
+    /// What a revert did, as notices (and errors for what could not be done).
+    private func announce(_ report: RevertReport, prefix: String = "") {
         var parts: [String] = []
         if !report.reverted.isEmpty { parts.append("Reverted \(report.reverted.count) \(report.reverted.count == 1 ? "file" : "files").") }
         if !report.conflicts.isEmpty {
             parts.append("\(report.conflicts.count) changed since the agent wrote \(report.conflicts.count == 1 ? "it" : "them") and \(report.conflicts.count == 1 ? "was" : "were") left as is.")
         }
-        if !parts.isEmpty { append(.init(kind: .notice, text: parts.joined(separator: " "))) }
+        if !prefix.isEmpty || !parts.isEmpty { append(.init(kind: .notice, text: ([prefix] + parts).filter { !$0.isEmpty }.joined(separator: " "))) }
         for (path, reason) in report.failures.sorted(by: { $0.key < $1.key }) {
             append(.init(kind: .error, text: "Could not revert \(path): \(reason)"))
         }
+    }
+
+    // MARK: - Rewinding and forking
+
+    /// The messages this chat can go back to, newest first.
+    var rewindTargets: [IDEAgentRewindTarget] { IDEAgentRewind.targets(in: entries) }
+
+    /// Goes back to before the user message `entryID`: its conversation, the files the agent changed since,
+    /// or both. The message goes back into the field to be sent again, or changed. Not while a run is going.
+    @discardableResult
+    func rewind(to entryID: UUID, scope: IDEAgentRewind.Scope) async -> Bool {
+        guard !isRunning, let host, let root = host.agentProjectRoot,
+              let position = entries.firstIndex(where: { $0.id == entryID }), entries[position].kind == .user,
+              let target = rewindTargets.first(where: { $0.id == entryID })
+        else { return false }
+
+        var report: RevertReport?
+        if scope != .conversation, !target.runs.isEmpty {
+            if let session {
+                do { report = try await session.revertRuns(target.runs) } catch {
+                    append(.init(kind: .error, text: error.localizedDescription))
+                    return false
+                }
+            } else {
+                // After a relaunch there is no session, and going back must not need one.
+                let log = await ensureCheckpointLog()
+                report = await log.revertRuns(target.runs, using: agentWorkspace ?? IDEAgentWorkspace(root: root, box: IDEAgentHostBox(host)))
+            }
+        }
+
+        guard scope != .code else {
+            if let report { markReverted(report, inEntriesAfter: position) }
+            announce(report ?? RevertReport(), prefix: report == nil ? "No file changes to revert from this message on." : "")
+            return true
+        }
+
+        let itemIndex = target.itemIndex
+        if let session {
+            do { try await session.rewind(toBeforeItem: itemIndex) } catch {
+                append(.init(kind: .error, text: error.localizedDescription))
+                return false
+            }
+            todos = await session.todoList.items
+        } else {
+            restoredItems = Array((restoredItems ?? []).prefix(itemIndex))
+            todos = TodoList.latest(in: restoredItems ?? [])
+            restoredTodos = []
+        }
+        let text = entries[position].text
+        entries.removeSubrange(position...)
+        draft = text
+        status = nil
+        if let report {
+            announce(report, prefix: "Went back to before that message.")
+        } else {
+            append(.init(kind: .notice, text: "Went back to before that message."))
+        }
+        let items = await session?.items ?? restoredItems ?? []
+        persist(items: items, checkpoints: await checkpointLog?.snapshot() ?? restoredRuns)
+        return true
+    }
+
+    /// The cards of the runs a revert reached show what happened to their files.
+    private func markReverted(_ report: RevertReport, inEntriesAfter position: Int) {
+        for index in entries.indices where index > position && entries[index].kind == .changes {
+            let paths = Set(entries[index].fileChanges.map(\.path))
+            let conflicts = report.conflicts.filter { paths.contains($0.path) }
+            entries[index].conflicts = conflicts.map { IDEAgentFileChange(path: $0.path, original: $0.original) }
+            entries[index].isReverted = conflicts.isEmpty && report.failures.keys.allSatisfy { !paths.contains($0) }
+        }
+    }
+
+    /// What a fork starts from: this chat's transcript and history up to before `entryID` (all of it if
+    /// `nil`). "Files changed" cards are left out: their originals belong to this chat. `nil` while a run is going.
+    func forkState(before entryID: UUID?) async -> (entries: [IDEAgentEntry], items: [ConversationItem], title: String)? {
+        guard !isRunning else { return nil }
+        let allItems = await session?.items ?? restoredItems ?? []
+        var keptEntries = entries
+        var keptItems = allItems
+        if let entryID {
+            guard let position = entries.firstIndex(where: { $0.id == entryID }), entries[position].kind == .user,
+                  let itemIndex = entries[position].itemIndex, itemIndex <= allItems.count
+            else { return nil }
+            keptEntries = Array(entries[..<position])
+            keptItems = Array(allItems.prefix(itemIndex))
+        }
+        keptEntries.removeAll { $0.kind == .changes }
+        return (keptEntries, keptItems, title)
+    }
+
+    /// Makes this (new, empty) chat a fork of another.
+    func adoptFork(entries newEntries: [IDEAgentEntry], items: [ConversationItem], title: String) {
+        guard isEmpty, !isRunning else { return }
+        entries = newEntries
+        restoredItems = items
+        todos = TodoList.latest(in: items)
+        restoredTodos = todos
+        customTitle = title + " (fork)"
+        persist(items: items, checkpoints: [])
     }
 
     func handle(_ event: AgentEvent) {
@@ -705,6 +831,8 @@ final class IDEAgentConversation: Identifiable {
             // The loop has told the model and it is trying again; say so rather than leave a silent gap.
             append(.init(kind: .notice, text: "The model wrote a tool call that could not be read. Asking it to try again."))
         case .compacted(let report):
+            // A summary replaces the start of the history, so every recorded position is now wrong.
+            if report.summarizedItems > 0 { for index in entries.indices { entries[index].itemIndex = nil } }
             if let notice = Self.compactionNotice(report) { append(.init(kind: .notice, text: notice)) }
         case .usage(let turnUsage):
             usage = usage + turnUsage

@@ -20,6 +20,8 @@ final class IDEAgentController {
     @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
     /// Bumped by `/model`, so the panel opens its settings popover.
     var settingsRequest = 0
+    /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
+    var rewindRequest: IDEAgentRewindRequest?
     /// Opens Settings ▸ Agent (`/permissions`); set by the window.
     @ObservationIgnored var onOpenSettings: (() -> Void)?
     /// Saves an exported transcript: a save panel, unless a test replaces it.
@@ -249,6 +251,15 @@ final class IDEAgentController {
     func closeOthers(keeping id: UUID) {
         for conversation in conversations where conversation.id != id { close(conversation.id) }
         select(id)
+    }
+
+    /// A new chat that starts from another's conversation, up to before the message `entryID` (all of it if `nil`).
+    @discardableResult
+    func fork(_ id: UUID, before entryID: UUID? = nil) async -> IDEAgentConversation? {
+        guard let source = conversations.first(where: { $0.id == id }), let state = await source.forkState(before: entryID) else { return nil }
+        let created = addConversation()
+        created.adoptFork(entries: state.entries, items: state.items, title: state.title)
+        return created
     }
 
     func rename(_ id: UUID, to name: String) {

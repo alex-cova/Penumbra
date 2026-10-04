@@ -37,6 +37,8 @@ public struct RevertReport: Sendable, Hashable {
     public var failures: [String: String] = [:]
 
     public var isComplete: Bool { conflicts.isEmpty && failures.isEmpty }
+
+    public init() {}
 }
 
 /// Where the original texts of a run's files can be kept beyond this process, so a run can still be
@@ -171,6 +173,21 @@ public actor CheckpointLog {
         }
         if report.isComplete { runs[index].isReverted = true }
         return report
+    }
+
+    /// Reverts several runs, newest first, so a file that more than one of them changed ends as it was
+    /// before the oldest. The reports are merged.
+    public func revertRuns(_ ids: [RunID], using workspace: any AgentWorkspace, ledger: ReadLedger? = nil) async -> RevertReport {
+        let wanted = Set(ids)
+        let ordered = runs.map(\.id).filter(wanted.contains).reversed()
+        var merged = RevertReport()
+        for id in ordered {
+            let report = await revert(id, using: workspace, ledger: ledger)
+            merged.reverted += report.reverted
+            merged.conflicts += report.conflicts
+            merged.failures.merge(report.failures) { first, _ in first }
+        }
+        return merged
     }
 
     // MARK: - Across a relaunch

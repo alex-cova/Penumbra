@@ -40,6 +40,9 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var detail: String?
     /// For a user message: what its `@` mentions attached (`src/A.java · 2.1 KB`).
     var attachments: [String] = []
+    /// For a user message: its place in the session's history (the index of its `.user` item), which
+    /// is what rewinding cuts at. `nil` once compaction has moved things.
+    var itemIndex: Int?
     /// For `exit_plan_mode`: the plan waiting for the user's decision.
     var plan: String?
     /// What the user decided about it: "Approved · Accept Edits", or "Changes requested".

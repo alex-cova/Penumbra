@@ -15,6 +15,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
     var detail: String?
     var attachments: [String]?
     var planOutcome: String?
+    var itemIndex: Int?
     /// For the "files changed" card: the run, its files, which of them the run created, and whether it was reverted.
     var run: UUID?
     var paths: [String]?
@@ -26,6 +27,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
         callID = entry.callID
         detail = entry.detail
         attachments = entry.attachments.isEmpty ? nil : entry.attachments
+        itemIndex = entry.itemIndex
         switch entry.kind {
         case .user: kind = .user
         case .assistant: kind = .assistant
@@ -81,6 +83,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
                 var entry = IDEAgentEntry(kind: .user, text: text)
                 entry.detail = detail
                 entry.attachments = attachments ?? []
+                entry.itemIndex = itemIndex
                 return entry
             }()
         case .assistant: IDEAgentEntry(kind: .assistant, text: text)
