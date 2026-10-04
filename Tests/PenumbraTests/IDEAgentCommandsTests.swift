@@ -474,3 +474,136 @@ final class IDEAgentCommandRunTests: XCTestCase {
         XCTAssertEqual(controller.mode, .auto)
     }
 }
+
+@MainActor
+final class IDEAgentPromptHistoryFlowTests: XCTestCase {
+    private var base: URL!
+    private var project: URL!
+    private var storeDirectory: URL!
+    private var workspace: IDEWorkspace!
+
+    override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        base = FileManager.default.temporaryDirectory.appendingPathComponent("agent-prompts-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        project = base.appendingPathComponent("project")
+        storeDirectory = base.appendingPathComponent("store")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        workspace = IDEWorkspace()
+        workspace.project.setRoot(project)
+    }
+
+    override func tearDownWithError() throws {
+        workspace.teardown()
+        workspace = nil
+        IDEWorkspace.isSessionPersistenceEnabled = true
+        try? FileManager.default.removeItem(at: base)
+    }
+
+    private func makeController(_ turns: [MockTurn] = [.text("ok"), .text("ok"), .text("ok")], store: Bool = true) -> IDEAgentController {
+        let settings = IDEAgentSettings(
+            defaults: UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!, keyStore: IDEAgentMemoryKeyStore())
+        settings.saveAPIKey("sk-test")
+        settings.acceptDisclosure()
+        let client = MockLLMClient(turns: turns)
+        let controller = IDEAgentController(
+            settings: settings, store: store ? SessionStore(directory: storeDirectory) : nil, clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        controller.newConversation()
+        return controller
+    }
+
+    private func say(_ controller: IDEAgentController, _ text: String) async {
+        controller.draft = text
+        controller.submit()
+        for _ in 0..<500 where controller.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    func testWhatWasSentIsRememberedAndComesBackWithTheNextWindow() async throws {
+        let controller = makeController()
+        await say(controller, "first question")
+        await say(controller, "second question")
+        await say(controller, "/help")
+        XCTAssertEqual(controller.promptHistory()?.prompts, ["first question", "second question", "/help"], "commands are remembered too")
+
+        let reopened = makeController()
+        XCTAssertEqual(reopened.promptHistory()?.prompts, ["first question", "second question", "/help"])
+    }
+
+    func testAMessageThatWasNotSentIsNotRemembered() async throws {
+        let controller = makeController(store: false)
+        controller.draft = "   "
+        controller.submit()
+        XCTAssertTrue(controller.promptHistory()?.prompts.isEmpty == true)
+
+        controller.draft = "a slow one"
+        controller.submit()
+        controller.draft = "typed while running"
+        controller.submit()  // the first is still running: this one is refused and stays in the field
+        XCTAssertEqual(controller.promptHistory()?.prompts, ["a slow one"])
+        XCTAssertEqual(controller.draft, "typed while running")
+        for _ in 0..<500 where controller.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    func testUpAndDownRecallThroughTheController() async throws {
+        let controller = makeController()
+        await say(controller, "one")
+        await say(controller, "two")
+        controller.draft = "half typed"
+        XCTAssertEqual(controller.recallPrompt(-1), "two")
+        XCTAssertEqual(controller.recallPrompt(-1), "one")
+        XCTAssertNil(controller.recallPrompt(-1))
+        XCTAssertEqual(controller.recallPrompt(1), "two")
+        XCTAssertEqual(controller.recallPrompt(1), "half typed")
+        XCTAssertNil(controller.recallPrompt(1))
+    }
+
+    func testSendingEndsTheRecall() async throws {
+        let controller = makeController()
+        await say(controller, "one")
+        XCTAssertEqual(controller.recallPrompt(-1), "one")
+        XCTAssertTrue(controller.selected.promptRecall.isRecalling)
+        await say(controller, "one")
+        XCTAssertFalse(controller.selected.promptRecall.isRecalling)
+        controller.selected.promptRecall.reset()
+    }
+
+    func testEachChatKeepsItsOwnPlaceButTheyShareTheHistory() async throws {
+        let controller = makeController()
+        await say(controller, "in the first chat")
+        controller.addConversation()
+        controller.draft = "second chat draft"
+        XCTAssertEqual(controller.recallPrompt(-1), "in the first chat", "the history is the project's")
+        XCTAssertTrue(controller.selected.promptRecall.isRecalling)
+        controller.select(controller.conversations[0].id)
+        XCTAssertFalse(controller.selected.promptRecall.isRecalling, "the other chat's place is not shared")
+    }
+
+    func testTheSearchListIsNewestFirstAndFuzzy() async throws {
+        let controller = makeController()
+        await say(controller, "fix the parser")
+        await say(controller, "write the docs")
+        await say(controller, "refactor the parser")
+        let all = controller.suggestions(for: .history(query: "", range: NSRange(location: 0, length: 0)))
+        XCTAssertEqual(all.map(\.insertion), ["refactor the parser", "write the docs", "fix the parser"])
+        let narrowed = controller.suggestions(for: .history(query: "parser", range: NSRange(location: 0, length: 6)))
+        XCTAssertEqual(Set(narrowed.map(\.insertion)), ["refactor the parser", "fix the parser"])
+        XCTAssertTrue(narrowed.allSatisfy { $0.payload == nil }, "accepting replaces the text; nothing is run")
+    }
+
+    func testAMultilinePromptShowsItsFirstLineButInsertsAllOfIt() async throws {
+        let controller = makeController()
+        await say(controller, "line one\nline two")
+        let rows = controller.suggestions(for: .history(query: "", range: NSRange(location: 0, length: 0)))
+        XCTAssertEqual(rows.first?.title, "line one …")
+        XCTAssertEqual(rows.first?.insertion, "line one\nline two")
+    }
+
+    func testClearHistoryForgetsThePromptsToo() async throws {
+        let controller = makeController()
+        await say(controller, "remember me")
+        controller.clearHistory()
+        XCTAssertTrue(controller.promptHistory()?.prompts.isEmpty == true)
+        XCTAssertTrue(makeController().promptHistory()?.prompts.isEmpty == true, "and from disk")
+    }
+}

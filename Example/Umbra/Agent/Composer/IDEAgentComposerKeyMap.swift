@@ -15,6 +15,8 @@ enum IDEAgentComposerAction: Equatable {
     /// ↑ on the first line, ↓ on the last: walk the prompts sent before.
     case historyPrevious
     case historyNext
+    /// Ctrl-R: search the prompts sent before.
+    case searchHistory
     case passThrough
 }
 
@@ -34,6 +36,7 @@ enum IDEAgentComposerKeyMap {
         static let keypadEnter: UInt16 = 76
         static let tab: UInt16 = 48
         static let escape: UInt16 = 53
+        static let r: UInt16 = 15
         static let downArrow: UInt16 = 125
         static let upArrow: UInt16 = 126
     }
@@ -66,6 +69,9 @@ enum IDEAgentComposerKeyMap {
             guard flags.isEmpty else { return .passThrough }
             if context.suggestionsVisible { return .nextSuggestion }
             return context.caretOnLastLine && context.selectionIsEmpty ? .historyNext : .passThrough
+
+        case KeyCode.r:
+            return flags == [.control] ? .searchHistory : .passThrough
 
         default:
             return .passThrough

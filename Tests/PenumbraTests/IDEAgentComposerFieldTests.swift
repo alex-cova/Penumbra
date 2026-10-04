@@ -13,6 +13,8 @@ private final class ComposerHarness {
     var accepts = 0
     let state = IDEAgentComposerState()
     var provider: (IDEAgentComposerTrigger) -> [IDEAgentSuggestion] = { _ in [] }
+    var history: ((Int) -> String?)?
+    var edits = 0
     var window: NSWindow!
     var hosting: NSHostingView<AnyView>!
 
@@ -27,7 +29,9 @@ private final class ComposerHarness {
             placeholder: "Ask", state: state, focusRequest: 0, acceptRequest: accepts,
             suggestions: { [unowned self] in self.provider($0) },
             onSend: { [unowned self] in self.sends += 1 },
-            onStop: { [unowned self] in self.stops += 1 })
+            onStop: { [unowned self] in self.stops += 1 },
+            onUserEdit: { [unowned self] in self.edits += 1 },
+            onHistory: history.map { handler in { handler($0) } })
         if hosting == nil {
             hosting = NSHostingView(rootView: AnyView(view.frame(width: 300, height: height)))
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
@@ -101,7 +105,7 @@ final class IDEAgentComposerFieldTests: XCTestCase {
         XCTAssertEqual(harness.sends, 1)
         XCTAssertEqual(harness.text, "hi", "Return does not add a newline")
 
-        textView.keyDown(with: try key(36, flags: .shift, window: harness.window))
+        textView.keyDown(with: try key(36, .shift, window: harness.window))
         XCTAssertEqual(harness.sends, 1)
         XCTAssertEqual(harness.text, "hi\n")
 
@@ -144,6 +148,86 @@ final class IDEAgentComposerFieldTests: XCTestCase {
         XCTAssertEqual(harness.text, "see @A.java ")
     }
 
+    func testUpAndDownWalkEarlierPromptsAndComeBackToTheDraft() async throws {
+        let harness = ComposerHarness()
+        var recall = IDEAgentPromptRecall()
+        let prompts = ["first prompt", "second prompt"]
+        harness.history = { direction in
+            direction < 0 ? recall.previous(current: harness.text, in: prompts) : recall.next(in: prompts)
+        }
+        harness.render()
+        let textView = harness.textView
+        textView.insertText("half typed", replacementRange: NSRange(location: 0, length: 0))
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        textView.keyDown(with: try key(126, window: harness.window))
+        XCTAssertEqual(harness.text, "second prompt")
+        XCTAssertEqual(textView.string, "second prompt")
+        textView.keyDown(with: try key(126, window: harness.window))
+        XCTAssertEqual(harness.text, "first prompt")
+        textView.keyDown(with: try key(125, window: harness.window))
+        XCTAssertEqual(harness.text, "second prompt")
+        textView.keyDown(with: try key(125, window: harness.window))
+        XCTAssertEqual(harness.text, "half typed", "back to what was being typed")
+    }
+
+    func testRecalledTextCanBeEditedAndTheEditIsReported() async throws {
+        let harness = ComposerHarness()
+        harness.history = { _ in "recalled" }
+        harness.render()
+        let textView = harness.textView
+        textView.keyDown(with: try key(126, window: harness.window))
+        XCTAssertEqual(harness.text, "recalled")
+        XCTAssertEqual(harness.edits, 0, "recalling is not the user typing")
+        textView.insertText("!", replacementRange: NSRange(location: 8, length: 0))
+        XCTAssertEqual(harness.text, "recalled!")
+        XCTAssertEqual(harness.edits, 1)
+    }
+
+    func testControlRSearchesEarlierPromptsAndTabPutsTheChosenOneInTheField() async throws {
+        let harness = ComposerHarness()
+        let prompts = ["fix the parser", "write the docs", "fix the build"]
+        harness.provider = { trigger in
+            guard case .history(let query, _) = trigger else { return [] }
+            return prompts.filter { query.isEmpty || $0.contains(query) }.map {
+                IDEAgentSuggestion(id: $0, icon: "clock", title: $0, detail: nil, insertion: $0)
+            }
+        }
+        let textView = harness.textView
+        textView.keyDown(with: try key(15, .control, window: harness.window))
+        XCTAssertTrue(harness.state.isSearchingHistory)
+        XCTAssertEqual(harness.state.suggestions.count, 3, "an empty search lists everything")
+
+        textView.insertText("fix", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(harness.state.suggestions.map(\.id), ["fix the parser", "fix the build"], "what is typed is the search")
+        textView.keyDown(with: try key(125, window: harness.window))
+        textView.keyDown(with: try key(48, window: harness.window))
+
+        XCTAssertEqual(harness.text, "fix the build", "the whole field became the prompt")
+        XCTAssertFalse(harness.state.isSearchingHistory)
+        XCTAssertFalse(harness.state.isShowingSuggestions)
+        XCTAssertEqual(harness.sends, 0)
+    }
+
+    func testEscapeLeavesTheHistorySearchWithoutChangingTheText() async throws {
+        let harness = ComposerHarness()
+        harness.provider = { trigger in
+            guard case .history = trigger else { return [] }
+            return [IDEAgentSuggestion(id: "x", icon: "clock", title: "earlier", detail: nil, insertion: "earlier")]
+        }
+        let textView = harness.textView
+        textView.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+        textView.keyDown(with: try key(15, .control, window: harness.window))
+        XCTAssertTrue(harness.state.isSearchingHistory)
+        textView.keyDown(with: try key(53, window: harness.window))
+        XCTAssertFalse(harness.state.isSearchingHistory)
+        XCTAssertEqual(harness.text, "typed")
+        XCTAssertEqual(harness.stops, 0, "that Esc closed the search, it did not stop a run")
+        textView.keyDown(with: try key(15, .control, window: harness.window))
+        textView.keyDown(with: try key(15, .control, window: harness.window))
+        XCTAssertFalse(harness.state.isSearchingHistory, "Ctrl-R again leaves it too")
+    }
+
     func testMentionsAndCommandsAreColoredButTheTextIsUntouched() async {
         let harness = ComposerHarness()
         let textView = harness.textView
@@ -157,7 +241,7 @@ final class IDEAgentComposerFieldTests: XCTestCase {
         XCTAssertEqual(harness.text, "/plan check @A.java now")
     }
 
-    private func key(_ code: UInt16, flags: NSEvent.ModifierFlags = [], window: NSWindow) throws -> NSEvent {
+    private func key(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], window: NSWindow) throws -> NSEvent {
         try XCTUnwrap(
             NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,

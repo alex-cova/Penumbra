@@ -77,6 +77,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private let appPermissionsFile: URL?
     /// Rules that last as long as this chat ("Allow for this chat").
     @ObservationIgnored private var chatRules = PermissionRules()
+    /// Where ↑ and ↓ are in the prompt history for this chat's field.
+    @ObservationIgnored var promptRecall = IDEAgentPromptRecall()
     /// Rules for the run in progress: the tools a command or skill said it may use.
     @ObservationIgnored private var runRules = PermissionRules()
     /// Items of a conversation loaded from disk, handed to the session that is created for it.
@@ -125,6 +127,7 @@ final class IDEAgentConversation: Identifiable {
 
         willSend?()
         commandCatalog?.invalidate()
+        promptRecall.reset()
         draft = ""
         var entry = IDEAgentEntry(kind: .user, text: text)
         if let modelText, modelText != text { entry.detail = modelText }

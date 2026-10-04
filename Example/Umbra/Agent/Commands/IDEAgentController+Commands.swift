@@ -21,10 +21,15 @@ extension IDEAgentController {
         guard !text.isEmpty else { return }
         commandCatalog.invalidate()
         if let invocation = IDEAgentSlashInvocation.parse(text), let descriptor = commandCatalog.descriptor(named: invocation.name) {
+            promptHistory()?.add(text)
+            selected.promptRecall.reset()
             run(descriptor, arguments: invocation.arguments)
             return
         }
-        if selected.canSend { selected.send() }
+        if selected.canSend {
+            promptHistory()?.add(text)
+            selected.send()
+        }
     }
 
     // MARK: - Suggestions
@@ -35,7 +40,21 @@ extension IDEAgentController {
         case .slash(let query, _): commandSuggestions(matching: query)
         case .slashArgument(let command, let query, _): argumentSuggestions(for: command, matching: query)
         case .mention(let query, _): mentionSuggestions(matching: query)
+        case .history(let query, _): historySuggestions(matching: query)
         case .none: []
+        }
+    }
+
+    // MARK: - Earlier prompts
+
+    private func historySuggestions(matching query: String) -> [IDEAgentSuggestion] {
+        let prompts = promptHistory()?.prompts ?? []
+        let found = IDEAgentPromptRecall.search(query, in: prompts, match: { FuzzyMatcher.match(query: $0, in: $1)?.score })
+        return found.map { prompt in
+            let firstLine = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
+            let multiline = prompt.contains("\n")
+            return IDEAgentSuggestion(
+                id: "prompt:" + prompt, icon: "clock.arrow.circlepath", title: firstLine + (multiline ? " …" : ""), detail: nil, insertion: prompt)
         }
     }
 

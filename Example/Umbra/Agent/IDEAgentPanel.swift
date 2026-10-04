@@ -162,6 +162,8 @@ struct IDEAgentPanel: View {
                     },
                     onCycleMode: { agent.selected.cycleMode() },
                     onAccept: { agent.perform($0) },
+                    onUserEdit: { agent.selected.promptRecall.reset() },
+                    onHistory: { agent.recallPrompt($0) },
                     onDropFiles: { urls in
                         urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
                             .joined(separator: " ") + " "

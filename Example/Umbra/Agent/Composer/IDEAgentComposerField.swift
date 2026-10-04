@@ -18,6 +18,8 @@ struct IDEAgentComposerField: NSViewRepresentable {
     var onCycleMode: (() -> Void)?
     /// A row with an action was accepted; the field has already been emptied.
     var onAccept: ((IDEAgentSuggestionPayload) -> Void)?
+    /// The user typed or deleted (not a recalled prompt or a suggestion).
+    var onUserEdit: (() -> Void)?
     /// `-1` for the previous prompt, `1` for the next; the text to show, or `nil` for none.
     var onHistory: ((Int) -> String?)?
     /// Text to insert for files dropped on the field (project-relative mentions).
@@ -97,6 +99,7 @@ struct IDEAgentComposerField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
+            parent.onUserEdit?()
             parent.text = textView.string
             textDidChangeProgrammatically()
         }
@@ -173,13 +176,19 @@ struct IDEAgentComposerField: NSViewRepresentable {
         private func refreshSuggestions() {
             guard let textView else { return }
             let selection = textView.selectedRange()
-            let trigger: IDEAgentComposerTrigger = selection.length == 0
-                ? .detect(in: textView.string, caret: selection.location) : .none
+            let trigger: IDEAgentComposerTrigger
+            if parent.state.isSearchingHistory {
+                trigger = .history(query: textView.string, range: NSRange(location: 0, length: (textView.string as NSString).length))
+            } else {
+                trigger = selection.length == 0 ? .detect(in: textView.string, caret: selection.location) : .none
+            }
             parent.state.update(trigger: trigger, suggestions: parent.suggestions(trigger))
         }
 
         func acceptSuggestion() -> Bool {
             guard let textView, let suggestion = parent.state.selected, let range = parent.state.trigger.range else { return false }
+            // Leave the search before the text changes, so the change is read as ordinary text.
+            parent.state.isSearchingHistory = false
             if let payload = suggestion.payload, let handler = parent.onAccept {
                 textView.string = ""
                 parent.text = ""
@@ -221,6 +230,9 @@ struct IDEAgentComposerField: NSViewRepresentable {
                 return showHistory(-1, in: textView)
             case .historyNext:
                 return showHistory(1, in: textView)
+            case .searchHistory:
+                parent.state.isSearchingHistory.toggle()
+                if parent.state.isSearchingHistory { refreshSuggestions() } else { parent.state.dismiss() }
             }
             return true
         }

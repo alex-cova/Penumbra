@@ -22,6 +22,8 @@ final class IDEAgentController {
     var settingsRequest = 0
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
+    /// What this project's chats were asked, by project folder.
+    @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
     /// Opens Settings ▸ Agent (`/permissions`); set by the window.
     @ObservationIgnored var onOpenSettings: (() -> Void)?
     /// Saves an exported transcript: a save panel, unless a test replaces it.
@@ -194,6 +196,7 @@ final class IDEAgentController {
         guard let store, let root = host?.agentProjectRoot else { return }
         store.deleteAll(projectRoot: root.path)
         IDEAgentCheckpointBlobs(store: store, projectRoot: root.path).removeAll()
+        promptHistory()?.clear()
         history = []
     }
 
@@ -260,6 +263,25 @@ final class IDEAgentController {
         let created = addConversation()
         created.adoptFork(entries: state.entries, items: state.items, title: state.title)
         return created
+    }
+
+    /// This project's prompt history: on disk beside its conversations when there is a store, else in memory.
+    func promptHistory() -> IDEAgentPromptHistory? {
+        guard let root = host?.agentProjectRoot else { return nil }
+        let key = root.standardizedFileURL.path
+        if let existing = promptHistories[key] { return existing }
+        let file = store.map { $0.projectDirectory(for: root.path).appendingPathComponent("prompts.jsonl") }
+        let created = IDEAgentPromptHistory(file: file)
+        promptHistories[key] = created
+        return created
+    }
+
+    /// ↑ (`-1`) and ↓ (`1`) in the message field: the text to show, or `nil` for none.
+    func recallPrompt(_ direction: Int) -> String? {
+        let prompts = promptHistory()?.prompts ?? []
+        return direction < 0
+            ? selected.promptRecall.previous(current: selected.draft, in: prompts)
+            : selected.promptRecall.next(in: prompts)
     }
 
     func rename(_ id: UUID, to name: String) {

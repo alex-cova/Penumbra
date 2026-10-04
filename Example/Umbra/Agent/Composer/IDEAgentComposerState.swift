@@ -32,6 +32,8 @@ final class IDEAgentComposerState {
     private(set) var trigger: IDEAgentComposerTrigger = .none
     private(set) var suggestions: [IDEAgentSuggestion] = []
     var selectedIndex = 0
+    /// Ctrl-R is on: the field's text is a search of earlier prompts.
+    var isSearchingHistory = false
     /// A trigger the user closed with Esc stays closed until the text around it changes.
     @ObservationIgnored private var dismissed: IDEAgentComposerTrigger?
 
@@ -53,6 +55,7 @@ final class IDEAgentComposerState {
     func dismiss() {
         dismissed = trigger
         suggestions = []
+        isSearchingHistory = false
     }
 
     func move(by delta: Int) {
@@ -61,6 +64,7 @@ final class IDEAgentComposerState {
     }
 
     func reset() {
+        isSearchingHistory = false
         trigger = .none
         suggestions = []
         selectedIndex = 0

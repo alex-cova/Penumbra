@@ -12,12 +12,14 @@ enum IDEAgentComposerTrigger: Equatable {
     case slashArgument(command: String, query: String, range: NSRange)
     /// `@` at the start or after whitespace, with the caret still inside that word.
     case mention(query: String, range: NSRange)
+    /// Ctrl-R: the whole field is a search of earlier prompts, and accepting one replaces all of it.
+    case history(query: String, range: NSRange)
 
     /// The range accepting a suggestion replaces.
     var range: NSRange? {
         switch self {
         case .none: nil
-        case .slash(_, let range), .slashArgument(_, _, let range), .mention(_, let range): range
+        case .slash(_, let range), .slashArgument(_, _, let range), .mention(_, let range), .history(_, let range): range
         }
     }
 

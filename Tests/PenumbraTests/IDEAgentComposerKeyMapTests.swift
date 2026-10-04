@@ -55,6 +55,15 @@ final class IDEAgentComposerKeyMapTests: XCTestCase {
         XCTAssertEqual(action(Keys.upArrow, .option), .passThrough)
     }
 
+    func testControlRStartsASearchOfEarlierPrompts() {
+        XCTAssertEqual(action(15, .control), .searchHistory)
+        XCTAssertEqual(action(15, .control, suggestions: true), .searchHistory, "it also leaves the search")
+        XCTAssertEqual(action(15), .passThrough, "a plain r is a letter")
+        XCTAssertEqual(action(15, .command), .passThrough)
+        XCTAssertEqual(action(15, [.control, .shift]), .passThrough)
+        XCTAssertEqual(action(15, .control, marked: true), .passThrough)
+    }
+
     func testAnInputMethodKeepsEveryKey() {
         XCTAssertEqual(action(Keys.returnKey, marked: true), .passThrough)
         XCTAssertEqual(action(Keys.escape, marked: true), .passThrough)
