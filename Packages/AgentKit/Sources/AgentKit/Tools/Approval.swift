@@ -20,6 +20,8 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
     public var editableArgument: String?
     /// For an edit awaiting approval: what it would change, as a unified diff.
     public var diff: String?
+    /// The rule an "always allow" button would add for this call, as `run_command(git status:*)`.
+    public var suggestedRule: String?
 
     public var id: String { callID }
 
@@ -32,6 +34,7 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
         notes: [String] = [],
         editableArgument: String? = nil,
         diff: String? = nil,
+        suggestedRule: String? = nil,
         callID: String = "",
         toolName: String = ""
     ) {
@@ -45,6 +48,7 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
         self.notes = notes
         self.editableArgument = editableArgument
         self.diff = diff
+        self.suggestedRule = suggestedRule
     }
 }
 
@@ -54,24 +58,6 @@ public enum ApprovalDecision: Sendable, Equatable {
     case approveEditing(String)
     /// An optional note goes back to the model so it can adjust.
     case deny(note: String?)
-}
-
-/// How much the agent does on its own. Reads never ask. Commands always ask (see `ApprovalPolicy`).
-public enum AutonomyMode: String, Sendable, Equatable, Codable, CaseIterable {
-    /// Edits apply at once, checkpointed so a run can be reverted. The default.
-    case autoApplyEdits
-    /// Every edit shows its diff first and waits for Apply or Reject.
-    case approveEachEdit
-    /// The model is not given the tools that change files or run commands, so it can only look and propose.
-    case planOnly
-
-    /// Whether a tool of this risk is offered to the model.
-    public func offers(_ risk: ToolRisk) -> Bool {
-        switch self {
-        case .planOnly: risk == .read
-        case .autoApplyEdits, .approveEachEdit: true
-        }
-    }
 }
 
 /// What an edit tool would do, worked out without doing it.
@@ -85,7 +71,8 @@ public struct EditPreview: Sendable, Equatable {
     }
 }
 
-/// Whether command-risk tools ask first. Reads never ask, and edits ask only in `approveEachEdit`.
+/// For the eval harness and tests, `approveAll` skips the permission policy altogether; `askForCommands`
+/// applies it (see `PermissionPolicy`).
 public enum ApprovalPolicy: Sendable, Equatable {
     case askForCommands
     /// For the eval harness and tests only: nothing is shown to a user.

@@ -26,6 +26,7 @@ final class IDEAgentController {
 
     @ObservationIgnored private weak var host: (any IDEAgentHost)?
     @ObservationIgnored private let store: SessionStore?
+    @ObservationIgnored private let appPermissionsFile: URL?
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     @ObservationIgnored private var didRestore = false
     /// True while a Gradle run the agent started is going, so Stop ends that run and no other.
@@ -39,12 +40,15 @@ final class IDEAgentController {
     init(
         settings: IDEAgentSettings = .shared,
         store: SessionStore? = nil,
+        appPermissionsFile: URL? = nil,
         clientFactory: @escaping @MainActor (IDEAgentSettings) throws -> any LLMClient = { try $0.makeClient() }
     ) {
         self.settings = settings
         self.store = store
+        self.appPermissionsFile = appPermissionsFile
         self.clientFactory = clientFactory
-        let first = IDEAgentConversation(settings: settings, store: store, clientFactory: clientFactory)
+        let first = IDEAgentConversation(
+            settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
         selectedID = first.id
         wire(first)
@@ -90,6 +94,11 @@ final class IDEAgentController {
     }
 
     var projectRoot: URL? { host?.agentProjectRoot }
+
+    /// What Settings ▸ Agent ▸ Permissions lists and edits.
+    func makePermissionsModel() -> IDEAgentPermissionsModel {
+        IDEAgentPermissionsModel(projectRoot: { [weak self] in self?.host?.agentProjectRoot }, appFile: appPermissionsFile)
+    }
 
     /// What the list above the composer offers for `/` and `@`. Nothing yet: the built-in commands
     /// and the project's files are added with them.
@@ -165,6 +174,8 @@ final class IDEAgentController {
     func showDiff(for change: IDEAgentFileChange) { selected.showDiff(for: change) }
 
     func revert(entryID: UUID) { selected.revert(entryID: entryID) }
+
+    var mode: PermissionMode { selected.mode }
 
     /// Starts an empty conversation. The one being left stays in the history.
     func newConversation() {

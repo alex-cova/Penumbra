@@ -24,6 +24,10 @@ public actor AgentSession {
     private let toolsByName: [String: any AgentTool]
     private let workspace: any AgentWorkspace
     private let configuration: AgentConfiguration
+    private var mode: PermissionMode
+    private var rules: PermissionRules
+    /// The mode the model was last told about; a change is announced at the next turn boundary.
+    private var announcedMode: PermissionMode
     private let ledger = ReadLedger()
     /// Per-run checkpoints of every file the agent changed, for the changed-files summary and Revert.
     public let checkpoints = CheckpointLog()
@@ -50,6 +54,9 @@ public actor AgentSession {
         self.toolsByName = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         self.workspace = workspace
         self.configuration = configuration
+        self.mode = configuration.mode
+        self.announcedMode = configuration.mode
+        self.rules = configuration.permissions
         self.items = history
         self.todoList = TodoList(TodoList.latest(in: history))
     }
@@ -82,6 +89,19 @@ public actor AgentSession {
     }
 
     public var awaitingApproval: [String] { Array(pendingApprovals.keys) }
+
+    public var currentMode: PermissionMode { mode }
+
+    /// Changes the mode for the calls that follow, mid-run if need be. The model hears about it at
+    /// the next turn boundary, as a note, so a history never gets a message between a call and its output.
+    public func setMode(_ newMode: PermissionMode) {
+        mode = newMode
+    }
+
+    /// Replaces the user's rules for the calls that follow.
+    public func setRules(_ newRules: PermissionRules) {
+        rules = newRules
+    }
 
     /// Answers an `.questionAsked` event; `nil` means the user dismissed it. A call with no pending
     /// question is ignored.
@@ -154,6 +174,7 @@ public actor AgentSession {
 
         for _ in 0..<configuration.maxIterations {
             if Task.isCancelled { return .stopped }
+            announceModeChange()
             await compactIfNeeded(force: false, out)
             if Task.isCancelled { return .stopped }
             out.yield(.stateChanged(.streaming))
@@ -222,6 +243,16 @@ public actor AgentSession {
 
     static let maxUnreadableCalls = 3
 
+    /// Tells the model the mode changed since it last heard. Always between a call's output and the
+    /// next request, never inside a pair.
+    private func announceModeChange() {
+        guard announcedMode != mode else { return }
+        announcedMode = mode
+        items.append(.user(Self.editorNote(mode.editorNote)))
+    }
+
+    static func editorNote(_ text: String) -> String { "[Note from the editor, not from the user] " + text }
+
     /// What the model is told when a call it wrote could not be read.
     static func unreadableCallNote(_ calls: [(detail: String, raw: String)]) -> String {
         let first = calls[0]
@@ -240,7 +271,7 @@ public actor AgentSession {
     /// whole thing. (Ollama counts only the tokens it evaluated, not those it served from its own
     /// cache, so the reported figure alone would run low.)
     /// The tools the model is told about. In plan mode that is only the ones that look.
-    private var offeredTools: [any AgentTool] { tools.filter { configuration.mode.offers($0.risk) } }
+    private var offeredTools: [any AgentTool] { tools.filter { mode.offers($0.risk) } }
 
     func estimatedContextTokens() -> Int {
         let fixed = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition))
@@ -438,7 +469,7 @@ public actor AgentSession {
                 plans.append(.answered(.error("Stopped: this exact call was made four times in one run.")))
             } else if !exempt, counts[key]! == 3 {
                 plans.append(.answered(.error("You have already made this exact call twice. Try a different approach instead of repeating it.")))
-            } else if let tool = toolsByName[call.name], !configuration.mode.offers(tool.risk) {
+            } else if let tool = toolsByName[call.name], !mode.offers(tool.risk) {
                 plans.append(.answered(.error("\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead.")))
             } else if let tool = toolsByName[call.name] {
                 plans.append(.run(tool, arguments: call.arguments, note: nil))
@@ -499,13 +530,24 @@ public actor AgentSession {
         return cancelled ? .stopped : .continue
     }
 
-    /// Asks the user about a command-risk call and returns the plan to follow: unchanged, with the
-    /// user's edit, or settled as a denial. Nothing a tool returns can approve a call; only
-    /// `resolveApproval` does.
+    /// Applies the permission policy to a call that changes files or runs a command, and returns the
+    /// plan to follow: unchanged, with the user's edit, or settled as a refusal. Nothing a tool
+    /// returns can approve a call; only `resolveApproval` does.
     private func approved(_ plan: Plan, call: PendingCall, _ out: AsyncStream<AgentEvent>.Continuation) async -> Plan {
         guard case .run(let tool, let arguments, _) = plan, configuration.approval == .askForCommands,
               let parsed = try? ToolArguments(json: arguments)
         else { return plan }
+
+        let subject = tool.permissionSubject(for: parsed)
+        let verdict = await PermissionPolicy.evaluate(
+            ToolCallInfo(name: call.name, risk: tool.risk, subject: subject),
+            mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
+        let notes: [String]
+        switch verdict {
+        case .allow: return plan
+        case .deny(let reason): return .answered(.error(reason))
+        case .ask(let extra): notes = extra
+        }
 
         let context = ToolContext(
             workspace: workspace, ledger: ledger, callID: call.id,
@@ -515,15 +557,25 @@ public actor AgentSession {
         let isEdit = tool.risk == .edit
         switch tool.risk {
         case .command:
-            guard let asked = await tool.approvalRequest(for: parsed, context: context) else { return plan }
-            request = asked
-        case .edit where configuration.mode == .approveEachEdit:
+            if let asked = await tool.approvalRequest(for: parsed, context: context) {
+                request = asked
+            } else if case .command(let text) = subject {
+                // A tool that says nothing about itself still asks when the policy says so.
+                request = ApprovalRequest(title: "Run \(call.name)", command: text, warnings: CommandWarnings.warnings(for: text))
+            } else {
+                request = ApprovalRequest(title: "Run \(call.name)", command: arguments)
+            }
+            if case .command(let text) = subject, request.suggestedRule == nil {
+                request.suggestedRule = PermissionRule.suggestion(forCommand: text)?.description
+            }
+        case .edit:
             // A call that can't be previewed (stale file, bad arguments) is left to fail on its own.
             guard let preview = await tool.editPreview(for: parsed, context: context) else { return plan }
             request = ApprovalRequest(title: "Apply edit", command: preview.summary, diff: preview.diff)
-        default:
+        case .read:
             return plan
         }
+        request.notes += notes
         request.callID = call.id
         request.toolName = call.name
 

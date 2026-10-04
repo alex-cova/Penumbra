@@ -193,6 +193,12 @@ public struct ApplyPatchTool: AgentTool {
             parameters: [ToolParameter("patch", .string, "The unified diff.")])
     }
 
+    /// The files the diff names. A diff that does not parse names none, and fails on its own.
+    public func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let text = try? arguments.string("patch"), let files = try? PatchParser.parse(text) else { return .none }
+        return .paths(files.map(\.path))
+    }
+
     /// Every file checked and the result computed, before anything is written.
     func prepare(_ arguments: ToolArguments, context: ToolContext) async throws -> [PlannedFile] {
         let files: [FilePatch]

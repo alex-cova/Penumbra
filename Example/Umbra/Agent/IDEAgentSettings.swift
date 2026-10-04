@@ -103,8 +103,8 @@ final class IDEAgentSettings {
     var commandEnvironmentText: String { didSet { defaults.set(commandEnvironmentText, forKey: Keys.commandEnvironment) } }
     /// Whether the chat opens over the editor like Settings (true) or docked beside it (false, the default).
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
-    /// What the agent may do without asking (see `AutonomyMode`).
-    var mode: AutonomyMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
+    /// What the agent may do without asking in a new chat (see `PermissionMode`); each chat can change its own.
+    var mode: PermissionMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
     /// Model turns per message before the run pauses; `AgentConfiguration.maxIterations` when unset.
     var iterationCap: Int { didSet { defaults.set(iterationCap, forKey: Keys.iterationCap) } }
     /// The context window of a hosted model the built-in table doesn't know; 0 means use the table.
@@ -171,7 +171,7 @@ final class IDEAgentSettings {
         opensAsPage = defaults.bool(forKey: Keys.page)
         priceTableText = defaults.string(forKey: Keys.prices) ?? IDEAgentPrices.defaultText
         secretFilePatternsText = defaults.string(forKey: Keys.secretPatterns) ?? ""
-        mode = defaults.string(forKey: Keys.mode).flatMap(AutonomyMode.init(rawValue:)) ?? .autoApplyEdits
+        mode = defaults.string(forKey: Keys.mode).flatMap(PermissionMode.init(persisted:)) ?? .acceptEdits
         let storedCap = defaults.integer(forKey: Keys.iterationCap)
         iterationCap = storedCap > 0 ? storedCap : Self.defaultIterationCap
         contextWindowOverride = max(0, defaults.integer(forKey: Keys.contextOverride))
@@ -366,7 +366,7 @@ final class IDEAgentSettings {
 
     var fingerprint: String {
         let local = provider == .ollama || provider == .mlx
-        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(mode.rawValue)|\(iterationCap)|\(contextWindow ?? 0)|\(secretFilePatternsText)"
+        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(contextWindow ?? 0)|\(secretFilePatternsText)"
     }
 
     func makeClient() throws -> any LLMClient {

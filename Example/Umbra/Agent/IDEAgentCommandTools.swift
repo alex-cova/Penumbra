@@ -163,6 +163,13 @@ struct IDEGradleTool: AgentTool {
             ])
     }
 
+    /// The command line a permission rule such as `Bash(gradle build:*)` matches.
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let tasks = try? arguments.stringArray("tasks"), !tasks.isEmpty else { return .none }
+        let options = (try? arguments.optionalStringArray("options")) ?? []
+        return .command((["gradle"] + tasks + options).joined(separator: " "))
+    }
+
     func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
         guard let tasks = try? arguments.stringArray("tasks"), !tasks.isEmpty else { return nil }
         let options = (try? arguments.optionalStringArray("options")) ?? []
@@ -207,6 +214,11 @@ struct IDERunTestsTool: AgentTool {
         let filters = try arguments.optionalStringArray("tests") ?? []
         let task = module.isEmpty ? "test" : (module.hasSuffix(":") ? module : module + ":") + "test"
         return ([task], filters.flatMap { ["--tests", $0] })
+    }
+
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let command = try? command(arguments) else { return .none }
+        return .command((["gradle"] + command.tasks + command.options).joined(separator: " "))
     }
 
     func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {

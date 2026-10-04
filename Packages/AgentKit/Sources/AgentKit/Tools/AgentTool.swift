@@ -159,6 +159,8 @@ public protocol AgentTool: Sendable {
     var waitsForUser: Bool { get }
     /// True for a tool whose identical repeat is harmless bookkeeping, not a stuck loop (`todo`).
     var isExemptFromRepeatGuard: Bool { get }
+    /// What a permission rule can match against: the command, or the files the call would change.
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject
 }
 
 extension AgentTool {
@@ -168,6 +170,13 @@ extension AgentTool {
     public func editPreview(for arguments: ToolArguments, context: ToolContext) async -> EditPreview? { nil }
     public var waitsForUser: Bool { false }
     public var isExemptFromRepeatGuard: Bool { false }
+
+    /// A `command` argument is a command; otherwise a `path` argument is the file the call changes.
+    public func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        if let command = try? arguments.optionalString("command") { return .command(command) }
+        if let path = try? arguments.optionalString("path") { return .paths([path]) }
+        return .none
+    }
 
     /// Parses, runs and converts every failure into a `ToolOutput`.
     public func execute(argumentsJSON: String, context: ToolContext) async -> ToolOutput {

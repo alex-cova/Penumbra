@@ -144,6 +144,7 @@ struct IDEAgentPanel: View {
                     suggestions: { agent.suggestions(for: $0) },
                     onSend: { if agent.canSend { agent.send() } },
                     onStop: { if agent.isRunning { agent.stop() } },
+                    onCycleMode: { agent.selected.cycleMode() },
                     onDropFiles: { urls in
                         urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
                             .joined(separator: " ") + " "
@@ -163,8 +164,50 @@ struct IDEAgentPanel: View {
                         isDisabled: !agent.canSend, action: agent.send)
                 }
             }
+            HStack {
+                IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, IDEAppearance.Spacing.xs)
         }
         .padding(IDEAppearance.Spacing.sm)
+    }
+}
+
+/// The chat's permission mode. A menu to pick one; ⇧Tab in the message field walks through them.
+private struct IDEAgentModeChip: View {
+    let mode: PermissionMode
+    let select: (PermissionMode) -> Void
+
+    private var tint: Color {
+        switch mode {
+        case .manual: IDEAppearance.ColorToken.muted
+        case .acceptEdits: IDEAppearance.ColorToken.accent
+        case .auto: .orange
+        case .plan: .teal
+        }
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(PermissionMode.allCases, id: \.self) { candidate in
+                Button {
+                    select(candidate)
+                } label: {
+                    Label(candidate.title, systemImage: candidate == mode ? "checkmark" : candidate.symbol)
+                }
+                .help(candidate.detail)
+            }
+        } label: {
+            Label(mode.title, systemImage: mode.symbol)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(tint)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("\(mode.title): \(mode.detail)\nPress ⇧Tab in the message field to switch.")
+        .accessibilityLabel("Permission mode: \(mode.title)")
     }
 }
 
@@ -319,15 +362,21 @@ private struct IDEAgentDiffView: View {
 private struct IDEAgentApprovalView: View {
     let request: ApprovalRequest
     let decide: (ApprovalDecision) -> Void
+    /// Approves this call and also changes what is asked from now on (an "always allow" rule, or Accept Edits).
+    let approveWith: (IDEAgentConversation.ApprovalShortcut) -> Void
 
     @State private var command: String
     @State private var isEditing = false
     @State private var isDenying = false
     @State private var note = ""
 
-    init(request: ApprovalRequest, decide: @escaping (ApprovalDecision) -> Void) {
+    init(
+        request: ApprovalRequest, decide: @escaping (ApprovalDecision) -> Void,
+        approveWith: @escaping (IDEAgentConversation.ApprovalShortcut) -> Void
+    ) {
         self.request = request
         self.decide = decide
+        self.approveWith = approveWith
         _command = State(initialValue: request.command)
     }
 
@@ -400,6 +449,7 @@ private struct IDEAgentApprovalView: View {
                     Button(isEditing ? "Done Editing" : "Edit…") { isEditing.toggle() }
                         .controlSize(.small)
                 }
+                alwaysAllowMenu
                 Button(isDenying ? (request.diff == nil ? "Send Denial" : "Send Rejection") : (request.diff == nil ? "Deny…" : "Reject…")) {
                     if isDenying { decide(.deny(note: note)) } else { isDenying = true }
                 }
@@ -410,6 +460,36 @@ private struct IDEAgentApprovalView: View {
         .foregroundStyle(IDEAppearance.ColorToken.foreground)
         .padding(IDEAppearance.Spacing.sm)
         .background(IDEAppearance.ColorToken.card)
+    }
+}
+
+extension IDEAgentApprovalView {
+    private var suggestedRule: PermissionRule? { request.suggestedRule.flatMap(PermissionRule.init(parsing:)) }
+
+    /// "git status:*" as the user thinks of it: "git status …".
+    private func described(_ rule: PermissionRule) -> String {
+        (rule.pattern ?? rule.tool).replacingOccurrences(of: ":*", with: " …")
+    }
+
+    @ViewBuilder fileprivate var alwaysAllowMenu: some View {
+        if request.diff != nil {
+            Menu("Always…") {
+                Button("Accept all edits in this chat") { approveWith(.acceptEdits) }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .controlSize(.small)
+            .help("Apply this edit, and stop asking about edits in this chat")
+        } else if let rule = suggestedRule {
+            Menu("Always…") {
+                Button("Allow “\(described(rule))” in this chat") { approveWith(.allowForChat(rule)) }
+                Button("Always allow “\(described(rule))” in this project") { approveWith(.allowInProject(rule)) }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .controlSize(.small)
+            .help("Run this command, and stop asking about commands like it")
+        }
     }
 }
 
@@ -449,9 +529,10 @@ private struct IDEAgentToolCard: View {
 
             if let request = entry.approval, entry.output == nil {
                 Divider().overlay(IDEAppearance.ColorToken.border)
-                IDEAgentApprovalView(request: request) { decision in
-                    workspace.agent.decide(callID: request.callID, decision)
-                }
+                IDEAgentApprovalView(
+                    request: request,
+                    decide: { workspace.agent.decide(callID: request.callID, $0) },
+                    approveWith: { workspace.agent.selected.approve(callID: request.callID, shortcut: $0) })
             }
 
             if let question = entry.question, entry.output == nil {
@@ -677,10 +758,13 @@ struct IDEAgentSettingsView: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
 
             Section("Behavior") {
-                Picker("Mode", selection: $settings.mode) {
-                    ForEach(AutonomyMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                Picker("Mode for new chats", selection: $settings.mode) {
+                    ForEach(PermissionMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 Text(settings.mode.detail)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Text("Each chat can change its own with the chip under the message field, or ⇧Tab.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
@@ -744,6 +828,9 @@ struct IDEAgentSettingsView: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
+        }
+        if let agent {
+            IDEAgentPermissionsSection(agent: agent)
         }
         Section("Protected files") {
             TextEditor(text: $settings.secretFilePatternsText)

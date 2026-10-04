@@ -14,7 +14,13 @@ public struct AgentConfiguration: Sendable {
     /// it fills the window; `nil` never compacts (and relies on the provider's own limit).
     public var contextWindow: Int?
     public var compactionThreshold: Double
-    public var mode: AutonomyMode
+    public var mode: PermissionMode
+    /// The user's allow, ask and deny rules. A host can replace them while the session lives (`setRules`).
+    public var permissions: PermissionRules
+    /// The host's say over edits and commands, ahead of the user's ask and allow rules.
+    public var gate: (any PermissionGate)?
+    /// Extra credential-file globs: a command that names one is never read as safe in Auto mode.
+    public var secretPatterns: [GlobPattern]
 
     public init(
         model: String,
@@ -27,7 +33,10 @@ public struct AgentConfiguration: Sendable {
         approval: ApprovalPolicy = .askForCommands,
         contextWindow: Int? = nil,
         compactionThreshold: Double = 0.75,
-        mode: AutonomyMode = .autoApplyEdits
+        mode: PermissionMode = .acceptEdits,
+        permissions: PermissionRules = PermissionRules(),
+        gate: (any PermissionGate)? = nil,
+        secretPatterns: [GlobPattern] = []
     ) {
         self.model = model
         self.systemPrompt = systemPrompt
@@ -40,13 +49,16 @@ public struct AgentConfiguration: Sendable {
         self.contextWindow = contextWindow
         self.compactionThreshold = compactionThreshold
         self.mode = mode
+        self.permissions = permissions
+        self.gate = gate
+        self.secretPatterns = secretPatterns
     }
 }
 
 public enum SystemPrompt {
     /// Stable for a session: anything that changes per message goes on the user message instead, so
     /// the provider's cached prefix survives.
-    public static func make(projectRoot: String, notes: String? = nil, mode: AutonomyMode = .autoApplyEdits) -> String {
+    public static func make(projectRoot: String, notes: String? = nil, mode: PermissionMode = .acceptEdits) -> String {
         var prompt = """
         You are a coding agent working inside a user's project in their editor.
 
@@ -61,16 +73,18 @@ public enum SystemPrompt {
         - When go_to_definition and find_usages are available, use them for a Java symbol's real declaration and usages instead of grep. To see what is already modified, use git_status and git_diff when they are available.
         - For work with several steps, keep a checklist with todo and update it as you go. When a decision is the user's to make, or the request is ambiguous in a way that changes what you would build, use ask_user rather than guessing.
         - After changing code, call diagnostics for the files you touched and fix what you introduced.
-        - Commands (run_command, gradle, run_tests) each need the user's approval, so batch what you can and give a clear reason. Prefer run_tests over run_command for tests. Never run a destructive or irreversible command unless the user asked for it; a denial is information, so adjust instead of retrying.
+        - Commands (run_command, gradle, run_tests) usually need the user's approval, so batch what you can and give a clear reason. Prefer run_tests over run_command for tests. Never run a destructive or irreversible command unless the user asked for it; a denial is information, so adjust instead of retrying.
         - Never write build output, version-control data or credentials. Everything you change in a run can be reverted by the user, so say what you changed.
         - If a tool returns an error, read it and change your approach; do not repeat the same call.
         """
         switch mode {
-        case .autoApplyEdits:
+        case .acceptEdits:
             break
-        case .approveEachEdit:
+        case .manual:
             prompt += "\n\nEvery edit is shown to the user as a diff before it is applied, and they may reject it. If one is rejected, take that as feedback: ask what they want, or propose something else."
-        case .planOnly:
+        case .auto:
+            prompt += "\n\nCommands that only read (listing, searching, git status and diff) run without asking; any other command asks for the user's approval."
+        case .plan:
             prompt += "\n\nPlan mode: you can read, search and check problems, but you cannot change files or run commands. Investigate, then give the user a concrete numbered plan: which files change and how, what to run to verify, and anything you are unsure about. Do not claim to have changed anything."
         }
         if let notes, !notes.isEmpty {

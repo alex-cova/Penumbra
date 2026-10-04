@@ -4,7 +4,7 @@ import Testing
 
 private let liveProjects = Locked<[TempProject]>([])
 
-private func session(_ turns: [MockTurn], toolTimeout: TimeInterval = 120, mode: AutonomyMode = .autoApplyEdits, history: [ConversationItem] = [])
+private func session(_ turns: [MockTurn], toolTimeout: TimeInterval = 120, mode: PermissionMode = .acceptEdits, history: [ConversationItem] = [])
     throws -> (AgentSession, MockLLMClient)
 {
     let project = try TempProject(files: ["A.txt": "a\n"])
@@ -103,7 +103,7 @@ private func ask(_ id: String = "q", _ question: String = "Which one?", options:
     }
 
     @Test func theChecklistIsAvailableInPlanMode() async throws {
-        let (agent, client) = try session([.toolCalls((id: "t", name: "todo", arguments: #"{"items":["[ ] plan"]}"#)), .text("planned")], mode: .planOnly)
+        let (agent, client) = try session([.toolCalls((id: "t", name: "todo", arguments: #"{"items":["[ ] plan"]}"#)), .text("planned")], mode: .plan)
         for await _ in await agent.send("plan it") {}
         #expect(client.requests[0].tools.map(\.name).contains("todo"))
         #expect(toolOutputs(await agent.items)["t"]?.hasPrefix("Checklist updated") == true)

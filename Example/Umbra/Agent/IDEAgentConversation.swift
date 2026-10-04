@@ -26,6 +26,8 @@ final class IDEAgentConversation: Identifiable {
     /// The model's checklist (`todo`), shown above the transcript.
     private(set) var todos: [TodoItem] = []
     var draft = ""
+    /// What the agent may do without asking, in this chat. New chats start from the setting.
+    private(set) var mode: PermissionMode
     /// The saved session's identity. It changes when the conversation is reset or another is loaded.
     private(set) var conversationID = UUID()
     /// What names this conversation's tab: stable for as long as the tab exists.
@@ -49,6 +51,10 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var pendingOutput: [String: String] = [:]
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     @ObservationIgnored private let store: SessionStore?
+    /// The app-wide permission rules file; `nil` in tests, which must not read the user's own.
+    @ObservationIgnored private let appPermissionsFile: URL?
+    /// Rules that last as long as this chat ("Allow for this chat").
+    @ObservationIgnored private var chatRules = PermissionRules()
     /// Items of a conversation loaded from disk, handed to the session that is created for it.
     @ObservationIgnored private var restoredItems: [ConversationItem]?
     @ObservationIgnored private var restoredTodos: [TodoItem] = []
@@ -62,11 +68,14 @@ final class IDEAgentConversation: Identifiable {
     init(
         settings: IDEAgentSettings,
         store: SessionStore?,
+        appPermissionsFile: URL? = nil,
         clientFactory: @escaping @MainActor (IDEAgentSettings) throws -> any LLMClient
     ) {
         self.settings = settings
         self.store = store
+        self.appPermissionsFile = appPermissionsFile
         self.clientFactory = clientFactory
+        self.mode = settings.mode
     }
 
     var canSend: Bool {
@@ -115,8 +124,75 @@ final class IDEAgentConversation: Identifiable {
                     return
                 }
             }
+            // Whatever changed since the session was made (the mode, a rules file) applies to this run.
+            await activeSession.setMode(self.mode)
+            await activeSession.setRules(self.currentRules(root: root))
             await self.consume(await activeSession.send(framed), session: activeSession)
         }
+    }
+
+    // MARK: - Permissions
+
+    /// The files' rules and this chat's own, merged.
+    private func currentRules(root: URL?) -> PermissionRules {
+        IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules)
+    }
+
+    /// Changes the mode for the calls that follow, mid-run if need be.
+    func setMode(_ newMode: PermissionMode) {
+        guard newMode != mode else { return }
+        mode = newMode
+        if let session { Task { await session.setMode(newMode) } }
+    }
+
+    func cycleMode() { setMode(mode.next) }
+
+    /// What the approval card's extra buttons do, besides running this one call.
+    enum ApprovalShortcut {
+        /// "Allow … in this chat": a rule that ends with the chat.
+        case allowForChat(PermissionRule)
+        /// "Always allow … in this project": written to `.umbra/settings.local.json`.
+        case allowInProject(PermissionRule)
+        /// "Accept all edits in this chat".
+        case acceptEdits
+    }
+
+    /// Approves the call and applies the shortcut. A rule that cannot be saved is reported, and the
+    /// call is still approved: the user asked for this run too.
+    func approve(callID: String, shortcut: ApprovalShortcut) {
+        switch shortcut {
+        case .allowForChat(let rule):
+            chatRules.add(rule, to: .allow)
+            pushRules()
+        case .allowInProject(let rule):
+            saveProjectRule(rule)
+        case .acceptEdits:
+            setMode(.acceptEdits)
+        }
+        decide(callID: callID, .approve)
+    }
+
+    private func saveProjectRule(_ rule: PermissionRule) {
+        guard let root = host?.agentProjectRoot,
+              let file = IDEAgentPermissionFiles.file(for: .project, projectRoot: root, appFile: appPermissionsFile)
+        else { return appendError("Open a project folder first; rules are saved in the project.") }
+        let existed = FileManager.default.fileExists(atPath: file.path)
+        do {
+            try IDEAgentPermissionFiles.add(rule, to: .allow, in: file)
+            appendNotice("Saved \(rule) to \(IDEAgentPermissionFiles.projectLocalPath)."
+                + (existed ? "" : " It is your own file: add it to .gitignore if the project is shared."))
+            pushRules()
+        } catch {
+            appendError("Could not save the rule: \(error.localizedDescription)")
+            chatRules.add(rule, to: .allow)
+            pushRules()
+        }
+    }
+
+    private func pushRules() {
+        guard let session, let root = host?.agentProjectRoot else { return }
+        let rules = currentRules(root: root)
+        Task { await session.setRules(rules) }
     }
 
     /// Cancels the stream and running tools. The run ends with a "Stopped." notice and the next
@@ -136,6 +212,7 @@ final class IDEAgentConversation: Identifiable {
         restoredTodos = []
         status = nil
         restoredItems = nil
+        chatRules = PermissionRules()
         conversationID = UUID()
         createdAt = Date()
     }
@@ -156,6 +233,7 @@ final class IDEAgentConversation: Identifiable {
         usage = snapshot.totalUsage
         // Provider items only the model that produced them may be sent back; the transcript is enough.
         restoredItems = snapshot.items.filter { if case .opaque = $0 { false } else { true } }
+        chatRules = PermissionRules()
         conversationID = snapshot.id
         createdAt = snapshot.createdAt
         status = nil
@@ -236,12 +314,14 @@ final class IDEAgentConversation: Identifiable {
         let configuration = AgentConfiguration(
             model: settings.model,
             systemPrompt: SystemPrompt.make(
-                projectRoot: workspace.rootPath, notes: IDEAgentProjectNotes.load(root: root), mode: settings.mode),
+                projectRoot: workspace.rootPath, notes: IDEAgentProjectNotes.load(root: root), mode: mode),
             reasoningEffort: settings.effectiveReasoningEffort,
             maxIterations: settings.iterationCap,
             cacheKey: Self.cacheKey(root: root, conversationID: conversationID),
             contextWindow: settings.contextWindow,
-            mode: settings.mode)
+            mode: mode,
+            permissions: currentRules(root: root),
+            secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns))
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history)
         // A restored conversation whose checklist the history no longer shows (compaction) keeps the saved one.

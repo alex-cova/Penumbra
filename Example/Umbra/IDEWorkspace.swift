@@ -115,7 +115,9 @@ public final class IDEWorkspace {
     /// The bell's list and the toast that announces finished Gradle and git work.
     let notifications = IDENotificationCenter()
     /// This window's coding agent. Reaches the window only through `IDEAgentHost`, weakly.
-    let agent = IDEAgentController(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil)
+    let agent = IDEAgentController(
+        store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil,
+        appPermissionsFile: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile() : nil)
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// The Structure tool window's member tree for the Java type at the caret.

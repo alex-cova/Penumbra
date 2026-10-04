@@ -204,7 +204,7 @@ final class IDEAgentSessionsTests: XCTestCase {
     func testApproveEachEditShowsTheDiffAndAppliesOnApply() async throws {
         try "one\ntwo\nthree\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
         let settings = makeSettings()
-        settings.mode = .approveEachEdit
+        settings.mode = .manual
         let (controller, _) = makeController([
             .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
             .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)),
@@ -225,7 +225,7 @@ final class IDEAgentSessionsTests: XCTestCase {
 
     func testPlanOnlyKeepsEditToolsOutOfTheRequest() async throws {
         let settings = makeSettings()
-        settings.mode = .planOnly
+        settings.mode = .plan
         let (controller, client) = makeController([.text("Plan: change A.")], settings: settings)
         await run(controller, "fix it")
         let names = try XCTUnwrap(client.requests.first).tools.map(\.name)
@@ -234,15 +234,33 @@ final class IDEAgentSessionsTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(client.requests.first).system.contains("Plan mode"))
     }
 
-    func testChangingTheModeStartsANewSessionThatKeepsTheConversation() async throws {
+    func testChangingTheChatsModeKeepsTheSessionAndTellsTheModel() async throws {
         let settings = makeSettings()
         let (controller, client) = makeController([.text("one"), .text("two")], settings: settings)
         await run(controller, "first")
-        settings.mode = .planOnly
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+
+        controller.selected.setMode(.plan)
         await run(controller, "second")
+
+        XCTAssertTrue(controller.currentSessionForTesting === session, "a mode change is not a new session")
         let second = try XCTUnwrap(client.requests.last)
-        XCTAssertTrue(second.system.contains("Plan mode"))
-        XCTAssertEqual(second.items.count, 3, "the first exchange carried over")
+        XCTAssertFalse(second.tools.map(\.name).contains("edit_file"), "plan withholds the edit tools from the next request")
+        XCTAssertEqual(second.items.count, 4, "the first exchange carried over, then the second message and the mode note")
+        guard case .user(let note) = second.items[3] else { return XCTFail("expected the mode note, got \(second.items[3])") }
+        XCTAssertTrue(note.hasPrefix("[Note from the editor, not from the user]") && note.contains("Plan"))
+    }
+
+    func testANewChatStartsInTheSettingsModeAndTheSettingDoesNotMoveARunningChat() async throws {
+        let settings = makeSettings()
+        settings.mode = .manual
+        let (controller, _) = makeController([.text("one")], settings: settings)
+        XCTAssertEqual(controller.selected.mode, .manual)
+
+        settings.mode = .auto
+        XCTAssertEqual(controller.selected.mode, .manual, "the setting is the default for new chats only")
+        controller.newConversation()
+        XCTAssertEqual(controller.selected.mode, .manual, "a fresh conversation in the same chat keeps the chat's mode")
     }
 
     func testProtectedFilePatternsReachTheReadTool() async throws {
@@ -288,17 +306,17 @@ final class IDEAgentSessionsTests: XCTestCase {
     func testBehaviorSettingsPersistAndChangeTheFingerprint() {
         let defaults = UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!
         let settings = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
-        XCTAssertEqual(settings.mode, .autoApplyEdits)
+        XCTAssertEqual(settings.mode, .acceptEdits)
         XCTAssertEqual(settings.iterationCap, IDEAgentSettings.defaultIterationCap)
         let before = settings.fingerprint
-        settings.mode = .approveEachEdit
+        settings.mode = .manual
         settings.iterationCap = 80
         settings.contextWindowOverride = 100_000
         settings.secretFilePatternsText = "*.vault"
         XCTAssertNotEqual(settings.fingerprint, before)
 
         let reloaded = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
-        XCTAssertEqual(reloaded.mode, .approveEachEdit)
+        XCTAssertEqual(reloaded.mode, .manual)
         XCTAssertEqual(reloaded.iterationCap, 80)
         XCTAssertEqual(reloaded.contextWindowOverride, 100_000)
         XCTAssertEqual(reloaded.secretFilePatterns, ["*.vault"])

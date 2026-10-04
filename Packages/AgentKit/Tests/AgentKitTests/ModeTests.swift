@@ -95,7 +95,7 @@ private struct Fixture {
 
     init(files: [String: String] = ["A.txt": "one\ntwo\nthree\n"]) throws { project = try TempProject(files: files) }
 
-    func session(_ client: MockLLMClient, mode: AutonomyMode) -> AgentSession {
+    func session(_ client: MockLLMClient, mode: PermissionMode) -> AgentSession {
         AgentSession(
             client: client, tools: ReadOnlyTools.all() + EditingTools.all(), workspace: project.workspace,
             configuration: AgentConfiguration(model: "m", mode: mode))
@@ -120,11 +120,11 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
     return events
 }
 
-@Suite struct AutonomyModeTests {
-    @Test func planOnlyOffersOnlyTheToolsThatLookAndRefusesTheOthers() async throws {
+@Suite struct PermissionModeTests {
+    @Test func planOffersOnlyTheToolsThatLookAndRefusesTheOthers() async throws {
         let f = try Fixture()
         let client = MockLLMClient(turns: [read(), edit(), .toolCalls((id: "x", name: "run_command", arguments: #"{"command":"ls"}"#)), .text("Here is the plan.")])
-        let agent = f.session(client, mode: .planOnly)
+        let agent = f.session(client, mode: .plan)
         let events = await drive(agent, decide: nil)
 
         #expect(events.last == .runEnded(.completed))
@@ -137,10 +137,10 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
         expectEveryCallAnswered(await agent.items)
     }
 
-    @Test func approveEachEditAsksWithTheDiffAndAppliesOnApproval() async throws {
+    @Test func manualAsksWithTheDiffAndAppliesOnApproval() async throws {
         let f = try Fixture()
         let client = MockLLMClient(turns: [read(), edit(), .text("done")])
-        let agent = f.session(client, mode: .approveEachEdit)
+        let agent = f.session(client, mode: .manual)
         var seen: ApprovalRequest?
         let events = await drive(agent) { request in seen = request; return .approve }
 
@@ -157,7 +157,7 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
     @Test func rejectingAnEditChangesNothingAndTellsTheModel() async throws {
         let f = try Fixture()
         let client = MockLLMClient(turns: [read(), edit(), .text("ok, what would you prefer?")])
-        let agent = f.session(client, mode: .approveEachEdit)
+        let agent = f.session(client, mode: .manual)
         _ = await drive(agent) { _ in .deny(note: "keep it as is") }
 
         #expect(f.disk("A.txt") == "one\ntwo\nthree\n")
@@ -167,11 +167,11 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
 
     @Test func aRejectedEditLeavesNoCheckpointAndAnApprovedOneDoes() async throws {
         let f = try Fixture()
-        let rejecting = f.session(MockLLMClient(turns: [read(), edit(), .text("done")]), mode: .approveEachEdit)
+        let rejecting = f.session(MockLLMClient(turns: [read(), edit(), .text("done")]), mode: .manual)
         _ = await drive(rejecting) { _ in .deny(note: nil) }
         #expect(await rejecting.checkpoints.runs.isEmpty)
 
-        let approving = f.session(MockLLMClient(turns: [read(), edit(), .text("done")]), mode: .approveEachEdit)
+        let approving = f.session(MockLLMClient(turns: [read(), edit(), .text("done")]), mode: .manual)
         _ = await drive(approving) { _ in .approve }
         #expect(await approving.checkpoints.runs.count == 1)
     }
@@ -184,7 +184,7 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
             .toolCalls((id: "p", name: "apply_patch", arguments: #"{"patch":"--- a/A.txt\n+++ b/A.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"}"#)),
             .text("done"),
         ])
-        let agent = f.session(client, mode: .approveEachEdit)
+        let agent = f.session(client, mode: .manual)
         var titles: [String] = []
         _ = await drive(agent) { request in titles.append(request.command); return .approve }
         #expect(titles == ["Create New.txt", "Patch A.txt"])
@@ -195,7 +195,7 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
         let f = try Fixture()
         // Never read, so the edit would be refused: asking the user to approve it would be a pointless question.
         let client = MockLLMClient(turns: [edit(), .text("ok")])
-        let agent = f.session(client, mode: .approveEachEdit)
+        let agent = f.session(client, mode: .manual)
         let events = await drive(agent, decide: nil)
         #expect(!events.contains { if case .approvalRequested = $0 { true } else { false } })
         #expect(toolOutputs(await agent.items)["e"] == "Error: Read A.txt with read_file before changing it.")
@@ -204,19 +204,19 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
     @Test func theDefaultModeAppliesEditsWithoutAsking() async throws {
         let f = try Fixture()
         let client = MockLLMClient(turns: [read(), edit(), .text("done")])
-        let events = await drive(f.session(client, mode: .autoApplyEdits), decide: nil)
+        let events = await drive(f.session(client, mode: .acceptEdits), decide: nil)
         #expect(!events.contains { if case .approvalRequested = $0 { true } else { false } })
         #expect(f.disk("A.txt") == "one\n2\nthree\n")
     }
 
     @Test func commandsStillAskInEveryMode() async throws {
-        #expect(AutonomyMode.allCases.allSatisfy { $0.offers(.read) })
-        #expect(AutonomyMode.planOnly.offers(.command) == false && AutonomyMode.approveEachEdit.offers(.command))
+        #expect(PermissionMode.allCases.allSatisfy { $0.offers(.read) })
+        #expect(PermissionMode.plan.offers(.command) == false && PermissionMode.manual.offers(.command))
     }
 
     @Test func thePlanPromptTellsTheModelItCannotChangeAnything() {
-        #expect(SystemPrompt.make(projectRoot: "/p", mode: .planOnly).contains("Plan mode"))
-        #expect(SystemPrompt.make(projectRoot: "/p", mode: .approveEachEdit).contains("shown to the user as a diff"))
+        #expect(SystemPrompt.make(projectRoot: "/p", mode: .plan).contains("Plan mode"))
+        #expect(SystemPrompt.make(projectRoot: "/p", mode: .manual).contains("shown to the user as a diff"))
         #expect(!SystemPrompt.make(projectRoot: "/p").contains("Plan mode"))
         let withNotes = SystemPrompt.make(projectRoot: "/p", notes: "Use tabs.")
         #expect(withNotes.contains("Project instructions") && withNotes.hasSuffix("Use tabs."))
