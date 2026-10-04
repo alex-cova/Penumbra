@@ -262,12 +262,12 @@ final class IDEAgentSessionsTests: XCTestCase {
 
     func testCompactionNoticeSaysWhatWasDoneAndNothingWhenNothingWas() {
         var report = CompactionReport()
-        XCTAssertNil(IDEAgentController.compactionNotice(report))
+        XCTAssertNil(IDEAgentConversation.compactionNotice(report))
         report.stubbedOutputs = 3
-        XCTAssertEqual(IDEAgentController.compactionNotice(report), "Context was getting full: cleared 3 old tool outputs.")
+        XCTAssertEqual(IDEAgentConversation.compactionNotice(report), "Context was getting full: cleared 3 old tool outputs.")
         report.summarizedItems = 12
         report.summaryFailed = true
-        let text = IDEAgentController.compactionNotice(report)
+        let text = IDEAgentConversation.compactionNotice(report)
         XCTAssertTrue(text?.contains("cleared 3 old tool outputs and summarized 12 earlier messages") == true)
         XCTAssertTrue(text?.contains("could not be written") == true)
     }
