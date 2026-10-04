@@ -23,6 +23,8 @@ enum IDEAppearance {
         static let xl = 24.0
         static let xxl = 32.0
         static let sidebarWidth = 220.0
+        /// The agent panel docked beside the editor.
+        static let agentPanelWidth = 380.0
         static let sidebarMinWidth = 160.0
         static let sidebarMaxWidth = 420.0
         /// Floor for the titlebar row, which otherwise matches the system titlebar's height.

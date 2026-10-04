@@ -69,4 +69,6 @@ struct IDEAgentSavedTranscript: Codable {
     var cost: Double?
     /// The model's checklist, which the history alone may no longer show after compaction.
     var todos: [TodoItem]?
+    /// The name the user gave the chat's tab.
+    var customTitle: String?
 }

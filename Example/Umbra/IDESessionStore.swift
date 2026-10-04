@@ -185,6 +185,13 @@ struct IDEWindowSession: Codable {
     var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
     var terminalTabs: [IDETerminalTab]?
     var selectedTerminalTabID: UUID?
+    /// The agent panel, when it is docked beside the editor. A panel that was a page over the editor is
+    /// not reopened: it would hide the files being restored.
+    var isAgentPanelVisible: Bool?
+    var agentPanelWidth: Double?
+    /// The saved conversations the agent's chat tabs showed, and which one was selected.
+    var agentChats: [UUID]?
+    var agentSelectedChat: UUID?
 
     static let empty = IDEWindowSession()
 
@@ -200,7 +207,11 @@ struct IDEWindowSession: Codable {
         terminalTabs: [IDETerminalTab]? = nil,
         selectedTerminalTabID: UUID? = nil,
         sidebarTab: IDESidebarTab? = nil,
-        closedSidebarTabs: [IDESidebarTab]? = nil
+        closedSidebarTabs: [IDESidebarTab]? = nil,
+        isAgentPanelVisible: Bool? = nil,
+        agentPanelWidth: Double? = nil,
+        agentChats: [UUID]? = nil,
+        agentSelectedChat: UUID? = nil
     ) {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
@@ -214,6 +225,10 @@ struct IDEWindowSession: Codable {
         self.terminalHeight = terminalHeight
         self.terminalTabs = terminalTabs
         self.selectedTerminalTabID = selectedTerminalTabID
+        self.isAgentPanelVisible = isAgentPanelVisible
+        self.agentPanelWidth = agentPanelWidth
+        self.agentChats = agentChats
+        self.agentSelectedChat = agentSelectedChat
     }
 
     init(from decoder: Decoder) throws {
@@ -233,6 +248,10 @@ struct IDEWindowSession: Codable {
             ?? IDEAppearance.Spacing.terminalDefaultHeight
         terminalTabs = try container.decodeIfPresent([IDETerminalTab].self, forKey: .terminalTabs)
         selectedTerminalTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTerminalTabID)
+        isAgentPanelVisible = try container.decodeIfPresent(Bool.self, forKey: .isAgentPanelVisible)
+        agentPanelWidth = try container.decodeIfPresent(Double.self, forKey: .agentPanelWidth)
+        agentChats = try? container.decodeIfPresent([UUID].self, forKey: .agentChats)
+        agentSelectedChat = try? container.decodeIfPresent(UUID.self, forKey: .agentSelectedChat)
     }
 }
 

@@ -183,6 +183,7 @@ public final class IDEWorkspace {
             // Settings only has to make room when the chat is going to cover the same area.
             if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
         }
+        agent.onLayoutChanged = { [weak self] in self?.saveSession() }
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
         }
@@ -218,6 +219,8 @@ public final class IDEWorkspace {
     /// from anywhere (`saveSession()`) writes the width on screen, not the default.
     var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
+    /// The docked agent panel's width, kept with the window session.
+    var agentPanelWidth = IDEAppearance.Spacing.agentPanelWidth
     var chromeOpacity = 1.0
     private(set) var layoutEpoch: UInt64 = 0
     /// Bumped when the shell UI color scheme changes so chrome views pick up new tokens.
@@ -3685,7 +3688,11 @@ public final class IDEWorkspace {
             terminalTabs: terminalTabs.isEmpty ? nil : terminalTabs,
             selectedTerminalTabID: selectedTerminalTabID,
             sidebarTab: selectedSidebarTab,
-            closedSidebarTabs: closedSidebarTabs.sorted { $0.rawValue < $1.rawValue }
+            closedSidebarTabs: closedSidebarTabs.sorted { $0.rawValue < $1.rawValue },
+            isAgentPanelVisible: agent.isPanelVisible && !agent.settings.opensAsPage,
+            agentPanelWidth: agentPanelWidth,
+            agentChats: agent.restorableTabs.ids,
+            agentSelectedChat: agent.restorableTabs.selected
         )
     }
 
@@ -3754,6 +3761,14 @@ public final class IDEWorkspace {
             restoredRoot = recentProjects.first { FileManager.default.fileExists(atPath: $0.path) }
         }
         applyProjectRoot(restoredRoot)
+        agentPanelWidth = session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth
+        if hasOpenProject {
+            // Restoring is not a change worth saving: the rest of the window is not back yet.
+            agent.withoutLayoutNotifications {
+                agent.restoreTabs(session.agentChats ?? [], selected: session.agentSelectedChat)
+                agent.isPanelVisible = session.isAgentPanelVisible == true && !agent.settings.opensAsPage
+            }
+        }
 
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
@@ -4612,8 +4627,15 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleAgentPanel() }),
             EditorCommand(id: "agent.askAboutSelection", title: "Ask Agent About Selection", group: "Agent",
                           action: { [weak self] in self?.askAgentAboutActiveSelection() }),
-            EditorCommand(id: "agent.newConversation", title: "New Agent Conversation", group: "Agent",
-                          action: { [weak self] in self?.agent.newConversation(); self?.agent.showPanel() }),
+            EditorCommand(id: "agent.newConversation", title: "New Agent Chat", group: "Agent",
+                          shortcutDisplay: "⌥⌘T",
+                          action: { [weak self] in self?.newAgentChat() }),
+            EditorCommand(id: "agent.nextChat", title: "Next Agent Chat", group: "Agent",
+                          shortcutDisplay: "⌥⌘]",
+                          action: { [weak self] in self?.selectAgentChat(1) }),
+            EditorCommand(id: "agent.previousChat", title: "Previous Agent Chat", group: "Agent",
+                          shortcutDisplay: "⌥⌘[",
+                          action: { [weak self] in self?.selectAgentChat(-1) }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
                           action: { [weak self] in self?.revealActiveFileInExplorer() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",

@@ -32,10 +32,23 @@ final class IDEAgentConversation: Identifiable {
     private(set) var conversationID = UUID()
     /// What names this conversation's tab: stable for as long as the tab exists.
     nonisolated let id = UUID()
+    /// A name the user gave the tab; without one it is the first message.
+    var customTitle: String?
+    /// A reply finished while the tab was in the background.
+    var isUnread = false
+    /// A saved conversation this tab shows but has not read from disk yet (restored tabs load when selected).
+    private(set) var pendingLoadID: UUID?
+    private var summaryTitle: String?
+    /// The run is waiting for the user: an approval or a question is open.
+    private(set) var isAwaitingUser = false
 
     let settings: IDEAgentSettings
 
     @ObservationIgnored weak var host: (any IDEAgentHost)?
+    /// Shared by the window's chats; `nil` when there is only ever one.
+    @ObservationIgnored var fileClaims: IDEAgentFileClaims?
+    /// Called when a run ends, with whether it ended.
+    @ObservationIgnored var onRunFinished: (() -> Void)?
     /// Called after the conversation was saved, so the window's history list can refresh.
     @ObservationIgnored var onPersisted: (() -> Void)?
     /// Called when a message is about to be sent, before it is added to the transcript.
@@ -215,9 +228,44 @@ final class IDEAgentConversation: Identifiable {
         chatRules = PermissionRules()
         conversationID = UUID()
         createdAt = Date()
+        pendingLoadID = nil
+        summaryTitle = nil
+        customTitle = nil
+        isAwaitingUser = false
+        fileClaims?.release(tab: id)
     }
 
-    var isEmpty: Bool { entries.isEmpty }
+    var isEmpty: Bool { entries.isEmpty && pendingLoadID == nil }
+
+    private static let maxTitleLength = 36
+
+    /// What the tab says: the user's name for it, else the first message, else what was saved.
+    var title: String {
+        if let customTitle, !customTitle.isEmpty { return customTitle }
+        if let first = entries.first(where: { $0.kind == .user }) { return Self.title(fromMessage: first.text) }
+        return summaryTitle ?? "New Chat"
+    }
+
+    static func title(fromMessage text: String) -> String {
+        let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > maxTitleLength else { return trimmed.isEmpty ? "New Chat" : trimmed }
+        return String(trimmed.prefix(maxTitleLength - 1)) + "…"
+    }
+
+    /// Shows a saved conversation without reading it yet.
+    func showPending(id: UUID, title: String) {
+        conversationID = id
+        pendingLoadID = id
+        summaryTitle = title
+    }
+
+    /// A pending conversation that turned out to be gone becomes an empty chat.
+    func dropPending() {
+        pendingLoadID = nil
+        summaryTitle = nil
+        conversationID = UUID()
+    }
 
     // MARK: - Saving and loading
 
@@ -236,20 +284,30 @@ final class IDEAgentConversation: Identifiable {
         chatRules = PermissionRules()
         conversationID = snapshot.id
         createdAt = snapshot.createdAt
+        pendingLoadID = nil
+        summaryTitle = snapshot.title
+        customTitle = saved.customTitle
         status = nil
     }
 
-    private func persist(_ session: AgentSession) async {
-        guard let store, let root = host?.agentProjectRoot else { return }
-        let items = await session.items
-        guard !items.isEmpty else { return }
+    private func persist(items: [ConversationItem]) {
+        guard let store, let root = host?.agentProjectRoot, !items.isEmpty else { return }
         let snapshot = SessionSnapshot(
-            id: conversationID, projectRoot: root.path, title: SessionStore.title(from: items),
+            id: conversationID, projectRoot: root.path, title: customTitle ?? SessionStore.title(from: items),
             createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage,
-            host: IDEAgentSavedTranscript.encode(entries: entries, cost: cost, todos: todos))
+            host: IDEAgentSavedTranscript.encode(entries: entries, cost: cost, todos: todos, customTitle: customTitle))
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
         onPersisted?()
+    }
+
+    /// Names the tab. A saved conversation is saved again so the name outlives the window.
+    func rename(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(80))
+        Task {
+            if let session { persist(items: await session.items) } else if let restoredItems { persist(items: restoredItems) }
+        }
     }
 
     /// Cancels the run and drops the session. A session that outlives its window would keep the
@@ -270,6 +328,8 @@ final class IDEAgentConversation: Identifiable {
         session = nil
         sessionFingerprint = nil
         isRunning = false
+        isAwaitingUser = false
+        fileClaims?.release(tab: id)
         Task { await old?.stop() }
     }
 
@@ -321,6 +381,9 @@ final class IDEAgentConversation: Identifiable {
             contextWindow: settings.contextWindow,
             mode: mode,
             permissions: currentRules(root: root),
+            gate: fileClaims.map { claims in
+                IDEAgentClaimsGate(claims: claims, tab: id, title: { [weak self] in self?.title ?? "another chat" })
+            },
             secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns))
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history)
@@ -346,8 +409,11 @@ final class IDEAgentConversation: Identifiable {
         await appendChangeSummary(for: currentRun, session: session)
         currentRun = nil
         isRunning = false
+        isAwaitingUser = false
         status = nil
-        await persist(session)
+        fileClaims?.release(tab: id)
+        persist(items: await session.items)
+        onRunFinished?()
     }
 
     /// "N files changed" for a run that changed any, after its closing notice.
@@ -374,6 +440,7 @@ final class IDEAgentConversation: Identifiable {
             case .deny: "Denied"
             }
         }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil }
         Task { await session.resolveApproval(callID: callID, decision: decision) }
     }
 
@@ -384,6 +451,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil }
         Task { await session.answerQuestion(callID: callID, answer: text) }
     }
 
@@ -482,8 +550,10 @@ final class IDEAgentConversation: Identifiable {
             break
         case .approvalRequested(let request):
             if let index = toolIndex(request.callID) { entries[index].approval = request }
+            isAwaitingUser = true
         case .questionAsked(let question):
             if let index = toolIndex(question.callID) { entries[index].question = question }
+            isAwaitingUser = true
         case .todosUpdated(let items):
             todos = items
         case .unreadableToolCall:

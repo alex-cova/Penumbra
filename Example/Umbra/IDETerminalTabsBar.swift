@@ -94,52 +94,16 @@ private struct IDETerminalTabItem: View {
     let onSelect: () -> Void
     let onClose: () -> Void
 
-    @State private var isHovering = false
-
     private let trailingSlotSide: CGFloat = 14
 
     var body: some View {
-        HStack(spacing: 6) {
+        IDEChromeTabItem(title: tab.title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "terminal")
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 12)
-
-            Text(tab.title)
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
-
-            IDETerminalTabCloseButton(side: trailingSlotSide, onClose: onClose)
+        } trailing: {
+            IDEChromeTabCloseButton(side: trailingSlotSide, onClose: onClose)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if isSelected {
-            return IDEAppearance.ColorToken.tabActive
-        }
-        if isHovering {
-            return IDEAppearance.ColorToken.tabHover
-        }
-        return IDEAppearance.ColorToken.tabInactive
     }
 }
 
@@ -319,26 +283,5 @@ private struct IDESourceControlTabItem: View {
             return IDEAppearance.ColorToken.tabHover
         }
         return IDEAppearance.ColorToken.tabInactive
-    }
-}
-
-private struct IDETerminalTabCloseButton: View {
-    let side: CGFloat
-    let onClose: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: onClose) {
-            Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .frame(width: side, height: side)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .accessibilityLabel("Close Tab")
-        .accessibilityAddTraits(.isButton)
     }
 }

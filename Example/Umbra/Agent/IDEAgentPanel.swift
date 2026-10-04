@@ -17,6 +17,7 @@ struct IDEAgentPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
             if !agent.todos.isEmpty { IDEAgentTodoListView(items: agent.todos) }
             transcript
             Divider().overlay(IDEAppearance.ColorToken.border)
@@ -43,7 +44,7 @@ struct IDEAgentPanel: View {
                         + (agent.cost == nil ? "" : "\nCost is an estimate from the price table in Settings ▸ Agent."))
                     .padding(.trailing, IDEAppearance.Spacing.xs)
             }
-            IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Conversation", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
+            IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
                 agent.newConversation()
             }
             Menu {
@@ -57,7 +58,7 @@ struct IDEAgentPanel: View {
                         Text(conversation.title)
                         Text(conversation.updatedAt.formatted(.relative(presentation: .named)))
                     }
-                    .disabled(conversation.id == agent.conversationID || agent.isRunning)
+                    .disabled(conversation.id == agent.conversationID)
                 }
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
@@ -65,7 +66,7 @@ struct IDEAgentPanel: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Earlier Conversations")
+            .help("Earlier Chats")
             .onAppear { agent.restoreLatestIfNeeded() }
             IDEAgentIconButton(
                 systemImage: settings.opensAsPage ? "sidebar.trailing" : "arrow.up.left.and.arrow.down.right",

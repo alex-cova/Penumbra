@@ -92,14 +92,17 @@ final class IDEAgentSessionsTests: XCTestCase {
         controller.newConversation()
         XCTAssertTrue(controller.entries.isEmpty)
         XCTAssertNotEqual(controller.conversationID, firstID)
+        XCTAssertEqual(controller.conversations.count, 2, "a new chat is a new tab")
         await run(controller, "second")
         XCTAssertEqual(Set(controller.history.map(\.id)), [firstID, controller.conversationID])
 
         controller.resume(firstID)
-        XCTAssertEqual(controller.entries.first?.text, "first")
+        XCTAssertEqual(controller.entries.first?.text, "first", "the tab that has it is shown")
+        XCTAssertEqual(controller.conversations.count, 2)
         controller.deleteConversation(firstID)
-        XCTAssertEqual(controller.history.count, 1, "deleting the open one starts a fresh conversation")
-        XCTAssertTrue(controller.entries.isEmpty)
+        XCTAssertEqual(controller.history.count, 1)
+        XCTAssertEqual(controller.conversations.count, 1, "deleting a conversation closes the tab showing it")
+        XCTAssertEqual(controller.entries.first?.text, "second", "and the neighbor is shown")
     }
 
     func testClearHistoryRemovesEveryConversationOfTheProject() async {

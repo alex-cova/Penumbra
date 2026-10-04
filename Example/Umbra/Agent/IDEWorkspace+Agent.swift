@@ -14,6 +14,19 @@ extension IDEWorkspace: IDEAgentHost {
         }
     }
 
+    /// A new chat tab (an empty one is reused), with the caret in its message field.
+    func newAgentChat() {
+        guard hasOpenProject else { return }
+        agent.newConversation()
+        agent.showPanel()
+    }
+
+    func selectAgentChat(_ step: Int) {
+        guard hasOpenProject else { return }
+        agent.selectNeighbor(step)
+        agent.showPanel()
+    }
+
     /// Closes the chat page and puts the caret back in the editor.
     func hideAgentPage() {
         guard agent.isPanelVisible else { return }

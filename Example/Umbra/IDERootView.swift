@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 public struct IDERootView: View {
-    @State private var agentPanelWidth: Double = 380
+    @State private var agentPanelWidth: Double
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth: Double
     @State private var gradleSidebarWidth: Double
@@ -26,6 +26,7 @@ public struct IDERootView: View {
         let session = IDEWindowSessionStore.load()
         _sidebarWidth = State(initialValue: session.sidebarWidth)
         _gradleSidebarWidth = State(initialValue: session.gradleSidebarWidth)
+        _agentPanelWidth = State(initialValue: session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth)
     }
 
     private var isAgentPageShown: Bool { workspace.agent.coversEditor && workspace.hasOpenProject }
@@ -259,9 +260,12 @@ public struct IDERootView: View {
         .onChange(of: gradleSidebarWidth) { _, newWidth in
             workspace.gradleSidebarWidth = newWidth
         }
+        .onChange(of: agentPanelWidth) { _, newWidth in
+            workspace.agentPanelWidth = newWidth
+        }
         // Building and writing the session is far too heavy to do on every tick of a resize drag,
         // so it waits for the sizes to settle. `task(id:)` cancels the pending save on each change.
-        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: gradleSidebarWidth, terminal: workspace.terminalHeight)) {
+        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: gradleSidebarWidth, terminal: workspace.terminalHeight, agent: agentPanelWidth)) {
             // The first run is the launch state, not a change: record it and save nothing.
             guard didRecordPanelSizes else {
                 didRecordPanelSizes = true
@@ -335,6 +339,7 @@ private struct PanelSizes: Hashable {
     var sidebar: Double
     var gradle: Double
     var terminal: Double
+    var agent: Double
 }
 
 private struct IDETerminalResizeHandle: View {

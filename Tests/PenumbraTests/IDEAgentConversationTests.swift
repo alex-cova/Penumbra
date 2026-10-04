@@ -23,12 +23,12 @@ final class IDEAgentConversationTests: XCTestCase {
         XCTAssertTrue(key.contains(first.uuidString), "the key names the conversation, not a per-process hash")
     }
 
-    func testAResetKeepsTheTabButStartsANewSavedConversation() {
+    func testAClearKeepsTheTabButStartsANewSavedConversation() {
         let controller = IDEAgentController(settings: makeSettings(), clientFactory: { _ in MockLLMClient(turns: []) })
         let tab = controller.selected.id
         let saved = controller.selected.conversationID
 
-        controller.newConversation()
+        controller.clear()
 
         XCTAssertEqual(controller.selected.id, tab, "the panel keeps showing the same tab")
         XCTAssertNotEqual(controller.selected.conversationID, saved, "a new conversation is saved under a new id")
