@@ -8,6 +8,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
     case project
     case java
     case inspections
+    case agent
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
         case .project: "Project"
         case .java: "Java"
         case .inspections: "Inspections"
+        case .agent: "Agent"
         }
     }
 
@@ -30,6 +32,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
         case .project: "folder"
         case .java: "cup.and.saucer"
         case .inspections: "checklist"
+        case .agent: "sparkles"
         }
     }
 
@@ -46,6 +49,8 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
             ["explorer", "flatten packages"]
         case .inspections:
             ["warnings", "severity", "code analysis", "quick fix", "lint", "probable bugs", "redundant code", "unused", "suppress", "noinspection"] + JavaInspectionRule.allCases.map(\.title)
+        case .agent:
+            ["agent", "ai", "model", "openai", "ollama", "mlx", "api key", "provider", "plan", "approve edits", "autonomy", "context", "compaction", "history", "conversations", "secrets", "protected files", "environment", "steps", "iterations"]
         case .java:
             ["jdk", "gradle", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports"]
         }
@@ -61,7 +66,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
     var showsTypePreview: Bool {
         switch self {
         case .editor: true
-        case .appearance, .focus, .project, .java, .inspections: false
+        case .appearance, .focus, .project, .java, .inspections, .agent: false
         }
     }
 }

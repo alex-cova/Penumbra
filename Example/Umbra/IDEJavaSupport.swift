@@ -556,10 +556,28 @@ final class IDEJavaSupport {
     /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
     /// first when the project has not been trusted yet. `runsApplication` is for tasks that start the
     /// program (`run`, `bootRun`): a server runs until it is stopped, so the sync timeout doesn't apply.
-    func runGradleTasks(_ taskPaths: [String], extraArguments: [String] = [], runsApplication: Bool = false) {
-        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
-        guard !taskPaths.isEmpty else { return }
-        guard !gradleSync.isSyncing, !isRunningGradleTasks else { return }
+    ///
+    /// `completion` is called exactly once, whichever way the call ends, so a caller can await it
+    /// (the agent does): refused to start, not trusted, finished, timed out, cancelled or failed.
+    func runGradleTasks(
+        _ taskPaths: [String],
+        extraArguments: [String] = [],
+        runsApplication: Bool = false,
+        timeout customTimeout: Duration? = nil,
+        completion: (@MainActor (IDEGradleRunOutcome) -> Void)? = nil
+    ) {
+        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else {
+            completion?(.notStarted("This project is not a Gradle project."))
+            return
+        }
+        guard !taskPaths.isEmpty else {
+            completion?(.notStarted("No Gradle task was given."))
+            return
+        }
+        guard !gradleSync.isSyncing, !isRunningGradleTasks else {
+            completion?(.notStarted("Gradle is already busy with a sync or another task in this window. Try again when it finishes."))
+            return
+        }
 
         gradleRunTask?.cancel()
         let arguments = extraArguments.isEmpty ? ["--no-configuration-cache"] : extraArguments
@@ -586,15 +604,16 @@ final class IDEJavaSupport {
                 guard let requestTrust, await requestTrust(url) else {
                     gradleConsole.appendNote("Not run: the project is not trusted")
                     gradleConsole.markFinished()
+                    completion?(.notStarted("The project is not trusted, so its Gradle build scripts were not run."))
                     return
                 }
                 gradleTrustStore.setTrusted(true, for: url)
             }
 
             do {
-                let timeout = runsApplication
+                let timeout = customTimeout ?? (runsApplication
                     ? Self.applicationRunTimeout
-                    : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
+                    : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)))
                 let startedAt = Date()
                 let result = try await gradleRunner.run(
                     projectDirectory: url,
@@ -614,17 +633,23 @@ final class IDEJavaSupport {
                 gradleConsole.markFinished()
                 if result.exitCode == 0 { reindexGeneratedSources() }
                 onGradleTasksFinished?(taskPaths, url, result)
+                completion?(.finished(result))
             } catch is CancellationError {
                 gradleConsole.appendNote("Task run cancelled")
                 gradleConsole.markFinished()
+                completion?(.cancelled(partial: nil))
             } catch {
                 gradleConsole.appendNote(Self.summarizeTaskRun(error))
                 gradleConsole.markFinished()
                 switch error {
-                case GradleCommandError.timedOut(let partial), GradleCommandError.cancelled(let partial):
+                case GradleCommandError.timedOut(let partial):
                     onGradleTasksFinished?(taskPaths, url, partial)
+                    completion?(.timedOut(partial: partial))
+                case GradleCommandError.cancelled(let partial):
+                    onGradleTasksFinished?(taskPaths, url, partial)
+                    completion?(.cancelled(partial: partial))
                 default:
-                    break
+                    completion?(.failed(Self.summarizeTaskRun(error)))
                 }
                 if case GradleCommandError.untrusted = error {
                     gradleSync = .untrusted
@@ -1373,4 +1398,15 @@ private extension JavaIndexScheduler.Progress {
         }
         return false
     }
+}
+
+/// How a Gradle task run ended, for a caller that awaits it. Every path of
+/// `IDEJavaSupport.runGradleTasks` reports exactly one.
+enum IDEGradleRunOutcome: Sendable {
+    case finished(GradleCommandResult)
+    case timedOut(partial: GradleCommandResult)
+    case cancelled(partial: GradleCommandResult?)
+    /// Nothing ran: not a Gradle project, busy, or the user declined to trust it.
+    case notStarted(String)
+    case failed(String)
 }

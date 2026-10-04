@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q && grep -q \"def _normalize\" validators.py && [ \"$(grep -c \"split()\" validators.py)\" = \"1\" ]",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Extract repeated code into one helper without changing behavior",
+  "difficulty": "medium",
+  "prompt": "validators.py repeats the same three-line normalization (strip, collapse inner whitespace, lower-case) in three functions. Move it into one helper named _normalize(value) and use it in all three functions. Behavior must not change and the tests must keep passing. Do not change the tests."
+}

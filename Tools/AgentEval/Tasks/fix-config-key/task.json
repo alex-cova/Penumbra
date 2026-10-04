@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Fix a misspelled key in a JSON config file",
+  "difficulty": "easy",
+  "prompt": "test_client.py fails because the client uses the wrong timeout. Find out why and fix it. Do not change the tests."
+}

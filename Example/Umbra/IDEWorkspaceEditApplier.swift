@@ -23,6 +23,15 @@ protocol IDEWorkspaceEditHost: AnyObject {
     func moveFile(from: URL, to: URL) throws
     /// Moves a file to the Trash and closes any open editors on it.
     func deleteFile(at: URL) throws
+    /// Writes a new file (and its folders) and shows it in the Explorer like any other new file.
+    /// The applier has already checked it is inside the project and doesn't exist.
+    func createFile(at: URL, contents: String) throws
+}
+
+extension IDEWorkspaceEditHost {
+    func createFile(at: URL, contents: String) throws {
+        throw IDEWorkspaceEditApplier.Failure.invalidEdit("this host cannot create files")
+    }
 }
 
 /// Applies a ``WorkspaceEdit``: files with a live editor go through `TextEditApplicator`, the
@@ -32,6 +41,7 @@ protocol IDEWorkspaceEditHost: AnyObject {
 struct IDEWorkspaceEditApplier {
     enum Failure: LocalizedError {
         case outsideProject
+        case alreadyExists
         case notUTF8
         case noProject
         case invalidEdit(String)
@@ -41,6 +51,7 @@ struct IDEWorkspaceEditApplier {
         var errorDescription: String? {
             switch self {
             case .outsideProject: return "The file is outside the project folder."
+            case .alreadyExists: return "A file already exists at that path."
             case .notUTF8: return "The file isn't UTF-8 text."
             case .noProject: return "Open a project folder to edit files that aren't open."
             case .invalidEdit(let detail): return "The rename is inconsistent: \(detail)"
@@ -64,9 +75,30 @@ struct IDEWorkspaceEditApplier {
                     result.failures[url] = Failure.invalidEdit("conflicting file renames").localizedDescription
                 case .duplicateFileDeletion(let url):
                     result.failures[url] = Failure.invalidEdit("conflicting file deletions").localizedDescription
+                case .duplicateFileCreation(let url):
+                    result.failures[url] = Failure.invalidEdit("a file is created twice").localizedDescription
                 }
             }
             return result
+        }
+
+        for creation in edit.fileCreations {
+            do {
+                guard let root = host.editProjectRoot else { throw Failure.noProject }
+                let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+                // The file doesn't exist yet, so its folder is the nearest ancestor that does.
+                var ancestor = creation.url.deletingLastPathComponent()
+                while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.path != "/" {
+                    ancestor = ancestor.deletingLastPathComponent()
+                }
+                let resolved = ancestor.resolvingSymlinksInPath().standardizedFileURL.path
+                guard resolved == rootPath || resolved.hasPrefix(rootPath + "/") else { throw Failure.outsideProject }
+                guard !FileManager.default.fileExists(atPath: creation.url.path) else { throw Failure.alreadyExists }
+                try host.createFile(at: creation.url, contents: creation.contents)
+                result.createdFiles.append(creation.url)
+            } catch {
+                result.failures[creation.url] = error.localizedDescription
+            }
         }
 
         for url in edit.affectedURLs {

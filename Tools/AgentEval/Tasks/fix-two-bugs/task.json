@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Fix two independent bugs, each behind its own failing test",
+  "difficulty": "hard",
+  "prompt": "Two tests in tests/test_inventory.py fail, for two different reasons. Find and fix both bugs in inventory.py without breaking the tests that pass. Do not change the tests."
+}

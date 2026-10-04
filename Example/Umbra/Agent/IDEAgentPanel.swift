@@ -1,0 +1,885 @@
+import AgentKit
+import AgentKitMLX
+import LocalModelStore
+import SwiftUI
+
+/// The agent tool window: transcript, tool-call cards, composer and the settings popover.
+struct IDEAgentPanel: View {
+    let agent: IDEAgentController
+    @State private var isSettingsPresented = false
+    @State private var isModelsPresented = false
+    @FocusState private var isComposerFocused: Bool
+
+    private var settings: IDEAgentSettings { agent.settings }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if !agent.todos.isEmpty { IDEAgentTodoListView(items: agent.todos) }
+            transcript
+            Divider().overlay(IDEAppearance.ColorToken.border)
+            composer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(IDEAppearance.ColorToken.panel)
+        .sheet(isPresented: $isModelsPresented) { IDELocalModelsView(store: .shared, settings: settings) }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 2) {
+            IDEPanelTitle("Agent")
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if agent.usage.inputTokens + agent.usage.outputTokens > 0 {
+                Text("\(IDEAgentFormat.tokens(agent.usage.inputTokens + agent.usage.outputTokens)) tokens"
+                    + (agent.cost.map { " · ~" + IDEAgentPrices.format($0) } ?? ""))
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .help("Input \(agent.usage.inputTokens) (\(agent.usage.cachedInputTokens) cached), output \(agent.usage.outputTokens)"
+                        + (agent.cost == nil ? "" : "\nCost is an estimate from the price table in Settings ▸ Agent."))
+                    .padding(.trailing, IDEAppearance.Spacing.xs)
+            }
+            IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Conversation", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
+                agent.newConversation()
+            }
+            Menu {
+                if agent.history.isEmpty {
+                    Text("No earlier conversations")
+                }
+                ForEach(agent.history) { conversation in
+                    Button {
+                        agent.resume(conversation.id)
+                    } label: {
+                        Text(conversation.title)
+                        Text(conversation.updatedAt.formatted(.relative(presentation: .named)))
+                    }
+                    .disabled(conversation.id == agent.conversationID || agent.isRunning)
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Earlier Conversations")
+            .onAppear { agent.restoreLatestIfNeeded() }
+            IDEAgentIconButton(
+                systemImage: settings.opensAsPage ? "sidebar.trailing" : "arrow.up.left.and.arrow.down.right",
+                help: settings.opensAsPage ? "Dock Beside the Editor" : "Open as a Page Over the Editor"
+            ) {
+                settings.opensAsPage.toggle()
+            }
+            IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
+                isSettingsPresented.toggle()
+            }
+            .popover(isPresented: $isSettingsPresented, arrowEdge: .bottom) {
+                IDEAgentSettingsView(settings: settings, manageModels: {
+                    isSettingsPresented = false
+                    isModelsPresented = true
+                })
+            }
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+    }
+
+    // MARK: - Transcript
+
+    @ViewBuilder private var transcript: some View {
+        if agent.entries.isEmpty {
+            IDEAgentEmptyState(settings: settings, openSettings: { isSettingsPresented = true })
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                        ForEach(agent.entries) { entry in
+                            IDEAgentEntryView(entry: entry).id(entry.id)
+                        }
+                        Color.clear.frame(height: 1).id(Self.bottomID)
+                    }
+                    .padding(IDEAppearance.Spacing.md)
+                }
+                .onChange(of: agent.entries.count) { scrollToBottom(proxy) }
+                .onChange(of: agent.entries.last?.text) { scrollToBottom(proxy) }
+            }
+        }
+    }
+
+    private static let bottomID = "agent-bottom"
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo(Self.bottomID, anchor: .bottom)
+    }
+
+    // MARK: - Composer
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            if !settings.hasAcceptedDisclosure {
+                IDEAgentDisclosureCard(settings: settings)
+            }
+            if let status = agent.status {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    ProgressView().controlSize(.mini)
+                    Text(status)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            }
+            HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
+                @Bindable var agent = agent
+                TextField("Ask about this project…", text: $agent.draft, axis: .vertical)
+                    .focused($isComposerFocused)
+                    .onChange(of: agent.composerFocusRequest) { isComposerFocused = true }
+                    .textFieldStyle(.plain)
+                    .font(IDEAppearance.Typography.body)
+                    .lineLimit(1...8)
+                    .onSubmit { agent.send() }
+                    .padding(IDEAppearance.Spacing.sm)
+                    .background(IDEAppearance.ColorToken.card)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+
+                if agent.isRunning {
+                    IDEAgentIconButton(
+                        systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
+                } else {
+                    IDEAgentIconButton(
+                        systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
+                        isDisabled: !agent.canSend, action: agent.send)
+                }
+            }
+        }
+        .padding(IDEAppearance.Spacing.sm)
+    }
+}
+
+// MARK: - Entries
+
+private struct IDEAgentEntryView: View {
+    let entry: IDEAgentEntry
+
+    var body: some View {
+        switch entry.kind {
+        case .user:
+            Text(entry.text)
+                .font(IDEAppearance.Typography.body)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .textSelection(.enabled)
+                .padding(IDEAppearance.Spacing.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(IDEAppearance.ColorToken.card)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+        case .assistant:
+            // Plain text while it streams; Markdown once the message is complete.
+            Group {
+                if entry.isStreaming {
+                    Text(entry.text)
+                } else {
+                    Text(IDEAgentFormat.markdown(entry.text))
+                }
+            }
+            .font(IDEAppearance.Typography.body)
+            .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolCall(let name):
+            IDEAgentToolCard(name: name, entry: entry)
+        case .changes:
+            IDEAgentChangesCard(entry: entry)
+        case .notice:
+            Text(entry.text)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .error:
+            Label(entry.text, systemImage: "exclamationmark.triangle.fill")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// "N files changed" for a run: each file opens in the diff viewer, and the whole run reverts.
+private struct IDEAgentChangesCard: View {
+    let entry: IDEAgentEntry
+    @Environment(IDEWorkspace.self) private var workspace
+
+    private var agent: IDEAgentController { workspace.agent }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            HStack {
+                Label(
+                    "\(entry.fileChanges.count) \(entry.fileChanges.count == 1 ? "file" : "files") changed",
+                    systemImage: entry.isReverted ? "arrow.uturn.backward.circle" : "pencil.circle")
+                    .font(IDEAppearance.Typography.sectionHeader)
+                Spacer()
+                if entry.isReverted {
+                    Text("Reverted").font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
+                } else {
+                    Button("Revert Run") { agent.revert(entryID: entry.id) }
+                        .controlSize(.small)
+                        .disabled(agent.isRunning)
+                        .help("Restore every file this run changed; files you edited afterwards are left alone")
+                }
+            }
+            ForEach(entry.fileChanges) { change in
+                let isConflict = entry.conflicts.contains { $0.path == change.path }
+                Button {
+                    agent.showDiff(for: change)
+                } label: {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
+                        Image(systemName: change.isCreation ? "plus.circle" : "doc.text")
+                            .foregroundStyle(change.isCreation ? IDEAppearance.ColorToken.gitAdded : IDEAppearance.ColorToken.gitModified)
+                        Text(change.path)
+                            .font(IDEAppearance.Typography.monoSmall)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        if isConflict {
+                            Text("changed since")
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.error)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show what changed")
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(IDEAppearance.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.card)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+}
+
+/// A unified diff, additions and removals tinted, in a box of bounded height so a large edit
+/// doesn't push the buttons out of view.
+private struct IDEAgentDiffView: View {
+    let diff: String
+
+    private struct Line: Identifiable {
+        let id: Int
+        let text: String
+        let tint: Color?
+    }
+
+    private var lines: [Line] {
+        diff.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, raw in
+            let text = String(raw)
+            let tint: Color? = if text.hasPrefix("+++") || text.hasPrefix("---") { nil }
+            else if text.hasPrefix("+") { Color.green.opacity(0.18) }
+            else if text.hasPrefix("-") { Color.red.opacity(0.18) }
+            else { nil }
+            return Line(id: index, text: text, tint: tint)
+        }
+    }
+
+    var body: some View {
+        ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(lines) { line in
+                    Text(line.text.isEmpty ? " " : line.text)
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .foregroundStyle(line.text.hasPrefix("@@") ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(line.tint ?? .clear)
+                }
+            }
+            .textSelection(.enabled)
+            .padding(IDEAppearance.Spacing.xs)
+        }
+        .frame(maxHeight: 260)
+        .background(IDEAppearance.ColorToken.editor)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+    }
+}
+
+/// The question on a command's card: what will run, where, why, and anything worth a second look.
+private struct IDEAgentApprovalView: View {
+    let request: ApprovalRequest
+    let decide: (ApprovalDecision) -> Void
+
+    @State private var command: String
+    @State private var isEditing = false
+    @State private var isDenying = false
+    @State private var note = ""
+
+    init(request: ApprovalRequest, decide: @escaping (ApprovalDecision) -> Void) {
+        self.request = request
+        self.decide = decide
+        _command = State(initialValue: request.command)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            Label(request.title, systemImage: request.diff == nil ? "terminal" : "doc.badge.gearshape")
+                .font(IDEAppearance.Typography.sectionHeader)
+            if let reason = request.reason, !reason.isEmpty {
+                Text(reason)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let diff = request.diff {
+                Text(request.command)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .textSelection(.enabled)
+                IDEAgentDiffView(diff: diff)
+            } else if isEditing {
+                TextEditor(text: $command)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .frame(minHeight: 54, maxHeight: 140)
+                    .scrollContentBackground(.hidden)
+                    .padding(IDEAppearance.Spacing.xs)
+                    .background(IDEAppearance.ColorToken.editor)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            } else {
+                Text(request.command)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .textSelection(.enabled)
+                    .padding(IDEAppearance.Spacing.xs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(IDEAppearance.ColorToken.editor)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            }
+            if let directory = request.workingDirectory {
+                Text("in \(directory)")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            ForEach(request.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(request.notes, id: \.self) { text in
+                Label(text, systemImage: "info.circle")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if isDenying {
+                TextField("Tell the agent why or what to do instead (optional)", text: $note)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .onSubmit { decide(.deny(note: note)) }
+            }
+            HStack {
+                Button(request.diff == nil ? "Run" : "Apply") { decide(isEditing && command != request.command ? .approveEditing(command) : .approve) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if request.editableArgument != nil {
+                    Button(isEditing ? "Done Editing" : "Edit…") { isEditing.toggle() }
+                        .controlSize(.small)
+                }
+                Button(isDenying ? (request.diff == nil ? "Send Denial" : "Send Rejection") : (request.diff == nil ? "Deny…" : "Reject…")) {
+                    if isDenying { decide(.deny(note: note)) } else { isDenying = true }
+                }
+                .controlSize(.small)
+                Spacer()
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(IDEAppearance.Spacing.sm)
+        .background(IDEAppearance.ColorToken.card)
+    }
+}
+
+private struct IDEAgentToolCard: View {
+    let name: String
+    let entry: IDEAgentEntry
+    @Environment(IDEWorkspace.self) private var workspace
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .semibold))
+                        .frame(width: 10)
+                    Text(IDEAgentToolSummary.title(name: name, arguments: entry.text))
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if let outcome = entry.approvalOutcome ?? entry.questionOutcome {
+                        Text(outcome)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(outcome == "Denied" ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                    }
+                    statusIcon
+                }
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
+                .padding(.vertical, IDEAppearance.Spacing.xs + 1)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let request = entry.approval, entry.output == nil {
+                Divider().overlay(IDEAppearance.ColorToken.border)
+                IDEAgentApprovalView(request: request) { decision in
+                    workspace.agent.decide(callID: request.callID, decision)
+                }
+            }
+
+            if let question = entry.question, entry.output == nil {
+                Divider().overlay(IDEAppearance.ColorToken.border)
+                IDEAgentQuestionView(question: question) { answer in
+                    workspace.agent.answer(callID: question.callID, text: answer)
+                }
+            }
+
+            // A running command shows its output as it arrives; a finished one, in full on request.
+            if isExpanded || (!entry.liveOutput.isEmpty && entry.output == nil) {
+                Divider().overlay(IDEAppearance.ColorToken.border)
+                Text(entry.liveOutput.isEmpty ? (entry.output?.text ?? "Running…") : entry.liveOutput)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(entry.output?.isError == true ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.foreground)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(IDEAppearance.Spacing.sm)
+                    // A huge file read must not make the transcript heavy; the model got all of it.
+                    .frame(maxHeight: 240)
+            }
+        }
+        .background(IDEAppearance.ColorToken.card.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+
+    @ViewBuilder private var statusIcon: some View {
+        if let output = entry.output {
+            Image(systemName: output.isError ? "xmark.circle.fill" : "checkmark.circle")
+                .foregroundStyle(output.isError ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+        } else {
+            ProgressView().controlSize(.mini)
+        }
+    }
+}
+
+/// The model's `ask_user` question: suggested answers as buttons, a field for any other, and Skip.
+private struct IDEAgentQuestionView: View {
+    let question: UserQuestion
+    let answer: (String?) -> Void
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            Label(question.question, systemImage: "questionmark.bubble")
+                .font(IDEAppearance.Typography.body)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(question.options, id: \.self) { option in
+                Button(option) { answer(option) }
+                    .controlSize(.small)
+            }
+            HStack {
+                TextField("Your answer", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .onSubmit(send)
+                Button("Send", action: send)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Skip") { answer(nil) }
+                    .controlSize(.small)
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(IDEAppearance.Spacing.sm)
+        .background(IDEAppearance.ColorToken.card)
+    }
+
+    private func send() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        answer(trimmed)
+    }
+}
+
+/// The model's checklist, under the header: collapsed to its progress, expandable to the items.
+private struct IDEAgentTodoListView: View {
+    let items: [TodoItem]
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .semibold))
+                        .frame(width: 10)
+                    Text("Checklist")
+                    Text("\(items.filter { $0.status == .completed }.count)/\(items.count)")
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    Spacer(minLength: 0)
+                }
+                .font(IDEAppearance.Typography.sectionHeader)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isExpanded {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.xs) {
+                        Image(systemName: Self.symbol(item.status))
+                            .foregroundStyle(item.status == .inProgress ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                            .frame(width: 14)
+                        Text(item.content)
+                            .strikethrough(item.status == .completed)
+                            .foregroundStyle(item.status == .completed ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(IDEAppearance.Typography.caption)
+                }
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.card.opacity(0.6))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Checklist, \(items.filter { $0.status == .completed }.count) of \(items.count) done")
+    }
+
+    private static func symbol(_ status: TodoItem.Status) -> String {
+        switch status {
+        case .pending: "circle"
+        case .inProgress: "circle.dotted.circle"
+        case .completed: "checkmark.circle.fill"
+        }
+    }
+}
+
+// MARK: - Empty state, disclosure, settings
+
+private struct IDEAgentEmptyState: View {
+    let settings: IDEAgentSettings
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 22))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("Ask about this project")
+                .font(IDEAppearance.Typography.sectionHeader)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            Text("The agent reads and searches the project, edits files, runs builds and tests, and checks problems. Edits apply right away and Revert Run undoes a whole run; every command asks you first.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .multilineTextAlignment(.center)
+            if let hint = settings.setupHint {
+                Text(hint)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .multilineTextAlignment(.center)
+                Button("Agent Settings…", action: openSettings)
+                    .controlSize(.small)
+            }
+        }
+        .padding(IDEAppearance.Spacing.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct IDEAgentDisclosureCard: View {
+    let settings: IDEAgentSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            Label("Your code leaves this Mac", systemImage: "network")
+                .font(IDEAppearance.Typography.sectionHeader)
+            Text("When you send a message, file contents the agent reads and the editor's problems are sent to \(settings.endpointHost). Nothing is sent before then.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Allow Sending to \(settings.endpointHost)") { settings.acceptDisclosure() }
+                .controlSize(.small)
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(IDEAppearance.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.card)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+}
+
+/// The agent's settings, in the panel's popover (provider and behavior) and in Settings ▸ Agent
+/// (also steps, context, environment, protected files and history).
+struct IDEAgentSettingsView: View {
+    let settings: IDEAgentSettings
+    var agent: IDEAgentController?
+    var isFullPane = false
+    var width: CGFloat? = 380
+    let manageModels: () -> Void
+    @State private var keyDraft = ""
+    @State private var isConfirmingClear = false
+
+    var body: some View {
+        @Bindable var settings = settings
+        Form {
+            Picker("Provider", selection: $settings.provider) {
+                ForEach(IDEAgentProvider.allCases) { Text($0.title).tag($0) }
+            }
+            if settings.provider != .mlx {
+                TextField("Base URL", text: $settings.baseURL)
+                    .onSubmit { Task { await refreshModelsIfOllama() } }
+            }
+
+            switch settings.provider {
+            case .ollama: ollamaSection(settings)
+            case .mlx: mlxSection(settings)
+            case .openAIResponses, .chatCompletions: TextField("Model", text: $settings.model)
+            }
+
+            Picker("Reasoning", selection: $settings.reasoningEffort) {
+                ForEach(IDEAgentSettings.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
+            }
+            Text(settings.provider == .openAIResponses || settings.provider == .chatCompletions
+                ? "Use Off for models without reasoning; they reject the setting."
+                : "Thinking makes each step slower. It applies to models that support it.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+
+            Section("Behavior") {
+                Picker("Mode", selection: $settings.mode) {
+                    ForEach(AutonomyMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Text(settings.mode.detail)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            if isFullPane { advancedSections(settings) }
+
+            if settings.provider != .mlx {
+            Section(settings.requiresAPIKey ? "API key for \(settings.endpointHost)" : "API key (optional)") {
+                SecureField(settings.hasAPIKey ? "Saved in the Keychain" : "Paste a key", text: $keyDraft)
+                    .onSubmit(saveKey)
+                HStack {
+                    Button("Save Key", action: saveKey).disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Remove Key") { settings.removeAPIKey() }.disabled(!settings.hasAPIKey)
+                }
+                if let error = settings.keyError {
+                    Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+                }
+                if settings.isLocalEndpoint {
+                    Label("This server runs on this Mac: nothing is sent elsewhere.", systemImage: "lock.shield")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: width)
+        .onChange(of: settings.baseURL) { settings.refreshKeyState() }
+        .onChange(of: settings.provider) { Task { await refreshModelsIfOllama() } }
+        .task { await refreshModelsIfOllama() }
+    }
+
+    @ViewBuilder private func advancedSections(_ settings: IDEAgentSettings) -> some View {
+        @Bindable var settings = settings
+        Section("Limits") {
+            Picker("Steps per message", selection: $settings.iterationCap) {
+                ForEach(Set(IDEAgentSettings.iterationCapChoices + [settings.iterationCap]).sorted(), id: \.self) { Text("\($0)").tag($0) }
+            }
+            Text("After this many model turns the run pauses; sending “continue” goes on.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            if settings.provider == .openAIResponses || settings.provider == .chatCompletions {
+                Picker("Context window", selection: $settings.contextWindowOverride) {
+                    Text("Automatic").tag(0)
+                    ForEach([32_768, 65_536, 131_072, 200_000, 400_000, 1_000_000], id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
+                }
+                Text("Older tool output is cleared, then older messages summarized, as the conversation nears this size. Automatic knows common OpenAI models; for other models compaction starts when the server reports an overflow.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+        if settings.provider == .openAIResponses || settings.provider == .chatCompletions {
+            Section("Prices") {
+                TextEditor(text: $settings.priceTableText)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .frame(minHeight: 70, maxHeight: 130)
+                HStack {
+                    Button("Reset to Defaults") { settings.priceTableText = IDEAgentPrices.defaultText }
+                        .disabled(settings.priceTableText == IDEAgentPrices.defaultText)
+                }
+                Text("US dollars per million tokens: model prefix, input, cached input, output. The panel shows an estimate for models listed here; the built-in rows are not checked against current prices. Local models show no cost.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+        Section("Protected files") {
+            TextEditor(text: $settings.secretFilePatternsText)
+                .font(IDEAppearance.Typography.monoSmall)
+                .frame(minHeight: 60, maxHeight: 120)
+            Text("One glob per line, such as config/*.yaml or **/secrets/**. The agent will not read these or search inside them, in addition to .env files, private keys and keystores.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+        Section("Command environment") {
+            TextEditor(text: $settings.commandEnvironmentText)
+                .font(IDEAppearance.Typography.monoSmall)
+                .frame(minHeight: 60, maxHeight: 120)
+            Text("One KEY=VALUE per line, added to the environment of commands the agent runs. A PATH entry goes in front of the usual path. Commands never inherit the app's environment.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+        if let agent {
+            Section("History") {
+                Button("Clear History for This Project…", role: .destructive) { isConfirmingClear = true }
+                    .confirmationDialog("Delete every saved agent conversation for this project?", isPresented: $isConfirmingClear) {
+                        Button("Delete Conversations", role: .destructive) { agent.clearHistory() }
+                    }
+                Text("Conversations are saved on this Mac, in Application Support, so they can be resumed.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+    }
+
+    @ViewBuilder private func ollamaSection(_ settings: IDEAgentSettings) -> some View {
+        @Bindable var settings = settings
+        HStack {
+            Picker("Model", selection: $settings.model) {
+                if settings.model.isEmpty { Text("Choose…").tag("") }
+                ForEach(settings.ollamaModels) { model in
+                    Text(IDEAgentOllamaLabel.title(model)).tag(model.name).disabled(!model.supportsTools)
+                }
+                if !settings.model.isEmpty, settings.selectedOllamaModel == nil { Text(settings.model).tag(settings.model) }
+            }
+            if settings.isLoadingOllamaModels {
+                ProgressView().controlSize(.small)
+            } else {
+                Button { Task { await settings.refreshOllamaModels() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+                    .help("Reload the installed models")
+            }
+        }
+        if let error = settings.ollamaError {
+            Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+        } else if let info = settings.selectedOllamaModel, !info.supportsTools {
+            Text("This model does not support tool calling, so the agent cannot use it.")
+                .font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+        }
+        Picker("Context", selection: $settings.localContextLength) {
+            ForEach(IDEAgentSettings.contextChoices, id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
+        }
+        Text("A larger window needs more memory and slows the first reply. The model's own maximum is \(settings.selectedOllamaModel?.contextLength.map(IDEAgentFormat.tokens) ?? "unknown"); the request uses \(IDEAgentFormat.tokens(settings.effectiveContextLength)).")
+            .font(IDEAppearance.Typography.caption)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+    }
+
+    @ViewBuilder private func mlxSection(_ settings: IDEAgentSettings) -> some View {
+        @Bindable var settings = settings
+        let store = IDELocalModelsStore.shared
+        Picker("Model", selection: $settings.model) {
+            if settings.model.isEmpty { Text("Choose…").tag("") }
+            ForEach(store.installed) { model in
+                let info = store.info(for: model)
+                Text(LocalModelFormat.shortName(model.id) + (info.hasChatTemplate && !info.supportsTools ? " (no tool support)" : ""))
+                    .tag(model.id)
+                    .disabled(info.hasChatTemplate && !info.supportsTools)
+            }
+            if !settings.model.isEmpty, settings.selectedMLXModel == nil { Text(settings.model).tag(settings.model) }
+        }
+        Button("Manage On-Device Models…", action: manageModels)
+        Label("Runs on this Mac's GPU. Nothing is sent anywhere.", systemImage: "lock.shield")
+            .font(IDEAppearance.Typography.caption)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+        Picker("Context", selection: $settings.localContextLength) {
+            ForEach(IDEAgentSettings.contextChoices, id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
+        }
+        let status = MLXAvailability.currentStatus()
+        if status != .available {
+            Text(MLXAvailability.message(for: status)).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+        }
+    }
+
+    private func refreshModelsIfOllama() async {
+        if settings.provider == .ollama { await settings.refreshOllamaModels() }
+    }
+
+    private func saveKey() {
+        settings.saveAPIKey(keyDraft)
+        keyDraft = ""
+    }
+}
+
+enum IDEAgentOllamaLabel {
+    /// "qwen-fixed:latest · 27.3B Q4_K_M · 17 GB", or why it can't be used.
+    static func title(_ model: OllamaModel) -> String {
+        var parts = [model.name]
+        let detail = [model.parameterSize, model.quantization].compactMap { $0 }.joined(separator: " ")
+        if !detail.isEmpty { parts.append(detail) }
+        if model.sizeBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .file)) }
+        let label = parts.joined(separator: " · ")
+        return model.supportsTools ? label : label + " (no tool support)"
+    }
+}
+
+private struct IDEAgentIconButton: View {
+    let systemImage: String
+    let help: String
+    var tint: Color?
+    var isActive = false
+    var isDisabled = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                .foregroundStyle(tint ?? IDEAppearance.ColorToken.muted)
+                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
+                .background(isActive || isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1)
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+        .focusable(false)
+    }
+}
+
+enum IDEAgentFormat {
+    /// "1.2K" for 1_234; whole numbers below a thousand.
+    static func tokens(_ count: Int) -> String {
+        count < 1_000 ? "\(count)" : String(format: "%.1fK", Double(count) / 1_000)
+    }
+
+    /// Inline Markdown with line breaks kept; plain text if it doesn't parse.
+    static func markdown(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}

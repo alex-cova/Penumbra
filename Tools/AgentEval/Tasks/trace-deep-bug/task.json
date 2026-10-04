@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Find a bug that shows up two modules away from the failing test",
+  "difficulty": "medium",
+  "prompt": "tests/test_pipeline.py fails: the totals per product are wrong. Find the root cause and fix it in the code. Do not change the tests."
+}

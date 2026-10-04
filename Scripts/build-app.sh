@@ -26,6 +26,16 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
+# On-device models (MLX) need their compiled Metal kernels at run time. SwiftPM builds them into a
+# resource bundle next to the binary; Umbra looks for `Contents/Resources/mlx.metallib` and tells MLX
+# where it is, and without it the on-device provider reports "this build has no MLX shaders".
+MLX_METALLIB="$BIN_PATH/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+if [[ -f "$MLX_METALLIB" ]]; then
+  cp "$MLX_METALLIB" "$APP_DIR/Contents/Resources/mlx.metallib"
+else
+  echo "warning: $MLX_METALLIB not found; on-device models will be unavailable in this build" >&2
+fi
+
 cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"

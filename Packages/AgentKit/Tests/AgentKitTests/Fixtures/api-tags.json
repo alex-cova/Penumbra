@@ -1,0 +1,48 @@
+{
+ "models": [
+  {
+   "name": "qwen-fixed:latest",
+   "model": "qwen-fixed:latest",
+   "modified_at": "2026-08-26T10:49:30.651789635-06:00",
+   "size": 16810714843,
+   "digest": "ce118cbe9ed20bfe38df7f41f5bd08e057b659eb5d8b27132915197739cd68a9",
+   "details": {
+    "parent_model": "hf.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M",
+    "format": "gguf",
+    "family": "qwen35",
+    "families": [
+     "qwen35"
+    ],
+    "parameter_size": "27.3B",
+    "quantization_level": "Q4_K_M",
+    "context_length": 262144,
+    "embedding_length": 5120
+   },
+   "capabilities": [
+    "completion"
+   ]
+  },
+  {
+   "name": "hf.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M",
+   "model": "hf.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M",
+   "modified_at": "2026-08-26T10:18:07.336162639-06:00",
+   "size": 16810714935,
+   "digest": "b82960e113971ef5bfe1eb60a204f5d136477c9c7c08c2fa24838480462c10df",
+   "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen35",
+    "families": [
+     "qwen35"
+    ],
+    "parameter_size": "27.3B",
+    "quantization_level": "unknown",
+    "context_length": 262144,
+    "embedding_length": 5120
+   },
+   "capabilities": [
+    "completion"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q && ! grep -rn \"fmt_money\" . --include=\"*.py\" --include=\"*.md\"",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Rename a function in its definition and every use",
+  "difficulty": "medium",
+  "prompt": "Rename the function fmt_money to format_money everywhere in this project: its definition, every import and call, and any documentation. The tests already use the new name. Do not change the tests."
+}

@@ -196,6 +196,14 @@ private struct IDETitlebarGlobalActions: View {
                 action: toggleNotifications
             )
 
+            IDEToolbarIconButton(
+                systemName: "brain",
+                isActive: workspace.agent.isPanelVisible && workspace.hasOpenProject,
+                help: workspace.hasOpenProject ? "Agent" : "Open a folder to use the agent",
+                action: workspace.toggleAgentPanel
+            )
+            .disabled(!workspace.hasOpenProject)
+
             Button(action: workspace.showSettings) {
                 IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings || workspace.isSettingsVisible)
             }

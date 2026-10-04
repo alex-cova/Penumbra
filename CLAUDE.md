@@ -11,6 +11,8 @@ Penumbra is a Swift Package Manager library: a high-performance plain text/code 
 - **`JavaIntelligence`** — native Java indexing, completion, navigation, diagnostics, refactoring, with **no dependency on `Penumbra`**. Umbra wires it through `Example/Umbra/IDEJavaSupport.swift`. Details: `Sources/JavaIntelligence/CLAUDE.md`.
 - **HTTP client** — `.http` parsing and sending live in the Umbra target (`Example/Umbra/HTTP/`), not a library; JavaIntelligence does not depend on it.
 - **`GitIntelligence`** (`Packages/GitIntelligence`) — its own dependency-free Swift package wrapping the git CLI; Umbra wires it through `IDEGitStatus`.
+- **`AgentKit`** (`Packages/AgentKit`) — the coding-agent harness core (LLM clients, loop, tools), pure Swift with no dependency on `Penumbra`; Umbra will wire it. Plan: `docs/AGENT_HARNESS_PLAN.md`. Details: `Packages/AgentKit/CLAUDE.md`, `Packages/AgentKitMLX/CLAUDE.md`.
+- **`AgentKitMLX`** (`Packages/AgentKitMLX`) — on-device models for the agent: `LocalModelStore` (Hugging Face search, downloads, the installed-model catalog; Foundation only) and `AgentKitMLX` (MLX loading and the `LLMClient`). Only Umbra links it; `AgentKit` never does. Details: `Packages/AgentKitMLX/CLAUDE.md`.
 - **`Umbra`** (`Example/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**, built on `Penumbra`, `EditorIntelligence` and `JavaIntelligence`. Every window is one project with its own `IDEWorkspace` (`IDEWindowRegistry` finds them; native tabs are merged windows). Every split in the app is a `SplitPanes` (`Example/Umbra/SplitView/`) — don't add `HSplitView`/`NSSplitView` or hand-rolled drag handles. Details: `Example/Umbra/CLAUDE.md`.
 
 ## App Store safety
@@ -41,12 +43,13 @@ The feature catalog lives next to the code and loads when you work there:
 - `Sources/Penumbra/CLAUDE.md` — `TextView` engine (editing, selection, keymap, layout, highlighting, folding, search, navigation, command palette).
 - `Sources/EditorIntelligence/CLAUDE.md` — completion, hover, navigation, diagnostics, refactoring, LSP/AI, chrome.
 - `Sources/Penumbra/Workbench/CLAUDE.md` — panes, tabs, session restoration.
-- `Sources/JavaIntelligence/CLAUDE.md`, `Example/Umbra/CLAUDE.md`, `Packages/GitIntelligence/CLAUDE.md`.
+- `Sources/JavaIntelligence/CLAUDE.md`, `Example/Umbra/CLAUDE.md`, `Packages/GitIntelligence/CLAUDE.md`, `Packages/AgentKit/CLAUDE.md`, `Tools/AgentEval/CLAUDE.md`.
 
 ## Common commands
 
 ```bash
 swift run -c release PerfHarness enter-session synthetic --lines 20000  # Enter latency + line-handle growth
+swift run AgentEval run --provider ollama --model <name> --trials 3     # agent eval: pass rate, turns, tokens (Tools/AgentEval/CLAUDE.md)
 ```
 
 Performance work is measured in Release with `PerfHarness` (`Tools/PerfHarness`); `enter-session` opens a generated Java file with Umbra's defaults (folding, minimap, method separators, Metal) and reports Enter latency by caret position and `LineManager` handle counts (through `@_spi(Benchmarks) import Penumbra`). Plan, baselines and results: `docs/EDITOR_PERF_PLAN.md`. Debug-build timings are misleading for byte-scanning code.

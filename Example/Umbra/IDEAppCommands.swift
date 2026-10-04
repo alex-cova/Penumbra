@@ -488,6 +488,8 @@ private struct IDEViewCommands: View {
         }
         Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: { workspace?.toggleGradleSidebar() })
             .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        Button("Toggle Agent", systemImage: "sparkles", action: { workspace?.toggleAgentPanel() })
+            .disabled(!(workspace?.hasOpenProject ?? false))
         Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace?.revealActiveFileInExplorer() })
             .menuShortcut(.revealActiveFile, in: preset)
         Button("Markdown Preview", systemImage: "doc.richtext", action: { workspace?.toggleMarkdownPreview() })

@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Fix a moving average that drops a window",
+  "difficulty": "easy",
+  "prompt": "The tests in this project fail. Find the cause in the code and fix it without changing the tests."
+}

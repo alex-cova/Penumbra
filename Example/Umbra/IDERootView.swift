@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 public struct IDERootView: View {
+    @State private var agentPanelWidth: Double = 380
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth: Double
     @State private var gradleSidebarWidth: Double
@@ -26,6 +27,9 @@ public struct IDERootView: View {
         _sidebarWidth = State(initialValue: session.sidebarWidth)
         _gradleSidebarWidth = State(initialValue: session.gradleSidebarWidth)
     }
+
+    private var isAgentPageShown: Bool { workspace.agent.coversEditor && workspace.hasOpenProject }
+    private var isAgentDocked: Bool { workspace.agent.isPanelVisible && !workspace.agent.settings.opensAsPage && workspace.hasOpenProject }
 
     public var body: some View {
         let _ = workspace.layoutEpoch
@@ -86,11 +90,17 @@ public struct IDERootView: View {
                                 IDEWelcomeView()
                             }
                         }
-                        .allowsHitTesting(!workspace.isSettingsVisible)
-                        .accessibilityHidden(workspace.isSettingsVisible)
+                        .allowsHitTesting(!workspace.isSettingsVisible && !isAgentPageShown)
+                        .accessibilityHidden(workspace.isSettingsVisible || isAgentPageShown)
                         .overlay {
                             if workspace.isSettingsVisible {
                                 IDEPreferencesView(preferences: workspace.preferences)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(IDEAppearance.ColorToken.workbench)
+                                    .transition(.opacity)
+                            } else if isAgentPageShown {
+                                // The chat opens over the editor like Settings, which stays mounted underneath.
+                                IDEAgentPage(agent: workspace.agent, onClose: workspace.hideAgentPage)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .background(IDEAppearance.ColorToken.workbench)
                                     .transition(.opacity)
@@ -127,6 +137,16 @@ public struct IDERootView: View {
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
+                }
+
+                if isAgentDocked {
+                    IDESidebarResizeHandle(width: $agentPanelWidth, edge: .trailing)
+
+                    IDEAgentPanel(agent: workspace.agent)
+                        .frame(width: agentPanelWidth)
+                        .idePanel()
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
 
                 if workspace.showsGradleSidebar {

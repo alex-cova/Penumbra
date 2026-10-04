@@ -10,6 +10,8 @@ public struct WorkspaceEdit: Sendable {
     public var changes: [URL: [TextEdit]]
     /// File renames to perform after the text edits, in order. Edits address the old URLs.
     public var fileRenames: [(from: URL, to: URL)]
+    /// Files to create before anything else, with their contents. A host refuses one that exists.
+    public var fileCreations: [(url: URL, contents: String)]
     /// Files to delete after text edits and renames (e.g. safe delete of a top-level class).
     public var fileDeletions: [URL]
     /// Non-fatal notes for the user (name conflicts, skipped read-only files).
@@ -19,16 +21,18 @@ public struct WorkspaceEdit: Sendable {
         changes: [URL: [TextEdit]] = [:],
         fileRenames: [(from: URL, to: URL)] = [],
         fileDeletions: [URL] = [],
-        warnings: [String] = []
+        warnings: [String] = [],
+        fileCreations: [(url: URL, contents: String)] = []
     ) {
         self.changes = changes
         self.fileRenames = fileRenames
         self.fileDeletions = fileDeletions
+        self.fileCreations = fileCreations
         self.warnings = warnings
     }
 
     public var isEmpty: Bool {
-        fileRenames.isEmpty && fileDeletions.isEmpty && changes.values.allSatisfy(\.isEmpty)
+        fileRenames.isEmpty && fileDeletions.isEmpty && fileCreations.isEmpty && changes.values.allSatisfy(\.isEmpty)
     }
 
     public var editCount: Int {
@@ -60,6 +64,7 @@ public struct WorkspaceEdit: Sendable {
         case duplicateFileRenameSource(URL)
         case duplicateFileRenameTarget(URL)
         case duplicateFileDeletion(URL)
+        case duplicateFileCreation(URL)
     }
 
     /// Checks that no two edits in a file overlap, no range is inverted, and file renames don't
@@ -92,6 +97,10 @@ public struct WorkspaceEdit: Sendable {
             if !targets.insert(rename.to.standardizedFileURL).inserted {
                 issues.append(.duplicateFileRenameTarget(rename.to))
             }
+        }
+        var creations = Set<URL>()
+        for creation in fileCreations where !creations.insert(creation.url.standardizedFileURL).inserted {
+            issues.append(.duplicateFileCreation(creation.url))
         }
         var deletions = Set<URL>()
         for url in fileDeletions {
@@ -178,17 +187,20 @@ public struct WorkspaceEditApplyResult: Sendable {
     public var appliedFiles: [URL]
     public var renamedFiles: [(from: URL, to: URL)]
     public var deletedFiles: [URL]
+    public var createdFiles: [URL]
     public var failures: [URL: String]
 
     public init(
         appliedFiles: [URL] = [],
         renamedFiles: [(from: URL, to: URL)] = [],
         deletedFiles: [URL] = [],
-        failures: [URL: String] = [:]
+        failures: [URL: String] = [:],
+        createdFiles: [URL] = []
     ) {
         self.appliedFiles = appliedFiles
         self.renamedFiles = renamedFiles
         self.deletedFiles = deletedFiles
+        self.createdFiles = createdFiles
         self.failures = failures
     }
 

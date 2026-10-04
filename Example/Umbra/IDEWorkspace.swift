@@ -114,6 +114,8 @@ public final class IDEWorkspace {
     let problems = IDEProblemsStore()
     /// The bell's list and the toast that announces finished Gradle and git work.
     let notifications = IDENotificationCenter()
+    /// This window's coding agent. Reaches the window only through `IDEAgentHost`, weakly.
+    let agent = IDEAgentController(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil)
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// The Structure tool window's member tree for the Java type at the caret.
@@ -174,6 +176,11 @@ public final class IDEWorkspace {
 
     public init() {
         reference.workspace = self
+        agent.attach(host: self)
+        agent.onPanelRequested = { [weak self] in
+            // Settings only has to make room when the chat is going to cover the same area.
+            if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
+        }
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
         }
@@ -225,9 +232,15 @@ public final class IDEWorkspace {
     func showSettings() {
         guard !isSettingsVisible else { return }
         isBottomPanelExpanded = false
+        agent.dismissPage()
         isSettingsVisible = true
         // Otherwise keystrokes keep going to the editor hidden under the settings.
         window?.makeFirstResponder(nil)
+    }
+
+    /// The chat page takes the place Settings has; opening it closes Settings without moving focus.
+    func dismissSettingsForAgent() {
+        isSettingsVisible = false
     }
 
     func hideSettings() {
@@ -685,6 +698,7 @@ public final class IDEWorkspace {
         javaStructureRefreshTask?.cancel()
         javaStructureRefreshTask = nil
         blame.cancelAll()
+        agent.teardown()
         closeAllDiffSessions()
         notifications.dismissToast()
         projectAccess.end()
@@ -744,6 +758,7 @@ public final class IDEWorkspace {
             languageIdentifier: nil
         )
         isSettingsVisible = false
+        agent.dismissPage()
         workbench.openDocument(document)
         showsWelcome = false
         // Layout is unchanged — only the active pane's selected document is. Reloading every
@@ -1056,6 +1071,24 @@ public final class IDEWorkspace {
             recheckJavaAfterSave(of: destination)
         } catch {
             presentError(error)
+        }
+    }
+
+    /// Saves an open, unsaved text buffer to its own file, wherever it is shown, for the agent: its
+    /// edits must be on disk before a command or build runs. Skips the import-optimizing on-save
+    /// step, since that would rewrite what the agent wrote. Returns whether the file was saved.
+    func saveBuffer(at url: URL) async -> Bool {
+        guard let (_, document) = paneAndDocument(matching: url), document.isDirty, document.contentKind == .text,
+              case .live(let textView) = await editTarget(for: url)
+        else { return false }
+        do {
+            _ = try await document.save(from: textView, to: url)
+            gitStatus.refresh()
+            refreshPresentation()
+            recheckJavaAfterSave(of: url)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -3067,6 +3100,17 @@ public final class IDEWorkspace {
         return text.isEmpty ? nil : text
     }
 
+    /// Open text files with edits not saved yet, by absolute path: what the agent reads and searches
+    /// in place of the stale copy on disk. Clean files are left out, since disk already matches.
+    func agentUnsavedBuffers() -> [String: String] {
+        var buffers: [String: String] = [:]
+        for document in workbench.allDocuments() where document.isDirty && document.contentKind == .text {
+            guard let path = document.url?.standardizedFileURL.path else { continue }
+            buffers[path] = sourceText(for: document)
+        }
+        return buffers
+    }
+
     func openFindInFilesHit(_ hit: ProjectSearchResult) {
         let length = max(0, hit.range.end.utf16Offset - hit.range.start.utf16Offset)
         let range = NSRange(location: hit.range.start.utf16Offset, length: length)
@@ -3514,6 +3558,7 @@ public final class IDEWorkspace {
 
     func selectTab(_ id: UUID, in paneID: UUID? = nil) {
         isSettingsVisible = false
+        agent.dismissPage()
         let pane: EditorPane
         if let paneID, let found = workbench.layout.findPane(id: paneID) {
             pane = found
@@ -3758,11 +3803,13 @@ public final class IDEWorkspace {
             guard kind == .references else { return }
             self?.usages.finishSearch()
         }
-        host.textView.contextMenuItemsProvider = { [weak self] context in
-            guard let self else { return [] }
+        // `host` must be weak: it owns the text view that stores this closure.
+        host.textView.contextMenuItemsProvider = { [weak self, weak host] context in
+            guard let self, let host else { return [] }
             let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
+                + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
         }
         host.wireMarkdownPreview()
         host.wireHTTPActions(sendRequest: { [weak self] in
@@ -3900,6 +3947,7 @@ public final class IDEWorkspace {
             }
             recordRecentFile(url)
             isSettingsVisible = false
+            agent.dismissPage()
             showsWelcome = false
             rebuildLayoutHosts()
             activatePane(workbench.activePaneID)
@@ -4558,6 +4606,12 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleStructureSidebar() }),
             EditorCommand(id: "app.toggleGradleSidebar", title: "Toggle Gradle Sidebar", group: "View",
                           action: { [weak self] in self?.toggleGradleSidebar() }),
+            EditorCommand(id: "app.toggleAgent", title: "Toggle Agent", group: "View",
+                          action: { [weak self] in self?.toggleAgentPanel() }),
+            EditorCommand(id: "agent.askAboutSelection", title: "Ask Agent About Selection", group: "Agent",
+                          action: { [weak self] in self?.askAgentAboutActiveSelection() }),
+            EditorCommand(id: "agent.newConversation", title: "New Agent Conversation", group: "Agent",
+                          action: { [weak self] in self?.agent.newConversation(); self?.agent.showPanel() }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
                           action: { [weak self] in self?.revealActiveFileInExplorer() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
@@ -5598,6 +5652,7 @@ public final class IDEWorkspace {
     func presentDiffDocument(_ document: WorkbenchDocument) {
         workbench.openDocument(document)
         isSettingsVisible = false
+        agent.dismissPage()
         showsWelcome = false
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
@@ -5812,6 +5867,17 @@ extension IDEWorkspace: IDEWorkspaceEditHost {
         guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
         let result = try operations.move(url, to: newURL)
         finishFileRename(from: url, to: result)
+    }
+
+    func createFile(at url: URL, contents: String) throws {
+        guard fileOperations != nil else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: url, options: .atomic)
+        // Like any new file: the Explorer lists it and git status picks it up.
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
     }
 
     func deleteFile(at url: URL) throws {

@@ -20,6 +20,25 @@ when distributing combined works.
 Textual, ConcurrencyExtras, and SwiftUIMath are also vendored under `Vendor/` for future use;
 only BeautifulMermaid and ElkSwift are wired into the build today.
 
+## Umbra on-device models (MLX)
+
+Umbra's agent can run models downloaded from Hugging Face on the Mac's own GPU. This is compiled into
+Umbra only (`Packages/AgentKitMLX`), never into `Penumbra` or `EditorIntelligence`. The model search and
+download code is ported from the author's Hextech app.
+
+| Component | Source | License |
+| --- | --- | --- |
+| MLX Swift | [ml-explore/mlx-swift](https://github.com/ml-explore/mlx-swift) (includes MLX and MLX-C) | MIT |
+| MLX Swift LM | [ml-explore/mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) | MIT |
+| swift-transformers | [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | Apache License 2.0 |
+| swift-jinja | [huggingface/swift-jinja](https://github.com/huggingface/swift-jinja) | Apache License 2.0 |
+| yyjson | [ibireme/yyjson](https://github.com/ibireme/yyjson) | MIT |
+| swift-crypto, swift-asn1 | [apple/swift-crypto](https://github.com/apple/swift-crypto), [apple/swift-asn1](https://github.com/apple/swift-asn1) | Apache License 2.0 |
+| EventSource | [mattt/EventSource](https://github.com/mattt/EventSource) | MIT |
+
+Model weights are not part of Umbra. Each model has its own license, shown on its Hugging Face page,
+and is the user's to accept; gated models need the user's own access token.
+
 ## Umbra split views
 
 Umbra's split panes (`Example/Umbra/SplitView/`) are vendored from

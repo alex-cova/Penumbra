@@ -115,6 +115,22 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         schedule(url: url, text: document.text, textHash: hash, delay: .zero)
     }
 
+    /// The compiler's result for exactly this text, awaited: the cached one when the text is
+    /// unchanged, else a compile that starts now (superseding any queued one) and finishes before
+    /// this returns. `nil` when nothing could be checked -- not a Java file, no configured project
+    /// or JDK, `javac` failed to run -- which is different from "no problems". Unlike
+    /// ``diagnostics(for:)`` it never answers with the previous text's result.
+    public func freshDiagnostics(for document: Document) async -> [Diagnostic]? {
+        guard let url = compilableURL(for: document) else { return nil }
+        let hash = document.text.hashValue
+        if let cached = cache[url], cached.textHash == hash { return cached.diagnostics }
+        if let existing = pending[url] {
+            existing.task.cancel()
+            pending[url] = nil
+        }
+        return await compile(url: url, text: document.text, textHash: hash, generation: generation)
+    }
+
     private func compilableURL(for document: Document) -> URL? {
         guard configuration != nil,
               document.languageIdentifier == "java",
@@ -144,10 +160,11 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         pending[url] = PendingCompile(textHash: textHash, task: task)
     }
 
-    private func compile(url: URL, text: String, textHash: Int, generation compileGeneration: Int) async {
+    @discardableResult
+    private func compile(url: URL, text: String, textHash: Int, generation compileGeneration: Int) async -> [Diagnostic]? {
         await acquireSlot()
         defer { releaseSlot() }
-        guard !Task.isCancelled, compileGeneration == generation, let configuration else { return }
+        guard !Task.isCancelled, compileGeneration == generation, let configuration else { return nil }
 
         let workDirectory = configuration.workDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: workDirectory) }
@@ -162,12 +179,13 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
             result = []
         }
 
-        guard !Task.isCancelled, compileGeneration == generation else { return }
+        guard !Task.isCancelled, compileGeneration == generation else { return nil }
         // Done with this text, whatever came out: a failed run must not block a retry.
         if pending[url]?.textHash == textHash { pending[url] = nil }
-        guard let result else { return }
+        guard let result else { return nil }
         cache[url] = CachedResult(textHash: textHash, diagnostics: result)
         resultHandler?(url, result)
+        return result
     }
 
     /// `nil` when the run produced nothing usable (couldn't launch, timed out, killed): the last

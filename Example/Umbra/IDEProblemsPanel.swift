@@ -19,7 +19,7 @@ struct IDEProblemsPanel: View {
                             fileHeader(file)
                             if !collapsedFiles.contains(file.url) {
                                 ForEach(file.rows) { row in
-                                    IDEProblemRowView(row: row) { workspace.openProblem(row) }
+                                    IDEProblemRowView(row: row, onOpen: { workspace.openProblem(row) }, onFix: { workspace.fixProblemWithAgent(row) })
                                 }
                             }
                         }
@@ -83,6 +83,7 @@ struct IDEProblemsPanel: View {
 private struct IDEProblemRowView: View {
     let row: ProblemRow
     let onOpen: () -> Void
+    let onFix: () -> Void
 
     @State private var isHovering = false
 
@@ -115,6 +116,22 @@ private struct IDEProblemRowView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .overlay(alignment: .trailing) {
+            if isHovering {
+                Button(action: onFix) {
+                    Label("Fix with Agent", systemImage: "sparkles")
+                        .font(IDEAppearance.Typography.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(IDEAppearance.ColorToken.card, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .padding(.trailing, IDEAppearance.Spacing.md)
+                .help("Ask the agent to fix this problem")
+            }
+        }
+        .contextMenu { Button("Fix with Agent", systemImage: "sparkles", action: onFix) }
         .accessibilityLabel("\(IDEProblemStyle.label(for: row.diagnostic.severity)) at line \(row.diagnostic.range.start.line + 1): \(row.diagnostic.message)")
     }
 }

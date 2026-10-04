@@ -148,22 +148,26 @@ public struct IDEPreferencesView: View {
             IDEPreferencesJavaPane(preferences: preferences)
         case .inspections:
             IDEPreferencesInspectionsPane(preferences: preferences)
+        case .agent:
+            IDEPreferencesAgentPane(agent: workspace.agent)
         }
     }
 }
 
 /// The strip above the settings, in the place of the editor's tab bar: one tab that closes them.
-private struct IDESettingsTabHeader: View {
+struct IDESettingsTabHeader: View {
+    var title = "Settings"
+    var systemImage = "gearshape"
     let onClose: () -> Void
     @State private var isHoveringClose = false
 
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                Image(systemName: "gearshape")
+                Image(systemName: systemImage)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .accessibilityHidden(true)
-                Text("Settings")
+                Text(title)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -178,8 +182,8 @@ private struct IDESettingsTabHeader: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { isHoveringClose = $0 }
-                .help("Close Settings")
-                .accessibilityLabel("Close Settings")
+                .help("Close \(title)")
+                .accessibilityLabel("Close \(title)")
             }
             .font(IDEAppearance.Typography.tabLabel)
             .padding(.horizontal, IDEAppearance.Spacing.md)
@@ -234,4 +238,17 @@ private struct IDEPreferencesSidebarRow: View {
         .environment(IDEWorkspace())
         .frame(width: 880, height: 600)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
+}
+
+/// Settings ▸ Agent: the same form as the agent panel's popover, plus the limits and protected files.
+private struct IDEPreferencesAgentPane: View {
+    let agent: IDEAgentController
+    @State private var isModelsPresented = false
+
+    var body: some View {
+        IDEAgentSettingsView(
+            settings: agent.settings, agent: agent, isFullPane: true, width: nil,
+            manageModels: { isModelsPresented = true })
+            .sheet(isPresented: $isModelsPresented) { IDELocalModelsView(store: .shared, settings: agent.settings) }
+    }
 }

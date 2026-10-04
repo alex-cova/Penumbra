@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q && grep -q -- \"--top\" README.md",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Add a command line option and document it",
+  "difficulty": "medium",
+  "prompt": "Add a --top N option to wordfreq.py that prints only the N most frequent words (ties broken alphabetically), keeping the existing output format and options. Document the option in README.md. The new tests in tests/test_wordfreq.py describe the expected behavior; do not change the tests."
+}

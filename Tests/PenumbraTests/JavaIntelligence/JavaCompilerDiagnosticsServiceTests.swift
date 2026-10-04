@@ -108,6 +108,62 @@ final class JavaCompilerDiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual((text as NSString).substring(with: range), "Strin")
     }
 
+    // MARK: - freshDiagnostics
+
+    func testFreshDiagnosticsWaitsForTheCompileOfExactlyThisText() async throws {
+        let launcher = FakeJavacLauncher { path, text, _ in
+            text.contains("Strin ")
+                ? .init(exitCode: 1, stdout: "", stderr: "\(path):1: error: cannot find symbol\nStrin x;\n^\n1 error\n")
+                : .init(exitCode: 0, stdout: "", stderr: "")
+        }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher, idleDelay: .seconds(60))
+        await service.configure(try makeConfiguration())
+
+        let brokenResult = await service.freshDiagnostics(for: makeDocument(text: "Strin x;"))
+        let broken = try XCTUnwrap(brokenResult)
+        XCTAssertEqual(broken.count, 1)
+        XCTAssertEqual(broken[0].severity, .error)
+        // Same file, new text: the answer is for the new text, never the previous one.
+        let fixedResult = await service.freshDiagnostics(for: makeDocument(text: "String x;"))
+        let fixed = try XCTUnwrap(fixedResult)
+        XCTAssertTrue(fixed.isEmpty)
+    }
+
+    func testFreshDiagnosticsServesTheCacheForUnchangedTextAndSupersedesAQueuedCompile() async throws {
+        let launcher = FakeJavacLauncher { _, _, _ in .init(exitCode: 0, stdout: "", stderr: "") }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher, idleDelay: .seconds(60))
+        await service.configure(try makeConfiguration())
+        let document = makeDocument(text: "class Foo {}")
+
+        // The editor queued an idle compile of this text; the agent doesn't wait a minute for it.
+        _ = await service.diagnostics(for: document)
+        let first = await service.freshDiagnostics(for: document)
+        XCTAssertNotNil(first)
+        let afterFirst = await launcher.launchCount
+        XCTAssertEqual(afterFirst, 1)
+        let second = await service.freshDiagnostics(for: document)
+        XCTAssertNotNil(second)
+        let afterSecond = await launcher.launchCount
+        XCTAssertEqual(afterSecond, 1, "unchanged text is answered from the cache")
+    }
+
+    func testFreshDiagnosticsIsNilWhenNothingCouldBeChecked() async throws {
+        let launcher = FakeJavacLauncher { _, _, _ in .init(exitCode: 0, stdout: "", stderr: "") }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher)
+        let unconfigured = await service.freshDiagnostics(for: makeDocument(text: "class Foo {}"))
+        XCTAssertNil(unconfigured, "no project or JDK is not the same as no problems")
+
+        await service.configure(try makeConfiguration())
+        let notJava = await service.freshDiagnostics(for: makeDocument(text: "x", url: URL(fileURLWithPath: "/proj/a.txt"), language: "plaintext"))
+        XCTAssertNil(notJava)
+
+        let crashing = FakeJavacLauncher { _, _, _ in .init(exitCode: 139, stdout: "", stderr: "") }
+        let failing = JavaCompilerDiagnosticsService(launcher: crashing)
+        await failing.configure(try makeConfiguration())
+        let failed = await failing.freshDiagnostics(for: makeDocument(text: "class Foo {}"))
+        XCTAssertNil(failed, "a compiler that did not run must not read as a clean file")
+    }
+
     func testCompilesTheEditorsTextNotTheFileOnDisk() async throws {
         let launcher = FakeJavacLauncher { _, bufferText, _ in
             XCTAssertEqual(bufferText, "class Unsaved {}")

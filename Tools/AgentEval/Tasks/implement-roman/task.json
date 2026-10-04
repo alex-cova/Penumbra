@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Implement Roman numeral conversion from a spec and tests",
+  "difficulty": "easy",
+  "prompt": "Implement to_roman and from_roman in roman.py as described in its docstrings, so that the tests in tests/test_roman.py pass. Do not change the tests."
+}

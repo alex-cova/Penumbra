@@ -1,0 +1,46 @@
+{
+ "qwen-fixed:latest": {
+  "capabilities": [
+   "tools",
+   "thinking",
+   "completion"
+  ],
+  "details": {
+   "parent_model": "hf.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M",
+   "format": "gguf",
+   "family": "qwen35",
+   "families": [
+    "qwen35"
+   ],
+   "parameter_size": "27.3B",
+   "quantization_level": "Q4_K_M"
+  },
+  "model_info": {
+   "general.architecture": "qwen35",
+   "general.parameter_count": 27320697856,
+   "qwen35.context_length": 262144
+  }
+ },
+ "hf.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M": {
+  "capabilities": [
+   "tools",
+   "thinking",
+   "completion"
+  ],
+  "details": {
+   "parent_model": "",
+   "format": "gguf",
+   "family": "qwen35",
+   "families": [
+    "qwen35"
+   ],
+   "parameter_size": "27.3B",
+   "quantization_level": "Q4_K_M"
+  },
+  "model_info": {
+   "general.architecture": "qwen35",
+   "general.parameter_count": 27320697856,
+   "qwen35.context_length": 262144
+  }
+ }
+}
