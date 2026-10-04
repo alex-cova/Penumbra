@@ -12,6 +12,14 @@ public struct IDEPreferencesView: View {
         self.preferences = preferences
     }
 
+    /// Opens the pane something asked for (`/permissions`), once.
+    private func takeRequestedDomain() {
+        guard let requested = workspace.requestedSettingsDomain else { return }
+        workspace.requestedSettingsDomain = nil
+        query = ""
+        selectedDomain = requested
+    }
+
     private var visibleDomains: [IDEPreferencesDomain] {
         IDEPreferencesDomain.allCases.filter { $0.matches(query) }
     }
@@ -25,6 +33,8 @@ public struct IDEPreferencesView: View {
         let _ = preferences.uiColorSchemeID
         VStack(spacing: 0) {
             IDESettingsTabHeader(onClose: workspace.hideSettings)
+                .onAppear { takeRequestedDomain() }
+                .onChange(of: workspace.requestedSettingsDomain) { takeRequestedDomain() }
             searchField
             HStack(spacing: 0) {
                 sidebar

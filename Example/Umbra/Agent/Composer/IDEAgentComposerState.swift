@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 import Observation
 
@@ -9,6 +10,18 @@ struct IDEAgentSuggestion: Identifiable, Equatable {
     var detail: String?
     /// Replaces the trigger's range in the text when the row is accepted.
     var insertion: String
+    /// What accepting does instead of inserting: the composer is emptied and this is carried out.
+    var payload: IDEAgentSuggestionPayload?
+}
+
+/// An action a suggestion row stands for.
+enum IDEAgentSuggestionPayload: Equatable {
+    /// Show this saved conversation.
+    case resume(UUID)
+    /// Switch to this mode.
+    case mode(PermissionMode)
+    /// Run this command now, with no arguments.
+    case run(String)
 }
 
 /// What the suggestion list shows and which row is highlighted. Owned by the panel; the composer

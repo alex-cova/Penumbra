@@ -16,6 +16,14 @@ final class IDEAgentController {
     private(set) var selectedID: UUID
     /// Which chat is changing which file, shared by all of them.
     @ObservationIgnored let fileClaims = IDEAgentFileClaims()
+    /// The commands and skills on offer.
+    @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
+    /// Bumped by `/model`, so the panel opens its settings popover.
+    var settingsRequest = 0
+    /// Opens Settings ▸ Agent (`/permissions`); set by the window.
+    @ObservationIgnored var onOpenSettings: (() -> Void)?
+    /// Saves an exported transcript: a save panel, unless a test replaces it.
+    @ObservationIgnored var exportHandler: @MainActor (_ name: String, _ markdown: String) -> Void = IDEAgentController.presentSavePanel
 
     var isPanelVisible = false {
         didSet { if oldValue != isPanelVisible { layoutChanged() } }
@@ -49,6 +57,8 @@ final class IDEAgentController {
         settings: IDEAgentSettings = .shared,
         store: SessionStore? = nil,
         appPermissionsFile: URL? = nil,
+        commandsHome: URL? = nil,
+        commandsAppSupport: URL? = nil,
         clientFactory: @escaping @MainActor (IDEAgentSettings) throws -> any LLMClient = { try $0.makeClient() }
     ) {
         self.settings = settings
@@ -59,12 +69,16 @@ final class IDEAgentController {
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
         selectedID = first.id
+        commandCatalog = IDEAgentCommandCatalog(
+            root: { [weak self] in self?.host?.agentProjectRoot }, loadsUserFolders: { settings.loadsUserSkills },
+            home: commandsHome, appSupport: commandsAppSupport)
         wire(first)
     }
 
     private func wire(_ conversation: IDEAgentConversation) {
         conversation.host = host
         conversation.fileClaims = fileClaims
+        conversation.commandCatalog = commandCatalog
         conversation.onPersisted = { [weak self] in
             self?.refreshHistory()
             self?.layoutChanged()
@@ -120,9 +134,6 @@ final class IDEAgentController {
         IDEAgentPermissionsModel(projectRoot: { [weak self] in self?.host?.agentProjectRoot }, appFile: appPermissionsFile)
     }
 
-    /// What the list above the composer offers for `/` and `@`. Nothing yet: the built-in commands
-    /// and the project's files are added with them.
-    func suggestions(for trigger: IDEAgentComposerTrigger) -> [IDEAgentSuggestion] { [] }
 
     // MARK: - History
 

@@ -7,12 +7,26 @@ enum IDEAgentComposerTrigger: Equatable {
     /// `/` at the start of the message with the caret still inside that first word. `range` covers
     /// the slash and the query, which is what accepting a suggestion replaces.
     case slash(query: String, range: NSRange)
+    /// The caret is after a command's name, on its first line: `/resume par|`. `range` covers what was
+    /// typed after the name and its space.
+    case slashArgument(command: String, query: String, range: NSRange)
     /// `@` at the start or after whitespace, with the caret still inside that word.
     case mention(query: String, range: NSRange)
+
+    /// The range accepting a suggestion replaces.
+    var range: NSRange? {
+        switch self {
+        case .none: nil
+        case .slash(_, let range), .slashArgument(_, _, let range), .mention(_, let range): range
+        }
+    }
 
     static func detect(in text: String, caret: Int) -> IDEAgentComposerTrigger {
         let string = text as NSString
         guard caret >= 0, caret <= string.length else { return .none }
+
+        // A command's arguments: the message starts with `/name`, and the caret is past it on that line.
+        if let argument = detectArgument(in: string, caret: caret) { return argument }
 
         // The word the caret is in: back to the previous whitespace.
         var start = caret
@@ -27,6 +41,24 @@ enum IDEAgentComposerTrigger: Equatable {
             return start == 0 ? .slash(query: query, range: range) : .none
         }
         return .mention(query: query, range: range)
+    }
+
+    private static func detectArgument(in string: NSString, caret: Int) -> IDEAgentComposerTrigger? {
+        guard string.length > 1, string.character(at: 0) == slashUnit else { return nil }
+        var nameEnd = 1
+        while nameEnd < string.length, IDEAgentSlashInvocation.isNameCharacter(Character(Unicode.Scalar(string.character(at: nameEnd)) ?? " ")) {
+            nameEnd += 1
+        }
+        // The name must end at a space or tab, and the caret must be past that space.
+        guard nameEnd > 1, nameEnd < string.length, caret > nameEnd,
+              [UInt16(32), 9].contains(string.character(at: nameEnd))
+        else { return nil }
+        let queryStart = nameEnd + 1
+        let query = string.substring(with: NSRange(location: queryStart, length: caret - queryStart))
+        guard !query.contains("\n") else { return nil }
+        return .slashArgument(
+            command: string.substring(with: NSRange(location: 1, length: nameEnd - 1)), query: query,
+            range: NSRange(location: queryStart, length: caret - queryStart))
     }
 
     /// The text after accepting `replacement` for the trigger's range, with the caret after it.

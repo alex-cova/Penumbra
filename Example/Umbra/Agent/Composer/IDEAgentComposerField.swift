@@ -16,6 +16,8 @@ struct IDEAgentComposerField: NSViewRepresentable {
     let onSend: () -> Void
     let onStop: () -> Void
     var onCycleMode: (() -> Void)?
+    /// A row with an action was accepted; the field has already been emptied.
+    var onAccept: ((IDEAgentSuggestionPayload) -> Void)?
     /// `-1` for the previous prompt, `1` for the next; the text to show, or `nil` for none.
     var onHistory: ((Int) -> String?)?
     /// Text to insert for files dropped on the field (project-relative mentions).
@@ -177,11 +179,13 @@ struct IDEAgentComposerField: NSViewRepresentable {
         }
 
         func acceptSuggestion() -> Bool {
-            guard let textView, let suggestion = parent.state.selected else { return false }
-            let range: NSRange
-            switch parent.state.trigger {
-            case .slash(_, let triggerRange), .mention(_, let triggerRange): range = triggerRange
-            case .none: return false
+            guard let textView, let suggestion = parent.state.selected, let range = parent.state.trigger.range else { return false }
+            if let payload = suggestion.payload, let handler = parent.onAccept {
+                textView.string = ""
+                parent.text = ""
+                textDidChangeProgrammatically()
+                handler(payload)
+                return true
             }
             // Through the text view, so the insertion is one undo step and the delegate hears about it.
             textView.insertText(suggestion.insertion, replacementRange: range)

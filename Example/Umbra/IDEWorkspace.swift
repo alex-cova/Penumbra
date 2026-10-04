@@ -117,7 +117,9 @@ public final class IDEWorkspace {
     /// This window's coding agent. Reaches the window only through `IDEAgentHost`, weakly.
     let agent = IDEAgentController(
         store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil,
-        appPermissionsFile: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile() : nil)
+        appPermissionsFile: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile() : nil,
+        commandsHome: IDEWorkspace.isSessionPersistenceEnabled ? FileManager.default.homeDirectoryForCurrentUser : nil,
+        commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent() : nil)
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// The Structure tool window's member tree for the Java type at the caret.
@@ -184,6 +186,10 @@ public final class IDEWorkspace {
             if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
         }
         agent.onLayoutChanged = { [weak self] in self?.saveSession() }
+        agent.onOpenSettings = { [weak self] in
+            self?.requestedSettingsDomain = .agent
+            self?.showSettings()
+        }
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
         }
@@ -233,6 +239,8 @@ public final class IDEWorkspace {
     /// Settings open over the editor area, like a tab, instead of in their own window. The editor
     /// underneath stays mounted so its carets and scroll positions survive.
     private(set) var isSettingsVisible = false
+    /// A pane Settings should open on, set by whatever sent the user there; the settings view takes it.
+    var requestedSettingsDomain: IDEPreferencesDomain?
 
     func showSettings() {
         guard !isSettingsVisible else { return }

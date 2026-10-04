@@ -12,10 +12,12 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
     var callID: String?
     var outputText: String?
     var outputIsError: Bool?
+    var detail: String?
 
     init?(_ entry: IDEAgentEntry) {
         text = entry.text
         callID = entry.callID
+        detail = entry.detail
         switch entry.kind {
         case .user: kind = .user
         case .assistant: kind = .assistant
@@ -34,7 +36,12 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
 
     var entry: IDEAgentEntry {
         switch kind {
-        case .user: IDEAgentEntry(kind: .user, text: text)
+        case .user:
+            {
+                var entry = IDEAgentEntry(kind: .user, text: text)
+                entry.detail = detail
+                return entry
+            }()
         case .assistant: IDEAgentEntry(kind: .assistant, text: text)
         case .notice: IDEAgentEntry(kind: .notice, text: text)
         case .error: IDEAgentEntry(kind: .error, text: text)

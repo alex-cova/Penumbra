@@ -103,6 +103,8 @@ final class IDEAgentSettings {
     var commandEnvironmentText: String { didSet { defaults.set(commandEnvironmentText, forKey: Keys.commandEnvironment) } }
     /// Whether the chat opens over the editor like Settings (true) or docked beside it (false, the default).
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
+    /// Whether commands and skills in `~/.claude` are offered, besides the project's and Umbra's own.
+    var loadsUserSkills: Bool { didSet { defaults.set(loadsUserSkills, forKey: Keys.userSkills) } }
     /// What the agent may do without asking in a new chat (see `PermissionMode`); each chat can change its own.
     var mode: PermissionMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
     /// Model turns per message before the run pauses; `AgentConfiguration.maxIterations` when unset.
@@ -135,6 +137,7 @@ final class IDEAgentSettings {
         static let commandEnvironment = "umbra.agent.commandEnvironment"
         static let mode = "umbra.agent.mode"
         static let page = "umbra.agent.opensAsPage"
+        static let userSkills = "umbra.agent.loadsUserSkills"
         static let prices = "umbra.agent.priceTable"
         static let secretPatterns = "umbra.agent.secretFilePatterns"
         static let iterationCap = "umbra.agent.iterationCap"
@@ -169,6 +172,7 @@ final class IDEAgentSettings {
         localContextLength = storedContext > 0 ? storedContext : Self.defaultContext
         commandEnvironmentText = defaults.string(forKey: Keys.commandEnvironment) ?? ""
         opensAsPage = defaults.bool(forKey: Keys.page)
+        loadsUserSkills = defaults.object(forKey: Keys.userSkills) as? Bool ?? true
         priceTableText = defaults.string(forKey: Keys.prices) ?? IDEAgentPrices.defaultText
         secretFilePatternsText = defaults.string(forKey: Keys.secretPatterns) ?? ""
         mode = defaults.string(forKey: Keys.mode).flatMap(PermissionMode.init(persisted:)) ?? .acceptEdits

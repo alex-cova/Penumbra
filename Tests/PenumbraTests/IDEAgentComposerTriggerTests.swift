@@ -13,12 +13,26 @@ final class IDEAgentComposerTriggerTests: XCTestCase {
         XCTAssertEqual(detect("/res"), .slash(query: "res", range: NSRange(location: 0, length: 4)))
     }
 
-    func testTheCommandListClosesOnceTheCommandHasArguments() {
-        XCTAssertEqual(detect("/resume foo"), .none)
-        XCTAssertEqual(detect("/resume "), .none)
+    func testOnceTheCommandHasASpaceTheArgumentListTakesOver() {
+        XCTAssertEqual(detect("/resume "), .slashArgument(command: "resume", query: "", range: NSRange(location: 8, length: 0)))
+        XCTAssertEqual(detect("/resume par"), .slashArgument(command: "resume", query: "par", range: NSRange(location: 8, length: 3)))
+        XCTAssertEqual(
+            detect("/resume parser fix"), .slashArgument(command: "resume", query: "parser fix", range: NSRange(location: 8, length: 10)),
+            "arguments may have several words")
         XCTAssertEqual(
             detect("/resume foo", caret: 4), .slash(query: "res", range: NSRange(location: 0, length: 4)),
-            "a caret back inside the command name reopens it")
+            "a caret back inside the command name reopens the command list")
+        XCTAssertEqual(
+            detect("/mode\tauto"), .slashArgument(command: "mode", query: "auto", range: NSRange(location: 6, length: 4)), "a tab separates too")
+    }
+
+    func testTheArgumentListNeedsAWellFormedCommandOnTheFirstLine() {
+        XCTAssertEqual(detect("/usr/bin is missing"), .none, "a path is not a command")
+        XCTAssertEqual(detect("/resume line one\nline two"), .none, "past the first line")
+        XCTAssertEqual(detect("/ resume"), .none)
+        XCTAssertEqual(detect("/"), .slash(query: "", range: NSRange(location: 0, length: 1)))
+        XCTAssertEqual(IDEAgentComposerTrigger.slashArgument(command: "a", query: "b", range: NSRange(location: 3, length: 1)).range, NSRange(location: 3, length: 1))
+        XCTAssertNil(IDEAgentComposerTrigger.none.range)
     }
 
     func testASlashLaterInTheMessageIsNotACommand() {

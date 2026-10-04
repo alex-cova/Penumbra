@@ -26,6 +26,7 @@ struct IDEAgentPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.panel)
         .sheet(isPresented: $isModelsPresented) { IDELocalModelsView(store: .shared, settings: settings) }
+        .onChange(of: agent.settingsRequest) { isSettingsPresented = true }
     }
 
     // MARK: - Header
@@ -143,9 +144,10 @@ struct IDEAgentPanel: View {
                     text: $agent.draft, height: $composerHeight, placeholder: "Ask about this project…",
                     state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
                     suggestions: { agent.suggestions(for: $0) },
-                    onSend: { if agent.canSend { agent.send() } },
+                    onSend: { agent.submit() },
                     onStop: { if agent.isRunning { agent.stop() } },
                     onCycleMode: { agent.selected.cycleMode() },
+                    onAccept: { agent.perform($0) },
                     onDropFiles: { urls in
                         urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
                             .joined(separator: " ") + " "
@@ -162,7 +164,7 @@ struct IDEAgentPanel: View {
                 } else {
                     IDEAgentIconButton(
                         systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
-                        isDisabled: !agent.canSend, action: agent.send)
+                        isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: agent.submit)
                 }
             }
             HStack {
@@ -220,14 +222,27 @@ private struct IDEAgentEntryView: View {
     var body: some View {
         switch entry.kind {
         case .user:
-            Text(entry.text)
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .textSelection(.enabled)
-                .padding(IDEAppearance.Spacing.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(IDEAppearance.ColorToken.card)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                Text(IDEAgentFormat.userMessage(entry.text))
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .textSelection(.enabled)
+                if let detail = entry.detail {
+                    DisclosureGroup("What the agent was sent") {
+                        Text(detail)
+                            .font(IDEAppearance.Typography.monoSmall)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+            }
+            .padding(IDEAppearance.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(IDEAppearance.ColorToken.card)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
         case .assistant:
             // Plain text while it streams; Markdown once the message is complete.
             Group {
@@ -768,6 +783,10 @@ struct IDEAgentSettingsView: View {
                 Text("Each chat can change its own with the chip under the message field, or ⇧Tab.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Toggle("Offer commands and skills from ~/.claude", isOn: $settings.loadsUserSkills)
+                Text("Commands (/name) and skills are also read from .umbra and .claude in the project, and from Umbra's own folder. Turn this off if a sandboxed build cannot read your home folder.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             if isFullPane { advancedSections(settings) }
 
@@ -976,6 +995,22 @@ enum IDEAgentFormat {
     /// "1.2K" for 1_234; whole numbers below a thousand.
     static func tokens(_ count: Int) -> String {
         count < 1_000 ? "\(count)" : String(format: "%.1fK", Double(count) / 1_000)
+    }
+
+    /// A user's message as typed, with a leading `/command` in bold and `@file` mentions marked.
+    static func userMessage(_ text: String) -> AttributedString {
+        var result = AttributedString(text)
+        func mark(_ range: NSRange) {
+            guard let swiftRange = Range(range, in: text), let lower = AttributedString.Index(swiftRange.lowerBound, within: result),
+                  let upper = AttributedString.Index(swiftRange.upperBound, within: result)
+            else { return }
+            result[lower..<upper].foregroundColor = IDEAppearance.ColorToken.accent
+        }
+        if text.hasPrefix("/"), let end = text.firstIndex(where: \.isWhitespace) ?? Optional(text.endIndex) {
+            mark(NSRange(text.startIndex..<end, in: text))
+        }
+        for token in IDEAgentMentionToken.scan(text) { mark(token.range) }
+        return result
     }
 
     /// Inline Markdown with line breaks kept; plain text if it doesn't parse.

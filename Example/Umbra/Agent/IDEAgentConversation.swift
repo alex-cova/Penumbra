@@ -47,6 +47,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored weak var host: (any IDEAgentHost)?
     /// Shared by the window's chats; `nil` when there is only ever one.
     @ObservationIgnored var fileClaims: IDEAgentFileClaims?
+    /// The window's commands and skills; the model is offered the skills.
+    @ObservationIgnored var commandCatalog: IDEAgentCommandCatalog?
     /// Called when a run ends, with whether it ended.
     @ObservationIgnored var onRunFinished: (() -> Void)?
     /// Called after the conversation was saved, so the window's history list can refresh.
@@ -68,6 +70,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private let appPermissionsFile: URL?
     /// Rules that last as long as this chat ("Allow for this chat").
     @ObservationIgnored private var chatRules = PermissionRules()
+    /// Rules for the run in progress: the tools a command or skill said it may use.
+    @ObservationIgnored private var runRules = PermissionRules()
     /// Items of a conversation loaded from disk, handed to the session that is created for it.
     @ObservationIgnored private var restoredItems: [ConversationItem]?
     @ObservationIgnored private var restoredTodos: [TodoItem] = []
@@ -98,18 +102,29 @@ final class IDEAgentConversation: Identifiable {
     // MARK: - Sending
 
     func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, let host else { return }
+        guard canSend else { return }
+        submit(text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Sends a message. The transcript shows `text`; the model gets `modelText` when it differs (a
+    /// command's expansion, a skill's instructions), which the row offers as `detail`. `allowedTools` are
+    /// permission rules for this run only. The draft is cleared once the message is on its way.
+    func submit(text: String, modelText: String? = nil, allowedTools: [String] = []) {
+        guard !isRunning, settings.hasAcceptedDisclosure, !text.isEmpty, let host else { return }
         guard let root = host.agentProjectRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
             return
         }
 
         willSend?()
+        commandCatalog?.invalidate()
         draft = ""
-        append(.init(kind: .user, text: text))
+        var entry = IDEAgentEntry(kind: .user, text: text)
+        if let modelText, modelText != text { entry.detail = modelText }
+        append(entry)
+        runRules = PermissionRules(allow: allowedTools.compactMap(PermissionRule.init(parsing:)))
         // The model sees the editor's state with the message; the transcript shows only the message.
-        let framed = host.agentEditorContext() + "\n\n" + text
+        let framed = host.agentEditorContext() + "\n\n" + (modelText ?? text)
         isRunning = true
         status = "Thinking…"
         runTask = Task { [weak self] in
@@ -148,7 +163,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// The files' rules and this chat's own, merged.
     private func currentRules(root: URL?) -> PermissionRules {
-        IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules)
+        IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules).merged(with: runRules)
     }
 
     /// Changes the mode for the calls that follow, mid-run if need be.
@@ -329,6 +344,7 @@ final class IDEAgentConversation: Identifiable {
         sessionFingerprint = nil
         isRunning = false
         isAwaitingUser = false
+        runRules = PermissionRules()
         fileClaims?.release(tab: id)
         Task { await old?.stop() }
     }
@@ -336,7 +352,9 @@ final class IDEAgentConversation: Identifiable {
     // MARK: - Session
 
     private func currentSession(root: URL, host: any IDEAgentHost) async throws -> AgentSession {
-        let fingerprint = settings.fingerprint + "|" + root.path + "|" + String(host.agentIsGradleProject)
+        // Skills are in the tool list, so a changed one starts a new session (which keeps the conversation).
+        let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
+        let fingerprint = settings.fingerprint + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = try clientFactory(settings)
@@ -368,6 +386,7 @@ final class IDEAgentConversation: Identifiable {
                 IDEFindUsagesTool(navigator: navigator, lineText: lineText),
             ]
         }
+        if let skills { tools.append(SkillTool(catalog: skills)) }
         tools.append(IDEDiagnosticsTool(
             problems: { await box.read(default: []) { $0.agentProblems() } },
             fresh: { await box.freshProblems(relativePaths: $0) }))
@@ -411,6 +430,7 @@ final class IDEAgentConversation: Identifiable {
         isRunning = false
         isAwaitingUser = false
         status = nil
+        runRules = PermissionRules()
         fileClaims?.release(tab: id)
         persist(items: await session.items)
         onRunFinished?()

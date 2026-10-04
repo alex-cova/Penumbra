@@ -36,6 +36,8 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var approvalOutcome: String?
     /// A command's output as it arrives; the card shows it in full while the model gets a summary.
     var liveOutput = ""
+    /// For a user message that was a command or skill: the text the model was sent. The row shows what was typed.
+    var detail: String?
 
     var isFinishedToolCall: Bool { output != nil }
 }
