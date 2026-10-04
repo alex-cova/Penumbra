@@ -771,9 +771,14 @@ public final class IDEWorkspace {
     }
 
     public func newFile() {
+        openUntitled(displayName: "Untitled", text: "")
+    }
+
+    /// An unsaved editor tab with this text.
+    func openUntitled(displayName: String, text: String) {
         let document = WorkbenchDocument(
-            displayName: "Untitled",
-            text: "",
+            displayName: displayName,
+            text: text,
             language: nil,
             languageIdentifier: nil
         )

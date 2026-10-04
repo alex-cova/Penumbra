@@ -1,14 +1,7 @@
 import AgentKit
 
 extension PermissionMode {
-    var title: String {
-        switch self {
-        case .manual: "Manual"
-        case .acceptEdits: "Accept Edits"
-        case .auto: "Auto"
-        case .plan: "Plan"
-        }
-    }
+    var title: String { displayName }
 
     var detail: String {
         switch self {

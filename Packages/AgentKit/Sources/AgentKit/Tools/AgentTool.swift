@@ -103,6 +103,8 @@ public struct ToolContext: Sendable {
     public let progress: (@Sendable (String) -> Void)?
     /// Puts a question to the user and waits. `nil` result: they stopped the run or dismissed it.
     public let ask: (@Sendable (UserQuestion) async -> String?)?
+    /// Shows the user a plan and waits for their decision. Stop answers with `.revise("")`.
+    public let proposePlan: (@Sendable (String) async -> PlanDecision)?
     /// The session's checklist, for `todo`.
     public let todos: TodoList?
 
@@ -113,7 +115,8 @@ public struct ToolContext: Sendable {
         checkpoint: CheckpointScope? = nil,
         progress: (@Sendable (String) -> Void)? = nil,
         ask: (@Sendable (UserQuestion) async -> String?)? = nil,
-        todos: TodoList? = nil
+        todos: TodoList? = nil,
+        proposePlan: (@Sendable (String) async -> PlanDecision)? = nil
     ) {
         self.workspace = workspace
         self.ledger = ledger
@@ -122,6 +125,7 @@ public struct ToolContext: Sendable {
         self.progress = progress
         self.ask = ask
         self.todos = todos
+        self.proposePlan = proposePlan
     }
 }
 
@@ -161,6 +165,8 @@ public protocol AgentTool: Sendable {
     var isExemptFromRepeatGuard: Bool { get }
     /// What a permission rule can match against: the command, or the files the call would change.
     func permissionSubject(for arguments: ToolArguments) -> PermissionSubject
+    /// Whether the model is told about the tool in this mode. By default what the mode offers by risk.
+    func isOffered(in mode: PermissionMode) -> Bool
 }
 
 extension AgentTool {
@@ -170,6 +176,8 @@ extension AgentTool {
     public func editPreview(for arguments: ToolArguments, context: ToolContext) async -> EditPreview? { nil }
     public var waitsForUser: Bool { false }
     public var isExemptFromRepeatGuard: Bool { false }
+
+    public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }
 
     /// A `command` argument is a command; otherwise a `path` argument is the file the call changes.
     public func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {

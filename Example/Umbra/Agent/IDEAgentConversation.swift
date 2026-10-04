@@ -427,7 +427,7 @@ final class IDEAgentConversation: Identifiable {
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns) + EditingTools.all() + [IDERunCommandTool(support: support)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
-        tools += [TodoTool(), AskUserTool()]
+        tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
         let git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
@@ -515,7 +515,7 @@ final class IDEAgentConversation: Identifiable {
             case .deny: "Denied"
             }
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
         Task { await session.resolveApproval(callID: callID, decision: decision) }
     }
 
@@ -526,11 +526,34 @@ final class IDEAgentConversation: Identifiable {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
         Task { await session.answerQuestion(callID: callID, answer: text) }
     }
 
     // MARK: - Reverting
+
+    /// Answers a plan card. Approving also switches this chat to that mode.
+    func approvePlan(callID: String, mode: PermissionMode) {
+        guard let session else { return }
+        if let index = toolIndex(callID) {
+            entries[index].plan = nil
+            entries[index].planOutcome = "Approved · \(mode.displayName)"
+        }
+        if mode != .plan { self.mode = mode }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        Task { await session.resolvePlan(callID: callID, decision: .approve(mode)) }
+    }
+
+    /// "Keep planning": the model revises with the user's words.
+    func revisePlan(callID: String, feedback: String) {
+        guard let session else { return }
+        if let index = toolIndex(callID) {
+            entries[index].plan = nil
+            entries[index].planOutcome = "Changes requested"
+        }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        Task { await session.resolvePlan(callID: callID, decision: .revise(feedback)) }
+    }
 
     func showDiff(for change: IDEAgentFileChange) {
         host?.agentShowDiff(relativePath: change.path, original: change.original)
@@ -592,6 +615,7 @@ final class IDEAgentConversation: Identifiable {
             case .runningTools(let names): status = "Running \(names.joined(separator: ", "))…"
             case .awaitingApproval: status = "Waiting for your approval…"
             case .awaitingAnswer: status = "Waiting for your answer…"
+            case .awaitingPlanApproval: status = "Waiting for you to approve the plan…"
             }
         case .textDelta, .reasoningDelta:
             break
@@ -620,6 +644,7 @@ final class IDEAgentConversation: Identifiable {
                 // Finished without an answer (Stop): the question is moot.
                 entries[index].approval = nil
                 entries[index].question = nil
+                entries[index].plan = nil
             }
         case .toolCallOutput:
             break
@@ -628,6 +653,9 @@ final class IDEAgentConversation: Identifiable {
             isAwaitingUser = true
         case .questionAsked(let question):
             if let index = toolIndex(question.callID) { entries[index].question = question }
+            isAwaitingUser = true
+        case .planProposed(let callID, let plan):
+            if let index = toolIndex(callID) { entries[index].plan = plan }
             isAwaitingUser = true
         case .todosUpdated(let items):
             todos = items

@@ -255,18 +255,20 @@ private struct IDEAgentEntryView: View {
             .background(IDEAppearance.ColorToken.card)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
         case .assistant:
-            // Plain text while it streams; Markdown once the message is complete.
+            // Plain text while it streams; Markdown blocks once the message is complete.
             Group {
                 if entry.isStreaming {
                     Text(entry.text)
+                        .font(IDEAppearance.Typography.body)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                        .textSelection(.enabled)
                 } else {
-                    Text(IDEAgentFormat.markdown(entry.text))
+                    IDEAgentMarkdownView(text: entry.text)
                 }
             }
-            .font(IDEAppearance.Typography.body)
-            .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolCall(let name) where name == "exit_plan_mode":
+            IDEAgentPlanCard(entry: entry)
         case .toolCall(let name):
             IDEAgentToolCard(name: name, entry: entry)
         case .changes:

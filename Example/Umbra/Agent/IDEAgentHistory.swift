@@ -14,6 +14,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
     var outputIsError: Bool?
     var detail: String?
     var attachments: [String]?
+    var planOutcome: String?
 
     init?(_ entry: IDEAgentEntry) {
         text = entry.text
@@ -33,6 +34,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
             toolName = name
             outputText = output.text
             outputIsError = output.isError
+            planOutcome = entry.planOutcome
         }
     }
 
@@ -52,6 +54,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
             {
                 var entry = IDEAgentEntry(kind: .toolCall(name: toolName ?? "tool"), text: text, callID: callID)
                 entry.output = ToolOutput(outputText ?? "", isError: outputIsError ?? false)
+                entry.planOutcome = planOutcome
                 return entry
             }()
         }

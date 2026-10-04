@@ -20,6 +20,16 @@ public enum PermissionMode: String, Sendable, Equatable, Codable, CaseIterable {
         }
     }
 
+    /// What a person calls it.
+    public var displayName: String {
+        switch self {
+        case .manual: "Manual"
+        case .acceptEdits: "Accept Edits"
+        case .auto: "Auto"
+        case .plan: "Plan"
+        }
+    }
+
     /// The order ⇧Tab walks through.
     public static let cycleOrder: [PermissionMode] = [.manual, .acceptEdits, .auto, .plan]
 
@@ -58,7 +68,7 @@ public enum PermissionMode: String, Sendable, Equatable, Codable, CaseIterable {
         case .auto:
             "The permission mode is now Auto: edits apply immediately, and commands that are known to be read-only run without asking. Any other command asks for approval."
         case .plan:
-            "The permission mode is now Plan: you can read, search and check problems, but you cannot change files or run commands. Investigate, then give the user a concrete plan."
+            "The permission mode is now Plan: you can read, search and check problems, but you cannot change files or run commands. Investigate, then give the user a concrete plan; if an exit_plan_mode tool is available, submit it with that, and do not start changing anything before the user approves."
         }
     }
 }

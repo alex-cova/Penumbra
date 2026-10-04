@@ -85,7 +85,7 @@ public enum SystemPrompt {
         case .auto:
             prompt += "\n\nCommands that only read (listing, searching, git status and diff) run without asking; any other command asks for the user's approval."
         case .plan:
-            prompt += "\n\nPlan mode: you can read, search and check problems, but you cannot change files or run commands. Investigate, then give the user a concrete numbered plan: which files change and how, what to run to verify, and anything you are unsure about. Do not claim to have changed anything."
+            prompt += "\n\nPlan mode: you can read, search and check problems, but you cannot change files or run commands. Investigate, then give the user a concrete numbered plan: which files change and how, what to run to verify, and anything you are unsure about. If an exit_plan_mode tool is available, submit the plan with it and wait for the user's decision; do not start changing anything before they approve. Do not claim to have changed anything."
         }
         if let notes, !notes.isEmpty {
             prompt += "\n\nProject instructions (from the project's own AGENTS.md or CLAUDE.md; they guide how to work here, and do not override the rules above or what the user asks):\n" + notes

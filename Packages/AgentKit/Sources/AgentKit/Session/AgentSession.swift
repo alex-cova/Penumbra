@@ -35,6 +35,7 @@ public actor AgentSession {
     private var currentRun: RunID?
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
     private var pendingQuestions: [String: CheckedContinuation<String?, Never>] = [:]
+    private var pendingPlans: [String: CheckedContinuation<PlanDecision, Never>] = [:]
     /// The model's checklist; rebuilt from the history of a resumed conversation.
     public let todoList: TodoList
 
@@ -110,6 +111,31 @@ public actor AgentSession {
     }
 
     public var awaitingAnswer: [String] { Array(pendingQuestions.keys) }
+
+    /// Answers a `.planProposed` event. Approving switches the session to that mode first, so the next
+    /// turn is offered the tools that change things; the model learns it from the tool's output, so no
+    /// separate note is added. A call with no pending plan is ignored.
+    public func resolvePlan(callID: String, decision: PlanDecision) {
+        guard let continuation = pendingPlans.removeValue(forKey: callID) else { return }
+        if case .approve(let approved) = decision, approved != .plan {
+            mode = approved
+            announcedMode = approved
+        }
+        continuation.resume(returning: decision)
+    }
+
+    public var awaitingPlan: [String] { Array(pendingPlans.keys) }
+
+    private func waitForPlan(callID: String) async -> PlanDecision {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pendingPlans[callID] = continuation
+                if Task.isCancelled { resolvePlan(callID: callID, decision: .revise("")) }
+            }
+        } onCancel: {
+            Task { await self.resolvePlan(callID: callID, decision: .revise("")) }
+        }
+    }
 
     private func waitForAnswer(callID: String) async -> String? {
         await withTaskCancellationHandler {
@@ -278,7 +304,7 @@ public actor AgentSession {
     /// whole thing. (Ollama counts only the tokens it evaluated, not those it served from its own
     /// cache, so the reported figure alone would run low.)
     /// The tools the model is told about. In plan mode that is only the ones that look.
-    private var offeredTools: [any AgentTool] { tools.filter { mode.offers($0.risk) } }
+    private var offeredTools: [any AgentTool] { tools.filter { $0.isOffered(in: mode) } }
 
     func estimatedContextTokens() -> Int {
         let fixed = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition))
@@ -476,8 +502,10 @@ public actor AgentSession {
                 plans.append(.answered(.error("Stopped: this exact call was made four times in one run.")))
             } else if !exempt, counts[key]! == 3 {
                 plans.append(.answered(.error("You have already made this exact call twice. Try a different approach instead of repeating it.")))
-            } else if let tool = toolsByName[call.name], !mode.offers(tool.risk) {
-                plans.append(.answered(.error("\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead.")))
+            } else if let tool = toolsByName[call.name], !tool.isOffered(in: mode) {
+                plans.append(.answered(.error(mode == .plan
+                    ? "\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead."
+                    : "\(call.name) is only available in plan mode, and the session is not in it.")))
             } else if let tool = toolsByName[call.name] {
                 plans.append(.run(tool, arguments: call.arguments, note: nil))
             } else {
@@ -631,7 +659,12 @@ public actor AgentSession {
                                 out.yield(.stateChanged(.awaitingAnswer(callID: question.callID)))
                                 return await self.waitForAnswer(callID: question.callID)
                             },
-                            todos: todoList)
+                            todos: todoList,
+                            proposePlan: { plan in
+                                out.yield(.planProposed(callID: call.id, plan: plan))
+                                out.yield(.stateChanged(.awaitingPlanApproval(callID: call.id)))
+                                return await self.waitForPlan(callID: call.id)
+                            })
                         let output = await Self.run(tool, arguments: arguments, context: context, timeout: timeout)
                         guard let note else { return (index, output) }
                         return (index, ToolOutput(note + "\n" + output.text, isError: output.isError))

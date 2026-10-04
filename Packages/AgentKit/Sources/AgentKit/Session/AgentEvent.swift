@@ -8,6 +8,8 @@ public enum AgentState: Sendable, Equatable {
     case awaitingApproval(callID: String)
     /// `ask_user` is waiting for the user's answer.
     case awaitingAnswer(callID: String)
+    /// `exit_plan_mode` is waiting for the user to approve the plan or ask for changes.
+    case awaitingPlanApproval(callID: String)
 }
 
 /// Why a run ended. Every ending leaves the session valid, so the next message continues it.
@@ -43,6 +45,8 @@ public enum AgentEvent: Sendable, Equatable {
     case approvalRequested(ApprovalRequest)
     /// The run is paused until `AgentSession.answerQuestion` is called for this call.
     case questionAsked(UserQuestion)
+    /// The model submitted a plan; the run is paused until `AgentSession.resolvePlan` is called for this call.
+    case planProposed(callID: String, plan: String)
     /// The model wrote a tool call that could not be read; it has been told and will try again.
     case unreadableToolCall(detail: String)
     /// The model changed its checklist.

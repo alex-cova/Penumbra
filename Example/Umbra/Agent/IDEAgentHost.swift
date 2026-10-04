@@ -58,6 +58,10 @@ protocol IDEAgentHost: AnyObject {
     func agentTerminalTail(lines: Int) -> String?
     /// Project files whose path matches `query`, best first, open files leading.
     func agentFileSuggestions(query: String, limit: Int) -> [String]
+    /// Opens text in a new, unsaved editor tab (a plan to keep and edit).
+    func agentOpenText(title: String, text: String)
+    /// Puts text at the active editor's caret, replacing the selection. `false` if there is no text editor to put it in.
+    func agentInsertAtCaret(_ text: String) -> Bool
 }
 
 extension IDEAgentHost {
@@ -68,6 +72,8 @@ extension IDEAgentHost {
     func agentOpenFilePaths() -> [String] { [] }
     func agentTerminalTail(lines: Int) -> String? { nil }
     func agentFileSuggestions(query: String, limit: Int) -> [String] { [] }
+    func agentOpenText(title: String, text: String) {}
+    func agentInsertAtCaret(_ text: String) -> Bool { false }
 }
 
 struct IDEAgentFreshProblems: Sendable, Equatable {

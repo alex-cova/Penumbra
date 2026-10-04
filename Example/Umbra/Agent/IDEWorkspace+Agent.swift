@@ -64,6 +64,18 @@ extension IDEWorkspace: IDEAgentHost {
         return IDEAgentSelection(path: agentRelativePath(url), startLine: start, endLine: end, text: selected)
     }
 
+    func agentOpenText(title: String, text: String) {
+        openUntitled(displayName: title, text: text)
+    }
+
+    func agentInsertAtCaret(_ text: String) -> Bool {
+        guard let document = workbench.activePane.selectedDocument, document.contentKind != .diff else { return false }
+        let textView = host(for: workbench.activePaneID).textView
+        textView.replace(textView.selectedRange, withText: text)
+        focusActiveEditor()
+        return true
+    }
+
     func agentOpenFilePaths() -> [String] {
         var seen = Set<String>()
         return workbench.allDocuments().compactMap(\.url).map(agentRelativePath).filter { seen.insert($0).inserted }
