@@ -64,6 +64,20 @@ protocol IDEAgentHost: AnyObject {
     func agentOpenText(title: String, text: String)
     /// Puts text at the active editor's caret, replacing the selection. `false` if there is no text editor to put it in.
     func agentInsertAtCaret(_ text: String) -> Bool
+    /// Opens the sidebar's History tab on the active file.
+    func agentShowLocalHistory()
+    /// Offers to add `relativePath` to the project's `.gitignore`. `true` when the line is now in the file.
+    func agentOfferGitignore(_ relativePath: String) -> Bool
+
+    // Showing work. All optional (see the extension below). The model asks to open a file; a build
+    // or a command reveals the panel it belongs to. None of these run anything by themselves.
+    /// Opens `relativePath` in the editor. `line` and `column` are 1-based.
+    func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws
+    /// Shows the Gradle tool window and the Gradle console.
+    func agentRevealGradle()
+    /// Appends `line` to the terminal tab for this command, creating and selecting the tab on the
+    /// first piece of text. `nil` means the command has finished and later text is ignored.
+    func agentShowCommand(id: UUID, title: String, line: String?)
 }
 
 extension IDEAgentHost {
@@ -77,6 +91,11 @@ extension IDEAgentHost {
     func agentRecordWrite(path: String, before: String?, after: String?, source: IDELocalHistorySource, group: UUID?) {}
     func agentOpenText(title: String, text: String) {}
     func agentInsertAtCaret(_ text: String) -> Bool { false }
+    func agentShowLocalHistory() {}
+    func agentOfferGitignore(_ relativePath: String) -> Bool { false }
+    func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {}
+    func agentRevealGradle() {}
+    func agentShowCommand(id: UUID, title: String, line: String?) {}
 }
 
 struct IDEAgentFreshProblems: Sendable, Equatable {
@@ -145,6 +164,31 @@ final class IDEAgentHostBox: @unchecked Sendable {
     func trashFile(relativePath: String) async throws {
         guard let host else { throw AgentWorkspaceError.readOnly }
         try await host.agentTrashFile(relativePath: relativePath)
+    }
+
+    @MainActor
+    func showFile(relativePath: String, line: Int?, column: Int?) async throws {
+        guard let host else { throw AgentWorkspaceError.readOnly }
+        try await host.agentShowFile(relativePath: relativePath, line: line, column: column)
+    }
+
+    func revealGradle() async {
+        await MainActor.run { host?.agentRevealGradle() }
+    }
+
+    /// Hops to the main thread and waits, so chunks that arrive from the command's reader stay in
+    /// order with the verdict the tool appends after `run` returns.
+    func showCommand(id: UUID, title: String, line: String?) {
+        let apply = { [weak self] in
+            MainActor.assumeIsolated {
+                self?.host?.agentShowCommand(id: id, title: title, line: line)
+            }
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.sync(execute: apply)
+        }
     }
 }
 

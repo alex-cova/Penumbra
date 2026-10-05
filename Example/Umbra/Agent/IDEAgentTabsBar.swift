@@ -25,6 +25,8 @@ struct IDEAgentTabsBar: View {
                             renameDraft = conversation.title
                             renaming = conversation
                         }
+                        Button("Fork") { Task { await agent.fork(conversation.id) } }
+                            .disabled(conversation.isEmpty || conversation.isRunning)
                         Divider()
                         Button("Close") { requestClose(conversation) }
                         Button("Close Others") { agent.closeOthers(keeping: conversation.id) }

@@ -116,6 +116,12 @@ actor IDELocalHistoryStore {
         events.filter { $0.path == path }.reversed()
     }
 
+    /// Revisions of `folder` and of files inside it, newest first. `src` does not include `src2`.
+    func events(under folder: String) -> [IDELocalHistoryEvent] {
+        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+        return events.filter { $0.path == folder || $0.path.hasPrefix(prefix) }.reversed()
+    }
+
     /// Every event since `date`, newest first.
     func recentEvents(since date: Date = .distantPast, limit: Int = 500) -> [IDELocalHistoryEvent] {
         Array(events.reversed().prefix { $0.time >= date }.prefix(limit))

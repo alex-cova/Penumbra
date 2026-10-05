@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 //
 // Swift 6 language mode is enabled on library, test, harness, and example targets.
@@ -13,7 +13,7 @@ let package = Package(
     name: "Penumbra",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v26)
     ],
     products: [
         .library(name: "Penumbra", targets: ["Penumbra"]),
@@ -32,7 +32,8 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
-        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0")
+        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
+        .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.0.0")
     ],
     targets: [
         .target(
@@ -147,7 +148,8 @@ let package = Package(
                 .product(name: "AgentKit", package: "AgentKit"),
                 .product(name: "AgentKitMLX", package: "AgentKitMLX"),
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),
-                .product(name: "SwiftTerm", package: "SwiftTerm")
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "DiagramKit", package: "DiagramKit")
             ],
             path: "Example/Umbra",
             exclude: [

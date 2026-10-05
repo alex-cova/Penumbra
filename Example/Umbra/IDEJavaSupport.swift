@@ -471,6 +471,7 @@ final class IDEJavaSupport {
         gradleSyncInFlight = false
         gradleBuildFilesChanged = false
         projectRootURL = url
+        dependencyGraphCache.removeAll()
         gradleModel = nil
         clearTestIndex()
         let hadJars = !jarSources.isEmpty
@@ -541,6 +542,7 @@ final class IDEJavaSupport {
 
     func reloadGradleProject() {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
+        dependencyGraphCache.removeAll()
         gradleModelCache.invalidate(projectRoot: url)
         syncGradleProject(
             url,
@@ -655,6 +657,89 @@ final class IDEJavaSupport {
                     gradleSync = .untrusted
                 }
             }
+        }
+    }
+
+    // MARK: - Dependency diagrams
+
+    @ObservationIgnored private var dependencyGraphCache: [String: (fingerprint: GradleBuildFingerprint, graph: GradleDependencyGraph)] = [:]
+
+    /// The module graph of the synced model; no Gradle run.
+    var moduleDependencyGraph: GradleDependencyGraph? {
+        gradleModel.map { GradleDependencyGraph.moduleGraph(from: $0) }
+    }
+
+    func invalidateDependencyGraphs() {
+        dependencyGraphCache.removeAll()
+    }
+
+    /// The resolved libraries of one project's configuration, from a Gradle run unless the build files are
+    /// unchanged since the last one. Shares the busy flag and the trust prompt with the other Gradle actions.
+    func resolveDependencyGraph(projectPath: String, configuration: String) async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure> {
+        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else {
+            return .failure(.message("This project is not a Gradle project."))
+        }
+        let fingerprint = GradleBuildFingerprintCollector.collect(projectRoot: url)
+        let cacheKey = projectPath + "|" + configuration
+        if let cached = dependencyGraphCache[cacheKey], cached.fingerprint == fingerprint {
+            return .success(cached.graph)
+        }
+        guard !isGradleBusy else {
+            return .failure(.message("Gradle is busy with a sync or another task in this window. Reload the diagram when it finishes."))
+        }
+        if !gradleTrustStore.isTrusted(url) {
+            guard let requestTrust, await requestTrust(url) else {
+                return .failure(.message("The project is not trusted, so its Gradle build scripts were not run."))
+            }
+            gradleTrustStore.setTrusted(true, for: url)
+        }
+
+        let taskPath = projectPath == ":" || projectPath.isEmpty ? ":umbraDependencyGraph" : projectPath + ":umbraDependencyGraph"
+        isRunningGradleTasks = true
+        runningGradleTaskPaths = [taskPath]
+        defer {
+            isRunningGradleTasks = false
+            runningGradleTaskPaths = []
+        }
+        gradleConsole.reset()
+        gradleConsole.appendNote("Project: \(url.path)")
+        gradleConsole.appendNote("Dependency diagram: \(projectPath) (\(configuration))")
+        let javaHome = await jdk.resolveForGradle()?.installation.home
+        do {
+            let graph = try await GradleDependencyGraphExtractor(runner: gradleRunner).extract(
+                projectDirectory: url,
+                projectPath: projectPath,
+                configuration: configuration,
+                javaHome: javaHome,
+                timeout: .seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)),
+                output: { line in
+                    Task { @MainActor in
+                        guard !Task.isCancelled else { return }
+                        self.gradleConsole.appendProcessLine(line)
+                    }
+                }
+            )
+            gradleConsole.markFinished()
+            dependencyGraphCache[cacheKey] = (fingerprint, graph)
+            return .success(graph)
+        } catch {
+            gradleConsole.markFinished()
+            return .failure(.message(Self.summarizeDependencyGraph(error)))
+        }
+    }
+
+    private static func summarizeDependencyGraph(_ error: Error) -> String {
+        switch error {
+        case let GradleDependencyGraphError.failed(result):
+            return "Gradle exited with code \(result.exitCode) while resolving the dependencies. The Gradle console has the output."
+        case GradleDependencyGraphError.missingOutput:
+            return "Gradle finished without writing the dependency graph."
+        case let GradleDependencyGraphError.decodingFailed(underlying, _):
+            return "The dependency graph could not be read: \(underlying)"
+        case let GradleDependencyGraphError.unavailable(message):
+            return message
+        default:
+            return summarizeTaskRun(error)
         }
     }
 

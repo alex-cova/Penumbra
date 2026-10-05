@@ -2,6 +2,7 @@ import Foundation
 import JavaIntelligence
 
 enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
+    case general
     case editor
     case appearance
     case focus
@@ -14,6 +15,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: "General"
         case .editor: "Editor"
         case .appearance: "Appearance"
         case .focus: "Focus"
@@ -26,6 +28,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .general: "gearshape"
         case .editor: "chevron.left.forwardslash.chevron.right"
         case .appearance: "paintbrush"
         case .focus: "scope"
@@ -39,6 +42,8 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
     /// What the search field matches besides the title: the settings the pane holds.
     var searchTerms: [String] {
         switch self {
+        case .general:
+            ["local history", "retention", "revisions", "days", "megabytes"]
         case .editor:
             ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts"]
         case .appearance:
@@ -66,7 +71,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
     var showsTypePreview: Bool {
         switch self {
         case .editor: true
-        case .appearance, .focus, .project, .java, .inspections, .agent: false
+        case .general, .appearance, .focus, .project, .java, .inspections, .agent: false
         }
     }
 }

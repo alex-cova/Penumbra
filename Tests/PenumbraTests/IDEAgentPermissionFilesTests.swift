@@ -110,4 +110,15 @@ final class IDEAgentPermissionFilesTests: XCTestCase {
         XCTAssertEqual(urls.map(\.lastPathComponent), ["permissions.json", "settings.json", "settings.local.json", "settings.json", "settings.local.json"])
         XCTAssertEqual(urls.map { $0.deletingLastPathComponent().lastPathComponent }, ["app", ".umbra", ".umbra", ".claude", ".claude"])
     }
+
+    func testGitignoreAddsALineOnceAndKeepsTheExistingText() {
+        let line = IDEAgentPermissionFiles.projectLocalPath
+        XCTAssertEqual(IDEAgentPermissionFiles.gitignore(adding: line, to: nil), line + "\n")
+        XCTAssertEqual(IDEAgentPermissionFiles.gitignore(adding: line, to: ""), line + "\n")
+        XCTAssertEqual(IDEAgentPermissionFiles.gitignore(adding: line, to: "build/\n"), "build/\n" + line + "\n")
+        XCTAssertEqual(IDEAgentPermissionFiles.gitignore(adding: line, to: "build/"), "build/\n" + line + "\n")
+        XCTAssertNil(IDEAgentPermissionFiles.gitignore(adding: line, to: "build/\n" + line + "\n"))
+        XCTAssertNil(IDEAgentPermissionFiles.gitignore(adding: "  \(line)  ", to: line + "\n"))
+        XCTAssertNil(IDEAgentPermissionFiles.gitignore(adding: "   ", to: "build/\n"))
+    }
 }

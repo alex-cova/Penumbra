@@ -18,7 +18,7 @@ final class IDEAgentController {
     @ObservationIgnored let fileClaims = IDEAgentFileClaims()
     /// The commands and skills on offer.
     @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
-    /// Bumped by `/model`, so the panel opens its settings popover.
+    /// Bumped by `/model`, so the panel opens its settings sheet.
     var settingsRequest = 0
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
@@ -290,7 +290,9 @@ final class IDEAgentController {
     /// A new chat that starts from another's conversation, up to before the message `entryID` (all of it if `nil`).
     @discardableResult
     func fork(_ id: UUID, before entryID: UUID? = nil) async -> IDEAgentConversation? {
-        guard let source = conversations.first(where: { $0.id == id }), let state = await source.forkState(before: entryID) else { return nil }
+        guard let source = conversations.first(where: { $0.id == id }) else { return nil }
+        loadPendingIfNeeded(source)
+        guard let state = await source.forkState(before: entryID) else { return nil }
         let created = addConversation()
         created.adoptFork(entries: state.entries, items: state.items, title: state.title)
         return created
@@ -371,6 +373,9 @@ final class IDEAgentController {
     }
 
     func send() { selected.send() }
+
+    /// Tries the last send again after a network failure. The message is not added a second time.
+    func retry() { selected.retry() }
 
     func stop() { selected.stop() }
 

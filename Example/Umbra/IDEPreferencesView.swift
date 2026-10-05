@@ -146,6 +146,8 @@ public struct IDEPreferencesView: View {
     @ViewBuilder
     private func domainPane(for domain: IDEPreferencesDomain) -> some View {
         switch domain {
+        case .general:
+            IDEPreferencesGeneralPane(preferences: preferences)
         case .editor:
             IDEPreferencesEditorPane(preferences: preferences)
         case .appearance:
@@ -160,6 +162,23 @@ public struct IDEPreferencesView: View {
             IDEPreferencesInspectionsPane(preferences: preferences)
         case .agent:
             IDEPreferencesAgentPane(agent: workspace.agent)
+        }
+    }
+}
+
+/// Settings ▸ General. Retention uses the keys Local History already reads.
+struct IDEPreferencesGeneralPane: View {
+    @Bindable var preferences: IDEPreferences
+
+    var body: some View {
+        IDESettingsSection(
+            "Local History",
+            footer: "Unnamed revisions older than this, and the oldest ones past the size, are removed. A revision you label is kept."
+        ) {
+            IDEPreferencesIntStepper(
+                title: "Keep for Days", value: $preferences.localHistoryDays, range: 1...365, valueWidth: 72, valueSuffix: " days")
+            IDEPreferencesIntStepper(
+                title: "Keep up to", value: $preferences.localHistoryMegabytes, range: 50...10_000, step: 50, valueWidth: 72, valueSuffix: " MB")
         }
     }
 }
@@ -250,7 +269,7 @@ private struct IDEPreferencesSidebarRow: View {
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
 }
 
-/// Settings ▸ Agent: the same form as the agent panel's popover, plus the limits and protected files.
+/// Settings ▸ Agent: the same form as the agent panel's sheet, plus the limits and protected files.
 private struct IDEPreferencesAgentPane: View {
     let agent: IDEAgentController
     @State private var isModelsPresented = false

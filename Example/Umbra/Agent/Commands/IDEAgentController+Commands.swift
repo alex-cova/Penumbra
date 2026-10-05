@@ -180,7 +180,7 @@ extension IDEAgentController {
         return message
     }
 
-    private func runBuiltIn(_ command: IDEAgentBuiltInCommand, arguments: String) {
+    func runBuiltIn(_ command: IDEAgentBuiltInCommand, arguments: String = "") {
         switch command {
         case .new:
             newConversation()
@@ -226,6 +226,8 @@ extension IDEAgentController {
             onOpenSettings?()
         case .model:
             settingsRequest += 1
+        case .history:
+            host?.agentShowLocalHistory()
         case .export:
             exportTranscript()
         case .initialize:

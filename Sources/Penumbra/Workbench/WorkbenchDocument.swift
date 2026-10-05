@@ -8,6 +8,8 @@ public enum WorkbenchDocumentContentKind: String, Codable, Sendable, Equatable {
     case image
     /// A host-drawn comparison of two texts (Umbra's diff viewer). Not restored with the session.
     case diff
+    /// A host-drawn class or dependency diagram (Umbra's diagram viewer). Not restored with the session.
+    case diagram
 }
 
 /// In-memory document tracked by an ``EditorPane``.

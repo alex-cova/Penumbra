@@ -37,11 +37,17 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let title: String
     public let updatedAt: Date
+    /// User messages in the conversation. Tool calls and the model's replies are not counted.
+    public let messageCount: Int
+    /// Dollars recorded in the host blob's `cost` field, when the host saved one.
+    public let cost: Double?
 
-    public init(id: UUID, title: String, updatedAt: Date) {
+    public init(id: UUID, title: String, updatedAt: Date, messageCount: Int = 0, cost: Double? = nil) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
+        self.messageCount = messageCount
+        self.cost = cost
     }
 }
 
@@ -95,7 +101,10 @@ public struct SessionStore: Sendable {
             .filter { $0.pathExtension == "json" }
             .compactMap { url -> SessionSummary? in
                 guard let data = try? Data(contentsOf: url), let snapshot = decode(data) else { return nil }
-                return SessionSummary(id: snapshot.id, title: snapshot.title, updatedAt: snapshot.updatedAt)
+                return SessionSummary(
+                    id: snapshot.id, title: snapshot.title, updatedAt: snapshot.updatedAt,
+                    messageCount: snapshot.items.reduce(into: 0) { count, item in if case .user = item { count += 1 } },
+                    cost: Self.cost(in: snapshot.host))
             }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -107,6 +116,12 @@ public struct SessionStore: Sendable {
     /// "Clear History": every conversation of one project.
     public func deleteAll(projectRoot: String) {
         try? FileManager.default.removeItem(at: projectDirectory(for: projectRoot))
+    }
+
+    /// The host blob is opaque. A number under `cost` is what a history row shows; anything else is none.
+    static func cost(in host: Data?) -> Double? {
+        guard let host, let object = try? JSONSerialization.jsonObject(with: host) as? [String: Any] else { return nil }
+        return (object["cost"] as? NSNumber)?.doubleValue
     }
 
     private func decode(_ data: Data) -> SessionSnapshot? {

@@ -287,6 +287,24 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
         ])
     }
 
+    @Test func retryRunsTheSameMessageAgainWithoutAddingASecondCopy() async throws {
+        let client = MockLLMClient(turns: [
+            MockTurn([.textDelta("par")], failure: .unreachable("Could not connect to localhost.")),
+            .text("full"),
+        ])
+        let session = try makeSession(client, tools: [])
+        #expect(ending(await runToEnd(session, "hello")) == .failed("Could not connect to localhost."))
+        #expect(await session.items == [.user("hello")])
+
+        var retried: [AgentEvent] = []
+        for await event in await session.retry() { retried.append(event) }
+        #expect(ending(retried) == .completed)
+        #expect(await session.items == [.user("hello"), .assistant("full")])
+        #expect(client.requests.count == 2)
+        #expect(client.requests[0].items == [.user("hello")])
+        #expect(client.requests[1].items == [.user("hello")])
+    }
+
     @Test func aFailedTurnLeavesNothingHalfWrittenAndTheSessionUsable() async throws {
         let client = MockLLMClient(turns: [
             MockTurn([.textDelta("par")], failure: .unauthorized), .text("recovered"),

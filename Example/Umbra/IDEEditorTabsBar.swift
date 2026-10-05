@@ -48,7 +48,7 @@ private struct IDEEditorTabItem: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: IDEFileIcon.systemName(forFilename: tab.title))
+            Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(width: 12)
@@ -80,6 +80,9 @@ private struct IDEEditorTabItem: View {
             Button("Split Editor Down") { workspace.splitDown(in: paneID) }
             Divider()
             Button("Rename File…") { workspace.renameTab(tab.id, in: paneID) }
+            if let url = workspace.workbench.panes.flatMap(\.documents).first(where: { $0.id == tab.id })?.url {
+                Button("Show History") { workspace.showLocalHistory(for: url) }
+            }
             Divider()
             Button("Close") { workspace.closeTab(tab.id, in: paneID) }
             Button("Close Other Tabs") { workspace.closeOtherTabs(tab.id, in: paneID) }

@@ -100,10 +100,9 @@ public struct IDERootView: View {
                                     .background(IDEAppearance.ColorToken.workbench)
                                     .transition(.opacity)
                             } else if isAgentPageShown {
-                                // The chat opens over the editor like Settings, which stays mounted underneath.
+                                // Expanded chat covers the editor, which stays mounted. Side Panel docks it.
                                 IDEAgentPage(agent: workspace.agent, onClose: workspace.hideAgentPage)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .background(IDEAppearance.ColorToken.workbench)
                                     .transition(.opacity)
                             }
                         }
@@ -146,6 +145,7 @@ public struct IDERootView: View {
                     IDEAgentPanel(agent: workspace.agent)
                         .frame(width: agentPanelWidth)
                         .idePanel()
+                        .transition(.opacity)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }

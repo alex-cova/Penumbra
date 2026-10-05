@@ -81,9 +81,11 @@ struct IDERunCommandTool: AgentTool {
             name: "run_command",
             description: """
             Run a shell command in the project root (zsh, no login shell, no stdin). The user approves \
-            each command first. Use it for what the other tools can't do, such as git, build tools and \
-            scripts. Not for reading or editing files. Interactive programs and long-lived servers will \
-            not work: anything the command starts is stopped when it ends.
+            each command first, and it then runs in a new integrated-terminal tab. Use it for what the \
+            other tools can't do, such as git and scripts. Not for reading or editing files, and not for \
+            a Gradle build or tests (use gradle and run_tests; those open the Gradle tool window). \
+            Interactive programs and long-lived servers will not work: anything the command starts is \
+            stopped when it ends.
             """,
             parameters: [
                 ToolParameter("command", .string, "The shell command."),
@@ -109,15 +111,28 @@ struct IDERunCommandTool: AgentTool {
         await support.saveAgentBuffers(context)
         let environment = await support.box.commandEnvironment()
         let progress = context.progress
+        let commandID = UUID()
+        let box = support.box
+        box.showCommand(id: commandID, title: command, line: "$ \(command)\n")
         let result: AgentCommandResult
         do {
             result = try await AgentCommandRunner.run(
                 AgentCommandSpec(command: command, workingDirectory: support.root, environment: environment, timeout: timeout),
-                onOutput: { progress?($0) })
+                onOutput: { chunk in
+                    progress?(chunk)
+                    box.showCommand(id: commandID, title: command, line: chunk)
+                })
         } catch {
+            box.showCommand(id: commandID, title: command, line: error.localizedDescription + "\n")
+            box.showCommand(id: commandID, title: command, line: nil)
             throw ToolError(error.localizedDescription)
         }
-        return Self.format(command: command, result: result, timeout: timeout)
+        let formatted = Self.format(command: command, result: result, timeout: timeout)
+        let verdict = formatted.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        let separator = result.output.hasSuffix("\n") || result.output.isEmpty ? "" : "\n"
+        box.showCommand(id: commandID, title: command, line: separator + verdict + "\n")
+        box.showCommand(id: commandID, title: command, line: nil)
+        return formatted
     }
 
     static func format(command: String, result: AgentCommandResult, timeout: TimeInterval) -> String {
@@ -152,7 +167,8 @@ struct IDEGradleTool: AgentTool {
             name: "gradle",
             description: """
             Run Gradle tasks in the project, such as build, classes or a module's task like :app:test. \
-            The user approves each run, and Gradle build scripts are code. You get a summary: compiler \
+            `build` builds the app. The user approves each run, and the Gradle tool window and console \
+            open so they can watch it. Gradle build scripts are code. You get a summary: compiler \
             errors, failed tests and the build's verdict, not the full log. To run tests use run_tests.
             """,
             parameters: [
@@ -199,7 +215,7 @@ struct IDERunTestsTool: AgentTool {
             description: """
             Run the project's tests with Gradle and get the failures: test name, message and where it \
             failed. Narrow it with `tests` (a class, Class.method, or a package pattern) and `module`. \
-            The user approves each run.
+            The user approves each run, and the Gradle tool window and console open for it.
             """,
             parameters: [
                 ToolParameter("tests", .array(of: .string), "Filters such as \"com.example.FooTest\" or \"FooTest.bar\". Empty runs everything.", optional: true),
@@ -242,6 +258,7 @@ enum IDEGradleRunner {
         tasks: [String], options: [String], timeout: TimeInterval, support: IDEAgentCommandSupport, context: ToolContext
     ) async throws -> String {
         await support.saveAgentBuffers(context)
+        await support.box.revealGradle()
         let started = Date()
         let outcome = await support.box.runGradle(tasks: tasks, options: options, timeout: timeout)
         let commandLine = (["gradle"] + tasks + options).joined(separator: " ")

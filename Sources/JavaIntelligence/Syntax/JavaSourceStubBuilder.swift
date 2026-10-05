@@ -287,8 +287,13 @@ public enum JavaSourceStubBuilder {
         let typeParameters = parseTypeParameters(node.child(byFieldName: "type_parameters"))
         return JavaMethodStub(
             name: nameNode.text, typeParameters: typeParameters, parameters: parameters, returnType: returnType,
-            modifiers: modifiers, isConstructor: false, javadoc: javadoc
+            thrownTypes: parseThrownTypes(node), modifiers: modifiers, isConstructor: false, javadoc: javadoc
         )
+    }
+
+    private static func parseThrownTypes(_ node: SyntaxNode) -> [JavaTypeRef] {
+        guard let throwsNode = node.namedChildren.first(where: { $0.type == "throws" }) else { return [] }
+        return throwsNode.namedChildren.map(JavaTypeNodeConverter.convert)
     }
 
     private static func parseConstructor(_ node: SyntaxNode, javadoc: String?) -> JavaMethodStub? {
@@ -298,8 +303,8 @@ public enum JavaSourceStubBuilder {
         var finalModifiers = modifiers
         if hasVarargs { finalModifiers.insert(.varargs) }
         return JavaMethodStub(
-            name: nameNode.text, parameters: parameters, returnType: .void, modifiers: finalModifiers,
-            isConstructor: true, javadoc: javadoc
+            name: nameNode.text, parameters: parameters, returnType: .void, thrownTypes: parseThrownTypes(node),
+            modifiers: finalModifiers, isConstructor: true, javadoc: javadoc
         )
     }
 

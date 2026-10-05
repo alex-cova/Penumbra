@@ -114,7 +114,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for grammar attributions.
 ## Requirements
 
 * **macOS**: 14.0 (Sonoma) or later
-* **Swift**: 6.0+ / Xcode 16+ (Swift 6 language mode enabled on all library and test targets)
+* **Swift**: 6.2+ / Xcode 26+ (macOS 26) (Swift 6 language mode enabled on all library and test targets)
 * **Dependencies**:
   * [Tree-sitter](https://github.com/tree-sitter/tree-sitter) (v0.26.12, vendored in `Packages/TreeSitter`)
   * [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient) (v0.8.0+)

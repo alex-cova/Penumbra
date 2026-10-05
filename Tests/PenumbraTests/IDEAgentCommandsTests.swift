@@ -46,9 +46,35 @@ final class IDEAgentSlashInvocationTests: XCTestCase {
         for expected in ["## You\n\nPlease fix it", "## Agent\n\nDone.", "Ran `read_file`", "(approved)", "Changed 1 file: `A.java`", "_Stopped._", "> **Error:** Boom"] {
             XCTAssertTrue(markdown.contains(expected), "missing \(expected)")
         }
+        XCTAssertFalse(markdown.contains("```sh"), "a file read is not a command")
         XCTAssertEqual(IDEAgentTranscriptExport.fileName(for: "Fix the parser / now!"), "fix-the-parser-now.md")
         XCTAssertEqual(IDEAgentTranscriptExport.fileName(for: "???"), "chat.md")
         XCTAssertEqual(IDEAgentTranscriptExport.fileName(for: String(repeating: "a", count: 200)).count, 63)
+    }
+
+    func testExportIncludesTheCommandsTheAgentRan() {
+        var shell = IDEAgentEntry(kind: .toolCall(name: "run_command"), text: #"{"command":"echo hi","reason":"check"}"#, callID: "c")
+        shell.approvalOutcome = "Approved"
+        shell.output = ToolOutput("$ echo hi\nhello\n[exit code 0 after 0.1 s]")
+        var gradle = IDEAgentEntry(kind: .toolCall(name: "gradle"), text: #"{"tasks":["classes"],"options":["--info"]}"#, callID: "g")
+        gradle.output = ToolOutput("BUILD SUCCESSFUL")
+        var tests = IDEAgentEntry(kind: .toolCall(name: "run_tests"), text: #"{"module":":app","tests":["FooTest"]}"#, callID: "t")
+        tests.output = ToolOutput("1 test failed", isError: true)
+        var backticks = IDEAgentEntry(kind: .toolCall(name: "run_command"), text: #"{"command":"echo ```"}"#, callID: "b")
+        backticks.output = ToolOutput("```")
+        let markdown = IDEAgentTranscriptExport.markdown(
+            title: "Commands", entries: [shell, gradle, tests, backticks], exportedAt: Date(timeIntervalSince1970: 0))
+        for expected in [
+            "```sh\necho hi\n```",
+            "$ echo hi\nhello",
+            "```sh\ngradle classes --info\n```",
+            "BUILD SUCCESSFUL",
+            "```sh\ngradle :app:test --tests FooTest\n```",
+            "Output (failed)",
+            "````sh\necho ```\n````",
+        ] {
+            XCTAssertTrue(markdown.contains(expected), "missing \(expected)\n\(markdown)")
+        }
     }
 }
 
@@ -325,6 +351,15 @@ final class IDEAgentCommandRunTests: XCTestCase {
         type(controller, "/model")
         XCTAssertEqual(opened, 1)
         XCTAssertEqual(controller.settingsRequest, before + 1)
+    }
+
+    func testHistoryOpensTheSidebarHistoryTab() {
+        let (controller, _) = makeController()
+        XCTAssertNotEqual(workspace.activeSidebarTab, .history)
+        type(controller, "/history")
+        XCTAssertEqual(workspace.activeSidebarTab, .history)
+        XCTAssertEqual(workspace.localHistoryScope, .file)
+        XCTAssertNil(workspace.localHistoryFile)
     }
 
     // MARK: - Resume

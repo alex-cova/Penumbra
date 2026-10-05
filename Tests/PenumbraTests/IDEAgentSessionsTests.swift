@@ -59,6 +59,29 @@ final class IDEAgentSessionsTests: XCTestCase {
 
     // MARK: - Persistence and resume
 
+    func testANetworkFailureCanBeRetriedAfterRelaunchWithoutSendingTheMessageTwice() async throws {
+        let (first, _) = makeController([
+            MockTurn([], failure: .unreachable("Could not connect to localhost.")),
+        ])
+        await run(first, "hello")
+        XCTAssertTrue(first.entries.last?.canRetry == true)
+
+        let secondClient = MockLLMClient(turns: [.text("hi there")])
+        let (second, _) = makeController([], client: secondClient)
+        second.restoreLatestIfNeeded()
+        XCTAssertEqual(second.entries.map(\.kind), [.user, .error])
+        XCTAssertTrue(second.entries.last?.canRetry == true)
+
+        second.retry()
+        await waitFor("the retried message is answered") {
+            !second.isRunning && second.entries.contains { $0.kind == .assistant }
+        }
+        XCTAssertEqual(second.entries.map(\.kind), [.user, .assistant])
+        XCTAssertEqual(second.entries.last?.text, "hi there")
+        let request = try XCTUnwrap(secondClient.requests.first)
+        XCTAssertEqual(request.items.filter { if case .user = $0 { true } else { false } }.count, 1)
+    }
+
     func testAConversationIsSavedAndComesBackInANewController() async throws {
         try "hello\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
         let (first, _) = makeController([
@@ -159,11 +182,15 @@ final class IDEAgentSessionsTests: XCTestCase {
         let unfinished = IDEAgentEntry(kind: .toolCall(name: "run_command"), text: "{}", callID: "c2")
         var changes = IDEAgentEntry(kind: .changes, text: "")
         changes.fileChanges = [IDEAgentFileChange(path: "A", original: nil)]
+        var retryable = IDEAgentEntry(kind: .error, text: "Could not connect to localhost.")
+        retryable.canRetry = true
         let rows = [IDEAgentEntry(kind: .user, text: "q"), finished, unfinished, changes,
-                    IDEAgentEntry(kind: .error, text: "boom"), IDEAgentEntry(kind: .notice, text: "n")]
+                    IDEAgentEntry(kind: .error, text: "boom"), retryable, IDEAgentEntry(kind: .notice, text: "n")]
 
         let restored = IDEAgentPersistedEntry.decode(IDEAgentPersistedEntry.encode(rows))
-        XCTAssertEqual(restored.map(\.kind), [.user, .toolCall(name: "grep"), .error, .notice])
+        XCTAssertEqual(restored.map(\.kind), [.user, .toolCall(name: "grep"), .error, .error, .notice])
+        XCTAssertFalse(restored[2].canRetry)
+        XCTAssertTrue(restored[3].canRetry)
         XCTAssertEqual(restored[1].callID, "c1")
         XCTAssertEqual(restored[1].output, ToolOutput("a:1: x"))
         XCTAssertEqual(restored[1].liveOutput, "", "live output is not kept")
@@ -234,6 +261,7 @@ final class IDEAgentSessionsTests: XCTestCase {
         let names = try XCTUnwrap(client.requests.first).tools.map(\.name)
         XCTAssertFalse(names.contains("edit_file") || names.contains("write_file") || names.contains("run_command"))
         XCTAssertTrue(names.contains("read_file"))
+        XCTAssertTrue(names.contains("show_file"), "plan mode can still open a file for the user")
         XCTAssertTrue(try XCTUnwrap(client.requests.first).system.contains("Plan mode"))
     }
 

@@ -190,17 +190,21 @@ private extension MetalCommands {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         Measurement.pumpRunLoop(seconds: 0.2)
-        let windowID = CGWindowID(window.windowNumber)
-        guard let cgImage = CGWindowListCreateImage(
-            .null,
-            [.optionIncludingWindow],
-            windowID,
-            [.boundsIgnoreFraming, .bestResolution]
-        ) else {
+        // CGWindowListCreateImage is obsolete from macOS 15; this dev tool shells out to screencapture.
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("perfharness-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: output) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-o", "-l", String(window.windowNumber), output.path]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
             return nil
         }
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
+        guard process.terminationStatus == 0,
+              let png = try? Data(contentsOf: output),
+              let rep = NSBitmapImageRep(data: png) else {
             return nil
         }
         return Shot(rep: rep, png: png)

@@ -26,7 +26,7 @@ struct IDEAgentSlashInvocation: Equatable {
 
 /// The commands the editor itself provides.
 enum IDEAgentBuiltInCommand: String, CaseIterable {
-    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, export, initialize = "init", cost, rename, help
+    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, initialize = "init", cost, rename, help
 
     var summary: String {
         switch self {
@@ -40,6 +40,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .mode: "Change what the agent may do without asking"
         case .permissions: "Open the permission rules"
         case .model: "Choose the model and provider"
+        case .history: "Show this file's local history"
         case .export: "Save this chat as a Markdown file"
         case .initialize: "Have the agent write an AGENTS.md for this project"
         case .cost: "Show this chat's token use and cost"
@@ -71,6 +72,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .mode: "slider.horizontal.3"
         case .permissions: "checkmark.shield"
         case .model: "cpu"
+        case .history: "clock"
         case .export: "square.and.arrow.up"
         case .initialize: "doc.badge.plus"
         case .cost: "dollarsign.circle"

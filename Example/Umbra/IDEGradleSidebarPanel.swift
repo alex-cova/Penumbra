@@ -114,6 +114,11 @@ struct IDEGradleSidebarPanel: View {
 
             if root != nil {
                 IDEGradleToolbarButton(
+                    systemImage: "point.3.connected.trianglepath.dotted",
+                    help: "Show Module Diagram",
+                    action: workspace.showGradleModuleDiagram
+                )
+                IDEGradleToolbarButton(
                     systemImage: "rectangle.expand.vertical",
                     help: "Expand All",
                     action: expandAll
@@ -231,7 +236,8 @@ struct IDEGradleSidebarPanel: View {
                 runText = task
                 isRunFieldPresented = true
                 isRunFocused = true
-            }
+            },
+            showDependencyDiagram: { workspace.showGradleDependencyDiagram(projectPath: $0) }
         )
     }
 
@@ -305,6 +311,7 @@ struct IDEGradleTreeActions {
     var reload: () -> Void = {}
     var module: (String) -> URL? = { _ in nil }
     var prefillRun: (String) -> Void = { _ in }
+    var showDependencyDiagram: (_ projectPath: String) -> Void = { _ in }
 }
 
 struct IDEGradleTreeView: View {
@@ -476,6 +483,7 @@ struct IDEGradleTreeView: View {
         case .project(let subproject):
             Button("Reveal in Explorer") { actions.reveal(subproject.directory) }
             Button("Reload Gradle Project") { actions.reload() }
+            Button("Show Dependency Diagram") { actions.showDependencyDiagram(subproject.path) }
             Divider()
             subtreeItems(node)
         case .jar(let url):

@@ -47,8 +47,20 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var plan: String?
     /// What the user decided about it: "Approved · Accept Edits", or "Changes requested".
     var planOutcome: String?
+    /// For an error: the send never reached the model, and Retry will try the same message again.
+    var canRetry = false
 
     var isFinishedToolCall: Bool { output != nil }
+}
+
+/// A failed send the user can try again: the provider was not there, or the connection dropped.
+/// Automatic retries cover rate limits and server errors; these are the ones that stop the run.
+enum IDEAgentNetworkFailure {
+    static func offersRetry(_ message: String) -> Bool {
+        message.hasPrefix("Could not connect to ")
+            || message.hasPrefix("The connection to the API was lost")
+            || message.hasPrefix("Ollama isn't running")
+    }
 }
 
 /// A command's live output, kept to the most recent part so a chatty build can't grow the transcript
@@ -86,6 +98,12 @@ enum IDEAgentToolSummary {
         case "glob": object["pattern"]?.stringValue
         case "grep": object["pattern"]?.stringValue.map { "“\($0)”" }
         case "diagnostics", "edit_file", "write_file": object["path"]?.stringValue
+        case "show_file":
+            if let path = object["path"]?.stringValue {
+                object["line"]?.intValue.map { "\(path):\($0)" } ?? path
+            } else {
+                nil
+            }
         case "ask_user": object["question"]?.stringValue
         case "todo": object["items"]?.arrayValue.map { "\($0.count) \($0.count == 1 ? "item" : "items")" }
         case "run_command": object["command"]?.stringValue
@@ -97,6 +115,28 @@ enum IDEAgentToolSummary {
         }
         guard let detail, !detail.isEmpty else { return name }
         return "\(name)  \(detail)"
+    }
+
+    /// The shell line behind a command tool (`run_command`, `gradle`, `run_tests`), or nil for the others.
+    static func commandLine(name: String, arguments: String) -> String? {
+        guard let object = (try? JSONValue(parsing: arguments))?.objectValue else { return nil }
+        switch name {
+        case "run_command":
+            let command = object["command"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return command.flatMap { $0.isEmpty ? nil : $0 }
+        case "gradle":
+            let tasks = object["tasks"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            guard !tasks.isEmpty else { return nil }
+            let options = object["options"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            return (["gradle"] + tasks + options).joined(separator: " ")
+        case "run_tests":
+            let module = object["module"]?.stringValue ?? ""
+            let filters = object["tests"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            let task = module.isEmpty ? "test" : (module.hasSuffix(":") ? module : module + ":") + "test"
+            return (["gradle", task] + filters.flatMap { ["--tests", $0] }).joined(separator: " ")
+        default:
+            return nil
+        }
     }
 
     private static func lineRange(_ object: [String: JSONValue]) -> String? {

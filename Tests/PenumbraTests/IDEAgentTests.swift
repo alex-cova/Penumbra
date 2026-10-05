@@ -146,6 +146,16 @@ final class IDEAgentToolSummaryTests: XCTestCase {
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.failed("boom"), iterationLimit: 40)?.text, "boom")
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.failed("boom"), iterationLimit: 40)?.isError, true)
     }
+
+    func testANetworkFailureOffersRetryAndOtherFailuresDoNot() {
+        XCTAssertTrue(IDEAgentNetworkFailure.offersRetry("Could not connect to localhost."))
+        XCTAssertTrue(IDEAgentNetworkFailure.offersRetry("Could not connect to 127.0.0.1."))
+        XCTAssertTrue(IDEAgentNetworkFailure.offersRetry("The connection to the API was lost: The request timed out."))
+        XCTAssertTrue(IDEAgentNetworkFailure.offersRetry("Ollama isn't running at localhost:11434."))
+        XCTAssertFalse(IDEAgentNetworkFailure.offersRetry("The API rejected the key. Check the API key."))
+        XCTAssertFalse(IDEAgentNetworkFailure.offersRetry("boom"))
+        XCTAssertFalse(IDEAgentNetworkFailure.offersRetry("Open a project folder first; the agent works inside one."))
+    }
 }
 
 final class IDEDiagnosticsToolTests: XCTestCase {
@@ -225,7 +235,7 @@ final class IDEAgentControllerTests: XCTestCase {
         guard case .user(let sent) = client.requests[0].items[0] else { return XCTFail("first item should be the user message") }
         XCTAssertTrue(sent.hasPrefix("[Editor state"))
         XCTAssertTrue(sent.hasSuffix("what is in A.java?"))
-        XCTAssertEqual(client.requests[0].tools.map(\.name), ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "apply_patch", "run_command", "todo", "ask_user", "diagnostics"])
+        XCTAssertEqual(client.requests[0].tools.map(\.name), ["read_file", "list_dir", "glob", "grep", "show_file", "edit_file", "write_file", "apply_patch", "run_command", "todo", "ask_user", "diagnostics"])
     }
 
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {
@@ -284,11 +294,71 @@ final class IDEAgentControllerTests: XCTestCase {
         controller.send()
         await eventually("first run ends") { !controller.isRunning }
         XCTAssertEqual(controller.entries.map(\.kind), [.user, .error])
+        XCTAssertFalse(controller.entries.last?.canRetry == true, "a rejected key is not a network failure")
 
         controller.draft = "two"
         controller.send()
         await eventually("second run ends") { !controller.isRunning }
         XCTAssertEqual(controller.entries.last?.text, "back")
+    }
+
+    func testANetworkFailureDropsThePartialReplyAndRetrySendsTheSameMessage() async throws {
+        let (controller, client, _) = try makeController(turns: [
+            MockTurn([.textDelta("half")], failure: .unreachable("Could not connect to localhost.")),
+            .text("the whole answer"),
+        ])
+        controller.draft = "hello"
+        controller.send()
+        await eventually("the failure shows") { !controller.isRunning }
+        XCTAssertEqual(controller.entries.map(\.kind), [.user, .error])
+        XCTAssertEqual(controller.entries.last?.text, "Could not connect to localhost.")
+        XCTAssertTrue(controller.entries.last?.canRetry == true)
+        let sent = await controller.currentSessionForTesting?.items.count
+        XCTAssertEqual(sent, 1, "the message is in the history once")
+
+        controller.retry()
+        await eventually("the retry finishes") { !controller.isRunning && controller.entries.contains { $0.kind == .assistant } }
+        XCTAssertEqual(controller.entries.map(\.kind), [.user, .assistant])
+        XCTAssertEqual(controller.entries.last?.text, "the whole answer")
+        XCTAssertEqual(client.requests.count, 2)
+        XCTAssertEqual(client.requests[0].items.count, 1)
+        XCTAssertEqual(client.requests[1].items.count, 1, "retry does not add a second copy of the message")
+    }
+
+    func testRetryAfterALaterTurnFailsKeepsTheWorkAlreadyDone() async throws {
+        let (controller, client, _) = try makeController(turns: [
+            .toolCalls((id: "c1", name: "list_dir", arguments: #"{"path":"."}"#)),
+            MockTurn([], failure: .connectionLost("The network connection was lost.")),
+            .text("done"),
+        ])
+        controller.draft = "look around"
+        controller.send()
+        await eventually("the later turn fails") { !controller.isRunning }
+        XCTAssertEqual(controller.entries.map(\.kind), [.user, .toolCall(name: "list_dir"), .error])
+        XCTAssertTrue(controller.entries.last?.text.hasPrefix("The connection to the API was lost") == true)
+        XCTAssertTrue(controller.entries.last?.canRetry == true)
+
+        controller.retry()
+        await eventually("the retry finishes") { !controller.isRunning && controller.entries.contains { $0.kind == .assistant } }
+        XCTAssertEqual(controller.entries.map(\.kind), [.user, .toolCall(name: "list_dir"), .assistant])
+        XCTAssertEqual(controller.entries.last?.text, "done")
+        XCTAssertEqual(client.requests.count, 3)
+        XCTAssertEqual(client.requests[2].items.filter { if case .user = $0 { true } else { false } }.count, 1)
+    }
+
+    func testSendingAnotherMessageClearsTheRetryButton() async throws {
+        let (controller, _, _) = try makeController(turns: [
+            MockTurn([], failure: .unreachable("Could not connect to localhost.")),
+            .text("ok"),
+        ])
+        controller.draft = "one"
+        controller.send()
+        await eventually("the failure offers retry") { controller.entries.last?.canRetry == true }
+        controller.draft = "two"
+        controller.send()
+        await eventually("the next message finishes") { !controller.isRunning && controller.entries.last?.text == "ok" }
+        XCTAssertFalse(controller.entries.contains(where: \.canRetry))
+        XCTAssertEqual(controller.entries.filter { $0.kind == .user }.map(\.text), ["one", "two"])
     }
 
     func testStopEndsTheRunWithANoticeAndKeepsTheTranscript() async throws {

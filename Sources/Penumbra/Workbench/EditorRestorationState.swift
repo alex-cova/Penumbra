@@ -159,8 +159,8 @@ public struct EditorPaneSnapshot: Equatable, Codable, Sendable {
     }
 
     public init(pane: EditorPane) {
-        // Diff tabs belong to the host and the session that made them; they are not restored.
-        let kept = pane.documents.filter { $0.contentKind != .diff }
+        // Diff and diagram tabs belong to the host and the session that made them; they are not restored.
+        let kept = pane.documents.filter { $0.contentKind != .diff && $0.contentKind != .diagram }
         let keptIDs = Set(kept.map(\.id))
         self.id = pane.id
         self.documents = kept.map(WorkbenchDocumentSnapshot.init)

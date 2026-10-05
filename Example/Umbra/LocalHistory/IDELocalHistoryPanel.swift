@@ -10,31 +10,49 @@ struct IDELocalHistoryPanel: View {
     @State private var isLoaded = false
 
     private var recorder: IDELocalHistoryRecorder { workspace.localHistory }
-    private var showsProject: Bool { workspace.localHistoryShowsProject }
+    private var scope: IDELocalHistoryScope { workspace.localHistoryScope }
 
     private var activeURL: URL? { workspace.workbench.activePane.selectedDocument?.url }
     private var activePath: String? { activeURL.flatMap(recorder.relativePath(of:)) }
 
+    /// The file the file view lists: a pin, or the active editor.
+    private var shownFilePath: String? {
+        if case .file = scope { return workspace.localHistoryFile ?? activePath }
+        return nil
+    }
+
     private struct ReloadKey: Equatable {
         var revision: Int
         var path: String?
-        var project: Bool
+        var scope: IDELocalHistoryScope
         var hasStore: Bool
     }
 
+    private enum Segment: Hashable {
+        case file, folder, project
+    }
+
     var body: some View {
-        @Bindable var workspace = workspace
         VStack(spacing: 0) {
             header
             Divider().overlay(IDEAppearance.ColorToken.border)
             content
-            if let selected = selectedEvent, !showsProject {
+            if let selected = selectedEvent, case .file = scope {
                 Divider().overlay(IDEAppearance.ColorToken.border)
                 actions(for: selected)
             }
         }
-        .task(id: ReloadKey(revision: recorder.revision, path: activePath, project: showsProject, hasStore: recorder.store != nil)) {
+        .task(id: ReloadKey(revision: recorder.revision, path: trackedPath, scope: scope, hasStore: recorder.store != nil)) {
             await reload()
+        }
+    }
+
+    /// What a reload should follow. A pinned file ignores whichever editor is active.
+    private var trackedPath: String? {
+        switch scope {
+        case .file: shownFilePath
+        case .folder(let path): path
+        case .project: nil
         }
     }
 
@@ -46,15 +64,57 @@ struct IDELocalHistoryPanel: View {
 
     // MARK: - Header
 
+    private var segment: Binding<Segment> {
+        Binding(
+            get: {
+                switch workspace.localHistoryScope {
+                case .file: .file
+                case .folder: .folder
+                case .project: .project
+                }
+            },
+            set: { next in
+                switch next {
+                case .file:
+                    workspace.localHistoryFile = nil
+                    workspace.localHistoryScope = .file
+                case .folder:
+                    break
+                case .project:
+                    workspace.localHistoryFile = nil
+                    workspace.localHistoryScope = .project
+                }
+            }
+        )
+    }
+
+    private var scopeCaption: String? {
+        switch scope {
+        case .folder(let path): path
+        case .file: workspace.localHistoryFile
+        case .project: nil
+        }
+    }
+
     private var header: some View {
-        @Bindable var workspace = workspace
-        return VStack(spacing: IDEAppearance.Spacing.xs) {
-            Picker("", selection: $workspace.localHistoryShowsProject) {
-                Text("This File").tag(false)
-                Text("Recent Changes").tag(true)
+        VStack(spacing: IDEAppearance.Spacing.xs) {
+            Picker("", selection: segment) {
+                Text("This File").tag(Segment.file)
+                if case .folder = scope {
+                    Text("This Folder").tag(Segment.folder)
+                }
+                Text("Recent Changes").tag(Segment.project)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            if let scopeCaption {
+                Text(scopeCaption)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack {
                 Toggle("Agent changes only", isOn: $agentOnly)
                     .toggleStyle(.checkbox)
@@ -81,14 +141,25 @@ struct IDELocalHistoryPanel: View {
             message("Open a folder to keep a history of its files.")
         } else if recorder.store == nil {
             message("Local History is off for this window.")
-        } else if !showsProject, activePath == nil {
+        } else if case .file = scope, shownFilePath == nil {
             message("Open a file in the project to see its earlier versions.")
         } else if isLoaded, visibleEvents.isEmpty {
-            message(agentOnly ? "No changes by the agent." : showsProject ? "Nothing has changed yet." : "No earlier versions yet. One is added each time you save.")
-        } else if showsProject {
+            message(emptyMessage)
+        } else if case .project = scope {
             projectList
+        } else if case .folder = scope {
+            fileList(showsPath: true)
         } else {
-            fileList
+            fileList(showsPath: false)
+        }
+    }
+
+    private var emptyMessage: String {
+        if agentOnly { return "No changes by the agent." }
+        switch scope {
+        case .project: return "Nothing has changed yet."
+        case .folder: return "Nothing in this folder has changed yet."
+        case .file: return "No earlier versions yet. One is added each time you save."
         }
     }
 
@@ -101,7 +172,7 @@ struct IDELocalHistoryPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var fileList: some View {
+    private func fileList(showsPath: Bool) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
                 ForEach(IDELocalHistoryPresentation.byDay(visibleEvents, time: \.time), id: \.heading) { section in
@@ -111,7 +182,7 @@ struct IDELocalHistoryPanel: View {
                         .padding(.horizontal, IDEAppearance.Spacing.sm)
                         .padding(.top, IDEAppearance.Spacing.sm)
                     ForEach(section.items) { event in
-                        row(event, showsPath: false)
+                        row(event, showsPath: showsPath)
                     }
                 }
             }
@@ -219,6 +290,8 @@ struct IDELocalHistoryPanel: View {
     @ViewBuilder private func menu(for event: IDELocalHistoryEvent) -> some View {
         Button("Compare with Current") { workspace.localHistoryOpenDiff(event, against: .current) }
         Button("Show This Change") { workspace.localHistoryOpenDiff(event, against: .previous) }
+        Button("Copy") { workspace.localHistoryCopy(event) }
+            .disabled(event.after == nil)
         Divider()
         Button("Revert to This Revision") { Task { await workspace.localHistoryRevert(toRevision: event) } }
         Button("Undo This Change") { Task { await workspace.localHistoryUndo(event) } }
@@ -230,6 +303,9 @@ struct IDELocalHistoryPanel: View {
             Button("Compare") { workspace.localHistoryOpenDiff(event, against: .current) }
             Button("Revert") { Task { await workspace.localHistoryRevert(toRevision: event) } }
                 .help("Put the file back to how it was after this revision")
+            Button("Copy") { workspace.localHistoryCopy(event) }
+                .disabled(event.after == nil)
+                .help("Copy this revision's text")
             Spacer()
         }
         .controlSize(.small)
@@ -244,12 +320,17 @@ struct IDELocalHistoryPanel: View {
             isLoaded = true
             return
         }
-        if showsProject {
+        switch scope {
+        case .project:
             events = await store.recentEvents(limit: 300)
-        } else if let path = activePath {
-            events = await store.events(forPath: path)
-        } else {
-            events = []
+        case .folder(let folder):
+            events = await store.events(under: folder)
+        case .file:
+            if let path = shownFilePath {
+                events = await store.events(forPath: path)
+            } else {
+                events = []
+            }
         }
         if let selection, !events.contains(where: { $0.id == selection }) { self.selection = nil }
         isLoaded = true

@@ -66,6 +66,25 @@ public actor AgentSession {
 
     /// Starts a run. The stream ends with exactly one `.runEnded`. Dropping the stream stops the run.
     public func send(_ text: String) -> AsyncStream<AgentEvent> {
+        beginRun {
+            items.append(.user(text))
+            return text
+        }
+    }
+
+    /// Runs again from the conversation as it stands, without adding a message. For a send the provider
+    /// never answered: the user message is already in the history, and a turn that failed to connect
+    /// left nothing half-written.
+    public func retry() -> AsyncStream<AgentEvent> {
+        beginRun {
+            for item in items.reversed() {
+                if case .user(let text) = item { return text }
+            }
+            return ""
+        }
+    }
+
+    private func beginRun(_ prepare: () -> String) -> AsyncStream<AgentEvent> {
         let (stream, continuation) = AsyncStream<AgentEvent>.makeStream()
         guard !isRunning else {
             continuation.yield(.runEnded(.failed("A run is already in progress.")))
@@ -73,8 +92,8 @@ public actor AgentSession {
             return stream
         }
         isRunning = true
-        items.append(.user(text))
-        let task = Task { await self.run(label: text, continuation) }
+        let label = prepare()
+        let task = Task { await self.run(label: label, continuation) }
         runTask = task
         continuation.onTermination = { _ in task.cancel() }
         return stream

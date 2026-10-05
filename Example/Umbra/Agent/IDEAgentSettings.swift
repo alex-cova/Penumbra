@@ -101,7 +101,7 @@ final class IDEAgentSettings {
     /// Extra environment variables for agent commands, one `KEY=VALUE` per line. A `PATH` entry is
     /// added in front of the built path.
     var commandEnvironmentText: String { didSet { defaults.set(commandEnvironmentText, forKey: Keys.commandEnvironment) } }
-    /// Whether the chat opens over the editor like Settings (true) or docked beside it (false, the default).
+    /// Whether the chat covers the editor (true) or sits docked beside it (false, the default).
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
     /// Whether commands and skills in `~/.claude` are offered, besides the project's and Umbra's own.
     var loadsUserSkills: Bool { didSet { defaults.set(loadsUserSkills, forKey: Keys.userSkills) } }

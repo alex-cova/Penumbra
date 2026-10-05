@@ -69,6 +69,9 @@ public final class IDEPreferences {
         static let preselectsRenamedName = "com.umbra.editor.preselectsRenamedName"
         static let confirmsInlineVariable = "com.umbra.editor.confirmsInlineVariable"
         static let javaSuppressWithComment = "com.umbra.editor.javaSuppressWithComment"
+        /// The same keys `IDELocalHistoryRecorder` already reads. Not the `com.umbra.editor` prefix.
+        static let localHistoryDays = "umbra.localHistory.days"
+        static let localHistoryMegabytes = "umbra.localHistory.megabytes"
     }
 
     var fontSize: Double {
@@ -436,6 +439,30 @@ public final class IDEPreferences {
         }
     }
 
+    /// How long an unnamed Local History revision is kept. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var localHistoryDays: Int {
+        didSet {
+            let clamped = min(max(localHistoryDays, 1), 365)
+            if clamped != localHistoryDays {
+                localHistoryDays = clamped
+                return
+            }
+            UserDefaults.standard.set(localHistoryDays, forKey: Keys.localHistoryDays)
+        }
+    }
+
+    /// How much text Local History keeps, in megabytes. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var localHistoryMegabytes: Int {
+        didSet {
+            let clamped = min(max(localHistoryMegabytes, 50), 10_000)
+            if clamped != localHistoryMegabytes {
+                localHistoryMegabytes = clamped
+                return
+            }
+            UserDefaults.standard.set(localHistoryMegabytes, forKey: Keys.localHistoryMegabytes)
+        }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
@@ -502,6 +529,8 @@ public final class IDEPreferences {
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
+        localHistoryDays = min(max((defaults.object(forKey: Keys.localHistoryDays) as? NSNumber)?.intValue ?? 7, 1), 365)
+        localHistoryMegabytes = min(max((defaults.object(forKey: Keys.localHistoryMegabytes) as? NSNumber)?.intValue ?? 500, 50), 10_000)
         IDEUIFonts.setCurrentFamilyName(uiFontName)
         IDEUIFonts.setCurrentFontSize(uiFontSize)
         IDEAppearance.applyUIColorScheme(uiColorScheme)

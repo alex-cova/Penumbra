@@ -16,6 +16,8 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
     var attachments: [String]?
     var planOutcome: String?
     var itemIndex: Int?
+    /// Set on an error the user can retry. Absent on older transcripts.
+    var canRetry: Bool?
     /// For the "files changed" card: the run, its files, which of them the run created, and whether it was reverted.
     var run: UUID?
     var paths: [String]?
@@ -32,7 +34,9 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
         case .user: kind = .user
         case .assistant: kind = .assistant
         case .notice: kind = .notice
-        case .error: kind = .error
+        case .error:
+            kind = .error
+            if entry.canRetry { canRetry = true }
         case .changes:
             // The card is kept only for a run whose originals are on disk (see `restoredEntry`).
             guard let run = entry.run, !entry.fileChanges.isEmpty else { return nil }
@@ -88,7 +92,12 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
             }()
         case .assistant: IDEAgentEntry(kind: .assistant, text: text)
         case .notice: IDEAgentEntry(kind: .notice, text: text)
-        case .error: IDEAgentEntry(kind: .error, text: text)
+        case .error:
+            {
+                var entry = IDEAgentEntry(kind: .error, text: text)
+                entry.canRetry = canRetry ?? false
+                return entry
+            }()
         case .toolCall:
             {
                 var entry = IDEAgentEntry(kind: .toolCall(name: toolName ?? "tool"), text: text, callID: callID)

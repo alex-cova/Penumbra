@@ -43,6 +43,30 @@ private func snapshot(_ root: String = "/proj/a", title: String = "Fix the build
         #expect(store.load(new.id, projectRoot: "/proj/b") == nil, "another project's folder never answers")
     }
 
+    @Test func listCountsUserMessagesAndReadsCostFromTheHostBlob() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var priced = snapshot(title: "priced")
+        priced.host = Data(#"{"entries":[],"cost":1.25}"#.utf8)
+        priced.items.append(.user("and this"))
+        var whole = snapshot(title: "whole dollars")
+        whole.host = Data(#"{"cost":2}"#.utf8)
+        whole.updatedAt = Date(timeIntervalSince1970: 1)
+        var plain = snapshot(title: "no cost")
+        plain.updatedAt = Date(timeIntervalSince1970: 2)
+        for item in [priced, whole, plain] { try store.save(item) }
+
+        let listed = store.list(projectRoot: priced.projectRoot)
+        let byTitle = Dictionary(uniqueKeysWithValues: listed.map { ($0.title, $0) })
+        #expect(byTitle["priced"]?.messageCount == 2)
+        #expect(byTitle["priced"]?.cost == 1.25)
+        #expect(byTitle["whole dollars"]?.cost == 2)
+        #expect(byTitle["no cost"]?.messageCount == 1)
+        #expect(byTitle["no cost"]?.cost == nil)
+        #expect(SessionStore.cost(in: Data("transcript".utf8)) == nil)
+        #expect(SessionStore.cost(in: Data(#"{"cost":null}"#.utf8)) == nil)
+    }
+
     @Test func savingAgainReplacesTheSameSession() throws {
         let (store, directory) = makeStore()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -12,6 +12,8 @@ struct IDETabRow: Identifiable, Equatable {
     let title: String
     let isDirty: Bool
     let isSelected: Bool
+    /// An SF Symbol for tabs that are not files (diagrams); files get an icon from their name.
+    var symbolName: String?
 }
 
 struct IDETerminalTab: Identifiable, Equatable {
@@ -21,10 +23,23 @@ struct IDETerminalTab: Identifiable, Equatable {
     var restartRequestID: UInt64 = 0
     /// Bumped to wipe the screen and scrollback of this tab's terminal.
     var clearRequestID: UInt64 = 0
+    /// Set when this tab only displays an agent command. It never starts a login shell, and it is
+    /// left out of the saved session: the text lives in the view until the window closes.
+    var agentCommandID: UUID?
+    /// Bumped when more output is waiting for this tab's view.
+    var agentFeedGeneration: UInt64 = 0
 
     static func defaultTitle(for directory: URL) -> String {
         let base = directory.lastPathComponent
         return base.isEmpty ? "Terminal" : base
+    }
+
+    /// A tab title short enough for the terminal strip.
+    static func commandTitle(for command: String) -> String {
+        let flat = command.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let limit = 48
+        guard flat.count > limit else { return flat.isEmpty ? "Command" : flat }
+        return String(flat.prefix(limit - 1)) + "…"
     }
 }
 
@@ -75,6 +90,7 @@ public final class IDEWorkspace {
     /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
     @ObservationIgnored
     var diffSessions: [UUID: IDEDiffSession] = [:]
+    var diagramSessions: [UUID: IDEDiagramSession] = [:]
     private let intelligenceServices = IDEIntelligenceServices()
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
@@ -214,8 +230,10 @@ public final class IDEWorkspace {
     var isSidebarVisible = false
     /// The left sidebar's tab. Read `activeSidebarTab`: this may name a tab that is unavailable now.
     var selectedSidebarTab = IDESidebarTab.explorer
-    /// The History tab shows every file's recent changes instead of the active file's revisions.
-    var localHistoryShowsProject = false
+    /// What the History tab lists: the active file, one folder, or every file's recent changes.
+    var localHistoryScope = IDELocalHistoryScope.file
+    /// A file to show instead of whichever editor is active. Cleared when the user picks This File or Recent Changes.
+    var localHistoryFile: String?
     /// Tabs the user closed with ×; the sidebar's + menu brings them back.
     private(set) var closedSidebarTabs: Set<IDESidebarTab> = []
     /// The project's breakpoints, mirrored from `breakpointStore` (which is not observable) for the
@@ -367,6 +385,12 @@ public final class IDEWorkspace {
     var terminalFocusRequestID: UInt64 = 0
     var terminalTabs: [IDETerminalTab] = []
     var selectedTerminalTabID: UUID?
+    /// Agent command id → the terminal tab displaying it. Not saved.
+    @ObservationIgnored private var agentCommandTabs: [UUID: UUID] = [:]
+    /// Output a command tab's view has not fed yet, keyed by tab id.
+    @ObservationIgnored private var agentCommandFeed: [UUID: String] = [:]
+    /// Commands whose tab should ignore anything further, including a tab the user closed.
+    @ObservationIgnored private var finishedAgentCommands: Set<UUID> = []
     /// Which tab the bottom panel is showing. Not persisted in the session -- each launch starts on
     /// a shell (or no terminal at all).
     var selectedBottomTab: IDEBottomPanelTab = .terminal
@@ -506,6 +530,10 @@ public final class IDEWorkspace {
             host.diffViewer.focus()
             return
         }
+        if workbench.activePane.selectedDocument?.contentKind == .diagram {
+            host.diagramViewer.focus()
+            return
+        }
         host.textView.focusTextInputWhenReady()
     }
 
@@ -548,6 +576,7 @@ public final class IDEWorkspace {
         }
         intelligenceServices.javaSupport.onGradleModelChanged = { [weak self] model in
             self?.fileIndexer.setGradleModel(model)
+            if model != nil { self?.reloadDiagramSessions(classes: false) }
         }
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
@@ -724,6 +753,7 @@ public final class IDEWorkspace {
         blame.cancelAll()
         agent.teardown()
         closeAllDiffSessions()
+        closeAllDiagramSessions()
         notifications.dismissToast()
         projectAccess.end()
         window = nil
@@ -1085,6 +1115,7 @@ public final class IDEWorkspace {
             diffSessions[document.id]?.save()
             return
         }
+        if document.contentKind == .diagram { return }
         let textView = host(for: pane.id).textView
         var destination = document.url
         if destination == nil {
@@ -2229,8 +2260,60 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Opens the bottom panel on a new tab that only displays one agent command. The user's shell
+    /// tabs are left alone, and this tab is not given the keyboard.
+    private func openAgentCommandTab(commandID: UUID, title: String) -> UUID {
+        let tab = IDETerminalTab(
+            id: UUID(),
+            title: IDETerminalTab.commandTitle(for: title),
+            workingDirectory: defaultTerminalDirectory(),
+            agentCommandID: commandID
+        )
+        terminalTabs.append(tab)
+        selectedTerminalTabID = tab.id
+        selectedBottomTab = .terminal
+        if !isTerminalVisible {
+            isTerminalVisible = true
+        }
+        saveSession()
+        return tab.id
+    }
+
+    /// Appends text to the command's display tab. `nil` ends the command: a closed tab, and anything
+    /// sent after this, is dropped rather than opening another tab.
+    func showAgentCommand(id: UUID, title: String, line: String?) {
+        if line == nil {
+            finishedAgentCommands.insert(id)
+            return
+        }
+        guard let line, !finishedAgentCommands.contains(id) else { return }
+        let tabID: UUID
+        if let existing = agentCommandTabs[id] {
+            guard terminalTabs.contains(where: { $0.id == existing }) else { return }
+            tabID = existing
+        } else {
+            tabID = openAgentCommandTab(commandID: id, title: title)
+            agentCommandTabs[id] = tabID
+        }
+        agentCommandFeed[tabID, default: ""] += line
+        guard let index = terminalTabs.firstIndex(where: { $0.id == tabID }) else { return }
+        terminalTabs[index].agentFeedGeneration += 1
+    }
+
+    /// The output waiting for an agent command tab, consumed once by its view.
+    func takeAgentCommandFeed(tabID: UUID) -> String {
+        let text = agentCommandFeed[tabID] ?? ""
+        agentCommandFeed[tabID] = nil
+        return text
+    }
+
     func closeTerminalTab(_ id: UUID) {
         guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        if let commandID = terminalTabs[index].agentCommandID {
+            agentCommandTabs[commandID] = nil
+            agentCommandFeed[id] = nil
+            finishedAgentCommands.insert(commandID)
+        }
 
         if terminalTabs.count == 1 {
             terminalTabs.removeAll()
@@ -2775,6 +2858,8 @@ public final class IDEWorkspace {
     func restartTerminalTab(_ id: UUID?) {
         guard let id = id ?? selectedTerminalTabID,
               let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
+        // An agent command tab has no shell to restart. Starting one would replace the output.
+        guard terminalTabs[index].agentCommandID == nil else { return }
         terminalTabs[index].restartRequestID += 1
         selectedTerminalTabID = id
         requestTerminalFocus()
@@ -3124,6 +3209,28 @@ public final class IDEWorkspace {
             }
         }
         return nil
+    }
+
+    /// Focuses a file that is already open, without reloading it, so a dirty buffer keeps the
+    /// user's edits. Selects `range` when given. Returns false when no tab shows `url`.
+    @discardableResult
+    func focusOpenDocument(_ url: URL, selecting range: NSRange?) -> Bool {
+        guard let (pane, document) = paneAndDocument(matching: url) else { return false }
+        if let range { document.selectedRange = range }
+        let alreadyVisible = pane.id == workbench.activePaneID && pane.selectedDocumentID == document.id
+        if alreadyVisible {
+            isSettingsVisible = false
+            agent.dismissPage()
+            showsWelcome = false
+        } else {
+            selectTab(document.id, in: pane.id)
+        }
+        if let range {
+            reveal(range, of: document.id, in: host(for: pane.id))
+        } else if alreadyVisible {
+            focusActiveEditor()
+        }
+        return true
     }
 
     /// Text of an open document, including unsaved edits. Nil when `url` is not open, so navigation
@@ -3708,7 +3815,9 @@ public final class IDEWorkspace {
         gradleSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> IDEWindowSession {
-        IDEWindowSession(
+        let shells = terminalTabs.filter { $0.agentCommandID == nil }
+        let selectedShell = shells.contains { $0.id == selectedTerminalTabID } ? selectedTerminalTabID : shells.first?.id
+        return IDEWindowSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
@@ -3717,8 +3826,8 @@ public final class IDEWorkspace {
             isGradleSidebarVisible: isGradleSidebarVisible,
             isTerminalVisible: isTerminalVisible,
             terminalHeight: terminalHeight ?? self.terminalHeight,
-            terminalTabs: terminalTabs.isEmpty ? nil : terminalTabs,
-            selectedTerminalTabID: selectedTerminalTabID,
+            terminalTabs: shells.isEmpty ? nil : shells,
+            selectedTerminalTabID: selectedShell,
             sidebarTab: selectedSidebarTab,
             closedSidebarTabs: closedSidebarTabs.sorted { $0.rawValue < $1.rawValue },
             isAgentPanelVisible: agent.isPanelVisible && !agent.settings.opensAsPage,
@@ -3860,6 +3969,7 @@ public final class IDEWorkspace {
             let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
+                + self.diagramContextMenuItems(url: url)
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
                 + self.localHistoryContextMenuItems(url: url)
         }
@@ -4063,7 +4173,13 @@ public final class IDEWorkspace {
     /// line's end; `nil` when the file can't be read as text.
     nonisolated static func utf16Range(ofLine line: Int, column: Int, in url: URL) -> NSRange? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let text = String(decoding: data, as: UTF8.self) as NSString
+        return utf16Range(ofLine: line, column: column, in: String(decoding: data, as: UTF8.self))
+    }
+
+    /// An empty range at a 1-based line and column of `text`, clamped to the last line and to that
+    /// line's end. A line past the end lands on the last line.
+    nonisolated static func utf16Range(ofLine line: Int, column: Int, in text: String) -> NSRange {
+        let text = text as NSString
         var lineStart = 0
         var currentLine = 1
         while currentLine < line {
@@ -4109,6 +4225,8 @@ public final class IDEWorkspace {
         guard pane.selectedDocument?.contentKind == .text else {
             if pane.selectedDocument?.contentKind == .image {
                 host.imageViewerController.focusForInteraction()
+            } else if pane.selectedDocument?.contentKind == .diagram {
+                host.diagramViewer.focus()
             } else {
                 host.diffViewer.focus()
             }
@@ -4450,6 +4568,7 @@ public final class IDEWorkspace {
 
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
         closeDiffSession(documentID, in: pane)
+        closeDiagramSession(documentID, in: pane)
         let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
         pane.closeDocument(documentID)
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
@@ -4681,6 +4800,36 @@ public final class IDEWorkspace {
             EditorCommand(id: "agent.previousChat", title: "Previous Agent Chat", group: "Agent",
                           shortcutDisplay: "⌥⌘[",
                           action: { [weak self] in self?.selectAgentChat(-1) }),
+            EditorCommand(id: "agent.clear", title: "Agent: Clear", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.clear) }),
+            EditorCommand(id: "agent.resume", title: "Agent: Resume", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.resume) }),
+            EditorCommand(id: "agent.rewind", title: "Agent: Rewind", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.rewind) }),
+            EditorCommand(id: "agent.fork", title: "Agent: Fork", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.fork) }),
+            EditorCommand(id: "agent.compact", title: "Agent: Compact", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.compact) }),
+            EditorCommand(id: "agent.plan", title: "Agent: Plan", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.plan) }),
+            EditorCommand(id: "agent.mode", title: "Agent: Mode", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.mode) }),
+            EditorCommand(id: "agent.permissions", title: "Agent: Permissions", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.permissions) }),
+            EditorCommand(id: "agent.model", title: "Agent: Model", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.model) }),
+            EditorCommand(id: "agent.export", title: "Agent: Export", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.export) }),
+            EditorCommand(id: "agent.init", title: "Agent: Init", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.initialize) }),
+            EditorCommand(id: "agent.cost", title: "Agent: Cost", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.cost) }),
+            EditorCommand(id: "agent.rename", title: "Agent: Rename", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.rename) }),
+            EditorCommand(id: "agent.help", title: "Agent: Help", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.help) }),
+            EditorCommand(id: "agent.history", title: "Agent: History", group: "Agent",
+                          action: { [weak self] in self?.runAgentCommand(.history) }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
                           action: { [weak self] in self?.revealActiveFileInExplorer() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
@@ -4780,6 +4929,16 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.reloadGradleProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
                           action: { [weak self] in self?.showGradleOutput() }),
+            EditorCommand(id: "app.java.showClassDiagram", title: "Java: Show Class Diagram", group: "Java",
+                          action: { [weak self] in self?.showClassDiagramForActiveFile() }),
+            EditorCommand(id: "app.java.showPackageDiagram", title: "Java: Show Package Class Diagram", group: "Java",
+                          action: { [weak self] in self?.showClassDiagramForActivePackage() }),
+            EditorCommand(id: "app.java.showProjectDiagram", title: "Java: Show Project Class Diagram", group: "Java",
+                          action: { [weak self] in self?.showClassDiagramForProject() }),
+            EditorCommand(id: "app.java.showGradleModuleDiagram", title: "Gradle: Show Module Diagram", group: "Java",
+                          action: { [weak self] in self?.showGradleModuleDiagram() }),
+            EditorCommand(id: "app.java.showGradleDependencyDiagram", title: "Gradle: Show Dependency Diagram", group: "Java",
+                          action: { [weak self] in self?.showGradleDependencyDiagram() }),
             EditorCommand(id: "app.http.sendRequest", title: "HTTP: Send Request", group: "HTTP",
                           action: { [weak self] in self?.sendActiveHTTPRequest() }),
             EditorCommand(id: "app.http.showResponse", title: "HTTP: Show Response", group: "HTTP",
@@ -4870,7 +5029,8 @@ public final class IDEWorkspace {
                     id: document.id,
                     title: document.displayName,
                     isDirty: document.isDirty,
-                    isSelected: document.id == pane.selectedDocumentID
+                    isSelected: document.id == pane.selectedDocumentID,
+                    symbolName: document.contentKind == .diagram ? diagramSessions[document.id]?.request.symbolName : nil
                 )
             }
         }
@@ -4912,7 +5072,7 @@ public final class IDEWorkspace {
         let headerChanged = headerContext.documentID == document.id && headerContext.isDirty != document.isDirty
         guard rowChanged || headerChanged else { return }
         if rowChanged {
-            rows[index] = IDETabRow(id: row.id, title: row.title, isDirty: document.isDirty, isSelected: row.isSelected)
+            rows[index] = IDETabRow(id: row.id, title: row.title, isDirty: document.isDirty, isSelected: row.isSelected, symbolName: row.symbolName)
             tabsByPane[workbench.activePaneID] = rows
         }
         if headerChanged {
@@ -5365,7 +5525,7 @@ public final class IDEWorkspace {
         if let kind = workbench.activePane.selectedDocument?.contentKind, kind != .text {
             statusLine = 1
             statusColumn = 1
-            statusLanguage = kind == .image ? "Image" : "Diff"
+            statusLanguage = kind == .image ? "Image" : (kind == .diagram ? "Diagram" : "Diff")
             statusSelectionLength = 0
             javaFileCanRun = false
             javaRunFileURL = nil
@@ -5623,14 +5783,22 @@ public final class IDEWorkspace {
         guard let document = pane.selectedDocument else { return }
         if document.contentKind == .image {
             host.diffViewer.hide()
+            host.diagramViewer.hide()
             showImageDocument(document, in: pane, host: host)
             return
         }
         if document.contentKind == .diff {
+            host.diagramViewer.hide()
             showDiffDocument(document, in: pane, host: host)
             return
         }
+        if document.contentKind == .diagram {
+            host.diffViewer.hide()
+            showDiagramDocument(document, in: pane, host: host)
+            return
+        }
         host.diffViewer.hide()
+        host.diagramViewer.hide()
         host.imageViewerController.hide()
         host.textView.languageIdentifier = document.languageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
@@ -5717,6 +5885,36 @@ public final class IDEWorkspace {
         if pane.id == workbench.activePaneID {
             host.diffViewer.focus()
         }
+    }
+
+    /// Puts a diagram tab's viewer over the pane's editor, keeping the text document it replaces.
+    private func showDiagramDocument(
+        _ document: WorkbenchDocument,
+        in pane: EditorPane,
+        host: IDEEditorPaneHost
+    ) {
+        guard let session = diagramSessions[document.id] else { return }
+        if let previousID = host.loadedDocumentID,
+           previousID != document.id,
+           let previous = pane.documents.first(where: { $0.id == previousID }),
+           previous.contentKind == .text {
+            syncTextViewToDocument(host.textView, document: previous, from: host)
+            previous.pendingState = host.textView.makeCapturedState()
+        }
+        host.markdownPreviewController.closeIfNotMarkdown()
+        host.imageViewerController.hide()
+        host.diffViewer.hide()
+        host.diagramViewer.show(session)
+        host.loadedDocumentID = document.id
+        host.loadedGeneration = document.contentGeneration
+        if pane.id == workbench.activePaneID {
+            host.diagramViewer.focus()
+        }
+    }
+
+    /// Opens a diagram tab (already set up with its session) in the active pane.
+    func presentDiagramDocument(_ document: WorkbenchDocument) {
+        presentDiffDocument(document)
     }
 
     /// Opens a diff tab (already set up with its session) in the active pane.

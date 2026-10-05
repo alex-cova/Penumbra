@@ -3,6 +3,16 @@ import AppKit
 import EditorIntelligence
 import Foundation
 
+/// What the History tab is showing.
+enum IDELocalHistoryScope: Equatable, Hashable {
+    /// The active editor, or `localHistoryFile` when one is pinned.
+    case file
+    /// Every revision under this project-relative folder.
+    case folder(String)
+    /// Recent changes across the project.
+    case project
+}
+
 /// What a revision is compared with.
 enum IDELocalHistoryComparison {
     /// The file as it is now.
@@ -16,7 +26,22 @@ extension IDEWorkspace {
 
     /// Opens the History tab on the active file, or on every file's recent changes.
     func showLocalHistory(project: Bool = false) {
-        localHistoryShowsProject = project
+        localHistoryFile = nil
+        localHistoryScope = project ? .project : .file
+        showSidebarTab(.history)
+    }
+
+    /// Opens the History tab on one project file, or on a folder's revisions.
+    func showLocalHistory(for url: URL) {
+        guard let path = localHistory.relativePath(of: url) else { return }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            localHistoryFile = nil
+            localHistoryScope = .folder(path)
+        } else {
+            localHistoryFile = path
+            localHistoryScope = .file
+        }
         showSidebarTab(.history)
     }
 
@@ -69,6 +94,16 @@ extension IDEWorkspace {
                     right: IDEDiffSide(source: .text(after), title: "Revision of \(time)"),
                     filePath: url.path, title: "\(url.lastPathComponent) (change)"))
             }
+        }
+    }
+
+    /// Puts the revision's text on the clipboard. A missing blob is reported; a deleted file has nothing to copy.
+    func localHistoryCopy(_ event: IDELocalHistoryEvent) {
+        guard event.after != nil, let store = localHistory.store else { return }
+        Task { @MainActor in
+            guard let text = await store.text(of: event) else { return presentLocalHistoryUnavailable() }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
         }
     }
 

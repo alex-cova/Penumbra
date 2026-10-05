@@ -3,12 +3,13 @@ import AgentKitMLX
 import LocalModelStore
 import SwiftUI
 
-/// The agent tool window: transcript, tool-call cards, composer and the settings popover.
+/// The agent tool window: transcript, tool-call cards, composer and the settings sheet.
 struct IDEAgentPanel: View {
     let agent: IDEAgentController
+    var placement: IDEAgentPlacement = .docked
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isSettingsPresented = false
     @State private var isHistoryPresented = false
-    @State private var isModelsPresented = false
     @State private var lastEscape: Date?
     @State private var composerState = IDEAgentComposerState()
     @State private var composerHeight: CGFloat = 22
@@ -26,8 +27,10 @@ struct IDEAgentPanel: View {
             composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(IDEAppearance.ColorToken.panel)
-        .sheet(isPresented: $isModelsPresented) { IDELocalModelsView(store: .shared, settings: settings) }
+        .background(placement == .page ? Color.clear : IDEAppearance.ColorToken.panel)
+        .sheet(isPresented: $isSettingsPresented) {
+            IDEAgentSettingsSheet(settings: settings)
+        }
         .sheet(item: Bindable(agent).rewindRequest) { request in
             IDEAgentRewindSheet(agent: agent, request: request) { agent.rewindRequest = nil }
         }
@@ -38,8 +41,7 @@ struct IDEAgentPanel: View {
 
     private var header: some View {
         HStack(spacing: 2) {
-            IDEPanelTitle("Agent")
-                .frame(maxWidth: .infinity, alignment: .leading)
+            headerTitle
 
             if agent.usage.inputTokens + agent.usage.outputTokens > 0 {
                 Text("\(IDEAgentFormat.tokens(agent.usage.inputTokens + agent.usage.outputTokens)) tokens"
@@ -60,24 +62,41 @@ struct IDEAgentPanel: View {
                 IDEAgentHistoryPopover(agent: agent) { isHistoryPresented = false }
             }
             .onAppear { agent.restoreLatestIfNeeded() }
-            IDEAgentIconButton(
-                systemImage: settings.opensAsPage ? "sidebar.trailing" : "arrow.up.left.and.arrow.down.right",
-                help: settings.opensAsPage ? "Dock Beside the Editor" : "Open as a Page Over the Editor"
-            ) {
-                settings.opensAsPage.toggle()
+            if placement == .docked {
+                IDEAgentIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Expand over the editor") {
+                    expandOverEditor()
+                }
             }
             IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
-                isSettingsPresented.toggle()
-            }
-            .popover(isPresented: $isSettingsPresented, arrowEdge: .bottom) {
-                IDEAgentSettingsView(settings: settings, manageModels: {
-                    isSettingsPresented = false
-                    isModelsPresented = true
-                })
+                isSettingsPresented = true
             }
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
+    }
+
+    @ViewBuilder private var headerTitle: some View {
+        if placement == .docked {
+            IDEPanelTitle("Agent")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if agent.conversations.count < 2 {
+            Text(agent.selected.title)
+                .font(IDEAppearance.Typography.sectionHeader)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func expandOverEditor() {
+        if reduceMotion {
+            settings.opensAsPage = true
+        } else {
+            withAnimation(.easeOut(duration: 0.15)) { settings.opensAsPage = true }
+        }
     }
 
     // MARK: - Transcript
@@ -176,7 +195,8 @@ struct IDEAgentPanel: View {
             }
             HStack {
                 IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
-                Spacer(minLength: 0)
+                IDEAgentModelChip(settings: settings) { isSettingsPresented = true }
+                Spacer(minLength: IDEAppearance.Spacing.sm)
                 if let fraction = agent.selected.contextFraction {
                     IDEAgentContextMeter(
                         fraction: fraction, tokens: agent.selected.contextTokens ?? 0, window: settings.contextWindow ?? 0,
@@ -318,6 +338,31 @@ private struct IDEAgentModeChip: View {
     }
 }
 
+/// The model this chat uses. Opens agent settings, where the model and provider are chosen.
+private struct IDEAgentModelChip: View {
+    let settings: IDEAgentSettings
+    let openSettings: () -> Void
+
+    private var title: String {
+        let model = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.isEmpty ? settings.provider.title : model
+    }
+
+    var body: some View {
+        Button(action: openSettings) {
+            Text(title)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .buttonStyle(.borderless)
+        .frame(maxWidth: 180)
+        .help(settings.provider.title)
+        .accessibilityLabel("Model: \(title)")
+    }
+}
+
 // MARK: - Entries
 
 private struct IDEAgentEntryView: View {
@@ -352,11 +397,31 @@ private struct IDEAgentEntryView: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .error:
+            IDEAgentErrorRow(entry: entry)
+        }
+    }
+}
+
+/// A failed send. Network failures offer Retry, which sends the same message again.
+private struct IDEAgentErrorRow: View {
+    let entry: IDEAgentEntry
+    @Environment(IDEWorkspace.self) private var workspace
+
+    private var agent: IDEAgentController { workspace.agent }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             Label(entry.text, systemImage: "exclamationmark.triangle.fill")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.error)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if entry.canRetry {
+                Button("Retry") { agent.retry() }
+                    .controlSize(.small)
+                    .disabled(agent.isRunning || agent.selected.isCompacting)
+                    .help("Send this message again")
+            }
         }
     }
 }
@@ -904,7 +969,40 @@ private struct IDEAgentDisclosureCard: View {
     }
 }
 
-/// The agent's settings, in the panel's popover (provider and behavior) and in Settings ▸ Agent
+/// Agent configuration from the chat, as a window sheet. Changes apply as they are edited.
+/// Done and Escape close it.
+private struct IDEAgentSettingsSheet: View {
+    let settings: IDEAgentSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var isModelsPresented = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Agent Settings")
+                    .font(IDEAppearance.Typography.titlebarTitle)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(IDEAppearance.Spacing.md)
+            Divider().overlay(IDEAppearance.ColorToken.border)
+            IDEAgentSettingsView(settings: settings, width: nil, manageModels: { isModelsPresented = true })
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(width: 460, height: 560)
+        .background(IDEAppearance.ColorToken.panel)
+        .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        .onExitCommand { dismiss() }
+        .sheet(isPresented: $isModelsPresented) {
+            IDELocalModelsView(store: .shared, settings: settings)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
+    }
+}
+
+/// The agent's settings, in the panel's sheet (provider and behavior) and in Settings ▸ Agent
 /// (also steps, context, environment, protected files and history).
 struct IDEAgentSettingsView: View {
     let settings: IDEAgentSettings

@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Markdown for the transcript: headings, lists, quotes, tables and fenced code, with inline styling.
+/// A project file named in the prose is a link when that file exists; clicking it opens the file.
 /// A code block can be copied, put at the editor's caret, or opened in a new tab.
 struct IDEAgentMarkdownView: View {
     let text: String
@@ -15,17 +16,44 @@ struct IDEAgentMarkdownView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
+        .environment(\.openURL, OpenURLAction { url in
+            guard let reference = IDEAgentFileLinks.reference(from: url) else { return .systemAction }
+            Task { await workspace.openAgentCitedFile(reference) }
+            return .handled
+        })
+    }
+
+    /// Prose with file citations turned into links. `tint` is what paints a link; the surrounding
+    /// words keep `foregroundStyle`.
+    private func prose(_ text: String) -> some View {
+        Text(linkedMarkdown(text)).tint(IDEAppearance.ColorToken.accent)
+    }
+
+    private func linkedMarkdown(_ text: String) -> AttributedString {
+        let root = workspace.project.rootURL
+        let linked = IDEAgentFileLinks.linkify(text) { path in
+            guard let root else { return false }
+            return IDEAgentFileLinks.resolve(path, under: root) != nil
+        }
+        var styled = IDEAgentFormat.markdown(linked)
+        let citations = styled.runs.compactMap { run -> Range<AttributedString.Index>? in
+            run.link?.scheme == IDEAgentFileLinks.scheme ? run.range : nil
+        }
+        for range in citations {
+            styled[range].underlineStyle = .single
+        }
+        return styled
     }
 
     @ViewBuilder private func view(for block: IDEAgentMarkdownBlock) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(IDEAgentFormat.markdown(text))
+            prose(text)
                 .font(level <= 2 ? IDEAppearance.Typography.sectionHeader.weight(.bold) : IDEAppearance.Typography.body.weight(.semibold))
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .padding(.top, level <= 2 ? 4 : 2)
         case .paragraph(let text):
-            Text(IDEAgentFormat.markdown(text))
+            prose(text)
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .fixedSize(horizontal: false, vertical: true)
@@ -35,14 +63,14 @@ struct IDEAgentMarkdownView: View {
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(minWidth: 14, alignment: .trailing)
-                Text(IDEAgentFormat.markdown(text))
+                prose(text)
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.leading, CGFloat(indent) * 14)
         case .quote(let text):
-            Text(IDEAgentFormat.markdown(text))
+            prose(text)
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.leading, IDEAppearance.Spacing.sm)

@@ -49,6 +49,9 @@ final class IDETerminalHostView: NSView {
 
     /// Whether this is the terminal tab the user is looking at.
     var isShownActive: Bool { isActive && !isShutDown }
+    /// An agent command tab displays text and never starts a shell.
+    private var mirrorsOutput = false
+    private var pendingMirror = ""
 
     /// The last `lines` non-empty lines of the screen and scrollback, as text.
     func recentText(lines: Int) -> String? {
@@ -101,6 +104,10 @@ final class IDETerminalHostView: NSView {
 
     override func layout() {
         super.layout()
+        if mirrorsOutput {
+            flushMirror()
+            return
+        }
         if isActive {
             startProcessIfNeeded()
             if pendingFocus {
@@ -119,10 +126,14 @@ final class IDETerminalHostView: NSView {
         terminalView.setNeedsDisplay(terminalView.bounds)
     }
 
+    func setMirrorsOutput(_ mirror: Bool) {
+        mirrorsOutput = mirror
+    }
+
     func setActive(_ active: Bool) {
         guard isActive != active else { return }
         isActive = active
-        if active {
+        if active, !mirrorsOutput {
             startProcessIfNeeded()
         }
     }
@@ -150,10 +161,24 @@ final class IDETerminalHostView: NSView {
     }
 
     func restartProcess() {
+        guard !mirrorsOutput else { return }
         if terminalView.process.running {
             terminalView.terminate()
         }
         startProcessIfNeeded()
+    }
+
+    /// Draws text into a command tab. Queued until the view has a size, then fed to the terminal.
+    func feedOutput(_ text: String) {
+        guard mirrorsOutput, !text.isEmpty else { return }
+        pendingMirror += text
+        flushMirror()
+    }
+
+    private func flushMirror() {
+        guard mirrorsOutput, !pendingMirror.isEmpty, bounds.width > 1, bounds.height > 1 else { return }
+        terminalView.feed(text: pendingMirror)
+        pendingMirror.removeAll(keepingCapacity: true)
     }
 
     /// Wipes the screen and scrollback, then sends Ctrl-L so the shell draws its prompt again.
@@ -202,6 +227,7 @@ final class IDETerminalHostView: NSView {
     }
 
     func startProcessIfNeeded() {
+        guard !mirrorsOutput else { return }
         guard isActive, !isShutDown else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
         guard !terminalView.process.running else {
@@ -230,7 +256,7 @@ final class IDETerminalHostView: NSView {
     }
 
     func handleProcessTerminated() {
-        guard isActive else { return }
+        guard isActive, !mirrorsOutput else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.startProcessIfNeeded()
         }
@@ -282,6 +308,9 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let clearRequestID: UInt64
     let commandTicket: UInt64
     let command: String?
+    let mirrorsOutput: Bool
+    let agentFeedGeneration: UInt64
+    let takeAgentFeed: () -> String
     let onTitleUpdate: (String) -> Void
     let onDirectoryUpdate: (URL) -> Void
     /// Tells the workspace about the view, so closing the window can end its shell.
@@ -293,6 +322,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         view.workingDirectory = workingDirectory
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
+        view.setMirrorsOutput(mirrorsOutput)
         view.setActive(isActive)
         view.applyEditorFont(name: fontName, size: fontSize)
         context.coordinator.hostView = view
@@ -300,16 +330,18 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         context.coordinator.lastRestartRequestID = restartRequestID
         context.coordinator.lastClearRequestID = clearRequestID
         context.coordinator.lastUIColorSchemeID = uiColorSchemeID
-        if isActive {
+        if isActive, !mirrorsOutput {
             view.scheduleFocus()
         }
         deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
+        deliverAgentFeed(generation: agentFeedGeneration, to: view, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ view: IDETerminalHostView, context: Context) {
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
+        view.setMirrorsOutput(mirrorsOutput)
         view.applyEditorFont(name: fontName, size: fontSize)
         view.syncWorkingDirectory(workingDirectory)
         if context.coordinator.lastUIColorSchemeID != uiColorSchemeID {
@@ -320,13 +352,13 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         view.setActive(isActive)
         context.coordinator.wasActive = isActive
 
-        if isActive && !wasActive {
+        if isActive && !wasActive && !mirrorsOutput {
             view.scheduleFocus()
         }
 
         if context.coordinator.lastFocusRequestID != focusRequestID {
             context.coordinator.lastFocusRequestID = focusRequestID
-            if isActive {
+            if isActive, !mirrorsOutput {
                 view.scheduleFocus()
             }
         }
@@ -345,6 +377,13 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
             }
         }
         deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
+        deliverAgentFeed(generation: agentFeedGeneration, to: view, coordinator: context.coordinator)
+    }
+
+    private func deliverAgentFeed(generation: UInt64, to view: IDETerminalHostView, coordinator: Coordinator) {
+        guard mirrorsOutput, generation != coordinator.lastAgentFeedGeneration else { return }
+        coordinator.lastAgentFeedGeneration = generation
+        view.feedOutput(takeAgentFeed())
     }
 
     private func deliver(_ command: String?, ticket: UInt64, to view: IDETerminalHostView, coordinator: Coordinator) {
@@ -370,6 +409,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         var lastRestartRequestID: UInt64 = 0
         var lastClearRequestID: UInt64 = 0
         var lastCommandTicket: UInt64 = 0
+        var lastAgentFeedGeneration: UInt64 = 0
         var lastUIColorSchemeID = ""
         var wasActive = false
     }
@@ -447,6 +487,9 @@ struct IDETerminalPanel: View {
                         clearRequestID: tab.clearRequestID,
                         commandTicket: isSelected ? workspace.terminalCommandTicket : 0,
                         command: isSelected ? workspace.pendingTerminalCommand : nil,
+                        mirrorsOutput: tab.agentCommandID != nil,
+                        agentFeedGeneration: tab.agentFeedGeneration,
+                        takeAgentFeed: { [weak workspace = workspace] in workspace?.takeAgentCommandFeed(tabID: tab.id) ?? "" },
                         // Weak: a running shell keeps its terminal view alive, and a strong capture
                         // here would keep the whole workspace alive through it after the window closes.
                         onTitleUpdate: { [weak workspace = workspace] in workspace?.updateTerminalTabTitle(tab.id, title: $0) },

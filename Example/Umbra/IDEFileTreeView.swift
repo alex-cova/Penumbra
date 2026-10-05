@@ -11,6 +11,8 @@ struct IDEFileTreeActions {
     var trash: (URL) -> Void
     var copyPath: (_ url: URL, _ relative: Bool) -> Void
     var findInFiles: (_ directory: URL) -> Void
+    var showHistory: (URL) -> Void
+    var showClassDiagram: (URL) -> Void
 }
 
 struct IDEFileTreeView: View {
@@ -428,6 +430,10 @@ private struct IDEFileTreeRow: View {
             Divider()
             Button("Copy Path") { selectAndRun { actions.copyPath(node.url, false) } }
             Button("Copy Relative Path") { selectAndRun { actions.copyPath(node.url, true) } }
+            Button("Show History") { selectAndRun { actions.showHistory(node.url) } }
+            if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
+                Button("Show Class Diagram") { selectAndRun { actions.showClassDiagram(node.url) } }
+            }
             if node.isDirectory {
                 Button("Find in Files Here…") { selectAndRun { actions.findInFiles(node.url) } }
             }

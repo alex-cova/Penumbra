@@ -98,6 +98,16 @@ final class IDELocalHistoryStoreTests: XCTestCase {
         XCTAssertEqual(limited, ["A"])
     }
 
+    func testEventsUnderAFolderDoNotMatchAShorterPrefix() async {
+        let store = store()
+        await store.record(path: "src/A.java", text: "a", source: .save, at: t0)
+        await store.record(path: "src/util/B.java", text: "b", source: .save, at: t0.addingTimeInterval(1))
+        await store.record(path: "src2/C.java", text: "c", source: .save, at: t0.addingTimeInterval(2))
+        await store.record(path: "src", text: "readme", source: .save, at: t0.addingTimeInterval(3))
+        let under = await store.events(under: "src").map(\.path)
+        XCTAssertEqual(under, ["src", "src/util/B.java", "src/A.java"])
+    }
+
     func testADeletionIsAnEventAndARecreationFollowsIt() async throws {
         let store = store()
         await store.record(path: "A", text: "alive", source: .save, at: t0)

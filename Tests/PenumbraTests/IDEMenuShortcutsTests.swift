@@ -54,6 +54,7 @@ final class IDEMenuShortcutsTests: XCTestCase {
             XCTAssertNil(shortcut(.gitPush, preset))
             XCTAssertNil(shortcut(.replaceInFiles, preset), "⇧⌘R is Send Request in these presets")
             XCTAssertNil(shortcut(.gitRevert, preset))
+            XCTAssertNil(shortcut(.recentChanges, preset), "⌥⇧C is the IntelliJ keymap's Recent Changes")
             XCTAssertEqual(shortcut(.zoomIn, preset), KeyboardShortcut("=", modifiers: .command))
             XCTAssertEqual(shortcut(.zoomOut, preset), KeyboardShortcut("-", modifiers: .command))
             XCTAssertNil(shortcut(.nextSplit, preset))
@@ -100,6 +101,7 @@ final class IDEMenuShortcutsTests: XCTestCase {
         XCTAssertEqual(shortcut(.toggleProblems, preset), KeyboardShortcut("6"))
         XCTAssertEqual(shortcut(.toggleStructure, preset), KeyboardShortcut("7"))
         XCTAssertEqual(shortcut(.toggleSourceControl, preset), KeyboardShortcut("9"))
+        XCTAssertEqual(shortcut(.recentChanges, preset), KeyboardShortcut("c", modifiers: [.option, .shift]))
     }
 
     func testIntelliJGivesShiftCommandRToReplaceInFilesNotToSendRequest() {

@@ -253,6 +253,17 @@ final class CommandHost: IDEAgentHost {
         for path in relativePaths { unsaved.removeValue(forKey: agentProjectRoot!.appendingPathComponent(path).path) }
     }
     var agentIsGradleProject: Bool { isGradle }
+    var revealedGradle = 0
+    var shownFiles: [(path: String, line: Int?, column: Int?)] = []
+    var commandLines: [(id: UUID, line: String?)] = []
+
+    func agentRevealGradle() { revealedGradle += 1 }
+    func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {
+        shownFiles.append((relativePath, line, column))
+    }
+    func agentShowCommand(id: UUID, title: String, line: String?) {
+        commandLines.append((id, line))
+    }
     func agentRunGradle(tasks: [String], options: [String], timeout: TimeInterval) async -> IDEGradleRunOutcome {
         gradleRequests.append((tasks, options))
         guard let gradleExecutable, let root = agentProjectRoot else { return gradleOutcome }
@@ -322,6 +333,7 @@ final class IDEAgentCommandToolTests: XCTestCase {
         let tool = IDERunCommandTool(support: support())
 
         let request = await tool.approvalRequest(for: try ToolArguments(json: #"{"command":"ls","reason":"r"}"#), context: context(scope: scope))
+        XCTAssertTrue(host.commandLines.isEmpty, "asking does not open a terminal tab")
         XCTAssertEqual(request?.notes.count, 2)
         XCTAssertTrue(request?.notes.first?.contains("Saves the files the agent changed first: A.java") == true)
         XCTAssertTrue(request?.notes.last?.contains("unsaved changes in Mine.java") == true)
@@ -340,6 +352,10 @@ final class IDEAgentCommandToolTests: XCTestCase {
         XCTAssertTrue(output.contains("hello") && output.contains("oops"))
         XCTAssertTrue(output.contains("[exit code 3 after "))
         XCTAssertTrue(chunks.joined.contains("hello"))
+        XCTAssertTrue(host.commandLines.first?.line?.hasPrefix("$ echo hello") == true)
+        XCTAssertTrue(host.commandLines.contains { $0.line?.contains("hello") == true })
+        XCTAssertEqual(host.commandLines.last?.line, nil, "the tab stops accepting output when the command ends")
+        XCTAssertEqual(Set(host.commandLines.map(\.id)).count, 1)
     }
 
     func testTimeoutsAndEmptyOutputAndLongOutputAreFormatted() {
@@ -381,6 +397,7 @@ final class IDEAgentCommandToolTests: XCTestCase {
         let plain = try ToolArguments(json: #"{"tests":null,"module":null,"reason":"r"}"#)
         _ = try await tool.run(plain, context: context())
         XCTAssertEqual(host.gradleRequests.last?.tasks, ["test"])
+        XCTAssertEqual(host.revealedGradle, 2)
     }
 
     func testGradleRefusalsBecomeOutputsTheModelCanActOn() async throws {
@@ -388,8 +405,10 @@ final class IDEAgentCommandToolTests: XCTestCase {
         let tool = IDEGradleTool(support: support())
         let output = await tool.execute(argumentsJSON: #"{"tasks":["classes"],"options":null,"reason":"r"}"#, context: context())
         XCTAssertEqual(output, .error("The project is not trusted, so its Gradle build scripts were not run."))
+        XCTAssertEqual(host.revealedGradle, 1, "a run that will not start still opens the Gradle panels, where the reason is written")
         let none = await tool.execute(argumentsJSON: #"{"tasks":[],"reason":"r"}"#, context: context())
         XCTAssertTrue(none.isError)
+        XCTAssertEqual(host.revealedGradle, 1, "a call with no task never reaches the runner")
     }
 
     func testGradleSummarizesACompileFailureForTheModel() async throws {
@@ -438,6 +457,35 @@ final class IDEAgentCommandToolTests: XCTestCase {
         XCTAssertEqual(IDEAgentToolSummary.title(name: "run_command", arguments: #"{"command":"git status"}"#), "run_command  git status")
         XCTAssertEqual(IDEAgentToolSummary.title(name: "gradle", arguments: #"{"tasks":["clean","build"]}"#), "gradle  clean build")
         XCTAssertEqual(IDEAgentToolSummary.title(name: "run_tests", arguments: #"{"module":":app","tests":["FooTest"]}"#), "run_tests  :app FooTest")
+        XCTAssertEqual(IDEAgentToolSummary.title(name: "show_file", arguments: #"{"path":"src/A.java","line":4}"#), "show_file  src/A.java:4")
+    }
+
+    func testShowFileOpensThePathAndRefusesWhatIsMissingOrOutside() async throws {
+        let file = project.appendingPathComponent("src/A.java")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "class A {}\n".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("dir"), withIntermediateDirectories: true)
+        let tool = IDEShowFileTool(root: project, box: IDEAgentHostBox(host))
+        XCTAssertTrue(tool.isOffered(in: .plan))
+        XCTAssertTrue(tool.isOffered(in: .acceptEdits))
+
+        let output = try await tool.run(try ToolArguments(json: #"{"path":"src/A.java","line":1,"column":1}"#), context: context())
+        XCTAssertEqual(output, "Opened src/A.java at line 1.")
+        XCTAssertEqual(host.shownFiles.first?.path, "src/A.java")
+        XCTAssertEqual(host.shownFiles.first?.line, 1)
+        XCTAssertEqual(host.shownFiles.first?.column, 1)
+
+        let missing = await tool.execute(argumentsJSON: #"{"path":"nope.java"}"#, context: context())
+        XCTAssertTrue(missing.isError)
+        let outside = await tool.execute(argumentsJSON: #"{"path":"/etc/passwd"}"#, context: context())
+        XCTAssertTrue(outside.isError)
+        let escape = await tool.execute(argumentsJSON: #"{"path":"../secret"}"#, context: context())
+        XCTAssertTrue(escape.isError)
+        let directory = await tool.execute(argumentsJSON: #"{"path":"dir"}"#, context: context())
+        XCTAssertTrue(directory.isError)
+        let badLine = await tool.execute(argumentsJSON: #"{"path":"src/A.java","line":0}"#, context: context())
+        XCTAssertTrue(badLine.isError)
+        XCTAssertEqual(host.shownFiles.count, 1)
     }
 }
 

@@ -86,6 +86,7 @@ final class IDEAgentApprovalFlowTests: XCTestCase {
         await waitFor("the run finishes") { !controller.isRunning }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertTrue(hosts.last?.commandLines.isEmpty == true, "a denied command does not open a terminal tab")
         XCTAssertEqual(toolEntry(controller)?.approvalOutcome, "Denied")
         let output = try XCTUnwrap(toolEntry(controller)?.output)
         XCTAssertTrue(output.isError && output.text.contains("use a dry run first"))

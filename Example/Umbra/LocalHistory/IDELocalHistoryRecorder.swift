@@ -132,8 +132,8 @@ final class IDELocalHistoryRecorder {
         let last = defaults.object(forKey: lastPruneKey) as? Date ?? .distantPast
         guard Date().timeIntervalSince(last) > 20 * 3_600 else { return }
         defaults.set(Date(), forKey: lastPruneKey)
-        let days = defaults.object(forKey: "umbra.localHistory.days") as? Double ?? 7
-        let megabytes = defaults.object(forKey: "umbra.localHistory.megabytes") as? Int ?? 500
+        let days = (defaults.object(forKey: "umbra.localHistory.days") as? NSNumber)?.doubleValue ?? 7
+        let megabytes = (defaults.object(forKey: "umbra.localHistory.megabytes") as? NSNumber)?.intValue ?? 500
         Task { await store.prune(maxAge: days * 86_400, maxBytes: megabytes * 1_000_000) }
     }
 

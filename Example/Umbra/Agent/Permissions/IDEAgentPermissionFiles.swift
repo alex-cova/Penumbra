@@ -26,6 +26,19 @@ enum IDEAgentPermissionFiles {
 
     static let projectLocalPath = ".umbra/settings.local.json"
 
+    /// `.gitignore` with `line` added, or `nil` when a line already matches after trimming.
+    /// An empty file becomes the line. A file without a trailing newline keeps its last line intact.
+    static func gitignore(adding line: String, to existing: String?) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let current = existing ?? ""
+        let present = current.split(separator: "\n", omittingEmptySubsequences: false)
+            .contains { $0.trimmingCharacters(in: .whitespaces) == trimmed }
+        if present { return nil }
+        if current.isEmpty { return trimmed + "\n" }
+        return current.hasSuffix("\n") ? current + trimmed + "\n" : current + "\n" + trimmed + "\n"
+    }
+
     /// `~/Library/Application Support/com.umbra.editor/permissions.json`.
     static func appFile() -> URL? {
         (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))?

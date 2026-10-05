@@ -215,6 +215,9 @@ private func drive(_ agent: AgentSession, decide: ((ApprovalRequest) -> Approval
     }
 
     @Test func thePlanPromptTellsTheModelItCannotChangeAnything() {
+        #expect(SystemPrompt.make(projectRoot: "/p").contains("show_file"))
+        #expect(SystemPrompt.make(projectRoot: "/p").contains("Gradle tool window"))
+        #expect(SystemPrompt.make(projectRoot: "/p").contains("integrated terminal"))
         #expect(SystemPrompt.make(projectRoot: "/p", mode: .plan).contains("Plan mode"))
         #expect(SystemPrompt.make(projectRoot: "/p", mode: .manual).contains("shown to the user as a diff"))
         #expect(!SystemPrompt.make(projectRoot: "/p").contains("Plan mode"))

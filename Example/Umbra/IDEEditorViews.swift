@@ -12,6 +12,8 @@ final class IDEEditorPaneHost: NSView {
     let imageViewerController: ImageViewerController
     /// Laid over the editor while a diff tab is selected.
     let diffViewer = IDEDiffViewerView()
+    /// Laid over the editor while a class or dependency diagram tab is selected.
+    let diagramViewer = IDEDiagramViewerView()
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
@@ -65,6 +67,14 @@ final class IDEEditorPaneHost: NSView {
             diffViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
             diffViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
             diffViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        diagramViewer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(diagramViewer)
+        NSLayoutConstraint.activate([
+            diagramViewer.topAnchor.constraint(equalTo: topAnchor),
+            diagramViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            diagramViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            diagramViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))

@@ -93,7 +93,7 @@ struct IDEAgentHistoryPopover: View {
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                         .lineLimit(1)
-                    Text(summary.updatedAt.formatted(.relative(presentation: .named)) + (isOpen ? "  ·  open" : ""))
+                    Text(detail(summary, isOpen: isOpen))
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
@@ -109,6 +109,14 @@ struct IDEAgentHistoryPopover: View {
             Button("Delete…", role: .destructive) { deleting = summary }
                 .disabled(agent.conversations.first { $0.conversationID == summary.id }?.isRunning == true)
         }
+    }
+
+    private func detail(_ summary: SessionSummary, isOpen: Bool) -> String {
+        var parts = [summary.updatedAt.formatted(.relative(presentation: .named))]
+        parts.append(summary.messageCount == 1 ? "1 message" : "\(summary.messageCount) messages")
+        if let cost = summary.cost { parts.append(IDEAgentPrices.format(cost)) }
+        if isOpen { parts.append("open") }
+        return parts.joined(separator: "  ·  ")
     }
 
     private func open(_ summary: SessionSummary) {

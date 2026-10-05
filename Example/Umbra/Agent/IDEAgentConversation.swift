@@ -92,6 +92,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     /// Where the current model turn's entries begin, so a retried turn can drop them.
     @ObservationIgnored private var turnStart = 0
+    /// The next run is a Retry of a send the provider never answered: drop that error once it starts.
+    @ObservationIgnored private var dismissRetryError = false
     @ObservationIgnored private var currentRun: RunID?
     @ObservationIgnored private var pendingOutput: [String: String] = [:]
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
@@ -166,7 +168,6 @@ final class IDEAgentConversation: Identifiable {
         willSend?()
         commandCatalog?.invalidate()
         promptRecall.reset()
-        stopRequested = false
         draft = ""
         var entry = IDEAgentEntry(kind: .user, text: text)
         // What the model reads: the output of commands the user ran since the last message, then the message.
@@ -179,6 +180,35 @@ final class IDEAgentConversation: Identifiable {
         let context = host.agentEditorContext()
         let body = fullText
         let entryID = entry.id
+        openRun(root: root, host: host) { session in
+            let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
+            if self.stopRequested { return nil }
+            // The new message is on its way, so the previous failure's Retry no longer applies.
+            if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
+            return await session.send(framed)
+        }
+    }
+
+    /// Tries the send that failed because the provider could not be reached. The message is already in
+    /// the transcript and in the history, so this does not add another copy of it.
+    func retry() {
+        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure, let host, let root = host.agentProjectRoot else { return }
+        guard entries.contains(where: \.canRetry) else { return }
+        willSend?()
+        commandCatalog?.invalidate()
+        promptRecall.reset()
+        dismissRetryError = true
+        openRun(root: root, host: host) { session in
+            await session.retry()
+        }
+    }
+
+    /// Makes the session, then runs `makeStream`. `nil` means Stop landed before anything was sent.
+    private func openRun(
+        root: URL, host: any IDEAgentHost,
+        makeStream: @escaping @MainActor (AgentSession) async -> AsyncStream<AgentEvent>?
+    ) {
+        stopRequested = false
         isRunning = true
         status = "Thinking…"
         runTask = Task { [weak self] in
@@ -187,9 +217,7 @@ final class IDEAgentConversation: Identifiable {
             do {
                 activeSession = try await self.currentSession(root: root, host: host)
             } catch {
-                self.append(.init(kind: .error, text: error.localizedDescription))
-                self.isRunning = false
-                self.status = nil
+                self.abandonRun(error: error.localizedDescription)
                 return
             }
             // Loading an on-device model reads gigabytes; say so, and fail visibly rather than inside the first turn.
@@ -200,9 +228,7 @@ final class IDEAgentConversation: Identifiable {
                     await models.load(model)
                 }
                 if let error = models.loadError, models.loadedID != model.id {
-                    self.append(.init(kind: .error, text: error))
-                    self.isRunning = false
-                    self.status = nil
+                    self.abandonRun(error: error)
                     return
                 }
             }
@@ -211,17 +237,28 @@ final class IDEAgentConversation: Identifiable {
             await activeSession.setRules(self.currentRules(root: root))
             // Stop pressed while the session was being made or a model loaded: end here, before anything is sent.
             if self.stopRequested { return self.endBeforeStarting() }
-            let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: activeSession)
-            if self.stopRequested { return self.endBeforeStarting() }
-            let stream = await activeSession.send(framed)
+            guard let stream = await makeStream(activeSession) else { return self.endBeforeStarting() }
+            if self.dismissRetryError {
+                self.dismissRetryError = false
+                if let index = self.entries.lastIndex(where: \.canRetry) { self.entries.remove(at: index) }
+            }
             // A Stop that landed between the check above and the run starting.
             if self.stopRequested { await activeSession.stop() }
             await self.consume(stream, session: activeSession)
         }
     }
 
+    /// The run never started. A Retry that was waiting stays, so the button is still there.
+    private func abandonRun(error: String) {
+        dismissRetryError = false
+        append(.init(kind: .error, text: error))
+        isRunning = false
+        status = nil
+    }
+
     /// Stop was pressed before the run began: say so and put anything queued back in the field.
     private func endBeforeStarting() {
+        dismissRetryError = false
         append(.init(kind: .notice, text: "Stopped."))
         isRunning = false
         status = nil
@@ -422,8 +459,14 @@ final class IDEAgentConversation: Identifiable {
         let existed = FileManager.default.fileExists(atPath: file.path)
         do {
             try IDEAgentPermissionFiles.add(rule, to: .allow, in: file)
-            appendNotice("Saved \(rule) to \(IDEAgentPermissionFiles.projectLocalPath)."
-                + (existed ? "" : " It is your own file: add it to .gitignore if the project is shared."))
+            var notice = "Saved \(rule) to \(IDEAgentPermissionFiles.projectLocalPath)."
+            if !existed {
+                let added = host?.agentOfferGitignore(IDEAgentPermissionFiles.projectLocalPath) == true
+                notice += added
+                    ? " Added it to .gitignore."
+                    : " It is your own file: add it to .gitignore if the project is shared."
+            }
+            appendNotice(notice)
             pushRules()
         } catch {
             appendError("Could not save the rule: \(error.localizedDescription)")
@@ -651,7 +694,10 @@ final class IDEAgentConversation: Identifiable {
         })
         agentWorkspace = workspace
         let support = IDEAgentCommandSupport(root: root, box: box)
-        var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns) + EditingTools.all() + [IDERunCommandTool(support: support)]
+        var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
+            + [IDEShowFileTool(root: root, box: box)]
+            + EditingTools.all()
+            + [IDERunCommandTool(support: support)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
         let git = IDEAgentGitSource(
@@ -1086,10 +1132,23 @@ final class IDEAgentConversation: Identifiable {
         case .runEnded(let ending):
             lastEnding = ending
             closeStreamingEntry()
-            if let message = IDEAgentToolSummary.endingMessage(ending, iterationLimit: iterationLimit) {
+            if case .failed(let message) = ending, IDEAgentNetworkFailure.offersRetry(message) {
+                // The turn never landed in the history. Drop its partial text so Retry starts clean.
+                dropUncommittedTurn()
+                var entry = IDEAgentEntry(kind: .error, text: message)
+                entry.canRetry = true
+                append(entry)
+            } else if let message = IDEAgentToolSummary.endingMessage(ending, iterationLimit: iterationLimit) {
                 append(.init(kind: message.isError ? .error : .notice, text: message.text))
             }
         }
+    }
+
+    /// Removes the model turn that failed before it was saved. A user message is never part of it.
+    private func dropUncommittedTurn() {
+        guard entries.indices.contains(turnStart) else { return }
+        guard !entries[turnStart...].contains(where: { $0.kind == .user }) else { return }
+        entries.removeSubrange(turnStart...)
     }
 
     /// What the transcript says when the agent shortened its own context. Nothing for a pass that changed nothing.

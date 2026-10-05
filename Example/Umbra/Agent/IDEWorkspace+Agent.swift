@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import EditorIntelligence
 import Foundation
 
@@ -25,6 +26,61 @@ extension IDEWorkspace: IDEAgentHost {
         guard hasOpenProject else { return }
         agent.selectNeighbor(step)
         agent.showPanel()
+    }
+
+    /// A built-in command from the palette. Chat commands open the panel first. `/rename` without a
+    /// name stays a notice; the palette asks for the name instead.
+    func runAgentCommand(_ command: IDEAgentBuiltInCommand) {
+        guard hasOpenProject else { return }
+        switch command {
+        case .history:
+            showLocalHistory()
+        case .rename:
+            agent.showPanel()
+            promptAgentRename()
+        default:
+            agent.showPanel()
+            agent.runBuiltIn(command)
+        }
+    }
+
+    func agentShowLocalHistory() {
+        showLocalHistory()
+    }
+
+    /// The first time `.umbra/settings.local.json` is created. Tests turn session persistence off and
+    /// must not stop on a modal; they keep the notice that tells the user to add the line.
+    func agentOfferGitignore(_ relativePath: String) -> Bool {
+        guard Self.isSessionPersistenceEnabled, let root = project.rootURL else { return false }
+        let alert = NSAlert()
+        alert.messageText = "Add to .gitignore"
+        alert.informativeText = "\(relativePath) holds rules for you alone. Add it to .gitignore so it stays out of a shared project."
+        alert.addButton(withTitle: "Add to .gitignore")
+        alert.addButton(withTitle: "Not Now")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        let url = root.appendingPathComponent(".gitignore")
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        guard let updated = IDEAgentPermissionFiles.gitignore(adding: relativePath, to: existing) else { return true }
+        do {
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func promptAgentRename() {
+        let alert = NSAlert()
+        alert.messageText = "Rename Chat"
+        alert.informativeText = "Leave it empty to use the first message."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = agent.selected.title
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        agent.rename(agent.selected.id, to: field.stringValue)
     }
 
     /// Closes the chat page and puts the caret back in the editor.
@@ -73,7 +129,7 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     func agentInsertAtCaret(_ text: String) -> Bool {
-        guard let document = workbench.activePane.selectedDocument, document.contentKind != .diff else { return false }
+        guard let document = workbench.activePane.selectedDocument, document.contentKind != .diff, document.contentKind != .diagram else { return false }
         let textView = host(for: workbench.activePaneID).textView
         textView.replace(textView.selectedRange, withText: text)
         focusActiveEditor()
@@ -202,6 +258,19 @@ extension IDEWorkspace: IDEAgentHost {
         javaSupport.cancelGradleTasks()
     }
 
+    func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {
+        await openAgentCitedFile(IDEAgentFileLinks.Reference(path: relativePath, line: line, column: column))
+    }
+
+    func agentRevealGradle() {
+        isGradleSidebarVisible = true
+        showGradleOutput()
+    }
+
+    func agentShowCommand(id: UUID, title: String, line: String?) {
+        showAgentCommand(id: id, title: title, line: line)
+    }
+
     func agentFreshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems {
         let javaFiles = relativePaths.filter { $0.hasSuffix(".java") }
         guard !javaFiles.isEmpty else { return IDEAgentFreshProblems() }
@@ -240,5 +309,24 @@ extension IDEWorkspace: IDEAgentHost {
         guard let root = project.rootURL?.standardizedFileURL.path else { return url.path }
         let path = url.standardizedFileURL.path
         return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : path
+    }
+
+    /// Opens a file the model cited. An already-open file is focused without reloading, so unsaved
+    /// edits stay, and the caret is placed from that buffer rather than the copy on disk.
+    func openAgentCitedFile(_ reference: IDEAgentFileLinks.Reference) async {
+        guard let root = project.rootURL, let url = IDEAgentFileLinks.resolve(reference.path, under: root) else { return }
+        host(for: workbench.activePaneID).textView.recordNavigationCheckpoint()
+        let range = await citedSelection(reference, in: url)
+        if focusOpenDocument(url, selecting: range) { return }
+        await openDocument(from: url, selecting: range)
+    }
+
+    private func citedSelection(_ reference: IDEAgentFileLinks.Reference, in url: URL) async -> NSRange? {
+        guard let line = reference.line else { return nil }
+        let column = max(reference.column ?? 1, 1)
+        if let live = openBufferText(for: url) {
+            return Self.utf16Range(ofLine: line, column: column, in: live)
+        }
+        return await Task.detached { Self.utf16Range(ofLine: line, column: column, in: url) }.value
     }
 }

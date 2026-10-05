@@ -33,6 +33,7 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case splitRight, splitDown
     case toggleSidebar, toggleStructure, revealActiveFile, markdownPreview
     case toggleTerminal, toggleProblems, toggleSourceControl
+    case recentChanges
     case newTerminalTab, nextTerminalTab, previousTerminalTab
     case nextTab, previousTab, nextSplit, previousSplit
     case toggleDebugTool, hideAllToolWindows
@@ -198,7 +199,9 @@ enum IDEMenuShortcuts {
         .toggleSourceControl: KeyboardShortcut("9", modifiers: .command),
         .toggleTerminal: KeyboardShortcut(functionKey12, modifiers: .option),
         // ⌥⌘E is Encapsulate Field in IntelliJ; Select In Project View is ⌥F1.
-        .revealActiveFile: KeyboardShortcut(functionKey1, modifiers: .option)
+        .revealActiveFile: KeyboardShortcut(functionKey1, modifiers: .option),
+        // Recent Changes. Sublime and Default leave it unbound; ⌥⇧C is free in the editor keymap.
+        .recentChanges: KeyboardShortcut("c", modifiers: [.option, .shift])
     ]
 }
 

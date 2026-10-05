@@ -101,7 +101,9 @@ struct IDESidebarPanel: View {
                     duplicate: { workspace.duplicateExplorerItem($0) },
                     trash: { workspace.trashExplorerItem($0) },
                     copyPath: { workspace.copyExplorerPath($0, relative: $1) },
-                    findInFiles: { workspace.showFindInFiles(in: $0) }
+                    findInFiles: { workspace.showFindInFiles(in: $0) },
+                    showHistory: { workspace.showLocalHistory(for: $0) },
+                    showClassDiagram: { workspace.showClassDiagram(forExplorerItem: $0) }
                 ),
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )

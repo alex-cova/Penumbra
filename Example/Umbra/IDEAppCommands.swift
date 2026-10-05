@@ -411,6 +411,19 @@ private struct IDEJavaCommands: View {
         Button("Reformat Code", action: { workspace?.reformatCode() })
         Button("Type Hierarchy") { workspace?.showTypeHierarchy() }
         Button("Call Hierarchy") { workspace?.showCallHierarchy() }
+        Menu("Diagrams") {
+            Button("Show Class Diagram") { workspace?.showClassDiagramForActiveFile() }
+                .disabled(!(workspace?.canShowClassDiagram ?? false))
+            Button("Show Package Class Diagram") { workspace?.showClassDiagramForActivePackage() }
+                .disabled(workspace?.activeJavaFileURL == nil)
+            Button("Show Project Class Diagram") { workspace?.showClassDiagramForProject() }
+                .disabled(!(workspace?.canShowClassDiagram ?? false))
+            Divider()
+            Button("Show Gradle Module Diagram") { workspace?.showGradleModuleDiagram() }
+                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+            Button("Show Gradle Dependency Diagram") { workspace?.showGradleDependencyDiagram() }
+                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        }
         Divider()
         Button("Optimize Imports", action: { workspace?.optimizeImports() })
         Divider()
@@ -493,6 +506,7 @@ private struct IDEViewCommands: View {
         Button("Show Local History", systemImage: "clock.arrow.circlepath", action: { workspace?.showLocalHistory() })
             .disabled(!(workspace?.hasOpenProject ?? false))
         Button("Recent Changes", action: { workspace?.showLocalHistory(project: true) })
+            .menuShortcut(.recentChanges, in: preset)
             .disabled(!(workspace?.hasOpenProject ?? false))
         Button("Put Label on This Version…", action: { workspace?.putLocalHistoryLabel() })
             .disabled(!(workspace?.hasOpenProject ?? false))
