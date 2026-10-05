@@ -187,7 +187,7 @@ public struct WebSearchTool: AgentTool {
             body += block
             included += 1
         }
-        return body
+        return UntrustedContent.wrap(body, source: "web-search")
     }
 }
 

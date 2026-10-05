@@ -47,7 +47,7 @@ public struct ReadFileTool: AgentTool {
         }
         let text = try await context.workspace.readText(path: path)
         await context.ledger.record(path: path, text: text)
-        if text.isEmpty { return "[\(path): empty file]" }
+        if text.isEmpty { return await context.finishFileTool("[\(path): empty file]", path: path) }
 
         var lines = text.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
@@ -72,7 +72,7 @@ public struct ReadFileTool: AgentTool {
         if last < lines.count {
             result += "[\(lines.count - last) more lines. Use offset=\(last + 1) to continue.]"
         }
-        return result
+        return await context.finishFileTool(result, path: path)
     }
 }
 

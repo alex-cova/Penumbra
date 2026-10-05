@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Remember a fact across a long read",
+  "difficulty": "medium",
+  "prompt": "The ticket id for this change is QUILL-4182. Set TICKET in config.py to that exact id.\n\nBefore you edit, read notes/volume.txt from start to end. It is background reading and does not change the ticket id. The id appears only in this message.\n\nThe tests must pass. Do not change the tests."
+}

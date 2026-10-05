@@ -89,7 +89,10 @@ public struct OllamaEventDecoder: StreamDecoder {
         let json: JSONValue
         do { json = try JSONValue(parsing: payload) } catch { throw LLMError.malformedEvent("Invalid JSON in stream event.") }
 
-        if let error = json["error"]?.stringValue { throw LLMError.api(message: error, code: nil) }
+        if let error = json["error"]?.stringValue {
+            if HTTPErrorClassifier.isContextLength(error) { throw LLMError.contextLengthExceeded }
+            throw LLMError.api(message: error, code: nil)
+        }
 
         var events: [LLMEvent] = []
         let message = json["message"]

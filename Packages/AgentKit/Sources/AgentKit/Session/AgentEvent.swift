@@ -20,6 +20,8 @@ public enum RunEnding: Sendable, Equatable {
     case contentFiltered
     /// Paused, not failed: the UI offers Continue.
     case iterationCap
+    /// Paused because the run spent its token, time or cost budget. The UI offers Continue.
+    case budget
     case stopped
     /// The same call a fourth time.
     case repeatedCall(String)

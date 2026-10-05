@@ -9,14 +9,21 @@ public struct Skill: Sendable, Equatable {
     public var directory: URL
     /// Tools the skill may use without asking while it is in use, as permission rules.
     public var allowedTools: [String]
+    /// Globs. Empty means the skill is always listed. Otherwise it is listed only after a file tool
+    /// has touched a matching path.
+    public var paths: [String]
     public var source: String
 
-    public init(name: String, description: String, body: String, directory: URL, allowedTools: [String] = [], source: String = "") {
+    public init(
+        name: String, description: String, body: String, directory: URL, allowedTools: [String] = [],
+        paths: [String] = [], source: String = ""
+    ) {
         self.name = name
         self.description = description
         self.body = body
         self.directory = directory
         self.allowedTools = allowedTools
+        self.paths = paths
         self.source = source
     }
 }
@@ -89,7 +96,8 @@ public struct SkillCatalog: Sendable, Equatable {
             guard !name.isEmpty else { continue }
             skills.append(Skill(
                 name: name, description: document.text("description") ?? CommandTemplate.firstLine(of: document.body),
-                body: document.body, directory: directory, allowedTools: document.list("allowed-tools"), source: folder.label))
+                body: document.body, directory: directory, allowedTools: document.list("allowed-tools"),
+                paths: document.list("paths"), source: folder.label))
         }
         return skills
     }

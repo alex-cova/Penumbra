@@ -161,7 +161,7 @@ private func builtInTasks(only ids: [String]? = nil) throws -> [EvalTask] {
         TrialResult(
             taskID: id, trial: n, passed: passed, protectedChanged: protected, checkExitCode: passed ? 0 : 1, checkOutput: "", ending: ending,
             turns: turns, toolCalls: calls, toolErrors: 0, runTestsCalls: 1, inputTokens: tokens, outputTokens: 0, cachedInputTokens: 0,
-            compactions: 0, seconds: seconds, changedFiles: changed, finalMessage: "", error: nil)
+            compactions: 0, summaryFailed: false, toolCatalogTokens: 0, seconds: seconds, changedFiles: changed, finalMessage: "", error: nil)
     }
 
     @Test func mediansAndFailureReasonsPerTask() {
@@ -180,6 +180,26 @@ private func builtInTasks(only ids: [String]? = nil) throws -> [EvalTask] {
         #expect(Summary.failureReason(trial("c", 1, passed: false, ending: "failed: The model kept writing tool calls that could not be read (x).")) == "unreadable tool call")
         #expect(Summary.failureReason(trial("c", 1, passed: false, ending: "failed: The API rejected the key.")) == "failed: The API rejected the key.")
         #expect(Summary.failureReason(trial("c", 1, passed: false, ending: "failed: " + String(repeating: "x", count: 100))).count == 50, "long messages are cut")
+    }
+
+    @Test func theFullCatalogIsMeasuredAndTheReportShowsTheCachedShare() {
+        let tools = Toolset.full.tools(runTests: nil)
+        let catalog = ContextBudget.tokens(system: "", tools: tools.map(\.definition))
+        #expect(catalog > 0)
+        #expect(catalog * 4 < 32_768, "catalog is \(catalog) tokens; deferring tools is for a large share of a 32K window")
+        var trial = trial("a", 1, passed: true)
+        trial.inputTokens = 100
+        trial.cachedInputTokens = 40
+        trial.toolCatalogTokens = catalog
+        trial.compactions = 2
+        trial.summaryFailed = true
+        let report = EvalReport(
+            startedAt: Date(), provider: "ollama", model: "m", toolset: "full", runTests: true, trialsPerTask: 1,
+            results: [trial])
+        let text = Summary.render(report)
+        #expect(text.contains("cached 40% of input"))
+        #expect(text.contains("2 compactions"))
+        #expect(text.contains("1 summaries failed"))
     }
 
     @Test func theTableNamesTheModelTheTasksAndTheTotal() {

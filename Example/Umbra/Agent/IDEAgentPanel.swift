@@ -1054,6 +1054,10 @@ struct IDEAgentSettingsView: View {
                 Text("Commands (/name) and skills are also read from .umbra and .claude in the project, and from Umbra's own folder. Turn this off if a sandboxed build cannot read your home folder.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Toggle("Load instructions from ~/.claude and Umbra's folder", isOn: $settings.loadsUserInstructions)
+                Text("Puts ~/.claude/CLAUDE.md and Umbra's own AGENTS.md ahead of the project's, which still wins. Off until you turn it on.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Toggle("Web search", isOn: $settings.webSearchEnabled)
                 Text("Queries are sent to api.search.brave.com, including while the model runs on this Mac. Nothing is sent until the agent calls the tool.")
                     .font(IDEAppearance.Typography.caption)
@@ -1109,6 +1113,26 @@ struct IDEAgentSettingsView: View {
                 ForEach(Set(IDEAgentSettings.iterationCapChoices + [settings.iterationCap]).sorted(), id: \.self) { Text("\($0)").tag($0) }
             }
             Text("After this many model turns the run pauses; sending “continue” goes on.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Picker("Token budget", selection: $settings.maxRunTokens) {
+                Text("Off").tag(0)
+                ForEach([50_000, 100_000, 250_000, 1_000_000], id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
+            }
+            Picker("Time budget", selection: $settings.maxRunSeconds) {
+                Text("Off").tag(0)
+                Text("2 min").tag(120)
+                Text("5 min").tag(300)
+                Text("10 min").tag(600)
+                Text("30 min").tag(1_800)
+            }
+            Picker("Spend limit", selection: $settings.maxRunCostCents) {
+                Text("Off").tag(0)
+                Text("$1").tag(100)
+                Text("$5").tag(500)
+                Text("$20").tag(2_000)
+            }
+            Text("A run pauses when it reaches one of these. The spend limit uses the price table and only applies to a model listed there. Sending “continue” starts again with a fresh allowance.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             if settings.provider == .openAIResponses || settings.provider == .chatCompletions {

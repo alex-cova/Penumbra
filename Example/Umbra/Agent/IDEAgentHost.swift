@@ -204,6 +204,7 @@ struct IDEDiagnosticsTool: AgentTool {
     var fresh: (@Sendable ([String]) async -> IDEAgentFreshProblems)?
 
     var risk: ToolRisk { .read }
+    var verifies: Bool { true }
     var definition: ToolDefinition {
         ToolDefinition(
             name: "diagnostics",

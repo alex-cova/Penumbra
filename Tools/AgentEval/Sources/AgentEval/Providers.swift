@@ -10,6 +10,9 @@ struct ProviderSetup {
     /// The window sessions compact against. Local models use what they were asked for.
     var contextWindow: Int?
     var isLocal: Bool
+    /// Ollama leaves more room: a prompt past `num_ctx` may truncate without an error, and the
+    /// estimate is then the only guard.
+    var compactionThreshold: Double = 0.75
 }
 
 enum ProviderError: Error, CustomStringConvertible {
@@ -53,7 +56,9 @@ enum Providers {
         }
         let context = min(options.contextWindow ?? defaultLocalContext, info.contextLength ?? .max)
         let client = OllamaClient(endpoint: LLMEndpoint(baseURL: url, apiKey: nil), contextLength: context, supportsThinking: info.supportsThinking)
-        return ProviderSetup(client: client, label: "ollama · \(model) · \(context / 1024)K context", contextWindow: context, isLocal: true)
+        return ProviderSetup(
+            client: client, label: "ollama · \(model) · \(context / 1024)K context", contextWindow: context, isLocal: true,
+            compactionThreshold: 0.60)
     }
 
     private static func remote(model: String, options: Options) throws -> ProviderSetup {

@@ -105,6 +105,8 @@ final class IDEAgentSettings {
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
     /// Whether commands and skills in `~/.claude` are offered, besides the project's and Umbra's own.
     var loadsUserSkills: Bool { didSet { defaults.set(loadsUserSkills, forKey: Keys.userSkills) } }
+    /// Whether `~/.claude/CLAUDE.md` and Umbra's own instruction file are put in the system prompt.
+    var loadsUserInstructions: Bool { didSet { defaults.set(loadsUserInstructions, forKey: Keys.userInstructions) } }
     /// Whether the agent may call `web_search`. Off until the user turns it on; a key is also required.
     var webSearchEnabled: Bool { didSet { defaults.set(webSearchEnabled, forKey: Keys.webSearch) } }
     /// Whether a Brave Search key is saved. Held here so views never read the Keychain.
@@ -113,6 +115,12 @@ final class IDEAgentSettings {
     var mode: PermissionMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
     /// Model turns per message before the run pauses; `AgentConfiguration.maxIterations` when unset.
     var iterationCap: Int { didSet { defaults.set(iterationCap, forKey: Keys.iterationCap) } }
+    /// Input plus output tokens for one run. `0` means no token budget.
+    var maxRunTokens: Int { didSet { defaults.set(maxRunTokens, forKey: Keys.runTokens) } }
+    /// Wall-clock seconds for one run. `0` means no time budget.
+    var maxRunSeconds: Int { didSet { defaults.set(maxRunSeconds, forKey: Keys.runSeconds) } }
+    /// US cents for one run, from the price table. `0` means no spend limit. Unknown models never trip it.
+    var maxRunCostCents: Int { didSet { defaults.set(maxRunCostCents, forKey: Keys.runCost) } }
     /// The context window of a hosted model the built-in table doesn't know; 0 means use the table.
     var contextWindowOverride: Int { didSet { defaults.set(contextWindowOverride, forKey: Keys.contextOverride) } }
     /// Extra globs for files the agent must not read, one per line, on top of the built-in credential list.
@@ -142,10 +150,14 @@ final class IDEAgentSettings {
         static let mode = "umbra.agent.mode"
         static let page = "umbra.agent.opensAsPage"
         static let userSkills = "umbra.agent.loadsUserSkills"
+        static let userInstructions = "umbra.agent.loadsUserInstructions"
         static let webSearch = "umbra.agent.webSearch"
         static let prices = "umbra.agent.priceTable"
         static let secretPatterns = "umbra.agent.secretFilePatterns"
         static let iterationCap = "umbra.agent.iterationCap"
+        static let runTokens = "umbra.agent.maxRunTokens"
+        static let runSeconds = "umbra.agent.maxRunSeconds"
+        static let runCost = "umbra.agent.maxRunCostCents"
         static let contextOverride = "umbra.agent.contextWindowOverride"
 
         /// `umbra.agent.baseURL` for the original (Responses) provider, so earlier settings carry over.
@@ -178,12 +190,16 @@ final class IDEAgentSettings {
         commandEnvironmentText = defaults.string(forKey: Keys.commandEnvironment) ?? ""
         opensAsPage = defaults.bool(forKey: Keys.page)
         loadsUserSkills = defaults.object(forKey: Keys.userSkills) as? Bool ?? true
+        loadsUserInstructions = defaults.bool(forKey: Keys.userInstructions)
         webSearchEnabled = defaults.bool(forKey: Keys.webSearch)
         priceTableText = defaults.string(forKey: Keys.prices) ?? IDEAgentPrices.defaultText
         secretFilePatternsText = defaults.string(forKey: Keys.secretPatterns) ?? ""
         mode = defaults.string(forKey: Keys.mode).flatMap(PermissionMode.init(persisted:)) ?? .acceptEdits
         let storedCap = defaults.integer(forKey: Keys.iterationCap)
         iterationCap = storedCap > 0 ? storedCap : Self.defaultIterationCap
+        maxRunTokens = max(0, defaults.integer(forKey: Keys.runTokens))
+        maxRunSeconds = max(0, defaults.integer(forKey: Keys.runSeconds))
+        maxRunCostCents = max(0, defaults.integer(forKey: Keys.runCost))
         contextWindowOverride = max(0, defaults.integer(forKey: Keys.contextOverride))
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         refreshKeyState()
@@ -399,18 +415,33 @@ final class IDEAgentSettings {
         }
     }
 
-    /// Everything a session depends on, so a change can start a new session (keeping history).
     /// The price of this session's turns, or `nil` for a local model or one the table doesn't list.
     func cost(of usage: TokenUsage) -> Double? {
         guard provider != .ollama, provider != .mlx, !isLocalEndpoint else { return nil }
         return IDEAgentPrices(text: priceTableText).cost(of: usage, model: model)
     }
 
+    /// True when this run's priced usage has reached the spend limit. `nil` when there is no limit.
+    /// A model the price table doesn't know never trips it.
+    var runIsOverCost: (@Sendable (TokenUsage) -> Bool)? {
+        guard maxRunCostCents > 0 else { return nil }
+        let cents = maxRunCostCents
+        let table = priceTableText
+        let name = model
+        return { usage in
+            guard let dollars = IDEAgentPrices(text: table).cost(of: usage, model: name) else { return false }
+            return dollars * 100 >= Double(cents)
+        }
+    }
+
     var secretFilePatterns: [String] { secretFilePatternsText.components(separatedBy: .newlines) }
 
+    /// Everything a session depends on, so a change can start a new session (keeping history).
+    /// The price table is part of it only while a spend limit is on, because that is when the session captured the table.
     var fingerprint: String {
         let local = provider == .ollama || provider == .mlx
-        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(contextWindow ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)"
+        let prices = maxRunCostCents > 0 ? priceTableText : ""
+        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)"
     }
 
     func makeClient() throws -> any LLMClient {

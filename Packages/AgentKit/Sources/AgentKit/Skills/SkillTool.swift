@@ -3,21 +3,39 @@ import Foundation
 /// Loads a skill's instructions, or a file from its folder. The tool's description lists every skill,
 /// so the model can see what exists and ask for what the task needs. It reads inside the skill's own
 /// folder only, which is why a user-level skill can ship scripts and notes the project jail would hide.
-public struct SkillTool: AgentTool {
+public final class SkillTool: AgentTool, @unchecked Sendable {
     public static let maxFileBytes = 64_000
     static let maxListedFiles = 60
     static let maxDescriptionLength = 220
     static let maxCatalogBytes = 8_000
 
     public let catalog: SkillCatalog
+    private let lock = NSLock()
+    private var touched: [String] = []
 
     public init(catalog: SkillCatalog) { self.catalog = catalog }
 
     public var risk: ToolRisk { .read }
 
+    public func noteFileTouched(_ path: String) {
+        lock.withLock { touched.append(path) }
+    }
+
+    /// Skills with no `paths`, plus skills whose `paths` match a file a file tool has touched.
+    private var listedSkills: [Skill] {
+        let touched = lock.withLock { self.touched }
+        return catalog.skills.filter { skill in
+            if skill.paths.isEmpty { return true }
+            return skill.paths.contains { pattern in
+                guard let glob = try? GlobPattern(pattern) else { return false }
+                return touched.contains { glob.matches($0) }
+            }
+        }
+    }
+
     public var definition: ToolDefinition {
         var listing = ""
-        for skill in catalog.skills {
+        for skill in listedSkills {
             let description = skill.description.count > Self.maxDescriptionLength
                 ? String(skill.description.prefix(Self.maxDescriptionLength - 1)) + "…" : skill.description
             let line = "- \(skill.name): \(description)\n"

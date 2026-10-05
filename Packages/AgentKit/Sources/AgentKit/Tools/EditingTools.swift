@@ -135,6 +135,8 @@ public struct EditFileTool: AgentTool {
         let firstLocation: Int
         let replacedLineCount: Int
         let occurrences: Int
+        /// Set when the match was not byte-for-byte, so the model is told what was relaxed.
+        let matchNote: String
     }
 
     func prepare(_ arguments: ToolArguments, context: ToolContext) async throws -> Prepared {
@@ -163,8 +165,9 @@ public struct EditFileTool: AgentTool {
             searchRange = NSRange(location: NSMaxRange(found), length: ns.length - NSMaxRange(found))
         }
 
-        guard !matches.isEmpty else {
-            throw ToolError(EditSupport.notFoundMessage(path: path, old: oldText, new: newText, in: text))
+        if matches.isEmpty {
+            return try prepareAlternative(
+                path: path, old: old, new: new, text: text, replaceAll: replaceAll, context: context)
         }
         if matches.count > 1, !replaceAll {
             let lines = matches.prefix(5).map { String(EditSupport.line(atOffset: $0.location, in: text)) }.joined(separator: ", ")
@@ -175,7 +178,32 @@ public struct EditFileTool: AgentTool {
         let edits = chosen.map { AgentTextEdit(location: $0.location, length: $0.length, replacement: newText) }
         return Prepared(
             path: path, original: text, expected: try AgentTextEdit.apply(edits, to: text), edits: edits,
-            firstLocation: chosen[0].location, replacedLineCount: newText.components(separatedBy: "\n").count, occurrences: chosen.count)
+            firstLocation: chosen[0].location, replacedLineCount: newText.components(separatedBy: "\n").count,
+            occurrences: chosen.count, matchNote: "")
+    }
+
+    /// A unique canonical or indentation match, applied to those lines only.
+    private func prepareAlternative(
+        path: String, old: String, new: String, text: String, replaceAll: Bool, context: ToolContext
+    ) throws -> Prepared {
+        switch EditMatching.alternative(old: old, new: new, in: text, tolerance: context.editTolerance, replaceAll: replaceAll) {
+        case .none:
+            throw ToolError(EditSupport.notFoundMessage(path: path, old: old, new: new, in: text))
+        case .noop:
+            throw ToolError("old_string and new_string are identical once line endings, trailing whitespace or punctuation are normalized; there is nothing to change.")
+        case .ambiguous(let count, let lines):
+            let listed = lines.map(String.init).joined(separator: ", ")
+            throw ToolError("old_string appears \(count) times in \(path) (lines \(listed)\(count > 5 ? ", …" : "")). Add surrounding lines to make it unique, or set replace_all to true.")
+        case .hits(let hits):
+            let edits = hits.map { AgentTextEdit(location: $0.range.location, length: $0.range.length, replacement: $0.replacement) }
+            let note = hits[0].kind == .indentation
+                ? " Applied after shifting indentation to match the file."
+                : " Applied after normalizing line endings, trailing whitespace or punctuation."
+            let lineCount = hits[0].replacement.components(separatedBy: "\n").count
+            return Prepared(
+                path: path, original: text, expected: try AgentTextEdit.apply(edits, to: text), edits: edits,
+                firstLocation: hits[0].range.location, replacedLineCount: lineCount, occurrences: hits.count, matchNote: note)
+        }
     }
 
     public func editPreview(for arguments: ToolArguments, context: ToolContext) async -> EditPreview? {
@@ -186,6 +214,21 @@ public struct EditFileTool: AgentTool {
     }
 
     public func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let path = (try? arguments.string("path")) ?? ""
+        do {
+            let written = try await apply(arguments, context: context)
+            if !path.isEmpty { await context.editFailures?.recordSuccess(path) }
+            return await context.finishFileTool(written, path: path)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let count = path.isEmpty ? 0 : (await context.editFailures?.recordFailure(path) ?? 0)
+            if let hint = EditFailureLog.hint(count: count) { throw ToolError(error.localizedDescription + hint) }
+            throw error
+        }
+    }
+
+    private func apply(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
         let change = try await prepare(arguments, context: context)
         let (path, text) = (change.path, change.original)
 
@@ -203,7 +246,7 @@ public struct EditFileTool: AgentTool {
 
         let startLine = EditSupport.line(atOffset: change.firstLocation, in: after)
         let count = change.occurrences == 1 ? "1 occurrence" : "\(change.occurrences) occurrences"
-        return "Edited \(path): replaced \(count), starting at line \(startLine).\n"
+        return "Edited \(path): replaced \(count), starting at line \(startLine).\(change.matchNote)\n"
             + EditSupport.snippet(path: path, text: after, startLine: startLine, lineCount: change.replacedLineCount)
     }
 }
@@ -278,7 +321,7 @@ public struct WriteFileTool: AgentTool {
                 throw ToolError("\(path) was changed while it was written and no longer matches. Read it again.")
             }
             await context.ledger.record(path: path, text: after)
-            return "Overwrote \(path) (\(Self.lineCount(after)) lines)."
+            return await context.finishFileTool("Overwrote \(path) (\(Self.lineCount(after)) lines).", path: path)
         }
 
         await context.checkpoint?.willChange(path: path, original: nil)
@@ -286,7 +329,7 @@ public struct WriteFileTool: AgentTool {
         let after = try await context.workspace.readText(path: path)
         await context.checkpoint?.didChange(path: path, written: after)
         await context.ledger.record(path: path, text: after)
-        return "Created \(path) (\(Self.lineCount(after)) lines)."
+        return await context.finishFileTool("Created \(path) (\(Self.lineCount(after)) lines).", path: path)
     }
 
     private static func lineCount(_ text: String) -> Int {

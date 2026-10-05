@@ -3,11 +3,14 @@ import Foundation
 /// Where a hunk lands in a file's lines, or why it can't.
 enum HunkMatcher {
     /// `lines` have no terminators. Returns the index of the hunk's first old line.
-    static func locate(_ hunk: PatchHunk, in lines: [String], notBefore floor: Int, path: String) throws -> Int {
+    static func locate(
+        _ hunk: PatchHunk, in lines: [String], notBefore floor: Int, path: String,
+        tolerance: EditTolerance = .hosted
+    ) throws -> Placement {
         let old = hunk.oldLines
         if old.isEmpty {
             // A pure insertion: `@@ -n,0 ... @@` adds after line n.
-            return min(max(hunk.oldStart, floor), lines.count)
+            return Placement(index: min(max(hunk.oldStart, floor), lines.count))
         }
 
         func matches(at position: Int) -> Bool {
@@ -17,12 +20,18 @@ enum HunkMatcher {
         }
 
         let stated = max(0, hunk.oldStart - 1)
-        if matches(at: stated) { return stated }
+        if matches(at: stated) { return Placement(index: stated) }
         let candidates = (floor...max(floor, lines.count - old.count)).filter(matches)
         switch candidates.count {
         case 1:
-            return candidates[0]
+            return Placement(index: candidates[0])
         case 0:
+            if let found = EditMatching.hunkPosition(old: old, in: lines, floor: floor, tolerance: tolerance) {
+                let note = found.shift == nil
+                    ? " Applied after normalizing line endings, trailing whitespace or punctuation."
+                    : " Applied after shifting indentation to match the file."
+                return Placement(index: found.index, shift: found.shift, note: note)
+            }
             throw PatchError(mismatch(hunk, lines: lines, floor: floor, path: path))
         default:
             // Nearest to where the hunk says it is; a tie means the context is not enough to decide.
@@ -31,8 +40,14 @@ enum HunkMatcher {
                 let places = candidates.prefix(4).map { String($0 + 1) }.joined(separator: ", ")
                 throw PatchError("Hunk \(hunk.number) of \(path) matches \(candidates.count) places (lines \(places)\(candidates.count > 4 ? ", …" : "")). Add more unchanged lines around the change so it matches exactly one.")
             }
-            return ranked[0]
+            return Placement(index: ranked[0])
         }
+    }
+
+    struct Placement {
+        var index: Int
+        var shift: EditMatching.IndentShift?
+        var note: String = ""
     }
 
     /// Names the first line that did not match, at the place where the most lines matched.
@@ -73,10 +88,12 @@ struct PlannedFile {
     /// the change spans, so the preview shows the change and not just its surroundings.
     let firstChangedLine: Int
     let changedLineCount: Int
+    /// Set when a hunk matched only after normalization or an indentation shift.
+    let matchNote: String
 }
 
 enum PatchPlanner {
-    static func plan(_ file: FilePatch, text: String?) throws -> PlannedFile {
+    static func plan(_ file: FilePatch, text: String?, tolerance: EditTolerance = .hosted) throws -> PlannedFile {
         if file.isCreation { return try planCreation(file) }
         guard let text else { throw PatchError("\(file.path) does not exist. To create a file, start the patch with `--- /dev/null`.") }
 
@@ -97,8 +114,11 @@ enum PatchPlanner {
         var firstChanged = 1
         var changedCount = 1
         var shift = 0  // lines added minus removed by earlier hunks
+        var matchNote = ""
         for hunk in file.hunks {
-            let position = try HunkMatcher.locate(hunk, in: bare, notBefore: floor, path: file.path)
+            let located = try HunkMatcher.locate(hunk, in: bare, notBefore: floor, path: file.path, tolerance: tolerance)
+            if matchNote.isEmpty { matchNote = located.note }
+            let position = located.index
             let oldCount = hunk.oldLines.count
             let endsAtEOF = position + oldCount == lines.count
             if edits.isEmpty {
@@ -125,7 +145,7 @@ enum PatchPlanner {
                 }
             }
 
-            let replacementLines = hunk.newLines
+            let replacementLines = hunk.newLines.map { located.shift?.apply(to: $0) ?? $0 }
             var replacement = ""
             var location = position < starts.count ? starts[position] : ns.length
             var length = 0
@@ -150,10 +170,13 @@ enum PatchPlanner {
         }
 
         let expected = try AgentTextEdit.apply(edits, to: text)
+        if expected == text {
+            throw PatchError("\(file.path): the patch changes nothing once line endings, trailing whitespace or punctuation are normalized.")
+        }
         return PlannedFile(
             path: file.path, isCreation: false, original: text, expected: expected, edits: edits,
             added: added, removed: removed, hunkCount: file.hunks.count, firstChangedLine: firstChanged,
-            changedLineCount: changedCount)
+            changedLineCount: changedCount, matchNote: matchNote)
     }
 
     private static func planCreation(_ file: FilePatch) throws -> PlannedFile {
@@ -169,8 +192,14 @@ enum PatchPlanner {
         let text = lines.joined(separator: "\n") + (missingEOL || lines.isEmpty ? "" : "\n")
         return PlannedFile(
             path: file.path, isCreation: true, original: nil, expected: text, edits: [], added: lines.count, removed: 0,
-            hunkCount: file.hunks.count, firstChangedLine: 1, changedLineCount: max(lines.count, 1))
+            hunkCount: file.hunks.count, firstChangedLine: 1, changedLineCount: max(lines.count, 1), matchNote: "")
     }
+}
+
+/// A patch failed on one file. `run` counts it and, on the third miss, suggests `write_file`.
+private struct PatchFileFailure: Error {
+    var path: String
+    var message: String
 }
 
 public struct ApplyPatchTool: AgentTool {
@@ -220,10 +249,16 @@ public struct ApplyPatchTool: AgentTool {
                 } else {
                     let text = try await context.workspace.readText(path: file.path)
                     try await EditSupport.requireFreshRead(path: file.path, text: text, context: context)
-                    planned.append(try PatchPlanner.plan(file, text: text))
+                    planned.append(try PatchPlanner.plan(file, text: text, tolerance: context.editTolerance))
                 }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch let error as PatchError {
-                throw ToolError(error.message)
+                throw PatchFileFailure(path: file.path, message: error.message)
+            } catch let error as PatchFileFailure {
+                throw error
+            } catch {
+                throw PatchFileFailure(path: file.path, message: error.localizedDescription)
             }
         }
         return planned
@@ -237,7 +272,19 @@ public struct ApplyPatchTool: AgentTool {
     }
 
     public func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
-        // Everything is checked and computed first, so a bad hunk in the last file changes nothing.
+        do {
+            return try await apply(arguments, context: context)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as PatchFileFailure {
+            let count = await context.editFailures?.recordFailure(failure.path) ?? 0
+            let hint = EditFailureLog.hint(count: count) ?? ""
+            throw ToolError(failure.message + hint)
+        }
+    }
+
+    /// Everything is checked and computed first, so a bad hunk in the last file changes nothing.
+    private func apply(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
         let planned = try await prepare(arguments, context: context)
 
         var applied: [PlannedFile] = []
@@ -258,7 +305,11 @@ public struct ApplyPatchTool: AgentTool {
         } catch {
             let failed = planned[applied.count]
             let undone = await rollBack(applied, written: writtenText, context: context)
-            throw ToolError("Applying \(failed.path) failed: \(error.localizedDescription) \(undone)")
+            throw PatchFileFailure(path: failed.path, message: "Applying \(failed.path) failed: \(error.localizedDescription) \(undone)")
+        }
+
+        for plan in planned where !plan.path.isEmpty {
+            await context.editFailures?.recordSuccess(plan.path)
         }
 
         var report: [String] = []
@@ -272,14 +323,18 @@ public struct ApplyPatchTool: AgentTool {
             if plan.isCreation {
                 report.append("Created \(plan.path) (\(plan.added) lines).")
             } else {
-                report.append("Patched \(plan.path): \(plan.hunkCount) hunk\(plan.hunkCount == 1 ? "" : "s"), +\(plan.added) −\(plan.removed).")
+                report.append("Patched \(plan.path): \(plan.hunkCount) hunk\(plan.hunkCount == 1 ? "" : "s"), +\(plan.added) −\(plan.removed).\(plan.matchNote)")
                 if planned.count <= 3 {
                     report.append(EditSupport.snippet(
                         path: plan.path, text: after, startLine: plan.firstChangedLine, lineCount: plan.changedLineCount))
                 }
             }
         }
-        return report.joined(separator: "\n")
+        var text = report.joined(separator: "\n")
+        for plan in planned {
+            text = await context.finishFileTool(text, path: plan.path)
+        }
+        return text
     }
 
     /// Puts back what was applied before the failure, newest first. Reports what it managed.

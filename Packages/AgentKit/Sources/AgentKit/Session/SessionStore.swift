@@ -139,7 +139,7 @@ public struct SessionStore: Sendable {
     /// A short title from the first thing the user asked.
     public static func title(from items: [ConversationItem]) -> String {
         for case .user(let text) in items {
-            let typed = text.range(of: editorStateEnd).map { String(text[$0.upperBound...]) } ?? text
+            guard let typed = UserText.typed(text) else { continue }
             let line = typed.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
             if !line.isEmpty { return line.count > 60 ? String(line.prefix(60)) + "…" : line }
         }

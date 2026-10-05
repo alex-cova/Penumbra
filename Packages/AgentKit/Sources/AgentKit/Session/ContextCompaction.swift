@@ -11,12 +11,17 @@ public struct CompactionPolicy: Sendable, Equatable {
     public var keepRecentToolOutputs: Int
     /// An output smaller than this is not worth replacing.
     public var minimumStubbableBytes: Int
-    /// A summary keeps this many of the newest model turns word for word.
+    /// A summary keeps at least this many of the newest model turns word for word.
     public var keepRecentTurns: Int
+    /// The newest turns are kept until they fill this share of the window, and never fewer than
+    /// `keepRecentTurns`. A fixed two turns is too few when they are short and too many when each
+    /// one is a large read.
+    public var tailTokenShare: Double
 
     public init(
         contextWindow: Int, threshold: Double = 0.75, target: Double = 0.5,
-        keepRecentToolOutputs: Int = 4, minimumStubbableBytes: Int = 600, keepRecentTurns: Int = 2
+        keepRecentToolOutputs: Int = 4, minimumStubbableBytes: Int = 600, keepRecentTurns: Int = 2,
+        tailTokenShare: Double = 0.30
     ) {
         self.contextWindow = contextWindow
         self.threshold = threshold
@@ -24,6 +29,7 @@ public struct CompactionPolicy: Sendable, Equatable {
         self.keepRecentToolOutputs = keepRecentToolOutputs
         self.minimumStubbableBytes = minimumStubbableBytes
         self.keepRecentTurns = keepRecentTurns
+        self.tailTokenShare = tailTokenShare
     }
 }
 
@@ -137,18 +143,70 @@ public enum ToolOutputStubs {
 /// its output.
 public enum ConversationSummary {
     public static let systemPrompt = """
-    You compress the history of a coding-agent session so the agent can keep working from the summary. \
-    Write a concise summary: what the user asked for, what has been done (files read or changed, with \
-    their paths), what was found, decisions made, errors and how they were handled, and what is still \
-    to do. Keep identifiers, paths, commands and error messages exact. Write plain text, no preamble.
+    You update the summary of a coding-agent session so the agent can keep working from it. Write \
+    exactly these sections, in this order, each as a heading:
+    ## Objective
+    ## Decisions
+    ## Work done
+    ## Open problems
+    ## Next step
+    ## Relevant files
+    Work done names files changed, with their paths. Relevant files lists paths still needed. If a \
+    previous summary is given in <previous-summary>, keep details that are still true and drop ones \
+    the later transcript shows are stale. The previous summary is not part of the transcript. Keep \
+    identifiers, paths, commands and error messages exact. Plain text, no preamble.
     """
 
     public static let heading = "[Summary of the earlier conversation, written by the assistant to save space. The user did not write it.]"
 
-    /// The index where the retained tail begins, or `nil` if there is nothing worth summarizing.
-    /// The tail starts at a user message or at the start of a model turn, and holds at least
-    /// `keepTurns` model turns.
-    public static func cutIndex(in items: [ConversationItem], keepTurns: Int) -> Int? {
+    /// How many characters of the user's own words to keep verbatim across compactions. The oldest
+    /// are dropped first.
+    public static let verbatimBudget = 6_000
+
+    /// What a summary request is built from. The previous summary is never cut with the transcript.
+    public struct Source: Equatable, Sendable {
+        public var previous: String?
+        public var transcript: String
+        public var verbatim: [String]
+    }
+
+    /// Splits a previous summary off the head, keeps the user's typed words, and renders the rest.
+    public static func source(from older: [ConversationItem], maximumCharacters: Int, verbatimBudget: Int = verbatimBudget) -> Source {
+        var rest = older
+        var previousParts: [String] = []
+        while let first = rest.first, case .user(let text) = first, text.hasPrefix(heading) {
+            let body = text.dropFirst(heading.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !body.isEmpty { previousParts.append(String(body)) }
+            rest.removeFirst()
+        }
+        return Source(
+            previous: previousParts.isEmpty ? nil : previousParts.joined(separator: "\n\n"),
+            transcript: transcript(of: rest, maximumCharacters: maximumCharacters),
+            verbatim: boundedVerbatim(from: rest, budget: verbatimBudget))
+    }
+
+    /// The user's own words from these items, newest kept, oldest dropped once `budget` is full.
+    public static func boundedVerbatim(from items: [ConversationItem], budget: Int) -> [String] {
+        let texts = items.compactMap { item -> String? in
+            if case .user(let text) = item { return UserText.typed(text) }
+            return nil
+        }
+        var kept: [String] = []
+        var used = 0
+        for text in texts.reversed() {
+            if text.count > budget {
+                if kept.isEmpty { kept.append(String(text.suffix(budget))) }
+                break
+            }
+            if used + text.count > budget { break }
+            kept.append(text)
+            used += text.count
+        }
+        return kept.reversed()
+    }
+
+    /// Where each model turn, and each user message, begins.
+    static func turnStarts(in items: [ConversationItem]) -> [Int] {
         var starts: [Int] = []
         for (index, item) in items.enumerated() {
             let previous = index > 0 ? items[index - 1] : nil
@@ -165,6 +223,14 @@ public enum ConversationSummary {
                 break
             }
         }
+        return starts
+    }
+
+    /// The index where the retained tail begins, or `nil` if there is nothing worth summarizing.
+    /// The tail starts at a user message or at the start of a model turn, and holds at least
+    /// `keepTurns` model turns.
+    public static func cutIndex(in items: [ConversationItem], keepTurns: Int) -> Int? {
+        let starts = turnStarts(in: items)
         let modelTurns = starts.filter { if case .user = items[$0] { false } else { true } }
         guard modelTurns.count > keepTurns else {
             // Few turns: cut at the last user message, if there is an earlier one to summarize.
@@ -173,6 +239,31 @@ public enum ConversationSummary {
         }
         let cut = modelTurns[modelTurns.count - keepTurns]
         return cut > 0 ? cut : nil
+    }
+
+    /// Like `cutIndex(keepTurns:)`, but the tail grows past `minimumTurns` while it fits in
+    /// `tailBudget` tokens. Fewer than `minimumTurns` is never kept, even when those turns are
+    /// already over the budget: two turns is the floor.
+    public static func cutIndex(in items: [ConversationItem], tailBudget: Int, minimumTurns: Int) -> Int? {
+        let minimum = max(1, minimumTurns)
+        let starts = turnStarts(in: items)
+        let modelTurns = starts.filter { if case .user = items[$0] { false } else { true } }
+        guard modelTurns.count > minimum else {
+            let users = starts.filter { if case .user = items[$0] { true } else { false } }
+            return users.count > 1 ? users.last : nil
+        }
+        var keep = minimum
+        var start = modelTurns[modelTurns.count - keep]
+        var tokens = ContextBudget.tokens(items[start...])
+        while keep < modelTurns.count {
+            let earlier = modelTurns[modelTurns.count - keep - 1]
+            let extra = ContextBudget.tokens(items[earlier..<start])
+            if tokens + extra > max(1, tailBudget) { break }
+            tokens += extra
+            start = earlier
+            keep += 1
+        }
+        return start > 0 ? start : nil
     }
 
     /// The older items as plain text, each tool output cut short, for the summarizing request.
@@ -192,7 +283,24 @@ public enum ConversationSummary {
         return OutputTruncation.headAndTail(lines.joined(separator: "\n"), maxCharacters: maximumCharacters, headShare: 0.4)
     }
 
-    public static func replacing(_ items: [ConversationItem], upTo cut: Int, with summary: String) -> [ConversationItem] {
-        [.user(heading + "\n\n" + summary)] + Array(items[cut...])
+    public static func replacing(_ items: [ConversationItem], upTo cut: Int, with summary: String, verbatim: [String] = []) -> [ConversationItem] {
+        var head: [ConversationItem] = [.user(heading + "\n\n" + summary)]
+        head += verbatim.map { .user($0) }
+        return head + Array(items[cut...])
+    }
+
+    /// The user message sent to the summarizer. The previous summary sits outside the transcript cut.
+    public static func requestText(for source: Source, focus: String?) -> String {
+        var text = ""
+        if let previous = source.previous {
+            let safe = previous.replacingOccurrences(of: "</previous-summary>", with: "< /previous-summary>", options: .caseInsensitive)
+            text += "<previous-summary>\n\(safe)\n</previous-summary>\n\n"
+        }
+        text += source.transcript
+        if let focus = focus?.trimmingCharacters(in: .whitespacesAndNewlines), !focus.isEmpty {
+            text += "\n\nGive particular attention to this, and keep its details: \(focus)"
+        }
+        text += "\n\nWrite the updated summary now."
+        return text
     }
 }

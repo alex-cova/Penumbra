@@ -107,6 +107,14 @@ public struct ToolContext: Sendable {
     public let proposePlan: (@Sendable (String) async -> PlanDecision)?
     /// The session's checklist, for `todo`.
     public let todos: TodoList?
+    /// How `edit_file` and `apply_patch` recover a unique near-miss. Exact matching always runs first.
+    public let editTolerance: EditTolerance
+    /// Failed edits in this run, so the third miss on one file suggests `write_file`.
+    public let editFailures: EditFailureLog?
+    /// Nested instruction files, appended once per directory.
+    public let projectNotes: ProjectNoteTracker?
+    /// Tells the session a file tool succeeded on `path` (conditional skills).
+    public let fileTouched: (@Sendable (String) -> Void)?
 
     public init(
         workspace: any AgentWorkspace,
@@ -116,7 +124,11 @@ public struct ToolContext: Sendable {
         progress: (@Sendable (String) -> Void)? = nil,
         ask: (@Sendable (UserQuestion) async -> String?)? = nil,
         todos: TodoList? = nil,
-        proposePlan: (@Sendable (String) async -> PlanDecision)? = nil
+        proposePlan: (@Sendable (String) async -> PlanDecision)? = nil,
+        editTolerance: EditTolerance = .hosted,
+        editFailures: EditFailureLog? = nil,
+        projectNotes: ProjectNoteTracker? = nil,
+        fileTouched: (@Sendable (String) -> Void)? = nil
     ) {
         self.workspace = workspace
         self.ledger = ledger
@@ -126,6 +138,19 @@ public struct ToolContext: Sendable {
         self.ask = ask
         self.todos = todos
         self.proposePlan = proposePlan
+        self.editTolerance = editTolerance
+        self.editFailures = editFailures
+        self.projectNotes = projectNotes
+        self.fileTouched = fileTouched
+    }
+
+    /// Appends a nested instruction file the first time `path`'s folder is touched, and tells the
+    /// session the path was touched. The system prompt is left alone.
+    public func finishFileTool(_ text: String, path: String) async -> String {
+        fileTouched?(path)
+        let rootURL = URL(fileURLWithPath: workspace.rootPath)
+        guard let extra = await projectNotes?.textToAppend(for: path, root: rootURL) else { return text }
+        return text + "\n\n" + extra
     }
 }
 
@@ -172,6 +197,11 @@ public protocol AgentTool: Sendable {
     /// When true, a deny rule naming this tool is honored even though reads otherwise skip rules.
     /// Set by a read that sends data off the machine (`web_search`). Ask and allow rules still are not.
     var honorsDenyRules: Bool { get }
+    /// When true, a successful call counts as checking the files this run changed (`diagnostics`,
+    /// `run_tests`, `gradle`).
+    var verifies: Bool { get }
+    /// A file tool touched `path`. Skills with a `paths` filter use this; other tools ignore it.
+    func noteFileTouched(_ path: String)
 }
 
 extension AgentTool {
@@ -182,6 +212,8 @@ extension AgentTool {
     public var waitsForUser: Bool { false }
     public var isExemptFromRepeatGuard: Bool { false }
     public var honorsDenyRules: Bool { false }
+    public var verifies: Bool { false }
+    public func noteFileTouched(_ path: String) {}
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }
 

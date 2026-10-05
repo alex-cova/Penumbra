@@ -38,6 +38,18 @@ public actor AgentSession {
     private var pendingPlans: [String: CheckedContinuation<PlanDecision, Never>] = [:]
     /// The model's checklist; rebuilt from the history of a resumed conversation.
     public let todoList: TodoList
+    /// Failed edits in the current run.
+    private let editFailures = EditFailureLog()
+    /// Nested instruction files already shown. Reset when a summary drops the outputs that carried them.
+    private let projectNotes = ProjectNoteTracker()
+    /// Asks once per run, so the flag survives from one turn to the next.
+    private let verifyPolicy = VerifyBeforeStoppingPolicy()
+    /// Paths of successful edits in the current run, for verify-before-stopping.
+    private var filesEditedThisRun: [String] = []
+    private var verifiedSinceEdit = false
+    /// Tokens reported during the current run. The budget uses this, not the session total, so
+    /// “continue” starts a fresh allowance.
+    private var runUsage = TokenUsage()
 
     public init(
         client: any LLMClient,
@@ -248,6 +260,10 @@ public actor AgentSession {
     private func run(label: String, _ out: AsyncStream<AgentEvent>.Continuation) async {
         let runID = await checkpoints.beginRun(label: label)
         currentRun = runID
+        await editFailures.reset()
+        filesEditedThisRun = []
+        verifiedSinceEdit = false
+        runUsage = TokenUsage()
         out.yield(.runStarted(runID))
         let ending = await loop(out)
         isRunning = false
@@ -262,19 +278,39 @@ public actor AgentSession {
         var callCounts: [String: Int] = [:]
         var compactedAfterOverflow = false
         var unreadableCalls = 0
+        var iteration = 0
+        /// Set when this turn is the last one: no tools, then the run ends with this reason.
+        var closing: RunEnding?
+        let started = Date()
+        let policies = turnPolicies()
 
-        for _ in 0..<configuration.maxIterations {
+        while true {
             if Task.isCancelled { return .stopped }
+            if closing == nil {
+                switch await combined(policies, turnState(iteration: iteration, started: started), ending: false) {
+                case .proceed:
+                    break
+                case .note(let text):
+                    items.append(.user(Self.editorNote(text)))
+                case .compact(let force):
+                    await compactIfNeeded(force: force, out)
+                case .finalTurn(let note, let ending):
+                    items.append(.user(Self.editorNote(note)))
+                    closing = ending
+                case .end(let ending):
+                    return ending
+                }
+            }
             await takePendingMessages()
             announceModeChange()
-            await compactIfNeeded(force: false, out)
+            if closing == nil { await compactIfNeeded(force: false, out) }
             if Task.isCancelled { return .stopped }
             out.yield(.stateChanged(.streaming))
 
             let itemsAtRequest = items.count
             let turn: Turn
             do {
-                turn = try await streamTurn(out)
+                turn = try await streamTurn(out, toolsEnabled: closing == nil)
             } catch is CancellationError {
                 return .stopped
             } catch LLMError.contextLengthExceeded where !compactedAfterOverflow {
@@ -288,6 +324,7 @@ public actor AgentSession {
             if Task.isCancelled { return .stopped }
             guard let finish = turn.finish else { return .failed("The model's response ended unexpectedly.") }
 
+            runUsage = runUsage + turn.usage
             totalUsage = totalUsage + turn.usage
             if turn.usage.inputTokens > 0 {
                 lastInputTokens = turn.usage.inputTokens
@@ -307,6 +344,14 @@ public actor AgentSession {
                 }
                 return finish == .length ? .lengthLimit : .contentFiltered
             }
+            if let closing {
+                for call in turn.calls {
+                    let output = ToolOutput("Not run: no tools are available on this last turn.", isError: true)
+                    items.append(.toolOutput(callID: call.id, output: output.text))
+                    out.yield(.toolCallFinished(id: call.id, name: call.name, output: output))
+                }
+                return closing
+            }
             // A call the model wrote but nobody could read: say so and let it try again, a few times.
             // (Ending the run here would throw away the work done so far for a typo in JSON.)
             if !turn.unreadable.isEmpty {
@@ -317,9 +362,30 @@ public actor AgentSession {
                 }
             }
             if turn.calls.isEmpty, turn.unreadable.isEmpty {
-                // Something the user wrote meanwhile is answered in this run, not in a new one.
-                if await takePendingMessages() { continue }
-                return .completed
+                switch await combined(policies, turnState(iteration: iteration, started: started), ending: true) {
+                case .note(let text):
+                    items.append(.user(Self.editorNote(text)))
+                    iteration += 1
+                    continue
+                case .compact(let force):
+                    await compactIfNeeded(force: force, out)
+                    iteration += 1
+                    continue
+                case .finalTurn(let note, let ending):
+                    items.append(.user(Self.editorNote(note)))
+                    closing = ending
+                    iteration += 1
+                    continue
+                case .end(let ending):
+                    return ending
+                case .proceed:
+                    // Something the user wrote meanwhile is answered in this run, not in a new one.
+                    if await takePendingMessages() {
+                        iteration += 1
+                        continue
+                    }
+                    return .completed
+                }
             }
 
             if !turn.calls.isEmpty {
@@ -333,8 +399,52 @@ public actor AgentSession {
             if !turn.unreadable.isEmpty {
                 items.append(.user(Self.unreadableCallNote(turn.unreadable)))
             }
+            iteration += 1
         }
-        return .iterationCap
+    }
+
+    private func turnPolicies() -> [any TurnPolicy] {
+        var policies: [any TurnPolicy] = [
+            RunLimitPolicy(
+                maxIterations: configuration.maxIterations,
+                maxTokens: configuration.maxRunTokens,
+                maxSeconds: configuration.maxRunSeconds,
+                isOverCost: configuration.runIsOverCost,
+                graceTurn: configuration.graceTurnAtCap),
+        ]
+        if configuration.verifyBeforeStopping { policies.append(verifyPolicy) }
+        policies.append(contentsOf: configuration.policies)
+        return policies
+    }
+
+    private func turnState(iteration: Int, started: Date) -> TurnState {
+        TurnState(
+            iteration: iteration, maxIterations: configuration.maxIterations, usage: runUsage,
+            elapsed: Date().timeIntervalSince(started), contextWindow: configuration.contextWindow,
+            estimatedTokens: estimatedContextTokens(), filesEdited: filesEditedThisRun,
+            verifiedSinceEdit: verifiedSinceEdit, mode: mode)
+    }
+
+    /// The first terminal decision wins. Notes and a compaction are folded when nobody ends the run.
+    private func combined(_ policies: [any TurnPolicy], _ state: TurnState, ending: Bool) async -> TurnDecision {
+        var notes: [String] = []
+        var compactForce: Bool?
+        for policy in policies {
+            let decision = await (ending ? policy.beforeEnding(state) : policy.beforeTurn(state))
+            switch decision {
+            case .proceed:
+                break
+            case .note(let text):
+                notes.append(text)
+            case .compact(let force):
+                compactForce = (compactForce ?? false) || force
+            case .finalTurn, .end:
+                return decision
+            }
+        }
+        if let compactForce { return .compact(force: compactForce) }
+        if !notes.isEmpty { return .note(notes.joined(separator: "\n\n")) }
+        return .proceed
     }
 
     static let maxUnreadableCalls = 3
@@ -405,8 +515,10 @@ public actor AgentSession {
     }
 
     /// Shortens the conversation now, at the user's request, whatever the window and however short it
-    /// already is: old tool outputs become stubs and everything but the latest turns is summarized.
-    /// `focus` tells the summary what to keep in detail. The report says what changed (nothing, for a
+    /// already is. Old tool outputs become stubs, then the oldest part is summarized. The tail that
+    /// stays word for word grows until it fills a share of the window, and never fewer than two model
+    /// turns. The user's own words from the summarized part are placed after the summary. `focus`
+    /// tells the summary what to keep in detail. The report says what changed (nothing, for a
     /// conversation too short to shorten). Never while a run is going.
     public func compactNow(focus: String? = nil) async throws -> CompactionReport {
         guard !isRunning else { throw CompactionError.runInProgress }
@@ -433,6 +545,7 @@ public actor AgentSession {
         if force {
             policy.target = 0.35
             policy.keepRecentToolOutputs = 2
+            policy.tailTokenShare = 0.20
         }
         var report = CompactionReport()
         report.estimatedTokensBefore = before
@@ -446,12 +559,17 @@ public actor AgentSession {
 
         let afterStubs = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition)) + ContextBudget.tokens(items)
         if manual { summaryBackoffUntilItems = 0 }
+        let tailBudget = Int(Double(window) * policy.tailTokenShare)
         if manual || afterStubs > (force ? Int(Double(window) * policy.target) : limit),
            items.count >= summaryBackoffUntilItems,
-           let cut = ConversationSummary.cutIndex(in: items, keepTurns: policy.keepRecentTurns) {
-            if let summary = await summarize(Array(items[..<cut]), window: window, focus: focus) {
+           let cut = ConversationSummary.cutIndex(in: items, tailBudget: tailBudget, minimumTurns: policy.keepRecentTurns) {
+            let budgetCharacters = max(2_000, Int(Double(window) * 0.5) * 3)
+            let older = Array(items[..<cut])
+            let prepared = ConversationSummary.source(from: older, maximumCharacters: budgetCharacters)
+            if let summary = await summarize(prepared, focus: focus, force: force) {
                 report.summarizedItems = cut
-                items = ConversationSummary.replacing(items, upTo: cut, with: summary)
+                items = ConversationSummary.replacing(items, upTo: cut, with: summary, verbatim: prepared.verbatim)
+                await projectNotes.reset()
             } else {
                 report.summaryFailed = !Task.isCancelled
                 summaryBackoffUntilItems = items.count + 6
@@ -467,27 +585,50 @@ public actor AgentSession {
     }
 
     /// One request to the same model, asking it to condense the older part of the conversation.
-    private func summarize(_ older: [ConversationItem], window: Int, focus: String? = nil) async -> String? {
-        let budgetCharacters = max(2_000, Int(Double(window) * 0.5) * 3)
-        let transcript = ConversationSummary.transcript(of: older, maximumCharacters: budgetCharacters)
-        let attention = focus?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            .map { "\n\nGive particular attention to this, and keep its details: \($0)" } ?? ""
+    /// A cache-friendly request reuses the session prefix; a tool call or a forced overflow pass
+    /// uses the dedicated summarizer instead.
+    private func summarize(_ source: ConversationSummary.Source, focus: String?, force: Bool) async -> String? {
+        if configuration.cacheFriendlySummaries, !force, let cached = await summarizeReusingPrefix(focus: focus) {
+            return cached
+        }
         let request = LLMRequest(
             model: configuration.model, system: ConversationSummary.systemPrompt,
-            items: [.user(transcript + attention + "\n\nWrite the summary now.")], tools: [],
+            items: [.user(ConversationSummary.requestText(for: source, focus: focus))], tools: [],
             reasoningEffort: nil, maxOutputTokens: 1_500, cacheKey: nil)
+        return await collectSummary(request, rejectToolCalls: false)
+    }
+
+    /// The session's own system prompt, tools and items, plus a note to summarize and call nothing.
+    /// The provider can hit its cached prefix. `nil` when the model calls a tool or writes nothing.
+    private func summarizeReusingPrefix(focus: String?) async -> String? {
+        let attention = focus?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            .map { " Give particular attention to: \($0)." } ?? ""
+        let note = Self.editorNote(
+            "Summarize the conversation now so it can continue. Call no tools. Write the sections Objective, Decisions, Work done (files changed, with paths), Open problems, Next step, Relevant files. Keep details that are still true and drop stale ones.\(attention)")
+        let request = LLMRequest(
+            model: configuration.model, system: configuration.systemPrompt,
+            items: items + [.user(note)], tools: offeredTools.map(\.definition),
+            reasoningEffort: nil, maxOutputTokens: 1_500, cacheKey: configuration.cacheKey,
+            contextWindow: configuration.contextWindow)
+        return await collectSummary(request, rejectToolCalls: true)
+    }
+
+    private func collectSummary(_ request: LLMRequest, rejectToolCalls: Bool) async -> String? {
         var text = ""
+        var called = false
         do {
             for try await event in client.stream(request) {
                 switch event {
                 case .textDelta(let delta): text += delta
-                case .retrying: text = ""
+                case .toolCallStarted: called = true
+                case .retrying: text = ""; called = false
                 default: break
                 }
             }
         } catch {
             return nil
         }
+        if rejectToolCalls, called { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -510,15 +651,16 @@ public actor AgentSession {
         var unreadable: [(detail: String, raw: String)] = []
     }
 
-    private func streamTurn(_ out: AsyncStream<AgentEvent>.Continuation) async throws -> Turn {
+    private func streamTurn(_ out: AsyncStream<AgentEvent>.Continuation, toolsEnabled: Bool = true) async throws -> Turn {
         let request = LLMRequest(
             model: configuration.model,
             system: configuration.systemPrompt,
             items: items,
-            tools: offeredTools.map(\.definition),
+            tools: toolsEnabled ? offeredTools.map(\.definition) : [],
             reasoningEffort: configuration.reasoningEffort,
             maxOutputTokens: configuration.maxOutputTokens,
-            cacheKey: configuration.cacheKey)
+            cacheKey: configuration.cacheKey,
+            contextWindow: configuration.contextWindow)
 
         var turn = Turn()
         var textFlushed = false
@@ -658,7 +800,13 @@ public actor AgentSession {
             for (index, output) in batch {
                 outputs[index] = output
                 out.yield(.toolCallFinished(id: calls[index].id, name: calls[index].name, output: output))
-                if !output.isError, case .run(let tool, _, _) = plans[index], tool.risk == .edit { changedFiles = true }
+                guard !output.isError, case .run(let tool, let arguments, _) = plans[index] else { continue }
+                if tool.risk == .edit {
+                    changedFiles = true
+                    verifiedSinceEdit = false
+                    filesEditedThisRun.append(contentsOf: Self.editedPaths(tool: tool.name, arguments: arguments))
+                }
+                if tool.verifies { verifiedSinceEdit = true }
             }
             // Running the tests again after an edit is the normal loop, not a stuck one: only identical
             // calls with nothing changed in between count towards the repeat guard.
@@ -713,7 +861,8 @@ public actor AgentSession {
 
         let context = ToolContext(
             workspace: workspace, ledger: ledger, callID: call.id,
-            checkpoint: currentRun.map { CheckpointScope(log: checkpoints, run: $0) })
+            checkpoint: currentRun.map { CheckpointScope(log: checkpoints, run: $0) },
+            editTolerance: configuration.editTolerance, editFailures: editFailures, projectNotes: projectNotes)
 
         var request: ApprovalRequest
         let isEdit = tool.risk == .edit
@@ -770,6 +919,10 @@ public actor AgentSession {
         let todoList = todoList
         let scope = currentRun.map { CheckpointScope(log: checkpoints, run: $0) }
         let timeout = configuration.toolTimeout
+        let tolerance = configuration.editTolerance
+        let failures = editFailures
+        let notes = projectNotes
+        let touchedTools = tools
         return await withTaskGroup(of: (Int, ToolOutput).self) { group in
             for index in indices {
                 let call = calls[index]
@@ -791,6 +944,10 @@ public actor AgentSession {
                                 out.yield(.planProposed(callID: call.id, plan: plan))
                                 out.yield(.stateChanged(.awaitingPlanApproval(callID: call.id)))
                                 return await self.waitForPlan(callID: call.id)
+                            },
+                            editTolerance: tolerance, editFailures: failures, projectNotes: notes,
+                            fileTouched: { path in
+                                for tool in touchedTools { tool.noteFileTouched(path) }
                             })
                         let output = await Self.run(tool, arguments: arguments, context: context, timeout: timeout)
                         guard let note else { return (index, output) }
@@ -821,6 +978,14 @@ public actor AgentSession {
             let seconds = timeout < 1 ? String(format: "%.2f", timeout) : String(Int(timeout))
             return first ?? .error("\(tool.name) timed out after \(seconds) seconds.")
         }
+    }
+
+    /// A `path` argument, or the tool's name when the call names several files (a patch).
+    private static func editedPaths(tool: String, arguments: String) -> [String] {
+        guard let path = (try? JSONValue(parsing: arguments))?.objectValue?["path"]?.stringValue, !path.isEmpty else {
+            return [tool]
+        }
+        return [path]
     }
 
     /// Argument text with keys sorted, so `{"a":1,"b":2}` and `{"b":2,"a":1}` count as one call.

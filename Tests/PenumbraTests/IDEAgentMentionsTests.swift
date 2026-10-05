@@ -68,7 +68,7 @@ final class IDEAgentMentionsTests: XCTestCase {
 
         let sent = try firstUserItem(client)
         XCTAssertTrue(sent.contains("What does @src/A.java declare?"))
-        XCTAssertTrue(sent.contains("<attachment name=\"src/A.java\">\nclass A {}\n\n</attachment>"))
+        XCTAssertTrue(sent.contains("<untrusted source=\"attachment:src/A.java\">\nclass A {}\n\n</untrusted>"))
         let user = try XCTUnwrap(controller.entries.first { $0.kind == .user })
         XCTAssertEqual(user.text, "What does @src/A.java declare?", "the transcript shows what was typed")
         XCTAssertEqual(user.attachments, ["src/A.java · 11 B"])
@@ -114,7 +114,7 @@ final class IDEAgentMentionsTests: XCTestCase {
         let (controller, client) = makeController([.text("ok")])
         await send(controller, "what is in @src/")
         let sent = try firstUserItem(client)
-        XCTAssertTrue(sent.contains("<attachment name=\"src/\">\nutil/\nA.java\n</attachment>"), sent)
+        XCTAssertTrue(sent.contains("<untrusted source=\"attachment:src/\">\nutil/\nA.java\n</untrusted>"), sent)
     }
 
     func testMentionsInACommandExpansionAreAttachedToo() async throws {
@@ -125,7 +125,7 @@ final class IDEAgentMentionsTests: XCTestCase {
         await send(controller, "/rev style")
         let sent = try firstUserItem(client)
         XCTAssertTrue(sent.contains("Review @src/A.java for style"))
-        XCTAssertTrue(sent.contains("<attachment name=\"src/A.java\">"))
+        XCTAssertTrue(sent.contains("<untrusted source=\"attachment:src/A.java\">"))
     }
 
     func testTheSessionKeepsTheAttachmentsInItsHistoryForLaterTurns() async throws {
@@ -134,7 +134,7 @@ final class IDEAgentMentionsTests: XCTestCase {
         await send(controller, "and now?")
         let second = try XCTUnwrap(client.requests.last)
         guard case .user(let first) = second.items[0] else { return XCTFail("no first user item") }
-        XCTAssertTrue(first.contains("<attachment name=\"A.txt\">"), "the model still has what it was given")
+        XCTAssertTrue(first.contains("<untrusted source=\"attachment:A.txt\">"), "the model still has what it was given")
     }
 
     // MARK: - The list

@@ -36,6 +36,7 @@ public final class RunTestsTool: AgentTool, @unchecked Sendable {
 
     // A command: it runs code, so it runs alone and never alongside a read.
     public var risk: ToolRisk { .command }
+    public var verifies: Bool { true }
     public var definition: ToolDefinition {
         ToolDefinition(
             name: "run_tests",

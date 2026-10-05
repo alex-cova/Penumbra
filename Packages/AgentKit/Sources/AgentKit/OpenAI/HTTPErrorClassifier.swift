@@ -14,11 +14,21 @@ public enum HTTPErrorClassifier {
             return .rateLimited(retryAfter: retryAfter)
         case 500...599:
             return .server(status: status, message: message)
-        case 400 where lowered.contains("context_length_exceeded") || lowered.contains("maximum context length"):
+        case 400 where isContextLength(lowered):
             return .contextLengthExceeded
         default:
             return .badRequest(status: status, message: message)
         }
+    }
+
+    /// Whether `text` is a provider saying the prompt does not fit the context window.
+    public static func isContextLength(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        let needles = [
+            "context_length_exceeded", "maximum context length", "context length", "context size",
+            "exceeds the available context", "prompt too long", "input length exceeds",
+        ]
+        return needles.contains { lowered.contains($0) }
     }
 
     /// `Retry-After` in seconds. The HTTP-date form is ignored; backoff covers it.

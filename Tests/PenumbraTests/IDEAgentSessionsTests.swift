@@ -344,6 +344,9 @@ final class IDEAgentSessionsTests: XCTestCase {
         settings.iterationCap = 80
         settings.contextWindowOverride = 100_000
         settings.secretFilePatternsText = "*.vault"
+        settings.maxRunTokens = 100_000
+        settings.maxRunSeconds = 300
+        settings.maxRunCostCents = 500
         XCTAssertNotEqual(settings.fingerprint, before)
 
         let reloaded = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
@@ -351,5 +354,18 @@ final class IDEAgentSessionsTests: XCTestCase {
         XCTAssertEqual(reloaded.iterationCap, 80)
         XCTAssertEqual(reloaded.contextWindowOverride, 100_000)
         XCTAssertEqual(reloaded.secretFilePatterns, ["*.vault"])
+        XCTAssertEqual(reloaded.maxRunTokens, 100_000)
+        XCTAssertEqual(reloaded.maxRunSeconds, 300)
+        XCTAssertEqual(reloaded.maxRunCostCents, 500)
+        let priced = reloaded.fingerprint
+        reloaded.priceTableText = "gpt-test 2 1 4"
+        XCTAssertNotEqual(reloaded.fingerprint, priced, "a spend limit uses the price table, so editing it starts a new session")
+        reloaded.model = "gpt-test"
+        XCTAssertEqual(reloaded.runIsOverCost?(TokenUsage(inputTokens: 3_000_000, outputTokens: 0)), true)
+        reloaded.maxRunCostCents = 0
+        XCTAssertNil(reloaded.runIsOverCost)
+        let unlimited = reloaded.fingerprint
+        reloaded.priceTableText = "gpt-test 9 1 9"
+        XCTAssertEqual(reloaded.fingerprint, unlimited, "with no spend limit the price table is only for the estimate")
     }
 }

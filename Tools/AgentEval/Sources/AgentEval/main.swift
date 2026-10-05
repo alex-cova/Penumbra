@@ -56,7 +56,8 @@ case .run:
     let configuration = EvalConfiguration(
         model: model, reasoningEffort: options.reasoning, maxIterations: options.maxIterations,
         contextWindow: setup.contextWindow, trialTimeout: options.trialTimeout, toolset: options.toolset,
-        offerRunTests: options.offerRunTests)
+        offerRunTests: options.offerRunTests, compactionThreshold: setup.compactionThreshold,
+        editTolerance: setup.isLocal ? .local : .hosted, verifyBeforeStopping: true)
     // Local models share one GPU; parallel trials would only slow each other and skew the timings.
     let jobs = setup.isLocal ? 1 : options.jobs
     let transcripts = options.transcriptsPath.map { URL(fileURLWithPath: $0, isDirectory: true) }

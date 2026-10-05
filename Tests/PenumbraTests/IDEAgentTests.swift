@@ -102,6 +102,12 @@ final class IDEAgentSettingsTests: XCTestCase {
         XCTAssertNoThrow(try makeSettings().makeClient())
     }
 
+    func testUserInstructionsStayOutUntilTheUserOptsIn() {
+        let settings = makeSettings()
+        XCTAssertFalse(settings.loadsUserInstructions)
+        XCTAssertNil(IDEAgentProjectNotes.loadUser(settings: settings))
+    }
+
     func testReasoningOffSendsNoEffortAndAChangeChangesTheFingerprint() {
         let settings = makeSettings()
         settings.reasoningEffort = "off"
@@ -143,6 +149,7 @@ final class IDEAgentToolSummaryTests: XCTestCase {
         XCTAssertNil(IDEAgentToolSummary.endingMessage(.completed, iterationLimit: 40))
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.stopped, iterationLimit: 40)?.isError, false)
         XCTAssertTrue(IDEAgentToolSummary.endingMessage(.iterationCap, iterationLimit: 40)!.text.contains("40 steps"))
+        XCTAssertEqual(IDEAgentToolSummary.endingMessage(.budget, iterationLimit: 40)?.isError, false)
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.failed("boom"), iterationLimit: 40)?.text, "boom")
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.failed("boom"), iterationLimit: 40)?.isError, true)
     }

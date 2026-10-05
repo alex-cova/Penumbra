@@ -100,10 +100,20 @@ public enum Summary {
         let total = report.results
         let passes = total.filter(\.passed).count
         let medianTokens = total.isEmpty ? 0 : Double(total.map { $0.inputTokens + $0.outputTokens }.reduce(0, +)) / Double(total.count)
+        let input = total.reduce(0) { $0 + $1.inputTokens }
+        let cached = total.reduce(0) { $0 + $1.cachedInputTokens }
+        let share = input == 0 ? 0 : Int((Double(cached) / Double(input) * 100).rounded())
+        let catalog = total.map(\.toolCatalogTokens).max() ?? 0
+        let compactions = total.reduce(0) { $0 + $1.compactions }
+        let failedSummaries = total.filter(\.summaryFailed).count
         lines.append("")
         lines.append(
             "passed \(passes)/\(total.count) (\(Int((passRate(total) * 100).rounded()))%) · "
             + "\(tokens(medianTokens)) tokens and \(Int((total.map(\.seconds).reduce(0, +) / Double(max(1, total.count))).rounded())) s per trial on average")
+        lines.append(
+            "cached \(share)% of input · tool catalog \(tokens(Double(catalog))) tokens · "
+            + "\(compactions) compaction\(compactions == 1 ? "" : "s")"
+            + (failedSummaries == 0 ? "" : " · \(failedSummaries) summaries failed"))
         return lines.joined(separator: "\n")
     }
 

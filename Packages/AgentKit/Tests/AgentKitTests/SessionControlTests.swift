@@ -357,14 +357,14 @@ private final class MemoryBlobs: CheckpointBlobStore, @unchecked Sendable {
 
     @Test func aLongerOneIsSummarizedKeepingTheLatestTurns() async throws {
         let client = MockLLMClient(turns: [.text("The user asked five things; files were read.")])
-        let agent = try session(client, history: history(turns: 6))
-        let before = await agent.items.count
+        let agent = try session(client, history: history(turns: 6), window: 4_000)
         let report = try await agent.compactNow()
         #expect(report.summarizedItems > 0 && report.changedAnything)
         #expect(report.estimatedTokensAfter < report.estimatedTokensBefore)
 
         let items = await agent.items
-        #expect(items.count < before)
+        #expect(items.contains { if case .user(let text) = $0 { text == "question 0" } else { false } },
+                "the user's own words survive the summary")
         guard case .user(let first) = items[0] else {
             Issue.record("no summary item")
             return

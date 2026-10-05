@@ -230,6 +230,13 @@ private func finishedCalls(_ events: [LLMEvent]) -> [(id: String, name: String, 
             try decode([#"{"error":"model requires more memory"}"#], sse: false, with: OllamaEventDecoder())
         }
     }
+
+    @Test func aContextOverflowBecomesContextLengthExceeded() {
+        #expect(throws: LLMError.contextLengthExceeded) {
+            try decode([#"{"error":"the request exceeds the available context size"}"#], sse: false, with: OllamaEventDecoder())
+        }
+        #expect(!HTTPErrorClassifier.isContextLength("num_ctx must be a number"))
+    }
 }
 
 @Suite struct OllamaEncoderTests {

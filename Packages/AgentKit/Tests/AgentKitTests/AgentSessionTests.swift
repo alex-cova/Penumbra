@@ -202,7 +202,8 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
             .toolCalls((id: "c\($0)", name: "look", arguments: "{\"n\":\($0)}"))
         })
         let session = try makeSession(
-            client, tools: [ProbeTool(name: "look", probe: probe)], configuration: AgentConfiguration(model: "m", maxIterations: 3))
+            client, tools: [ProbeTool(name: "look", probe: probe)],
+            configuration: AgentConfiguration(model: "m", maxIterations: 3, graceTurnAtCap: false))
         #expect(ending(await runToEnd(session)) == .iterationCap)
         #expect(client.requests.count == 3)
         expectEveryCallAnswered(await session.items)

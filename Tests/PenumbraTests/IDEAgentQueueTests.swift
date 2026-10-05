@@ -138,7 +138,7 @@ final class IDEAgentQueueTests: XCTestCase {
         controller.submit()
         await waitFor("finished") { !controller.isRunning && controller.selected.queue.isEmpty }
         guard case .user(let sent) = try XCTUnwrap(try XCTUnwrap(client.requests.last).items.last) else { return XCTFail("no message") }
-        XCTAssertTrue(sent.contains("<attachment name=\"A.txt\">\nalpha\nbeta\n\n</attachment>"), sent)
+        XCTAssertTrue(sent.contains("<untrusted source=\"attachment:A.txt\">\nalpha\nbeta\n\n</untrusted>"), sent)
         XCTAssertEqual(controller.entries.first { $0.text == "compare with @A.txt" }?.attachments.count, 1)
     }
 
@@ -163,6 +163,7 @@ final class IDEAgentQueueTests: XCTestCase {
         XCTAssertEqual(IDEAgentConversation.drainAction(queued: ["a"], ending: .stopped), .restore("a"))
         XCTAssertEqual(IDEAgentConversation.drainAction(queued: ["a"], ending: .failed("boom")), .restore("a"))
         XCTAssertEqual(IDEAgentConversation.drainAction(queued: ["a"], ending: .iterationCap), .restore("a"))
+        XCTAssertEqual(IDEAgentConversation.drainAction(queued: ["a"], ending: .budget), .restore("a"))
         XCTAssertEqual(IDEAgentConversation.drainAction(queued: ["a"], ending: nil), .restore("a"))
     }
 
@@ -350,7 +351,8 @@ final class IDEAgentShellShortcutTests: XCTestCase {
         let many = (0..<9).map { "command \($0)" }
         XCTAssertEqual(IDEAgentShellContext.bounded(many), Array(many.suffix(IDEAgentShellContext.maxCommands)), "the newest few")
         XCTAssertEqual(IDEAgentShellContext.prefix(for: []), "")
-        XCTAssertTrue(IDEAgentShellContext.prefix(for: ["$ ls"]).hasSuffix("[End of the commands the user ran.]\n\n"))
+        XCTAssertTrue(IDEAgentShellContext.prefix(for: ["$ ls"]).contains("<untrusted source=\"commands the user ran\">"))
+        XCTAssertTrue(IDEAgentShellContext.prefix(for: ["$ ls"]).hasSuffix("</untrusted>\n\n"))
     }
 }
 

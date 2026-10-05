@@ -92,15 +92,19 @@ private struct Fixture {
         run = await log.beginRun(label: "patch")
     }
 
-    func context() -> ToolContext {
-        ToolContext(workspace: project.workspace, ledger: ledger, callID: "c", checkpoint: CheckpointScope(log: log, run: run))
+    func context(tolerance: EditTolerance = .hosted, failures: EditFailureLog? = nil) -> ToolContext {
+        ToolContext(
+            workspace: project.workspace, ledger: ledger, callID: "c",
+            checkpoint: CheckpointScope(log: log, run: run),
+            editTolerance: tolerance, editFailures: failures)
     }
 
     func read(_ path: String) async { _ = await ReadFileTool().execute(argumentsJSON: #"{"path":"\#(path)"}"#, context: context()) }
 
-    func patch(_ text: String) async -> ToolOutput {
+    func patch(_ text: String, tolerance: EditTolerance = .hosted, failures: EditFailureLog? = nil) async -> ToolOutput {
         let argument = (try? JSONValue.string(text).serialized()) ?? "\"\""
-        return await ApplyPatchTool().execute(argumentsJSON: #"{"patch":\#(argument)}"#, context: context())
+        return await ApplyPatchTool().execute(
+            argumentsJSON: #"{"patch":\#(argument)}"#, context: context(tolerance: tolerance, failures: failures))
     }
 
     func disk(_ path: String) -> String? { try? String(contentsOf: project.root.appendingPathComponent(path), encoding: .utf8) }
@@ -296,6 +300,59 @@ private struct Fixture {
         #expect(output.text.contains("were put back, so nothing was changed"))
         #expect(try String(contentsOf: project.root.appendingPathComponent("A.txt"), encoding: .utf8) == "a\n")
         #expect(try String(contentsOf: project.root.appendingPathComponent("B.txt"), encoding: .utf8) == "b\n")
+    }
+
+    @Test func aCanonicalHunkRewritesOnlyTheMatchedLinesOfACRLFFile() async throws {
+        let f = try await Fixture(files: ["a.txt": "keep\r\nhello \u{201C}world\u{201D}  \r\nuntouched\r\n"])
+        await f.read("a.txt")
+        let output = await f.patch("""
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -1,3 +1,3 @@
+         keep
+        -hello "world"
+        +hello there
+         untouched
+        """)
+        #expect(!output.isError)
+        #expect(output.text.contains("normalizing"))
+        #expect(f.disk("a.txt")?.debugDescription == "\"keep\\r\\nhello there\\r\\nuntouched\\r\\n\"")
+    }
+
+    @Test func aNormalizedNoOpIsReportedAndTheFileStays() async throws {
+        let f = try await Fixture(files: ["a.txt": "hello\n"])
+        await f.read("a.txt")
+        let output = await f.patch("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello \n+hello\n")
+        #expect(output.isError)
+        #expect(output.text.contains("nothing"))
+        #expect(f.disk("a.txt") == "hello\n")
+    }
+
+    @Test func anIndentationShiftAppliesOnlyForLocalModels() async throws {
+        let hosted = try await Fixture(files: ["a.txt": "    value\n"])
+        await hosted.read("a.txt")
+        let refused = await hosted.patch("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-        value\n+        VALUE\n")
+        #expect(refused.isError)
+        #expect(hosted.disk("a.txt") == "    value\n")
+
+        let local = try await Fixture(files: ["a.txt": "    value\n"])
+        await local.read("a.txt")
+        let applied = await local.patch(
+            "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-        value\n+        VALUE\n", tolerance: .local)
+        #expect(!applied.isError)
+        #expect(applied.text.contains("shifting indentation"))
+        #expect(local.disk("a.txt") == "    VALUE\n")
+    }
+
+    @Test func theThirdFailureSuggestsWriteFile() async throws {
+        let f = try await Fixture(files: ["a.txt": "alpha\n"])
+        await f.read("a.txt")
+        let failures = EditFailureLog()
+        let patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-missing\n+nope\n"
+        var last = ToolOutput("")
+        for _ in 0..<3 { last = await f.patch(patch, failures: failures) }
+        #expect(last.isError)
+        #expect(last.text.contains("write_file"))
     }
 }
 

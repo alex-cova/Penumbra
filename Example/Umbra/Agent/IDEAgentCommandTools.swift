@@ -162,6 +162,7 @@ struct IDEGradleTool: AgentTool {
     let support: IDEAgentCommandSupport
 
     var risk: ToolRisk { .command }
+    var verifies: Bool { true }
     var definition: ToolDefinition {
         ToolDefinition(
             name: "gradle",
@@ -209,6 +210,7 @@ struct IDERunTestsTool: AgentTool {
     let support: IDEAgentCommandSupport
 
     var risk: ToolRisk { .command }
+    var verifies: Bool { true }
     var definition: ToolDefinition {
         ToolDefinition(
             name: "run_tests",

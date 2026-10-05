@@ -105,6 +105,11 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
         guard let split = MLXConversation.split(request.items) else {
             throw LLMError.badRequest(status: 0, message: "The conversation must end with a user message or tool results.")
         }
+        // Thrown before any tokens are generated, so the session can compact and retry.
+        let window = [request.contextWindow, loaded.info.contextLength].compactMap { $0 }.filter { $0 > 0 }.min()
+        if let window, MLXContextFit.exceeds(request, window: window) {
+            throw LLMError.contextLengthExceeded
+        }
         let thinking = request.reasoningEffort != nil
         let key = Key(
             modelID: model.id, instructions: request.system, tools: request.tools, thinking: thinking,

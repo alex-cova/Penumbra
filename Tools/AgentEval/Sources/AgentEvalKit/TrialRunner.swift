@@ -10,10 +10,14 @@ public struct EvalConfiguration: Sendable {
     public var trialTimeout: TimeInterval
     public var toolset: Toolset
     public var offerRunTests: Bool
+    public var compactionThreshold: Double
+    public var editTolerance: EditTolerance
+    public var verifyBeforeStopping: Bool
 
     public init(
         model: String, reasoningEffort: String? = nil, maxIterations: Int = 40, contextWindow: Int? = nil,
-        trialTimeout: TimeInterval = 600, toolset: Toolset = .full, offerRunTests: Bool = true
+        trialTimeout: TimeInterval = 600, toolset: Toolset = .full, offerRunTests: Bool = true,
+        compactionThreshold: Double = 0.75, editTolerance: EditTolerance = .hosted, verifyBeforeStopping: Bool = true
     ) {
         self.model = model
         self.reasoningEffort = reasoningEffort
@@ -22,6 +26,9 @@ public struct EvalConfiguration: Sendable {
         self.trialTimeout = trialTimeout
         self.toolset = toolset
         self.offerRunTests = offerRunTests
+        self.compactionThreshold = compactionThreshold
+        self.editTolerance = editTolerance
+        self.verifyBeforeStopping = verifyBeforeStopping
     }
 }
 
@@ -42,6 +49,10 @@ public struct TrialResult: Codable, Sendable, Equatable {
     public var outputTokens: Int
     public var cachedInputTokens: Int
     public var compactions: Int
+    /// A compaction needed a summary and the model did not write one.
+    public var summaryFailed: Bool
+    /// Tokens in the tool definitions offered to the model, not including the system prompt.
+    public var toolCatalogTokens: Int
     public var seconds: Double
     public var changedFiles: [String]
     public var finalMessage: String
@@ -57,7 +68,7 @@ public enum TrialRunner {
         var result = TrialResult(
             taskID: task.id, trial: trial, passed: false, protectedChanged: [], checkExitCode: -1, checkOutput: "", ending: "not run",
             turns: 0, toolCalls: 0, toolErrors: 0, runTestsCalls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0,
-            compactions: 0, seconds: 0, changedFiles: [], finalMessage: "", error: nil)
+            compactions: 0, summaryFailed: false, toolCatalogTokens: 0, seconds: 0, changedFiles: [], finalMessage: "", error: nil)
         let sandbox: Sandbox
         do { sandbox = try Sandbox.create(from: task.projectDirectory) } catch {
             result.error = "could not create the sandbox: \(error.localizedDescription)"
@@ -68,15 +79,21 @@ public enum TrialRunner {
         let before = sandbox.snapshot()
         let runTests = configuration.offerRunTests ? RunTestsTool(command: task.check, directory: sandbox.root) : nil
         let workspace = DiskAgentWorkspace(root: sandbox.root)
+        let tools = configuration.toolset.tools(runTests: runTests)
+        result.toolCatalogTokens = ContextBudget.tokens(system: "", tools: tools.map(\.definition))
         let session = AgentSession(
-            client: client, tools: configuration.toolset.tools(runTests: runTests), workspace: workspace,
+            client: client, tools: tools, workspace: workspace,
             configuration: AgentConfiguration(
                 model: configuration.model,
-                systemPrompt: SystemPrompt.make(projectRoot: workspace.rootPath),
+                systemPrompt: SystemPrompt.make(
+                    projectRoot: workspace.rootPath, notes: ProjectInstructions.loadRoot(at: sandbox.root)),
                 reasoningEffort: configuration.reasoningEffort,
                 maxIterations: configuration.maxIterations,
                 approval: .approveAll,
-                contextWindow: configuration.contextWindow))
+                contextWindow: configuration.contextWindow,
+                compactionThreshold: configuration.compactionThreshold,
+                verifyBeforeStopping: configuration.verifyBeforeStopping,
+                editTolerance: configuration.editTolerance))
 
         let started = Date()
         let timedOut = Atomic(false)
@@ -104,7 +121,9 @@ public enum TrialRunner {
                 result.inputTokens += usage.inputTokens
                 result.outputTokens += usage.outputTokens
                 result.cachedInputTokens += usage.cachedInputTokens
-            case .compacted(let report) where report.changedAnything: result.compactions += 1
+            case .compacted(let report):
+                if report.changedAnything { result.compactions += 1 }
+                if report.summaryFailed { result.summaryFailed = true }
             case .runEnded(let ending):
                 result.ending = describe(ending)
                 log += "ENDED: \(result.ending)\n"
@@ -142,6 +161,7 @@ public enum TrialRunner {
         case .lengthLimit: "output limit"
         case .contentFiltered: "content filter"
         case .iterationCap: "step limit"
+        case .budget: "budget"
         case .stopped: "stopped"
         case .repeatedCall(let name): "repeated \(name)"
         case .failed(let message): "failed: \(message.prefix(300))"

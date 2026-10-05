@@ -35,6 +35,9 @@ public struct LLMRequest: Sendable {
     public var maxOutputTokens: Int?
     /// Stable per session so the provider can route requests to the same cache.
     public var cacheKey: String?
+    /// The window the host is compacting against, when it set one. A local client uses it to
+    /// refuse a prompt that cannot fit, so the session can compact and retry.
+    public var contextWindow: Int?
 
     public init(
         model: String,
@@ -43,7 +46,8 @@ public struct LLMRequest: Sendable {
         tools: [ToolDefinition] = [],
         reasoningEffort: String? = nil,
         maxOutputTokens: Int? = nil,
-        cacheKey: String? = nil
+        cacheKey: String? = nil,
+        contextWindow: Int? = nil
     ) {
         self.model = model
         self.system = system
@@ -52,6 +56,7 @@ public struct LLMRequest: Sendable {
         self.reasoningEffort = reasoningEffort
         self.maxOutputTokens = maxOutputTokens
         self.cacheKey = cacheKey
+        self.contextWindow = contextWindow
     }
 }
 

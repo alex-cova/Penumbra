@@ -50,6 +50,68 @@ private final class SummarizingClient: LLMClient, @unchecked Sendable {
     }
 }
 
+/// Serves a cache-friendly summary (the session's own system prompt plus the summarize note) separately
+/// from the dedicated summarizer, and everything else from a script.
+private final class PrefixSummarizingClient: LLMClient, @unchecked Sendable {
+    enum PrefixAnswer {
+        case summary(String)
+        case toolCall
+    }
+
+    let providerID = "mock"
+    let inner: MockLLMClient
+    let prefix: PrefixAnswer
+    let dedicated: String
+    private let lock = NSLock()
+    private var prefixes: [LLMRequest] = []
+    private var dedicateds: [LLMRequest] = []
+
+    init(turns: [MockTurn], prefix: PrefixAnswer, dedicated: String) {
+        inner = MockLLMClient(turns: turns)
+        self.prefix = prefix
+        self.dedicated = dedicated
+    }
+
+    var prefixRequests: [LLMRequest] { lock.withLock { prefixes } }
+    var dedicatedRequests: [LLMRequest] { lock.withLock { dedicateds } }
+
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        if request.system == ConversationSummary.systemPrompt {
+            lock.withLock { dedicateds.append(request) }
+            return Self.text(dedicated)
+        }
+        let asksForSummary = request.items.contains { item in
+            if case .user(let text) = item { return text.contains("Summarize the conversation now") }
+            return false
+        }
+        if asksForSummary {
+            lock.withLock { prefixes.append(request) }
+            let prefix = prefix
+            return AsyncThrowingStream { continuation in
+                switch prefix {
+                case .summary(let text):
+                    continuation.yield(.textDelta(text))
+                    continuation.yield(.finished(.completed))
+                case .toolCall:
+                    continuation.yield(.toolCallStarted(id: "sum", name: "bulk"))
+                    continuation.yield(.toolCallFinished(id: "sum", name: "bulk", arguments: "{}"))
+                    continuation.yield(.finished(.toolCalls))
+                }
+                continuation.finish()
+            }
+        }
+        return inner.stream(request)
+    }
+
+    private static func text(_ text: String) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.textDelta(text))
+            continuation.yield(.finished(.completed))
+            continuation.finish()
+        }
+    }
+}
+
 private func call(_ n: Int) -> MockTurn {
     .toolCalls((id: "c\(n)", name: "bulk", arguments: #"{"n":\#(n)}"#))
 }
@@ -193,6 +255,68 @@ private func outputs(_ items: [ConversationItem]) -> [String] {
         let events = await run(try session(client, window: 10_000, characters: 3_000))
         let first = try #require(reports(events).first)
         #expect(first.estimatedTokensBefore >= 9_000, "\(first)")
+    }
+
+    @Test func aCacheFriendlySummaryReusesTheSessionPrefixAndAToolCallFallsBack() async throws {
+        let client = PrefixSummarizingClient(
+            turns: (1...6).map(call) + [.text("done")],
+            prefix: .summary("Kept the goal."),
+            dedicated: "Dedicated fallback.")
+        let agent = AgentSession(
+            client: client, tools: [BulkTool(characters: 2_400)], workspace: try TempProject().workspace,
+            configuration: AgentConfiguration(
+                model: "m", systemPrompt: "sys", cacheKey: "cache-key", contextWindow: 2_500,
+                cacheFriendlySummaries: true))
+        let events = await run(agent)
+        #expect(events.last == .runEnded(.completed))
+        let prefix = try #require(client.prefixRequests.first)
+        #expect(prefix.system == "sys")
+        #expect(prefix.cacheKey == "cache-key")
+        #expect(!prefix.tools.isEmpty)
+        #expect(prefix.items.last.map { if case .user(let text) = $0 { text.contains("Summarize the conversation now") } else { false } } == true)
+        #expect(client.dedicatedRequests.isEmpty)
+        let items = await agent.items
+        #expect(items.contains { if case .user(let text) = $0 { text.contains("Kept the goal.") } else { false } })
+
+        let falling = PrefixSummarizingClient(
+            turns: (1...6).map(call) + [.text("done")],
+            prefix: .toolCall,
+            dedicated: "Dedicated fallback.")
+        let fallback = AgentSession(
+            client: falling, tools: [BulkTool(characters: 2_400)], workspace: try TempProject().workspace,
+            configuration: AgentConfiguration(
+                model: "m", systemPrompt: "sys", cacheKey: "cache-key", contextWindow: 2_500,
+                cacheFriendlySummaries: true))
+        let fallbackEvents = await run(fallback)
+        #expect(fallbackEvents.last == .runEnded(.completed))
+        #expect(!falling.prefixRequests.isEmpty)
+        let dedicated = try #require(falling.dedicatedRequests.first)
+        #expect(dedicated.system == ConversationSummary.systemPrompt)
+        #expect(dedicated.tools.isEmpty)
+        #expect(dedicated.cacheKey == nil)
+        #expect(await fallback.items.contains { if case .user(let text) = $0 { text.contains("Dedicated fallback.") } else { false } })
+    }
+
+    @Test func aForcedOverflowUsesTheDedicatedSummarizerEvenWhenSummariesReuseThePrefix() async throws {
+        let client = PrefixSummarizingClient(
+            turns: [
+                call(1), call(2), call(3),
+                MockTurn([], failure: .contextLengthExceeded),
+                .text("done"),
+            ],
+            prefix: .summary("should not be asked"),
+            dedicated: "Shortened after overflow.")
+        let agent = AgentSession(
+            client: client, tools: [BulkTool(characters: 2_400)], workspace: try TempProject().workspace,
+            configuration: AgentConfiguration(
+                model: "m", systemPrompt: "sys", cacheKey: "cache-key", contextWindow: 3_000,
+                compactionThreshold: 0.95, cacheFriendlySummaries: true))
+        let events = await run(agent)
+        #expect(events.last == .runEnded(.completed))
+        #expect(client.prefixRequests.isEmpty)
+        let dedicated = try #require(client.dedicatedRequests.first)
+        #expect(dedicated.system == ConversationSummary.systemPrompt)
+        #expect(await agent.items.contains { if case .user(let text) = $0 { text.contains("Shortened after overflow.") } else { false } })
     }
 
     @Test func aStoppedRunNeverCompactsHalfway() async throws {
