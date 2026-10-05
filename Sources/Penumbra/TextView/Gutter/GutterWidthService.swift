@@ -54,6 +54,14 @@ final class GutterWidthService {
             }
         }
     }
+    /// Width of the change stripe between the line numbers and the line-marker column; 0 hides it.
+    var changeStripeWidth: CGFloat = 0 {
+        didSet {
+            if changeStripeWidth != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
     /// Width of the line-marker column between the line numbers and the folding ribbon; 0 hides it.
     var lineMarkerColumnWidth: CGFloat = 0 {
         didSet {
@@ -72,10 +80,9 @@ final class GutterWidthService {
     var gutterLeadingPadding: CGFloat = 0
     var gutterTrailingPadding: CGFloat = 0
     /// Whether the text starts after the gutter. Without line numbers the gutter's other columns
-    /// overlay the text, except the annotation column, which needs the room (a diff's old and new
-    /// line numbers).
+    /// overlay the text, except the annotation column and the change stripe, which need the room.
     var reservesGutterSpace: Bool {
-        showLineNumbers || annotationColumnWidth > 0
+        showLineNumbers || annotationColumnWidth > 0 || changeStripeWidth > 0
     }
     var gutterWidth: CGFloat {
         var width: CGFloat = 0
@@ -86,6 +93,7 @@ final class GutterWidthService {
             width += gutterDecorationColumnWidth
         }
         width += annotationColumnWidth
+        width += changeStripeWidth
         width += lineMarkerColumnWidth
         if showFoldingRibbon {
             width += foldingRibbonWidth
@@ -107,7 +115,7 @@ final class GutterWidthService {
         return min(measuredLineNumberWidth, max(0, Self.maximumGutterWidth - others))
     }
     private var otherColumnsWidth: CGFloat {
-        var width: CGFloat = annotationColumnWidth + lineMarkerColumnWidth
+        var width: CGFloat = annotationColumnWidth + changeStripeWidth + lineMarkerColumnWidth
         if showGutterDecorations { width += gutterDecorationColumnWidth }
         if showFoldingRibbon { width += foldingRibbonWidth }
         return width
@@ -129,7 +137,7 @@ final class GutterWidthService {
         }
     }
     /// Upper bound for the whole gutter. The line-number column gives way to the other columns
-    /// (decorations, annotations, markers, ribbon), so digits that do not fit are clipped.
+    /// (decorations, annotations, change stripe, markers, ribbon), so digits that do not fit are clipped.
     static let maximumGutterWidth: CGFloat = 70
     let didUpdateGutterWidth = PassthroughSubject<Void, Never>()
 

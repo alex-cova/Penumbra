@@ -43,6 +43,8 @@ final class LayoutManager {
                 lineMarkerView.needsDisplay = true
                 gutterAnnotationView.lineManager = lineManager
                 gutterAnnotationView.needsDisplay = true
+                changeStripeView.lineManager = lineManager
+                changeStripeView.needsDisplay = true
                 setNeedsLayout()
             }
         }
@@ -382,6 +384,42 @@ final class LayoutManager {
         gutterAnnotationView.textColor = theme.lineNumberColor
         if hasGutterAnnotations { updateGutterAnnotationColumnWidth() }
     }
+    private let changeStripeView = GutterChangeView()
+    /// Reserves the change-stripe column even when the file is clean, so the text does not jump
+    /// when the first change arrives.
+    var showsGutterChangeStripe = false {
+        didSet {
+            if showsGutterChangeStripe != oldValue {
+                updateChangeStripeWidth()
+                changeStripeView.isHidden = !showsGutterChangeStripe
+                setNeedsLayout()
+            }
+        }
+    }
+    var gutterChanges: [GutterChange] {
+        changeStripeView.store.changes
+    }
+
+    func setGutterChanges(_ changes: [GutterChange]) {
+        changeStripeView.store.replace(with: changes)
+        changeStripeView.changesDidChange()
+    }
+
+    func clearGutterChanges() {
+        guard !changeStripeView.store.isEmpty else { return }
+        changeStripeView.store.clear()
+        changeStripeView.changesDidChange()
+    }
+
+    func applyGutterChangeEdit(_ edit: GutterLineMarkerEdit) {
+        if changeStripeView.store.applyEdit(edit) {
+            changeStripeView.changesDidChange()
+        }
+    }
+
+    private func updateChangeStripeWidth() {
+        gutterWidthService.changeStripeWidth = showsGutterChangeStripe ? GutterChangeView.columnWidth : 0
+    }
     private let lineMarkerView = GutterLineMarkerView()
     private var lineMarkerContentHeight: CGFloat = 0
     private var gutterAnnotationContentHeight: CGFloat = 0
@@ -549,6 +587,7 @@ final class LayoutManager {
         self.gutterDecorationView.lineManager = lineManager
         self.lineMarkerView.lineManager = lineManager
         self.gutterAnnotationView.lineManager = lineManager
+        self.changeStripeView.lineManager = lineManager
         self.methodSeparatorView.lineManager = lineManager
         self.lineBackgroundView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
@@ -1075,6 +1114,19 @@ extension LayoutManager {
             gutterAnnotationView.textContainerInsetTop = textContainerInset.top
             gutterAnnotationView.rowHeight = theme.font.lineHeight * lineHeightMultiplier
             interactive = annotationFrame
+        }
+        let stripeWidth = gutterWidthService.changeStripeWidth
+        if stripeWidth > 0 {
+            let numbersWidth = gutterWidthService.showLineNumbers ? gutterWidthService.lineNumberWidth : 0
+            let leading = gutterWidthService.showLineNumbers ? gutterWidthService.gutterLeadingPadding : 0
+            let stripeX = safeAreaInsets.left + leading + decorationWidth + annotationWidth + numbersWidth
+            let stripeFrame = CGRect(x: stripeX, y: viewport.minY, width: stripeWidth, height: viewport.height)
+            if changeStripeView.frame != stripeFrame {
+                changeStripeView.frame = stripeFrame
+                changeStripeView.needsDisplay = true
+            }
+            changeStripeView.textContainerInsetTop = textContainerInset.top
+            interactive = interactive.map { $0.union(stripeFrame) } ?? stripeFrame
         }
         let markerWidth = gutterWidthService.lineMarkerColumnWidth
         if markerWidth > 0 {
@@ -1616,6 +1668,7 @@ extension LayoutManager {
         gutterDecorationView.removeFromSuperview()
         lineMarkerView.removeFromSuperview()
         gutterAnnotationView.removeFromSuperview()
+        changeStripeView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
         // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
         // views (which paint the glyphs). When Metal is active it is a viewport-sized overlay on
@@ -1641,6 +1694,7 @@ extension LayoutManager {
         gutterContainerView.addSubview(gutterDecorationView)
         gutterContainerView.addSubview(gutterAnnotationView)
         gutterContainerView.addSubview(lineNumbersContainerView)
+        gutterContainerView.addSubview(changeStripeView)
         gutterContainerView.addSubview(lineMarkerView)
         gutterContainerView.addSubview(foldRibbonView)
     }
@@ -1674,6 +1728,7 @@ extension LayoutManager {
         gutterDecorationView.isHidden = !showsGutterDecorationColumn
         lineMarkerView.isHidden = !showsLineMarkerColumn
         gutterAnnotationView.isHidden = !hasGutterAnnotations
+        changeStripeView.isHidden = !showsGutterChangeStripe
         // Metal paints the hairline on the canvas. The AppKit view would sit under that opaque layer.
         methodSeparatorView.isHidden = !showMethodSeparators || isMetalRenderingActive
         lineBackgroundView.isHidden = lineBackgroundView.store.isEmpty || isMetalRenderingActive
@@ -1691,6 +1746,7 @@ extension LayoutManager {
     private func syncGutterBackgroundWithEditor() {
         let background = textInputView?.backgroundColor ?? .textBackgroundColor
         gutterBackgroundView.backgroundColor = background
+        changeStripeView.apply(background: background)
     }
 }
 

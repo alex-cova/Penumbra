@@ -352,6 +352,8 @@ private struct IDEGitCommands: View {
             .disabled(!(workspace?.gitStatus.isRepository ?? false))
         Button(workspace?.isBlameShownForActiveFile == true ? "Hide Git Blame" : "Show Git Blame", action: { workspace?.toggleGitBlame() })
             .disabled(!(workspace?.gitStatus.isRepository ?? false))
+        Button(workspace?.showsChangedLines == true ? "Hide Changed Lines" : "Highlight Changed Lines", action: { workspace?.toggleChangedLines() })
+            .disabled(!(workspace?.gitStatus.isRepository ?? false))
         Button("Revert File…", action: { workspace?.revertActiveFile() })
             .menuShortcut(.gitRevert, in: preset)
             .disabled(!(workspace?.gitStatus.isRepository ?? false))

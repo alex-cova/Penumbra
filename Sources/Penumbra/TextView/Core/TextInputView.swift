@@ -1408,6 +1408,7 @@ final class TextInputView: EditorView {
         if layoutManager.hasLineMarkers { lineMarkers = [] }
         if layoutManager.hasLineBackgrounds { layoutManager.lineBackgrounds = [] }
         layoutManager.clearGutterAnnotations()
+        layoutManager.clearGutterChanges()
         syntaxParseGeneration += 1
         let parseGeneration = syntaxParseGeneration
         syntaxParsePolicy = state.parsePolicy
@@ -1812,6 +1813,23 @@ final class TextInputView: EditorView {
 
     func clearGutterAnnotations() {
         layoutManager.clearGutterAnnotations()
+    }
+
+    var showsGutterChangeStripe: Bool {
+        get { layoutManager.showsGutterChangeStripe }
+        set { layoutManager.showsGutterChangeStripe = newValue }
+    }
+
+    var gutterChanges: [GutterChange] {
+        layoutManager.gutterChanges
+    }
+
+    func setGutterChanges(_ changes: [GutterChange]) {
+        layoutManager.setGutterChanges(changes)
+    }
+
+    func clearGutterChanges() {
+        layoutManager.clearGutterChanges()
     }
 
     func gutterAnnotation(atRow row: Int) -> GutterAnnotation? {
@@ -3165,16 +3183,19 @@ extension TextInputView {
                 }
             }
         }
-        // Only an edit that adds or removes a line break can move markers to other lines. The
-        // edit is described in rows up front: a few lookups, however many markers there are.
+        // Markers, decorations and line backgrounds only move when a line break is added or
+        // removed. The change stripe also marks a line whose text changed, so it describes every
+        // edit. Either way the description is a few line-manager lookups, however many spans there are.
         var markerEdit: GutterLineMarkerEdit?
         let lineCountBeforeEdit = lineManager.lineCount
+        let tracksStripe = layoutManager.showsGutterChangeStripe
         let followsLineBreaks = layoutManager.hasLineMarkers || layoutManager.hasGutterDecorations
             || layoutManager.hasLineBackgrounds
-        let hasLineBreak = followsLineBreaks || layoutManager.hasGutterAnnotations
+        let describesEdit = tracksStripe || layoutManager.hasGutterAnnotations || followsLineBreaks
+        let hasLineBreak = describesEdit
             ? Self.containsLineBreak(newString) || Self.containsLineBreak(currentText)
             : false
-        if layoutManager.hasGutterAnnotations || (followsLineBreaks && hasLineBreak) {
+        if tracksStripe || layoutManager.hasGutterAnnotations || (followsLineBreaks && hasLineBreak) {
             let lastRow = max(lineCountBeforeEdit - 1, 0)
             let startRow = lineManager.row(containingCharacterAt: range.location) ?? lastRow
             let endRow = max(lineManager.row(containingCharacterAt: range.upperBound) ?? lastRow, startRow)
@@ -3207,6 +3228,9 @@ extension TextInputView {
             }
             if layoutManager.hasGutterAnnotations {
                 layoutManager.applyGutterAnnotationEdit(markerEdit)
+            }
+            if tracksStripe {
+                layoutManager.applyGutterChangeEdit(markerEdit)
             }
             if layoutManager.hasGutterDecorations, hasLineBreak {
                 layoutManager.applyGutterDecorationEdit(markerEdit)

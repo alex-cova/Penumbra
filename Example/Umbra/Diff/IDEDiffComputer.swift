@@ -168,6 +168,42 @@ enum IDEDiffComputer {
         return result.flatMap { refine($0, left: left, right: right, leftKeys: leftKeys, rightKeys: rightKeys, whitespace: whitespace, highlight: highlight) }
     }
 
+    /// Line chunks only, with no word-level refine. When the uncommon middle is longer than
+    /// `maximumMiddle` lines on either side, Myers is skipped and that middle is one chunk, so a
+    /// file that differs throughout stays bounded.
+    static func lineChunks(left: IDEDiffText, right: IDEDiffText, maximumMiddle: Int) -> [IDEDiffChunk] {
+        let leftKeys = (0 ..< left.lineCount).map { left.line($0) }
+        let rightKeys = (0 ..< right.lineCount).map { right.line($0) }
+        var head = 0
+        while head < leftKeys.count, head < rightKeys.count, leftKeys[head] == rightKeys[head] {
+            head += 1
+        }
+        var tail = 0
+        while tail < leftKeys.count - head, tail < rightKeys.count - head,
+              leftKeys[leftKeys.count - 1 - tail] == rightKeys[rightKeys.count - 1 - tail] {
+            tail += 1
+        }
+        let leftMiddle = leftKeys.count - head - tail
+        let rightMiddle = rightKeys.count - head - tail
+        if leftMiddle > maximumMiddle || rightMiddle > maximumMiddle {
+            let leftRange = head ..< (leftKeys.count - tail)
+            let rightRange = head ..< (rightKeys.count - tail)
+            guard !leftRange.isEmpty || !rightRange.isEmpty else { return [] }
+            return [IDEDiffChunk(left: leftRange, right: rightRange)]
+        }
+        let pairs = matchedPairs(leftKeys, rightKeys)
+        var result: [IDEDiffChunk] = []
+        var previous = (-1, -1)
+        for anchor in pairs + [(left.lineCount, right.lineCount)] {
+            let leftRange = (previous.0 + 1) ..< anchor.0
+            let rightRange = (previous.1 + 1) ..< anchor.1
+            previous = anchor
+            guard !leftRange.isEmpty || !rightRange.isEmpty else { continue }
+            result.append(IDEDiffChunk(left: leftRange, right: rightRange))
+        }
+        return result
+    }
+
     // MARK: - Lines
 
     private static func keys(of text: IDEDiffText, whitespace: IDEDiffWhitespacePolicy) -> [String] {

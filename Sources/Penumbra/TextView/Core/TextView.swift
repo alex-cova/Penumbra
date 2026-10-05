@@ -589,6 +589,32 @@ public struct DocumentTextExport: Sendable {
         textInputView.clearGutterAnnotations()
     }
 
+    /// Reserves the change stripe beside the line numbers, including while the file is clean, so
+    /// the text does not jump when the first change arrives. Off by default. The host decides
+    /// which lines changed; this view only draws them.
+    public var showsGutterChangeStripe: Bool {
+        get { textInputView.showsGutterChangeStripe }
+        set { textInputView.showsGutterChangeStripe = newValue }
+    }
+
+    /// The spans the change stripe is drawing. Setting them replaces whatever an edit had marked.
+    public var gutterChanges: [GutterChange] {
+        get { textInputView.gutterChanges }
+        set { setGutterChanges(newValue) }
+    }
+
+    /// Replaces the change stripe. `changes` are coalesced. ``setState(_:addUndoAction:)`` clears
+    /// them; ``showsGutterChangeStripe`` is left as the host set it. Drawing is bounded by the
+    /// visible rows.
+    public func setGutterChanges(_ changes: [GutterChange]) {
+        textInputView.setGutterChanges(changes)
+    }
+
+    /// Removes every change mark. The column stays reserved while ``showsGutterChangeStripe`` is on.
+    public func clearGutterChanges() {
+        textInputView.clearGutterChanges()
+    }
+
     /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
     /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
     /// simply take up zero height, so scrolling and hit-testing already skip them for free — with

@@ -127,6 +127,8 @@ public final class IDEWorkspace {
     let gitStatus = IDEGitStatusModel()
     /// Git blame in the editor gutter, per file.
     let blame = IDEBlameController()
+    /// Lines that differ from `HEAD`, in the gutter next to the line numbers.
+    let changeMarkers = IDEChangeMarkerController()
     let problems = IDEProblemsStore()
     /// The bell's list and the toast that announces finished Gradle and git work.
     let notifications = IDENotificationCenter()
@@ -224,6 +226,8 @@ public final class IDEWorkspace {
         gitStatus.onRefreshed = { [weak self] in
             self?.refreshBlameInOpenEditors()
             self?.reloadDiffSessions()
+            self?.changeMarkers.invalidateHeadCache()
+            self?.refreshChangedLinesInOpenEditors(force: true, delay: .zero)
         }
     }
 
@@ -751,6 +755,7 @@ public final class IDEWorkspace {
         javaStructureRefreshTask?.cancel()
         javaStructureRefreshTask = nil
         blame.cancelAll()
+        changeMarkers.cancelAll()
         agent.teardown()
         closeAllDiffSessions()
         closeAllDiagramSessions()
@@ -2434,6 +2439,33 @@ public final class IDEWorkspace {
         }
         blame.toggle(for: url)
         refreshBlame(in: workbench.activePane, force: true)
+    }
+
+    /// Whether the change stripe is on (Git ▸ Hide Changed Lines). On unless the user turned it off.
+    var showsChangedLines: Bool { changeMarkers.isEnabled }
+
+    /// Shows or hides the change stripe in every editor (Git ▸ Highlight Changed Lines).
+    func toggleChangedLines() {
+        changeMarkers.toggle()
+        refreshChangedLinesInOpenEditors(force: true, delay: .zero)
+    }
+
+    /// Re-diffs the editors that are showing, or hides the stripe when the feature or the file is out.
+    private func refreshChangedLinesInOpenEditors(force: Bool, delay: Duration) {
+        for pane in workbench.panes {
+            guard let host = hostCache.peek(pane.id) else { continue }
+            guard pane.selectedDocument?.contentKind == .text else {
+                changeMarkers.hide(on: host.textView)
+                continue
+            }
+            changeMarkers.refresh(
+                textView: host.textView,
+                url: pane.selectedDocument?.url,
+                git: gitStatus,
+                force: force,
+                delay: delay
+            )
+        }
     }
 
     /// Re-blames the editor of `pane` after a save, or hides the column after a toggle off.
@@ -5867,6 +5899,7 @@ public final class IDEWorkspace {
         host: IDEEditorPaneHost
     ) {
         guard let session = diffSessions[document.id] else { return }
+        changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
            previousID != document.id,
            let previous = pane.documents.first(where: { $0.id == previousID }),
@@ -5894,6 +5927,7 @@ public final class IDEWorkspace {
         host: IDEEditorPaneHost
     ) {
         guard let session = diagramSessions[document.id] else { return }
+        changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
            previousID != document.id,
            let previous = pane.documents.first(where: { $0.id == previousID }),
@@ -5951,6 +5985,7 @@ public final class IDEWorkspace {
             previous.pendingState = host.textView.makeCapturedState()
         }
         host.markdownPreviewController.closeIfNotMarkdown()
+        changeMarkers.hide(on: host.textView)
         host.imageViewerController.show(url: url)
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration
@@ -6002,8 +6037,9 @@ public final class IDEWorkspace {
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
-        // `setState` cleared the blame column; bring it back for a file that has blame on.
+        // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
+        changeMarkers.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true, delay: .zero)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
             host.textView.focusTextInputWhenReady()
@@ -6184,6 +6220,7 @@ extension IDEWorkspace: TextViewDelegate {
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.
         noteActiveDocumentEdited()
+        changeMarkers.refresh(textView: textView, url: textView.documentURL, git: gitStatus)
     }
 
     public func textView(

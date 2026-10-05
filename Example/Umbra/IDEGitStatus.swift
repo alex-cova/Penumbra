@@ -188,6 +188,13 @@ final class IDEGitStatusModel {
         return await Self.loadBlame(root: rootURL, existing: repository, relativePath: relative, contents: contents)
     }
 
+    /// The blob of `relativePath` in `HEAD`. `found` is false when git could not be asked;
+    /// `data` is nil when `HEAD` has no such file.
+    func headContents(relativePath: String) async -> (found: Bool, data: Data?) {
+        guard let rootURL else { return (false, nil) }
+        return await Self.loadHead(root: rootURL, existing: repository, relativePath: relativePath)
+    }
+
     /// Back to the history of the whole repository.
     func clearFileHistory() {
         guard historyFilePath != nil else { return }
@@ -642,6 +649,15 @@ final class IDEGitStatusModel {
     nonisolated private static func loadBlame(root: URL, existing: GitRepository?, relativePath: String, contents: Data) async -> [GitBlameLine]? {
         guard let repo = try? await repository(for: root, existing: existing) else { return nil }
         return try? await repo.blame(relativePath: relativePath, contents: contents)
+    }
+
+    nonisolated private static func loadHead(root: URL, existing: GitRepository?, relativePath: String) async -> (found: Bool, data: Data?) {
+        guard let repo = try? await repository(for: root, existing: existing) else { return (false, nil) }
+        do {
+            return (true, try await repo.fileContents(at: .head, path: relativePath))
+        } catch {
+            return (false, nil)
+        }
     }
 
     nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String, filePath: String?) async -> String {
