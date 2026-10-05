@@ -39,6 +39,25 @@ jobs:
           xcodebuild -version
           xcrun --show-sdk-version
 
+      # Xcode 27's default metal is a stub. Unless the separate Metal toolchain is
+      # mounted, Swift Build calls that stub, it exits before writing a .dia, and
+      # the log only shows a missing diagnostics file for the first shader
+      # (MLX steel_attention.metal, or SwiftTerm's Shaders.metal before that).
+      - name: Install Metal toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          xcodebuild -showComponent MetalToolchain
+          metal="$(xcrun -f metal)"
+          echo "metal: ${metal}"
+          case "${metal}" in
+            *XcodeDefault.xctoolchain*)
+              echo "error: xcrun metal is the Xcode stub; the Metal toolchain is not mounted" >&2
+              exit 1
+              ;;
+          esac
+          "${metal}" --version
+
       - name: Check for legacy iOS carryover
         run: bash Scripts/check-ios-carryover.sh
 
