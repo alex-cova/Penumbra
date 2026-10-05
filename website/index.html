@@ -15,7 +15,7 @@
     />
     <meta
       property="og:image"
-      content="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-editing.png"
+      content="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/editor.png"
     />
     <meta name="theme-color" content="#090b10" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
@@ -72,10 +72,10 @@
         <div class="hero-visual">
           <figure class="hero-shot">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-editing.png"
-              alt="Umbra editing a Markdown file with syntax highlighting, line numbers, and minimap"
-              width="1280"
-              height="800"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/editor.png"
+              alt="Umbra editing a Java file with project explorer, minimap, and breadcrumbs"
+              width="2684"
+              height="1904"
               fetchpriority="high"
             />
           </figure>
@@ -147,7 +147,8 @@
           <h2>Umbra, the editor app</h2>
           <p>
             A Sublime Text-style editor for macOS: open a folder, edit fast, and stay in one window for
-            Java projects, API calls, docs, and Git. No Electron, no LSP server to configure for Java.
+            Java projects, API calls, docs, Git, and an AI coding agent. No Electron, no LSP server to
+            configure for Java.
           </p>
           </div>
         </div>
@@ -213,6 +214,19 @@
               <li>Status colors</li>
               <li>Diff</li>
               <li>History</li>
+            </ul>
+          </article>
+
+          <article class="umbra-card umbra-agent reveal">
+            <h3>AI coding agent</h3>
+            <p>
+              Built on <code>AgentKit</code>: chat with local or cloud models, run tools against your
+              project, and review file edits with accept or revert before they land on disk.
+            </p>
+            <ul class="tag-list">
+              <li>Agent</li>
+              <li>File edits</li>
+              <li>Local models</li>
             </ul>
           </article>
 
@@ -288,29 +302,29 @@
         <div class="section-head reveal">
           <h2>Umbra in action</h2>
           <p>
-            Java editing with Gradle sync, Markdown and Mermaid preview, Git history, the welcome screen,
-            and an integrated terminal, all in one native macOS window.
+            Java editing with class diagrams, Markdown preview, Git source control, Gradle and terminal
+            tooling, and an AI coding agent — all in one native macOS window.
           </p>
         </div>
 
         <figure class="showcase-primary reveal">
           <img
-            src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-mermaid-diagrams.png"
-            alt="Umbra Markdown preview rendering Mermaid sequence and class diagrams"
-            width="2450"
-            height="2038"
+            src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/diagram.png"
+            alt="Umbra Java class diagram blueprint showing types and relationships"
+            width="2672"
+            height="1916"
             loading="lazy"
           />
-          <figcaption>Mermaid diagrams in Markdown preview</figcaption>
+          <figcaption>Java class diagram blueprint</figcaption>
         </figure>
 
         <div class="screenshot-gallery">
           <figure class="screenshot-card reveal">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-welcome.png"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/home.png"
               alt="Umbra welcome screen with Open File, Open Folder, and keyboard shortcut hints"
-              width="2540"
-              height="2092"
+              width="2672"
+              height="1916"
               loading="lazy"
             />
             <figcaption>Welcome screen with quick-open shortcuts</figcaption>
@@ -318,35 +332,57 @@
 
           <figure class="screenshot-card reveal">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-markdown-blockquotes.png"
-              alt="Markdown preview with nested blockquotes and syntax-highlighted Swift and JavaScript code blocks"
-              width="2540"
-              height="2092"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/markdown2.png"
+              alt="Umbra editing Markdown with side-by-side live preview, syntax highlighting, and minimap"
+              width="2672"
+              height="1916"
               loading="lazy"
             />
-            <figcaption>Markdown preview with blockquotes and fenced code</figcaption>
+            <figcaption>Markdown editing with live preview</figcaption>
           </figure>
 
           <figure class="screenshot-card reveal">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-java-terminal.png"
-              alt="Umbra editing a Java file with project explorer, minimap, and integrated terminal"
-              width="2540"
-              height="2092"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/markdown.png"
+              alt="Umbra Markdown preview rendering a flowchart diagram"
+              width="2672"
+              height="1916"
               loading="lazy"
             />
-            <figcaption>Java editing with integrated terminal</figcaption>
+            <figcaption>Flowchart diagrams in Markdown preview</figcaption>
           </figure>
 
           <figure class="screenshot-card reveal">
             <img
-              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/umbra-git-history.png"
-              alt="Umbra split view showing Swift source above Git commit history and inline diff"
-              width="2540"
-              height="1884"
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/tools.png"
+              alt="Umbra with project explorer, Java editor, integrated terminal, and Gradle tool window"
+              width="2684"
+              height="1904"
               loading="lazy"
             />
-            <figcaption>Git history and inline diff</figcaption>
+            <figcaption>Explorer, terminal, and Gradle tool window</figcaption>
+          </figure>
+
+          <figure class="screenshot-card reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/git.png"
+              alt="Umbra source control panel with staged changes, commit history, and inline diff"
+              width="2672"
+              height="1916"
+              loading="lazy"
+            />
+            <figcaption>Git staging, history, and inline diff</figcaption>
+          </figure>
+
+          <figure class="screenshot-card reveal">
+            <img
+              src="https://raw.githubusercontent.com/alex-cova/Penumbra/main/Screenshots/ai.png"
+              alt="Umbra AI coding agent panel reviewing file edits with accept and revert controls"
+              width="2672"
+              height="1916"
+              loading="lazy"
+            />
+            <figcaption>AI coding agent with inline file edits</figcaption>
           </figure>
         </div>
       </section>

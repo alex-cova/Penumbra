@@ -473,6 +473,14 @@ button:focus-visible {
   background: var(--bg-muted);
 }
 
+.umbra-agent {
+  grid-column: span 6;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%),
+    var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+
 .umbra-workbench {
   grid-column: span 12;
 }
@@ -566,7 +574,9 @@ button:focus-visible {
 }
 
 .screenshot-card:nth-child(3),
-.screenshot-card:nth-child(4) {
+.screenshot-card:nth-child(4),
+.screenshot-card:nth-child(5),
+.screenshot-card:nth-child(6) {
   grid-column: span 6;
 }
 
@@ -760,6 +770,7 @@ button:focus-visible {
   .umbra-http,
   .umbra-markdown,
   .umbra-git,
+  .umbra-agent,
   .umbra-workbench {
     grid-column: span 12;
   }
@@ -776,7 +787,9 @@ button:focus-visible {
   .screenshot-card:nth-child(1),
   .screenshot-card:nth-child(2),
   .screenshot-card:nth-child(3),
-  .screenshot-card:nth-child(4) {
+  .screenshot-card:nth-child(4),
+  .screenshot-card:nth-child(5),
+  .screenshot-card:nth-child(6) {
     grid-column: span 12;
   }
 }
