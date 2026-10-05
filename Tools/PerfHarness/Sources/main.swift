@@ -35,7 +35,8 @@ func printUsageAndExit() -> Never {
       save <path> [--highlighted] [--deferred]
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR]
-      java-completion synthetic
+      java-completion synthetic [--jars N]
+      java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inspections <path|synthetic> [--lines N] [--samples N]
       enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
@@ -75,7 +76,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections"
-    || command == "enter-session" || command == "markdown-preview"
+    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -90,7 +91,12 @@ do {
     case "snapshot-metal":
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "java-completion":
-        try JavaCompletionProfile.run()
+        try JavaCompletionProfile.run(jars: Int(flagValue("--jars", in: rest) ?? "") ?? 0)
+    case "java-name-index":
+        try JavaNameIndexProfile.run(
+            pathOrSynthetic: path,
+            files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000
+        )
     case "java-inspections":
         try JavaInspectionsProfile.run(
             pathOrSynthetic: path,

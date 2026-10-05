@@ -135,6 +135,13 @@ final class JavaMemberIndexTests: XCTestCase {
         XCTAssertEqual(word.first { $0.name == "getName" }?.tier, .wordStart)
     }
 
+    func testDigitWordStartFindsToBase64() async throws {
+        let source = "package demo; public class Codec { public String toBase64(String text) { return text; } }"
+        let index = try await makeIndex([("Codec.java", source)])
+        let hits = await index.members(matching: "64", limit: 10)
+        XCTAssertEqual(names(hits), ["Codec.toBase64"])
+    }
+
     func testBetterTiersAndShorterNamesComeFirst() async throws {
         let index = try await makeIndex([("Person.java", person)])
         let hits = await index.members(matching: "name", limit: 10)

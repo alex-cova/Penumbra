@@ -8,11 +8,14 @@ import JavaIntelligence
 /// `CompletionUpdate` for a set of representative sites, in a small file and in a 5k-line file.
 /// Prints `stage` rows like `InteractiveProfile` and one `budget` row per gate:
 ///
-///   swift run -c release PerfHarness java-completion synthetic
+///   swift run -c release PerfHarness java-completion synthetic [--jars N]
 enum JavaCompletionProfile {
     private static let samples = 12
     private static let packageCount = 20
     private static let classesPerPackage = 25
+    /// A few hundred classes per synthetic JAR shard. `--jars 200` is a Spring Boot-sized classpath.
+    private static let classesPerJar = 400
+    private static let jarWords = ["Default", "Abstract", "Http", "Json", "Request", "Service", "Builder", "Factory", "Exception"]
 
     private struct Site {
         let name: String
@@ -25,14 +28,16 @@ enum JavaCompletionProfile {
         Site(name: "member_access", before: "user.getAddress().", after: ""),
         Site(name: "member_prefix", before: "user.getN", after: ""),
         Site(name: "lambda_chain", before: "users.stream().filter(u -> u.isActive()).map(u -> u.", after: ")"),
+        Site(name: "class_name_one", before: "S", after: ""),
         Site(name: "class_name_short", before: "Str", after: ""),
         Site(name: "class_name_long", before: "ArrayLi", after: ""),
+        Site(name: "class_name_hump", before: "NPE", after: ""),
         Site(name: "new_expected", before: "List<User> result = new Arr", after: ""),
         Site(name: "statement_expected", before: "String s = ", after: "")
     ]
 
-    static func run() throws {
-        let result = try runBlocking { try await measure() }
+    static func run(jars: Int = 0) throws {
+        let result = try runBlocking { try await measure(jars: jars) }
         var firstAll: [Double] = []
         var finalAll: [Double] = []
         for (name, band) in result.small {
@@ -63,11 +68,11 @@ enum JavaCompletionProfile {
         var large: [(String, Band)] = []
     }
 
-    private static func measure() async throws -> Result {
+    private static func measure(jars: Int) async throws -> Result {
         guard let jdk = JDKLocator().select() else {
             throw ProfileFailure(message: "java-completion needs an installed JDK")
         }
-        note("=== java completion profile (JDK \(jdk.featureVersion)) ===")
+        note("=== java completion profile (JDK \(jdk.featureVersion), jars=\(jars)) ===")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("perf-java-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -77,11 +82,16 @@ enum JavaCompletionProfile {
         try JavaIndexShardWriter().write(try JDKCtSymRoot(installation: jdk).readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: jdkShard)
         let projectShard = directory.appendingPathComponent("project.idx")
         try JavaIndexShardWriter().write(try writeProject(in: directory), stamp: JavaStamp(size: 0, modificationDate: 0), to: projectShard)
-        await index.setSources([
-            .init(precedence: 1, reader: try JavaIndexShardReader(url: projectShard)),
+        var sources: [JavaIndex.Source] = [
+            .init(precedence: 1, reader: try JavaIndexShardReader(url: projectShard), shardPath: projectShard.path),
             .init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard))
-        ])
-        note("  indexed JDK and \(packageCount * classesPerPackage) project classes")
+        ]
+        sources += try writeJarShards(count: jars, in: directory)
+        let nameCount = sources.reduce(0) { $0 + $1.reader.allQualifiedNames.count }
+        let started = DispatchTime.now().uptimeNanoseconds
+        await index.setSources(sources)
+        let setSources = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        note("  names=\(nameCount) sources=\(sources.count) set_sources_s=\(format(setSources))")
 
         var result = Result()
         for site in sites {
@@ -198,6 +208,50 @@ enum JavaCompletionProfile {
             }
         }
         return stubs
+    }
+
+    /// Precedence-2 shards, each a few hundred classes under its own packages. Some names are nested.
+    private static func writeJarShards(count: Int, in directory: URL) throws -> [JavaIndex.Source] {
+        guard count > 0 else { return [] }
+        var sources: [JavaIndex.Source] = []
+        sources.reserveCapacity(count)
+        let words = jarWords
+        let wordCount = words.count
+        for jar in 0..<count {
+            var stubs: [JavaClassStub] = []
+            stubs.reserveCapacity(classesPerJar)
+            let origin = URL(fileURLWithPath: "/synthetic/jar\(jar).jar")
+            for index in 0..<classesPerJar {
+                let packageName = "com.synth.j\(jar).p\(index / 20)"
+                let w0 = words[index % wordCount]
+                let w1 = words[(index / wordCount) % wordCount]
+                let w2 = words[(index / (wordCount * wordCount)) % wordCount]
+                let simple: String
+                let qualified: String
+                let binary: String
+                let outer: String?
+                if index % 7 == 0 {
+                    let outerSimple = "\(w0)\(w1)"
+                    simple = w2
+                    outer = "\(packageName).\(outerSimple)"
+                    qualified = "\(outer!).\(simple)"
+                    binary = "\(packageName).\(outerSimple)$\(simple)"
+                } else {
+                    simple = "\(w0)\(w1)\(w2)"
+                    qualified = "\(packageName).\(simple)"
+                    binary = qualified
+                    outer = nil
+                }
+                stubs.append(JavaClassStub(
+                    binaryName: binary, qualifiedName: qualified, simpleName: simple, packageName: packageName,
+                    outerQualifiedName: outer, kind: .classKind, modifiers: [.publicFlag], origin: .jar(origin)
+                ))
+            }
+            let shard = directory.appendingPathComponent("jar-\(jar).idx")
+            try JavaIndexShardWriter().write(stubs, stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
+            sources.append(.init(precedence: 2, reader: try JavaIndexShardReader(url: shard), shardPath: shard.path))
+        }
+        return sources
     }
 
     // MARK: - Output

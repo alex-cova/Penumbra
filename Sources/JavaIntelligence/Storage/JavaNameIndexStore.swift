@@ -74,6 +74,147 @@ public struct JavaNameIndexShardWriter {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try out.write(to: url, options: .atomic)
     }
+
+    /// Rewrites a readable shard without turning postings back into strings. `removing` is the set
+    /// of old file ids to drop (deleted or edited). `replacing` is those edited files plus new
+    /// ones, already tokenized. Surviving files keep dense new ids; their posting runs are copied
+    /// and translated. When orphaned strings pass a quarter of the string table, falls back to
+    /// ``write(_:to:)``.
+    @discardableResult
+    public func rewrite(
+        from reader: JavaNameIndexShardReader, removing: Set<Int>, replacing: [JavaNameIndexEntry], to url: URL
+    ) throws -> JavaNameIndexShardReader {
+        var strings = reader.stringTable
+        let oldStringCount = strings.count
+        var idByString: [String: UInt32] = [:]
+        idByString.reserveCapacity(strings.count + replacing.count)
+        for (index, string) in strings.enumerated() { idByString[string] = UInt32(index) }
+        func intern(_ string: String) -> UInt32 {
+            if let existing = idByString[string] { return existing }
+            let id = UInt32(strings.count)
+            strings.append(string)
+            idByString[string] = id
+            return id
+        }
+
+        var translate = [Int32](repeating: -1, count: reader.files.count)
+        var newFiles: [(pathID: UInt32, stamp: JavaStamp)] = []
+        newFiles.reserveCapacity(reader.files.count + replacing.count)
+        for (old, file) in reader.files.enumerated() where !removing.contains(old) {
+            translate[old] = Int32(newFiles.count)
+            newFiles.append((intern(file.relativePath), file.stamp))
+        }
+        var replacingIDs: [UInt32] = []
+        replacingIDs.reserveCapacity(replacing.count)
+        for entry in replacing {
+            replacingIDs.append(UInt32(newFiles.count))
+            newFiles.append((intern(entry.relativePath), entry.stamp))
+        }
+
+        var runs: [UInt32: [UInt32]] = [:]
+        runs.reserveCapacity(reader.postingRuns.count)
+        for run in reader.postingRuns {
+            var copied: [UInt32] = []
+            copied.reserveCapacity(run.count)
+            for old in reader.postingFileIDs(offset: run.offset, count: run.count) {
+                let mapped = Int(old)
+                guard mapped < translate.count else { continue }
+                let newID = translate[mapped]
+                if newID >= 0 { copied.append(UInt32(newID)) }
+            }
+            if !copied.isEmpty { runs[run.stringID] = copied }
+        }
+        for (entry, fileID) in zip(replacing, replacingIDs) {
+            for identifier in entry.identifiers {
+                runs[intern(identifier), default: []].append(fileID)
+            }
+        }
+
+        var referenced = Set<UInt32>()
+        referenced.reserveCapacity(newFiles.count + runs.count)
+        for file in newFiles { referenced.insert(file.pathID) }
+        for id in runs.keys { referenced.insert(id) }
+        let orphans = strings.count - referenced.count
+        if strings.count > 0, orphans * 4 > strings.count {
+            let rebuilt = entries(files: newFiles, runs: runs, strings: strings)
+            try write(rebuilt, to: url)
+            return try JavaNameIndexShardReader(url: url)
+        }
+
+        var out = Data()
+        out.append(contentsOf: Self.magic)
+        out.appendUInt32LE(Self.formatVersion)
+        out.appendUInt32LE(UInt32(newFiles.count))
+        var stringBytes = Data()
+        stringBytes.appendUInt32LE(UInt32(strings.count))
+        if reader.encodedStringTable.count >= 4 {
+            stringBytes.append(reader.encodedStringTable.dropFirst(4))
+        }
+        for string in strings[oldStringCount...] {
+            let bytes = Array(string.utf8)
+            stringBytes.appendUInt32LE(UInt32(bytes.count))
+            stringBytes.append(contentsOf: bytes)
+        }
+        out.appendUInt32LE(UInt32(stringBytes.count))
+        out.append(stringBytes)
+        for file in newFiles {
+            out.appendUInt32LE(file.pathID)
+            out.appendInt64LE(file.stamp.size)
+            out.appendFloat64LE(file.stamp.modificationDate)
+        }
+
+        out.appendUInt32LE(UInt32(runs.count))
+        var body = Data()
+        var table: [String: (Int, Int)] = [:]
+        var runList: [(stringID: UInt32, offset: Int, count: Int)] = []
+        table.reserveCapacity(runs.count)
+        runList.reserveCapacity(runs.count)
+        for identifierID in runs.keys.sorted() {
+            let fileIDs = runs[identifierID]!
+            let offset = body.count
+            out.appendUInt32LE(identifierID)
+            out.appendUInt32LE(UInt32(offset))
+            out.appendUInt32LE(UInt32(fileIDs.count))
+            for fileID in fileIDs { body.appendUInt32LE(fileID) }
+            let index = Int(identifierID)
+            if index < strings.count { table[strings[index]] = (offset, fileIDs.count) }
+            runList.append((identifierID, offset, fileIDs.count))
+        }
+        out.append(body)
+
+        var files: [(relativePath: String, stamp: JavaStamp)] = []
+        files.reserveCapacity(newFiles.count)
+        for file in newFiles {
+            let index = Int(file.pathID)
+            guard index < strings.count else { throw JavaIndexStoreError.corrupt("path id") }
+            files.append((strings[index], file.stamp))
+        }
+        let built = JavaNameIndexShardReader(
+            files: files, stringTable: strings, encodedStringTable: stringBytes,
+            postingRuns: runList, postingTable: table, postings: body
+        )
+
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try out.write(to: url, options: .atomic)
+        return built
+    }
+
+    private func entries(
+        files: [(pathID: UInt32, stamp: JavaStamp)], runs: [UInt32: [UInt32]], strings: [String]
+    ) -> [JavaNameIndexEntry] {
+        var sets = [Set<String>](repeating: [], count: files.count)
+        for (stringID, fileIDs) in runs {
+            let index = Int(stringID)
+            guard index < strings.count else { continue }
+            let name = strings[index]
+            for fileID in fileIDs where Int(fileID) < sets.count {
+                sets[Int(fileID)].insert(name)
+            }
+        }
+        return files.enumerated().map { index, file in
+            JavaNameIndexEntry(relativePath: strings[Int(file.pathID)], stamp: file.stamp, identifiers: sets[index])
+        }.sorted { $0.relativePath < $1.relativePath }
+    }
 }
 
 /// Reads a shard written by ``JavaNameIndexShardWriter``. The file table and the identifier
@@ -85,7 +226,12 @@ public final class JavaNameIndexShardReader: @unchecked Sendable {
 
     private let data: Data
     private let postingsBase: Int
-    private let stringTable: [String]
+    /// Decoded string table. Ids are indexes; an incremental rewrite appends new strings after these.
+    let stringTable: [String]
+    /// `StringTableBuilder.encoded()` bytes, including the leading count, so a rewrite can copy them.
+    let encodedStringTable: Data
+    /// One posting run per identifier: string id, byte offset, file count.
+    let postingRuns: [(stringID: UInt32, offset: Int, count: Int)]
     /// identifier -> (byteOffset, fileCount) within the postings section.
     private let postingTable: [String: (Int, Int)]
 
@@ -106,9 +252,11 @@ public final class JavaNameIndexShardReader: @unchecked Sendable {
         guard cursor + 4 <= data.count else { throw JavaIndexStoreError.corrupt("string table") }
         let stringsLength = Int(data.readUInt32LE(at: cursor)); cursor += 4
         guard cursor + stringsLength <= data.count else { throw JavaIndexStoreError.corrupt("string table") }
-        let strings = StringTableBuilder.decode(data.subdata(in: cursor..<(cursor + stringsLength)))
+        let encodedStrings = data.subdata(in: cursor..<(cursor + stringsLength))
+        let strings = StringTableBuilder.decode(encodedStrings)
         cursor += stringsLength
         self.stringTable = strings
+        self.encodedStringTable = encodedStrings
 
         var files: [(String, JavaStamp)] = []
         files.reserveCapacity(fileCount)
@@ -127,17 +275,52 @@ public final class JavaNameIndexShardReader: @unchecked Sendable {
         let identifierCount = Int(data.readUInt32LE(at: cursor)); cursor += 4
         var table: [String: (Int, Int)] = [:]
         table.reserveCapacity(identifierCount)
+        var runs: [(stringID: UInt32, offset: Int, count: Int)] = []
+        runs.reserveCapacity(identifierCount)
         for _ in 0..<identifierCount {
             guard cursor + 12 <= data.count else { throw JavaIndexStoreError.corrupt("index table") }
-            let id = Int(data.readUInt32LE(at: cursor))
+            let id = data.readUInt32LE(at: cursor)
             let offset = Int(data.readUInt32LE(at: cursor + 4))
             let count = Int(data.readUInt32LE(at: cursor + 8))
             cursor += 12
-            guard id < strings.count else { throw JavaIndexStoreError.corrupt("identifier id") }
-            table[strings[id]] = (offset, count)
+            guard Int(id) < strings.count else { throw JavaIndexStoreError.corrupt("identifier id") }
+            table[strings[Int(id)]] = (offset, count)
+            runs.append((id, offset, count))
         }
         self.postingTable = table
+        self.postingRuns = runs
         self.postingsBase = cursor
+    }
+
+    /// A reader over tables a rewrite already built, so a save does not decode the string table it
+    /// just wrote. Posting offsets are relative to `postings`, which is the postings section alone.
+    init(
+        files: [(relativePath: String, stamp: JavaStamp)],
+        stringTable: [String],
+        encodedStringTable: Data,
+        postingRuns: [(stringID: UInt32, offset: Int, count: Int)],
+        postingTable: [String: (Int, Int)],
+        postings: Data
+    ) {
+        self.files = files
+        self.data = postings
+        self.postingsBase = 0
+        self.stringTable = stringTable
+        self.encodedStringTable = encodedStringTable
+        self.postingRuns = postingRuns
+        self.postingTable = postingTable
+    }
+
+    /// Raw file ids of one posting run, in stored order.
+    func postingFileIDs(offset: Int, count: Int) -> [UInt32] {
+        let start = postingsBase + offset
+        guard count > 0, start + count * 4 <= data.count else { return [] }
+        var ids: [UInt32] = []
+        ids.reserveCapacity(count)
+        for index in 0..<count {
+            ids.append(data.readUInt32LE(at: start + index * 4))
+        }
+        return ids
     }
 
     /// Ids (indexes into ``files``) of the files that contain `identifier`.
@@ -160,8 +343,8 @@ public final class JavaNameIndexShardReader: @unchecked Sendable {
 
     public var identifierCount: Int { postingTable.count }
 
-    /// Inverts the postings back into per-file entries -- used by an incremental update to carry
-    /// unchanged files over without re-tokenizing them.
+    /// Inverts the postings back into per-file entries. Incremental updates copy posting runs
+    /// instead; this remains for the round-trip test.
     public func allEntries() -> [JavaNameIndexEntry] {
         var sets = [Set<String>](repeating: [], count: files.count)
         for identifier in postingTable.keys {

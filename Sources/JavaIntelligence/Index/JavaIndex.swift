@@ -47,6 +47,10 @@ public actor JavaIndex {
     /// Names from every shard. Large (the whole JDK + classpath), so it is rebuilt only when the
     /// sources change -- never on an overlay edit.
     private var baseNameIndex: [NameEntry] = []
+    /// Indexes into ``baseNameIndex``, one bucket per word-start byte. Built with the name index.
+    private var baseNameBuckets = [[Int32]](repeating: [], count: JavaWordBuckets.count)
+    /// Qualified name → position in ``sortedSources`` of the first shard that defines it.
+    private var winningSource: [String: Int32] = [:]
     private var basePackages: Set<String> = []
     /// Names from the open-document overlay (precedence -1). Small, and rebuilt from `overlay` on
     /// every overlay change, which is what keeps typing cheap on a large classpath.
@@ -57,10 +61,9 @@ public actor JavaIndex {
     /// ``classes(inPackage:)`` touch one package's names instead of the whole classpath.
     private var baseEntriesByOwner: [String: [NameEntry]] = [:]
     /// Decoded stubs by source position (in `sortedSources`) and qualified name. Shards are
-    /// immutable, so entries stay valid until `setSources` replaces them; the size cap keeps a
-    /// long session from holding the whole JDK decoded.
-    private var decodedStubs: [DecodedKey: JavaClassStub] = [:]
-    private static let decodedStubLimit = 16_384
+    /// immutable, so entries stay valid until `setSources` replaces them. Past the cap, the oldest
+    /// insertion is dropped — one decode on the next use of that name, not a flush of the cache.
+    private var decodedStubs = JavaFIFOCache<DecodedKey, JavaClassStub>(limit: 16_384)
 
     private struct DecodedKey: Hashable {
         let source: Int
@@ -146,7 +149,7 @@ public actor JavaIndex {
         sourcesVersion += 1
         self.sources = sources
         self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
-        decodedStubs = [:]
+        decodedStubs.removeAll()
         rebuildBaseIndex()
         bumpGeneration()
     }
@@ -180,9 +183,18 @@ public actor JavaIndex {
     private func rebuildBaseIndex() {
         var entries: [NameEntry] = []
         var pkgs: Set<String> = []
+        var winners: [String: Int32] = [:]
+        var nameCount = 0
+        for source in sortedSources { nameCount += source.reader.allQualifiedNames.count }
+        entries.reserveCapacity(nameCount)
+        winners.reserveCapacity(nameCount)
 
-        for source in sources {
+        // First position in `sortedSources` wins, which is the shard `classStub` used to return.
+        // Equal precedences keep their incoming order, so two project shards stay in caller order.
+        for (position, source) in sortedSources.enumerated() {
+            let sourcePosition = Int32(position)
             for qualifiedName in source.reader.allQualifiedNames {
+                if winners[qualifiedName] == nil { winners[qualifiedName] = sourcePosition }
                 let simpleName = String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName))
                 entries.append(NameEntry(
                     lowerSimpleName: simpleName.lowercased(),
@@ -199,12 +211,17 @@ public actor JavaIndex {
             }
         }
         entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
+        var buckets = [[Int32]](repeating: [], count: JavaWordBuckets.count)
         var byOwner: [String: [NameEntry]] = [:]
-        for entry in entries {
+        for (index, entry) in entries.enumerated() {
+            let entryID = Int32(index)
+            JavaWordBuckets.wordInitials(of: entry.simpleName) { buckets[Int($0)].append(entryID) }
             let owner = entry.qualifiedName.range(of: ".", options: .backwards).map { String(entry.qualifiedName[..<$0.lowerBound]) } ?? ""
             byOwner[owner, default: []].append(entry)
         }
         self.baseNameIndex = entries
+        self.baseNameBuckets = buckets
+        self.winningSource = winners
         self.basePackages = pkgs
         self.baseEntriesByOwner = byOwner
     }
@@ -255,13 +272,16 @@ public actor JavaIndex {
         if let overlaid = overlay[qualifiedName] {
             return overlaid
         }
-        for (position, source) in sortedSources.enumerated() {
+        guard let start = winningSource[qualifiedName] else { return nil }
+        // No earlier shard defines the name. A hidden shard (or a stub that fails to decode) falls
+        // through to the same walk as before, from the next position.
+        for position in Int(start)..<sortedSources.count {
+            let source = sortedSources[position]
             guard isVisible(shardPath: source.shardPath, precedence: source.precedence) else { continue }
             let key = DecodedKey(source: position, qualifiedName: qualifiedName)
-            if let cached = decodedStubs[key] { return cached }
+            if let cached = decodedStubs.value(for: key) { return cached }
             if let stub = source.reader.classStub(named: qualifiedName) {
-                if decodedStubs.count >= Self.decodedStubLimit { decodedStubs.removeAll(keepingCapacity: true) }
-                decodedStubs[key] = stub
+                decodedStubs.insert(stub, for: key)
                 return stub
             }
         }
@@ -295,15 +315,32 @@ public actor JavaIndex {
                 i += 1
             }
         }
-        // Camel-hump: only worth scanning the rest of the table when the prefix looks like an
-        // all-uppercase abbreviation, since a full scan is O(n) and `matchesCamelHump` rejects
-        // anything else immediately anyway.
+        // Camel-hump: only worth scanning when the prefix looks like an all-uppercase abbreviation.
+        // Every ASCII uppercase letter is a bucket key, so the names `matchesCamelHump` can accept
+        // all sit in the bucket of the pattern's first letter. A non-ASCII first letter stays a
+        // full scan, because `matchesCamelHump` uses `Character.isUppercase`.
         if prefix.count > 1, prefix.allSatisfy(\.isUppercase) {
-            for table in [baseNameIndex, overlayNameIndex] {
-                for entry in table where bestPrecedence[entry.qualifiedName] == nil {
-                    guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
-                    if matchesCamelHump(prefix, entry.simpleName) {
-                        considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+            let firstIsASCIIUpper = prefix.utf8.first.map { $0 >= 65 && $0 <= 90 } ?? false
+            if firstIsASCIIUpper, let key = JavaWordBuckets.bucketKey(of: prefix) {
+                for id in baseNameBuckets[Int(key)] {
+                    let entry = baseNameIndex[Int(id)]
+                    guard bestPrecedence[entry.qualifiedName] == nil,
+                          isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                          matchesCamelHump(prefix, entry.simpleName) else { continue }
+                    considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                }
+                for entry in overlayNameIndex where bestPrecedence[entry.qualifiedName] == nil {
+                    guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                          matchesCamelHump(prefix, entry.simpleName) else { continue }
+                    considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                }
+            } else {
+                for table in [baseNameIndex, overlayNameIndex] {
+                    for entry in table where bestPrecedence[entry.qualifiedName] == nil {
+                        guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
+                        if matchesCamelHump(prefix, entry.simpleName) {
+                            considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                        }
                     }
                 }
             }
@@ -314,6 +351,36 @@ public actor JavaIndex {
         for name in matchedNames {
             guard seen.insert(name).inserted else { continue }
             if let stub = classStub(qualifiedName: name) {
+                result.append(stub)
+            }
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    /// Classes whose simple name is exactly `name` (case-sensitive), deduplicated by qualified name
+    /// keeping the higher-precedence definition. Unlike ``classes(simpleNamePrefix:)`` this does
+    /// not decode prefix neighbours (`List` does not pull in `ListIterator`) and does not run the
+    /// all-caps hump scan (`UUID`, `URL`).
+    public func classes(simpleName name: String, limit: Int = 200) -> [JavaClassStub] {
+        guard !name.isEmpty, limit > 0 else { return [] }
+        let lower = name.lowercased()
+        var bestPrecedence: [String: Int] = [:]
+        var matchedNames: [String] = []
+        for table in [baseNameIndex, overlayNameIndex] {
+            var i = lowerBoundIndex(for: lower, in: table)
+            while i < table.count, table[i].lowerSimpleName == lower {
+                if table[i].simpleName == name, isVisible(shardPath: table[i].shardPath, precedence: table[i].precedence) {
+                    considerMatch(table[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
+                }
+                i += 1
+            }
+        }
+        var seen = Set<String>()
+        var result: [JavaClassStub] = []
+        for matched in matchedNames {
+            guard seen.insert(matched).inserted else { continue }
+            if let stub = classStub(qualifiedName: matched) {
                 result.append(stub)
             }
             if result.count >= limit { break }
@@ -332,31 +399,69 @@ public actor JavaIndex {
     /// `ArrayList`). Best tier first, then higher-precedence (project before JDK), shorter names,
     /// alphabetical; deduplicated by qualified name and capped at `limit`.
     public func classes(matching query: String, limit: Int = 150) -> [ClassMatch] {
-        guard let firstQueryCharacter = query.lowercased().first else { return [] }
-        var best: [String: (entry: NameEntry, tier: CompletionMatcher.Tier)] = [:]
-        for table in [baseNameIndex, overlayNameIndex] {
-            for entry in table where entry.lowerSimpleName.contains(firstQueryCharacter) {
-                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
-                      let match = CompletionMatcher.match(query, in: entry.simpleName) else { continue }
-                if let existing = best[entry.qualifiedName], existing.entry.precedence <= entry.precedence {
-                    continue
-                }
-                best[entry.qualifiedName] = (entry, match.tier)
+        guard limit > 0, let key = JavaWordBuckets.bucketKey(of: query) else { return [] }
+        let lowered = Array(query.lowercased().utf8)
+        var top: [RankedClass] = []
+        top.reserveCapacity(min(limit * 2, 512))
+        var slot: [String: Int] = [:]
+        var floor: RankedClass?
+
+        func consider(_ entry: NameEntry, _ tier: CompletionMatcher.Tier) {
+            if let index = slot[entry.qualifiedName] {
+                // Same simple name, so the same tier. A second definition replaces one already
+                // held only when its precedence is lower.
+                if entry.precedence < top[index].precedence { top[index].precedence = entry.precedence }
+                return
+            }
+            let ranked = RankedClass(
+                tier: tier, precedence: entry.precedence, simpleCount: entry.simpleName.count, qualifiedName: entry.qualifiedName
+            )
+            if let floor, top.count >= limit, !ranked.isBetter(than: floor) { return }
+            slot[entry.qualifiedName] = top.count
+            top.append(ranked)
+            if top.count >= limit * 2 {
+                top.sort { $0.isBetter(than: $1) }
+                if top.count > limit { top.removeLast(top.count - limit) }
+                slot.removeAll(keepingCapacity: true)
+                for (index, item) in top.enumerated() { slot[item.qualifiedName] = index }
+                floor = top.last
             }
         }
-        let ordered = best.values.sorted { lhs, rhs in
-            if lhs.tier != rhs.tier { return lhs.tier > rhs.tier }
-            if lhs.entry.precedence != rhs.entry.precedence { return lhs.entry.precedence < rhs.entry.precedence }
-            if lhs.entry.simpleName.count != rhs.entry.simpleName.count { return lhs.entry.simpleName.count < rhs.entry.simpleName.count }
-            return lhs.entry.qualifiedName < rhs.entry.qualifiedName
+
+        func consume(_ entry: NameEntry) {
+            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                  JavaWordBuckets.isSubsequence(lowered, of: entry.lowerSimpleName),
+                  let tier = CompletionMatcher.tier(query, in: entry.simpleName) else { return }
+            consider(entry, tier)
         }
+
+        for entry in overlayNameIndex { consume(entry) }
+        for id in baseNameBuckets[Int(key)] { consume(baseNameIndex[Int(id)]) }
+
+        top.sort { $0.isBetter(than: $1) }
         var result: [ClassMatch] = []
-        for candidate in ordered {
-            guard let stub = classStub(qualifiedName: candidate.entry.qualifiedName) else { continue }
-            result.append(ClassMatch(stub: stub, tier: candidate.tier))
-            if result.count >= limit { break }
+        result.reserveCapacity(min(limit, top.count))
+        for item in top {
+            guard result.count < limit, let stub = classStub(qualifiedName: item.qualifiedName) else { continue }
+            result.append(ClassMatch(stub: stub, tier: item.tier))
         }
         return result
+    }
+
+    /// One held class-name match. Ordered as ``classes(matching:)``: better tier, then lower
+    /// precedence, then a shorter simple name, then the qualified name.
+    private struct RankedClass {
+        var tier: CompletionMatcher.Tier
+        var precedence: Int
+        var simpleCount: Int
+        var qualifiedName: String
+
+        func isBetter(than other: RankedClass) -> Bool {
+            if tier != other.tier { return tier > other.tier }
+            if precedence != other.precedence { return precedence < other.precedence }
+            if simpleCount != other.simpleCount { return simpleCount < other.simpleCount }
+            return qualifiedName < other.qualifiedName
+        }
     }
 
     private func considerMatch(_ entry: NameEntry, bestPrecedence: inout [String: Int], matchedNames: inout [String]) {
@@ -458,4 +563,46 @@ public actor JavaIndex {
     }
 
     public var allSourceCount: Int { sources.count }
+}
+
+/// A fixed-capacity map that drops the oldest insertion when it fills. A lookup of a dropped key
+/// misses and is inserted again at the newest position; nothing empties the whole map at once.
+struct JavaFIFOCache<Key: Hashable, Value> {
+    private var storage: [Key: Value] = [:]
+    private var ring: [Key] = []
+    private var cursor = 0
+    let limit: Int
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    var count: Int { storage.count }
+
+    mutating func removeAll() {
+        storage.removeAll(keepingCapacity: true)
+        ring.removeAll(keepingCapacity: true)
+        cursor = 0
+    }
+
+    func value(for key: Key) -> Value? {
+        storage[key]
+    }
+
+    /// Replaces an existing key in place. A new key past `limit` takes the oldest slot.
+    mutating func insert(_ value: Value, for key: Key) {
+        if storage[key] != nil {
+            storage[key] = value
+            return
+        }
+        if storage.count >= limit, !ring.isEmpty {
+            storage[ring[cursor]] = nil
+            ring[cursor] = key
+            cursor += 1
+            if cursor == ring.count { cursor = 0 }
+        } else {
+            ring.append(key)
+        }
+        storage[key] = value
+    }
 }

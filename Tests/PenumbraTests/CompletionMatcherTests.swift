@@ -40,6 +40,26 @@ final class CompletionMatcherTests: XCTestCase {
         XCTAssertEqual(CompletionMatcher.match("get", in: "getName")?.matchedRanges, [NSRange(location: 0, length: 3)])
     }
 
+    func testTierAgreesWithMatch() {
+        let names = [
+            "getName", "ArrayList", "ArrayListEntry", "Base64", "S3Client", "URLConnection",
+            "NullPointerException", "toString", "MAX_VALUE", "_Internal", "$Proxy12", "UUID", "String"
+        ]
+        var queries = ["", "g", "gN", "get", "getName", "Arr", "ArrLi", "AL", "NPE", "64", "6", "S", "Str", "s", "UC", "URLC", "URL", "mv", "tSt", "_I", "I"]
+        queries.append(contentsOf: names)
+        for name in names {
+            for query in queries {
+                XCTAssertEqual(
+                    CompletionMatcher.tier(query, in: name),
+                    CompletionMatcher.match(query, in: name)?.tier,
+                    "\(query) in \(name)"
+                )
+            }
+        }
+        XCTAssertEqual(CompletionMatcher.tier("Σ", in: "Σigma"), CompletionMatcher.match("Σ", in: "Σigma")?.tier)
+        XCTAssertEqual(CompletionMatcher.tier("σ", in: "Σigma"), CompletionMatcher.match("σ", in: "Σigma")?.tier)
+    }
+
     func testFirstCharacterCase() {
         XCTAssertEqual(CompletionMatcher.match("str", in: "String")?.firstCharacterCaseMatches, false)
         XCTAssertEqual(CompletionMatcher.match("Str", in: "String")?.firstCharacterCaseMatches, true)

@@ -6,7 +6,7 @@ enum JavaUnresolvedTypeInspection {
         let file = JavaSourceStubBuilder.build(tree: walker.syntaxTree, url: url ?? JavaNavigationSession.placeholderURL)
         var inspections: [JavaInspection] = []
         for name in walker.undeclaredTypeNames.sorted() {
-            let candidates = await index.classes(simpleNamePrefix: name, limit: 50).filter { $0.simpleName == name }
+            let candidates = await index.classes(simpleName: name, limit: 50)
             guard candidates.isEmpty || candidates.allSatisfy({ !isImportable($0, from: file.packageName) }) else { continue }
             guard let range = firstTypeReference(to: name, in: walker.syntaxTree) else { continue }
             let start = JavaImportInserter.textPosition(forByteOffset: range.lowerBound, in: walker.syntaxTree.sourceBytes)

@@ -6,7 +6,7 @@ enum JavaUnresolvedImportInspection {
         var inspections: [JavaInspection] = []
         for entry in context.file.imports where !entry.isOnDemand {
             let simple = entry.qualifiedName.split(separator: ".").last.map(String.init) ?? entry.qualifiedName
-            let candidates = await index.classes(simpleNamePrefix: simple, limit: 50).filter { $0.qualifiedName == entry.qualifiedName || $0.simpleName == simple }
+            let candidates = await index.classes(simpleName: simple, limit: 50)
             guard candidates.isEmpty else { continue }
             guard let importEntry = JavaImportList(tree: context.tree).entries.first(where: { $0.qualifiedName == entry.qualifiedName && $0.isStatic == entry.isStatic }) else {
                 continue

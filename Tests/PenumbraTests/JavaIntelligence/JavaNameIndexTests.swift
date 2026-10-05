@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import JavaIntelligence
 
@@ -82,6 +83,7 @@ final class JavaNameIndexTests: XCTestCase {
 
     func testFilesChangedUpdatesIncrementally() async throws {
         let a = try write("A.java", "class A { Old o; }")
+        try write("B.java", "class B { Kept k; }")
         _ = await build()
 
         try "class A { Fresh o; }".write(to: a, atomically: true, encoding: .utf8)
@@ -90,8 +92,10 @@ final class JavaNameIndexTests: XCTestCase {
         XCTAssertEqual(affected.map(\.path), [src.path])
         let fresh = await names("Fresh")
         let old = await names("Old")
+        let kept = await names("Kept")
         XCTAssertEqual(fresh, ["A.java", "D.java"])
         XCTAssertEqual(old, [])
+        XCTAssertEqual(kept, ["B.java"])
     }
 
     func testRemovedFileDisappears() async throws {
@@ -103,6 +107,8 @@ final class JavaNameIndexTests: XCTestCase {
         await index.filesChanged([a])
         let after = await names("Gone")
         XCTAssertEqual(after, ["B.java"])
+        let remaining = await index.indexedFileCount(in: src)
+        XCTAssertEqual(remaining, 1)
 
         // A rebuild (no incremental hint) notices removals too.
         let b = src.appendingPathComponent("B.java")
@@ -149,6 +155,37 @@ final class JavaNameIndexTests: XCTestCase {
         XCTAssertEqual(found, [unsaved])
     }
 
+    func testStampScanMatchesTheURLWalk() throws {
+        try write("A.java", "class A {}")
+        try write("pkg/B.java", "class B {}")
+        try write(".hidden.java", "class H {}")
+        try write("build/Gen.java", "class Gen {}")
+        try FileManager.default.createSymbolicLink(at: src.appendingPathComponent("Link.java"), withDestinationURL: src.appendingPathComponent("A.java"))
+        try FileManager.default.createSymbolicLink(at: src.appendingPathComponent("linked-dir"), withDestinationURL: src.appendingPathComponent("pkg"))
+        let scanned = try XCTUnwrap(JavaSourceStampScan.javaFiles(in: src))
+        let walked = urlWalkStamps(src)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: scanned.map { ($0.relativePath, $0.stamp) }), walked)
+    }
+
+    func testRewriteReaderMatchesTheFile() throws {
+        let shard = dir.appendingPathComponent("x/refs.idx")
+        let original = [
+            JavaNameIndexEntry(relativePath: "a/A.java", stamp: JavaStamp(size: 3, modificationDate: 4.5), identifiers: ["A", "Kept"]),
+            JavaNameIndexEntry(relativePath: "B.java", stamp: JavaStamp(size: 7, modificationDate: 8), identifiers: ["Kept"])
+        ]
+        try JavaNameIndexShardWriter().write(original, to: shard)
+        let reader = try JavaNameIndexShardReader(url: shard)
+        let updated = JavaNameIndexEntry(
+            relativePath: "a/A.java", stamp: JavaStamp(size: 9, modificationDate: 10), identifiers: ["A", "Fresh"]
+        )
+        let rewritten = try JavaNameIndexShardWriter().rewrite(from: reader, removing: [0], replacing: [updated], to: shard)
+        let fromDisk = try JavaNameIndexShardReader(url: shard)
+        XCTAssertEqual(rewritten.allEntries(), fromDisk.allEntries())
+        XCTAssertEqual(rewritten.relativePaths(containing: "Kept").sorted(), fromDisk.relativePaths(containing: "Kept").sorted())
+        XCTAssertEqual(rewritten.relativePaths(containing: "Fresh"), ["a/A.java"])
+        XCTAssertEqual(fromDisk.relativePaths(containing: "Fresh"), ["a/A.java"])
+    }
+
     func testShardRoundTrip() throws {
         let shard = dir.appendingPathComponent("x/refs.idx")
         let entries = [
@@ -161,5 +198,93 @@ final class JavaNameIndexTests: XCTestCase {
         XCTAssertEqual(reader.relativePaths(containing: "A"), ["a/A.java"])
         XCTAssertEqual(reader.allEntries(), entries)
         XCTAssertThrowsError(try JavaNameIndexShardReader(url: dir.appendingPathComponent("missing.idx")))
+    }
+
+    func testIncrementalUpdatesMatchAFullRebuild() async throws {
+        let steps: [(String, String?)] = [
+            ("A.java", "class A { Gamma a; }"),
+            ("C.java", "class C { Gamma g; }"),
+            ("B.java", nil),
+            ("A.java", "class A { Delta a; }"),
+            ("C.java", "class C { Gamma g; NewId n; }"),
+            ("C.java", "class C { NewId n; }")
+        ]
+        try write("A.java", "class A { Alpha a; }", mtime: 1_000)
+        try write("B.java", "class B { Beta b; }", mtime: 1_000)
+
+        _ = await build()
+        var when = 2_000.0
+        for (name, text) in steps {
+            let url = src.appendingPathComponent(name)
+            if let text {
+                try write(name, text, mtime: when)
+            } else {
+                try FileManager.default.removeItem(at: url)
+            }
+            when += 1
+            await index.filesChanged([url])
+        }
+        let afterDelete = await index.indexedFileCount(in: src)
+        XCTAssertEqual(afterDelete, 2)
+        let incremental = try shardEntries(cache: dir.appendingPathComponent("cache"), root: src)
+
+        let freshRoot = dir.appendingPathComponent("fresh-cache")
+        let fresh = JavaNameIndex(paths: JavaIndexPaths(root: freshRoot))
+        for await _ in await fresh.build(roots: [src]) {}
+        let rebuilt = try shardEntries(cache: freshRoot, root: src)
+        XCTAssertEqual(incremental, rebuilt)
+
+        let replayRoot = dir.appendingPathComponent("replay-src")
+        let replayCache = dir.appendingPathComponent("replay-cache")
+        try FileManager.default.createDirectory(at: replayRoot, withIntermediateDirectories: true)
+        func replayWrite(_ name: String, _ text: String, _ mtime: TimeInterval) throws {
+            let url = replayRoot.appendingPathComponent(name)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: mtime)], ofItemAtPath: url.path)
+        }
+        try replayWrite("A.java", "class A { Alpha a; }", 1_000)
+        try replayWrite("B.java", "class B { Beta b; }", 1_000)
+        let replay = JavaNameIndex(paths: JavaIndexPaths(root: replayCache))
+        for await _ in await replay.build(roots: [replayRoot]) {}
+        when = 2_000
+        for (name, text) in steps {
+            let url = replayRoot.appendingPathComponent(name)
+            if let text {
+                try replayWrite(name, text, when)
+            } else {
+                try FileManager.default.removeItem(at: url)
+            }
+            when += 1
+            for await _ in await replay.build(roots: [replayRoot]) {}
+        }
+        let replayed = try shardEntries(cache: replayCache, root: replayRoot)
+        XCTAssertEqual(replayed, rebuilt)
+    }
+
+    private func urlWalkStamps(_ root: URL) -> [String: JavaStamp] {
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        let resolved = JavaNameIndexTests.realPath(root.path)
+        let resolvedPrefix = resolved.hasSuffix("/") ? resolved : resolved + "/"
+        var walked: [String: JavaStamp] = [:]
+        for url in SourceRoot(directory: root).javaFileURLs() {
+            let path = url.path
+            guard path.hasPrefix(resolvedPrefix) || path.hasPrefix(prefix) else { continue }
+            let relative = String(path.dropFirst(path.hasPrefix(prefix) ? prefix.count : resolvedPrefix.count))
+            guard let stamp = JavaStamp(url: url) else { continue }
+            walked[relative] = stamp
+        }
+        return walked
+    }
+
+    private static func realPath(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    private func shardEntries(cache: URL, root: URL) throws -> [String: JavaNameIndexEntry] {
+        let shard = JavaIndexPaths(root: cache).projectNameIndexShard(for: root)
+        let reader = try JavaNameIndexShardReader(url: shard)
+        return Dictionary(uniqueKeysWithValues: reader.allEntries().map { ($0.relativePath, $0) })
     }
 }

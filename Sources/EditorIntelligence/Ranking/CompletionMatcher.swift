@@ -67,6 +67,32 @@ public enum CompletionMatcher {
         }
     }
 
+    /// The tier ``match(_:in:)`` would report, without building matched offsets.
+    ///
+    /// Class-name completion ranks by tier and decodes stubs only for the names it keeps, so it
+    /// never needs the offset arrays `match` allocates per candidate. ASCII names (every ordinary
+    /// Java identifier) stay on the stack; anything else delegates to `match`.
+    public static func tier(_ query: String, in candidate: String) -> Tier? {
+        if query.isEmpty { return .any }
+        if query.utf8.contains(where: { $0 >= 128 }) {
+            return match(query, in: candidate)?.tier
+        }
+        // `withUTF8` may make the storage contiguous, so the copies have to be mutable. A non-ASCII
+        // byte in the candidate is handled only if the ASCII path actually reads it; a prefix
+        // decision does not depend on bytes after the query.
+        var queryUTF8 = query
+        var candidateUTF8 = candidate
+        let scanned = queryUTF8.withUTF8 { queryBytes in
+            candidateUTF8.withUTF8 { candidateBytes -> (Tier?, Bool) in
+                var fallback = false
+                let tier = asciiTier(queryBytes, candidateBytes, fallback: &fallback)
+                return (tier, fallback)
+            }
+        }
+        if scanned.1 { return match(query, in: candidate)?.tier }
+        return scanned.0
+    }
+
     /// Match `query` against `candidate`. Returns `nil` when it doesn't match.
     public static func match(_ query: String, in candidate: String) -> Match? {
         let q = Array(query.utf16)
@@ -176,6 +202,127 @@ public enum CompletionMatcher {
             }
         }
         return starts
+    }
+
+    /// Same decisions as ``match(_:in:)`` for ASCII, which is one UTF-16 unit per byte.
+    /// Sets `fallback` when a byte at or above 128 is read; the caller then uses ``match(_:in:)``.
+    private static func asciiTier(
+        _ q: UnsafeBufferPointer<UInt8>, _ c: UnsafeBufferPointer<UInt8>, fallback: inout Bool
+    ) -> Tier? {
+        if q.count > c.count || q.isEmpty { return q.isEmpty ? .any : nil }
+        // One character is the first keystroke. It is a prefix when the name starts with it, and a
+        // later word start otherwise — never a camel-hump, because a single character at index 0
+        // is the prefix tier.
+        if q.count == 1 {
+            if q[0] >= 128 { fallback = true; return nil }
+            let wanted = asciiLower(q[0])
+            if c.isEmpty { return nil }
+            if c[0] >= 128 { fallback = true; return nil }
+            if c.count == 1 {
+                if q[0] == c[0] { return .exact }
+                return asciiLower(c[0]) == wanted ? .prefix : nil
+            }
+            if asciiLower(c[0]) == wanted { return .prefix }
+            for index in 1..<c.count {
+                if !isAsciiWordStart(c, index, fallback: &fallback) { continue }
+                if fallback { return nil }
+                if c[index] >= 128 { fallback = true; return nil }
+                if asciiLower(c[index]) == wanted { return .wordStart }
+            }
+            return nil
+        }
+        if q.count == c.count {
+            var identical = true
+            for index in 0..<q.count {
+                if q[index] >= 128 || c[index] >= 128 { fallback = true; return nil }
+                if q[index] != c[index] { identical = false }
+            }
+            if identical { return .exact }
+            var sameLower = true
+            for index in 0..<q.count where asciiLower(q[index]) != asciiLower(c[index]) {
+                sameLower = false
+                break
+            }
+            if sameLower { return q[0] == c[0] ? .exactIgnoringCase : .prefix }
+        } else {
+            var prefix = true
+            for index in 0..<q.count {
+                if q[index] >= 128 || c[index] >= 128 { fallback = true; return nil }
+                if asciiLower(q[index]) != asciiLower(c[index]) { prefix = false; break }
+            }
+            if prefix { return .prefix }
+        }
+        if q[0] >= 128 || c[0] >= 128 { fallback = true; return nil }
+        if asciiLower(q[0]) == asciiLower(c[0]), asciiHumpSucceeds(q, c, from: 0, fallback: &fallback) { return .camelHump }
+        if fallback { return nil }
+        var index = 1
+        while index < c.count {
+            if isAsciiWordStart(c, index, fallback: &fallback),
+               !fallback,
+               c[index] < 128,
+               asciiLower(c[index]) == asciiLower(q[0]),
+               asciiHumpSucceeds(q, c, from: index, fallback: &fallback) {
+                return .wordStart
+            }
+            if fallback { return nil }
+            index += 1
+        }
+        return nil
+    }
+
+    /// ``humpMatch`` without the offset list: success is the only result the tier needs.
+    private static func asciiHumpSucceeds(
+        _ query: UnsafeBufferPointer<UInt8>, _ candidate: UnsafeBufferPointer<UInt8>, from: Int, fallback: inout Bool
+    ) -> Bool {
+        func solve(_ qi: Int, _ last: Int) -> Bool {
+            if qi == query.count { return true }
+            if query[qi] >= 128 { fallback = true; return false }
+            let wanted = asciiLower(query[qi])
+            let queryIsUpper = isUpper(UInt16(query[qi]))
+            let next = last + 1
+            if next < candidate.count {
+                if candidate[next] >= 128 { fallback = true; return false }
+                if asciiLower(candidate[next]) == wanted,
+                   !queryIsUpper || isAsciiWordStart(candidate, next, fallback: &fallback) || isUpper(UInt16(candidate[next])) {
+                    if fallback { return false }
+                    if solve(qi + 1, next) { return true }
+                }
+            }
+            var index = last + 2
+            while index < candidate.count {
+                if isAsciiWordStart(candidate, index, fallback: &fallback) {
+                    if fallback { return false }
+                    if candidate[index] >= 128 { fallback = true; return false }
+                    if asciiLower(candidate[index]) == wanted {
+                        if solve(qi + 1, index) { return true }
+                    }
+                }
+                if fallback { return false }
+                index += 1
+            }
+            return false
+        }
+        return solve(1, from)
+    }
+
+    /// ``wordStarts(_:)`` for one ASCII byte. Index 0 is a word start; callers pass `i > 0`.
+    private static func isAsciiWordStart(_ c: UnsafeBufferPointer<UInt8>, _ i: Int, fallback: inout Bool) -> Bool {
+        guard i > 0, i < c.count else { return false }
+        let previous = c[i - 1]
+        let current = c[i]
+        if previous >= 128 || current >= 128 { fallback = true; return false }
+        if isSeparator(UInt16(previous)), !isSeparator(UInt16(current)) { return true }
+        if isUpper(UInt16(current)), isLower(UInt16(previous)) || isDigit(UInt16(previous)) { return true }
+        if isUpper(UInt16(current)), isUpper(UInt16(previous)), i + 1 < c.count {
+            if c[i + 1] >= 128 { fallback = true; return false }
+            if isLower(UInt16(c[i + 1])) { return true }
+        }
+        if isDigit(UInt16(current)), !isDigit(UInt16(previous)), !isSeparator(UInt16(previous)) { return true }
+        return false
+    }
+
+    private static func asciiLower(_ byte: UInt8) -> UInt8 {
+        (65...90).contains(byte) ? byte &+ 32 : byte
     }
 
     private static func lower(_ unit: UInt16) -> UInt16 {

@@ -60,7 +60,7 @@ struct JavaMemberTable: Sendable {
 
     private(set) var owners: [Owner] = []
     private(set) var entries: [Entry] = []
-    private var buckets = [[Int32]](repeating: [], count: 256)
+    private var buckets = [[Int32]](repeating: [], count: JavaWordBuckets.count)
 
     var isEmpty: Bool { entries.isEmpty }
 
@@ -87,7 +87,7 @@ struct JavaMemberTable: Sendable {
         func append(_ name: String, _ kind: JavaMemberKind, slot: Int) {
             let entryID = Int32(entries.count)
             entries.append(Entry(lower: name.lowercased(), name: name, owner: ownerID, kind: kind, slot: Int32(slot)))
-            Self.wordInitials(of: name) { buckets[Int($0)].append(entryID) }
+            JavaWordBuckets.wordInitials(of: name) { buckets[Int($0)].append(entryID) }
             added = true
         }
 
@@ -124,35 +124,6 @@ struct JavaMemberTable: Sendable {
         }
     }
 
-    /// Calls `body` with the lowercased first byte of each word of `name`, once per distinct byte.
-    /// A word starts at the first character, at an uppercase letter, and after a non-letter.
-    static func wordInitials(of name: String, _ body: (UInt8) -> Void) {
-        var seen: (UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0)
-        var previous: UInt8 = 0
-        var offset = 0
-        for byte in name.utf8 {
-            let isUpper = byte >= 65 && byte <= 90
-            let previousIsLetter = (previous >= 65 && previous <= 90) || (previous >= 97 && previous <= 122)
-            if offset == 0 || isUpper || !previousIsLetter {
-                let lower = isUpper ? byte + 32 : byte
-                if insert(lower, into: &seen) { body(lower) }
-            }
-            previous = byte
-            offset += 1
-        }
-    }
-
-    private static func insert(_ byte: UInt8, into set: inout (UInt64, UInt64, UInt64, UInt64)) -> Bool {
-        let bit = UInt64(1) << UInt64(byte & 63)
-        switch byte >> 6 {
-        case 0: if set.0 & bit != 0 { return false }; set.0 |= bit
-        case 1: if set.1 & bit != 0 { return false }; set.1 |= bit
-        case 2: if set.2 & bit != 0 { return false }; set.2 |= bit
-        default: if set.3 & bit != 0 { return false }; set.3 |= bit
-        }
-        return true
-    }
-
     struct Candidate: Sendable {
         let entry: Int32
         let match: CompletionMatcher.Match
@@ -161,14 +132,14 @@ struct JavaMemberTable: Sendable {
     /// The best `limit` matches, best first. `isSkipped` drops whole owners (a class the overlay
     /// replaces, or a shard the query scope hides).
     func matches(query: String, limit: Int, isSkipped: (Owner) -> Bool) -> [Candidate] {
-        guard limit > 0, let first = query.lowercased().utf8.first else { return [] }
+        guard limit > 0, let first = JavaWordBuckets.bucketKey(of: query) else { return [] }
         let lowered = Array(query.lowercased().utf8)
         var top: [(score: Int, candidate: Candidate)] = []
         var floor = Int.min
         var skippedOwner: [Int32: Bool] = [:]
         for entryID in buckets[Int(first)] {
             let entry = entries[Int(entryID)]
-            guard Self.isSubsequence(lowered, of: entry.lower) else { continue }
+            guard JavaWordBuckets.isSubsequence(lowered, of: entry.lower) else { continue }
             if let skipped = skippedOwner[entry.owner] {
                 if skipped { continue }
             } else {
@@ -189,13 +160,6 @@ struct JavaMemberTable: Sendable {
         }
         top.sort { $0.score > $1.score }
         return top.prefix(limit).map(\.candidate)
-    }
-
-    /// Every character of `query` occurs in `name` in order. All match tiers imply it.
-    private static func isSubsequence(_ query: [UInt8], of name: String) -> Bool {
-        var index = 0
-        for byte in name.utf8 where index < query.count && byte == query[index] { index += 1 }
-        return index == query.count
     }
 }
 

@@ -178,8 +178,8 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         let inserter = JavaImportInserter(text: text, bytes: tree.sourceBytes, tree: tree, fileStubs: fileStubs)
         var actions: [CodeAction] = []
         for name in names {
-            let candidates = await index.classes(simpleNamePrefix: name, limit: 200)
-                .filter { $0.simpleName == name && isImportable($0, from: fileStubs.packageName) }
+            let candidates = await index.classes(simpleName: name, limit: 200)
+                .filter { isImportable($0, from: fileStubs.packageName) }
                 .sorted { ($0.outerQualifiedName == nil ? 0 : 1, $0.qualifiedName) < ($1.outerQualifiedName == nil ? 0 : 1, $1.qualifiedName) }
                 .prefix(Self.maxImportCandidates)
             for stub in candidates {

@@ -155,7 +155,9 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
                 for relative in reader.relativePaths(containing: identifier) {
                     let path = prefix + relative
                     if overlay[path] != nil { continue }
-                    if FileManager.default.fileExists(atPath: path) { result.insert(path) }
+                    // A deletion the watcher has not reported yet fails when the caller reads the
+                    // file. Statting every candidate made a common name wait on the whole posting.
+                    result.insert(path)
                 }
             }
             for (path, identifiers) in overlay where path.hasPrefix(prefix) && identifiers.contains(identifier) {
@@ -194,42 +196,117 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
     private static func rootID(_ directory: URL) -> String { "names-\(directory.path)" }
 
     /// Brings `shardURL` in line with the files under `directory`. With `only == nil` every file's
-    /// stamp is compared; otherwise just the listed relative paths are re-examined.
+    /// stamp is compared; otherwise just the listed relative paths are re-examined. Stamps are read
+    /// from the shard's file table, and a readable shard is updated by copying posting runs.
     private static func sync(directory: URL, shardURL: URL, only: Set<String>?) -> SyncOutcome {
         let existing = try? JavaNameIndexShardReader(url: shardURL)
         let prefix = directory.path.hasSuffix("/") ? directory.path : directory.path + "/"
-        var previous: [String: JavaNameIndexEntry] = [:]
         if let existing {
-            for entry in existing.allEntries() { previous[entry.relativePath] = entry }
+            return syncExisting(existing, directory: directory, shardURL: shardURL, prefix: prefix, only: only)
+        }
+        return syncMissing(directory: directory, shardURL: shardURL, prefix: prefix, only: only)
+    }
+
+    private static func syncExisting(
+        _ existing: JavaNameIndexShardReader, directory: URL, shardURL: URL, prefix: String, only: Set<String>?
+    ) -> SyncOutcome {
+        var idByPath: [String: Int] = [:]
+        idByPath.reserveCapacity(existing.files.count)
+        for (id, file) in existing.files.enumerated() { idByPath[file.relativePath] = id }
+
+        var removing = Set<Int>()
+        var replacing: [JavaNameIndexEntry] = []
+        var reindexed = 0
+
+        func tokenize(_ relative: String, url: URL) {
+            guard let stamp = JavaStamp(url: url), let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+            if let old = idByPath[relative] { removing.insert(old) }
+            replacing.append(JavaNameIndexEntry(
+                relativePath: relative, stamp: stamp, identifiers: JavaIdentifierScanner.identifiers(in: text)
+            ))
+            reindexed += 1
         }
 
+        if let only {
+            for relative in only {
+                let url = URL(fileURLWithPath: prefix + relative)
+                if let stamp = JavaStamp(url: url) {
+                    if let old = idByPath[relative] {
+                        if existing.files[old].stamp != stamp { tokenize(relative, url: url) }
+                    } else {
+                        tokenize(relative, url: url)
+                    }
+                } else if let old = idByPath[relative] {
+                    removing.insert(old)
+                }
+            }
+        } else {
+            var seen = Set<String>()
+            // One `getattrlistbulk` pass per directory. The URL walk stays for a volume that
+            // rejects the bulk call; both produce the same relative paths and stamps.
+            let scanned = JavaSourceStampScan.javaFiles(in: directory)
+            if Task.isCancelled {
+                return SyncOutcome(reader: existing, reindexed: 0, fileCount: existing.files.count, failure: nil)
+            }
+            if let scanned {
+                for file in scanned {
+                    seen.insert(file.relativePath)
+                    if let old = idByPath[file.relativePath], existing.files[old].stamp == file.stamp { continue }
+                    tokenize(file.relativePath, url: URL(fileURLWithPath: prefix + file.relativePath))
+                }
+            } else {
+                // The enumerator reports symlink-resolved URLs (`/private/var/...`), so measure the
+                // relative path against the resolved root.
+                let resolved = realPath(directory.path)
+                let resolvedPrefix = resolved.hasSuffix("/") ? resolved : resolved + "/"
+                for url in SourceRoot(directory: directory).javaFileURLs() {
+                    if Task.isCancelled { break }
+                    let path = url.path
+                    guard path.hasPrefix(resolvedPrefix) || path.hasPrefix(prefix) else { continue }
+                    let relative = String(path.dropFirst(path.hasPrefix(prefix) ? prefix.count : resolvedPrefix.count))
+                    seen.insert(relative)
+                    if let old = idByPath[relative], let stamp = JavaStamp(url: url), existing.files[old].stamp == stamp {
+                        continue
+                    }
+                    tokenize(relative, url: url)
+                }
+            }
+            if Task.isCancelled {
+                return SyncOutcome(reader: existing, reindexed: 0, fileCount: existing.files.count, failure: nil)
+            }
+            for (id, file) in existing.files.enumerated() where !seen.contains(file.relativePath) {
+                removing.insert(id)
+            }
+        }
+
+        guard reindexed > 0 || !removing.isEmpty else {
+            return SyncOutcome(reader: existing, reindexed: 0, fileCount: existing.files.count, failure: nil)
+        }
+        do {
+            let reader = try JavaNameIndexShardWriter().rewrite(from: existing, removing: removing, replacing: replacing, to: shardURL)
+            // A removal-only change reindexes nothing but still rewrote the shard; report it as work.
+            return SyncOutcome(reader: reader, reindexed: max(reindexed, 1), fileCount: reader.files.count, failure: nil)
+        } catch {
+            return SyncOutcome(reader: existing, reindexed: 0, fileCount: existing.files.count, failure: String(describing: error))
+        }
+    }
+
+    /// No readable shard yet: tokenize what is asked for and write one from scratch.
+    private static func syncMissing(directory: URL, shardURL: URL, prefix: String, only: Set<String>?) -> SyncOutcome {
         var next: [String: JavaNameIndexEntry] = [:]
         var reindexed = 0
-        var changed = existing == nil
 
-        func tokenize(_ relative: String) {
-            let url = URL(fileURLWithPath: prefix + relative)
+        func tokenize(_ relative: String, url: URL) {
             guard let stamp = JavaStamp(url: url), let text = try? String(contentsOf: url, encoding: .utf8) else { return }
             next[relative] = JavaNameIndexEntry(relativePath: relative, stamp: stamp, identifiers: JavaIdentifierScanner.identifiers(in: text))
             reindexed += 1
         }
 
         if let only {
-            next = previous
             for relative in only {
-                let old = previous[relative]
-                let url = URL(fileURLWithPath: prefix + relative)
-                if let stamp = JavaStamp(url: url) {
-                    if old?.stamp != stamp { tokenize(relative) }
-                } else if old != nil {
-                    next[relative] = nil
-                    changed = true
-                }
+                tokenize(relative, url: URL(fileURLWithPath: prefix + relative))
             }
         } else {
-            var seen = Set<String>()
-            // The enumerator reports symlink-resolved URLs (`/private/var/...`), so measure the
-            // relative path against the resolved root.
             let resolved = realPath(directory.path)
             let resolvedPrefix = resolved.hasSuffix("/") ? resolved : resolved + "/"
             for url in SourceRoot(directory: directory).javaFileURLs() {
@@ -237,29 +314,20 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
                 let path = url.path
                 guard path.hasPrefix(resolvedPrefix) || path.hasPrefix(prefix) else { continue }
                 let relative = String(path.dropFirst(path.hasPrefix(prefix) ? prefix.count : resolvedPrefix.count))
-                seen.insert(relative)
-                if let old = previous[relative], let stamp = JavaStamp(url: url), old.stamp == stamp {
-                    next[relative] = old
-                } else {
-                    tokenize(relative)
-                }
+                tokenize(relative, url: url)
             }
-            if Task.isCancelled { return SyncOutcome(reader: existing, reindexed: 0, fileCount: previous.count, failure: nil) }
-            if seen.count != previous.count || !Set(previous.keys).isSubset(of: seen) { changed = true }
+            if Task.isCancelled { return SyncOutcome(reader: nil, reindexed: 0, fileCount: 0, failure: nil) }
         }
-        if reindexed > 0 { changed = true }
-
-        guard changed else {
-            return SyncOutcome(reader: existing, reindexed: 0, fileCount: previous.count, failure: nil)
+        guard reindexed > 0 else {
+            return SyncOutcome(reader: nil, reindexed: 0, fileCount: 0, failure: nil)
         }
         do {
             let entries = next.values.sorted { $0.relativePath < $1.relativePath }
             try JavaNameIndexShardWriter().write(entries, to: shardURL)
             let reader = try JavaNameIndexShardReader(url: shardURL)
-            // A removal-only change reindexes nothing but still rewrote the shard; report it as work.
-            return SyncOutcome(reader: reader, reindexed: max(reindexed, 1), fileCount: entries.count, failure: nil)
+            return SyncOutcome(reader: reader, reindexed: reindexed, fileCount: entries.count, failure: nil)
         } catch {
-            return SyncOutcome(reader: existing, reindexed: 0, fileCount: previous.count, failure: String(describing: error))
+            return SyncOutcome(reader: nil, reindexed: 0, fileCount: 0, failure: String(describing: error))
         }
     }
 }
