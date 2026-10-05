@@ -151,6 +151,15 @@ extension Color {
         let blue = Double(hex & 0xFF) / 255
         self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
+
+    /// sRGB hex of this color, or nil when it cannot be resolved to sRGB.
+    var sRGBHex: UInt32? {
+        guard let resolved = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let red = UInt32((resolved.redComponent * 255).rounded())
+        let green = UInt32((resolved.greenComponent * 255).rounded())
+        let blue = UInt32((resolved.blueComponent * 255).rounded())
+        return (red << 16) | (green << 8) | blue
+    }
 }
 
 enum IDEUIFonts {

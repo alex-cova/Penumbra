@@ -45,6 +45,45 @@ struct IDEPreferencesEditorPane: View {
             )
         }
 
+        IDESettingsSection(
+            "Caret",
+            footer: "A block covers the next character and redraws it in the editor background. An underline sits on the baseline."
+        ) {
+            IDESettingsPicker("Shape", selection: $preferences.caretShape) {
+                Text("Bar").tag(CaretShape.bar)
+                Text("Block").tag(CaretShape.block)
+                Text("Underline").tag(CaretShape.underline)
+            }
+
+            IDESettingsToggle(
+                "Match Theme Color",
+                isOn: Binding(
+                    get: { preferences.caretColorHex == nil },
+                    set: { matchesTheme in
+                        if matchesTheme {
+                            preferences.caretColorHex = nil
+                        } else if preferences.caretColorHex == nil {
+                            preferences.caretColorHex = ThemeCatalog.palette(
+                                id: preferences.themeID,
+                                fallbackDark: true
+                            ).text
+                        }
+                    }
+                ),
+                detail: "Uses the theme's text color. Turn this off to pick a color."
+            )
+
+            if let customCaretColor = preferences.caretColorHex {
+                IDESettingsColorWell(
+                    title: "Color",
+                    hex: Binding(
+                        get: { preferences.caretColorHex ?? customCaretColor },
+                        set: { preferences.caretColorHex = $0 }
+                    )
+                )
+            }
+        }
+
         IDESettingsSection("Indentation") {
             IDEPreferencesIntStepper(
                 title: "Tab Width",

@@ -1,5 +1,6 @@
 import Foundation
 // swiftlint:disable file_length
+@preconcurrency import AppKit
 import CoreGraphics
 import CoreText
 
@@ -603,6 +604,14 @@ extension LineController {
     }
 }
 
+struct LineCaretMetrics {
+    var barRect: CGRect
+    var advance: CGFloat
+    var descent: CGFloat
+    var coveredText: String
+    var coveredFont: NSFont
+}
+
 // MARK: - EditorTextInput
 extension LineController {
     func caretRect(atIndex lineLocalLocation: Int) -> CGRect {
@@ -615,6 +624,79 @@ extension LineController {
         }
         let yPosition = (estimatedLineFragmentHeight * lineFragmentHeightMultiplier - estimatedLineFragmentHeight) / 2
         return CGRect(x: 0, y: yPosition, width: Caret.width, height: estimatedLineFragmentHeight)
+    }
+
+    /// Bar geometry plus the width and text of the character after the caret. Called only when the
+    /// caret is a block or an underline. ``caretRect(atIndex:)`` stays the cheap bar lookup that
+    /// selection and hit testing use.
+    func caretMetrics(atIndex lineLocalLocation: Int) -> LineCaretMetrics {
+        let font = caretFont(at: lineLocalLocation)
+        for lineFragment in typesetter.lineFragments {
+            guard let caretLocation = lineFragment.caretLocation(forLineLocalLocation: lineLocalLocation) else {
+                continue
+            }
+            let xPosition = CTLineGetOffsetForStringIndex(lineFragment.line, caretLocation, nil)
+            let yPosition = lineFragment.yPosition + (lineFragment.scaledSize.height - lineFragment.baseSize.height) / 2
+            let barRect = CGRect(x: xPosition, y: yPosition, width: Caret.width, height: lineFragment.baseSize.height)
+            let covered = coveredCharacter(in: lineFragment, caretLocation: caretLocation, font: font)
+            return LineCaretMetrics(
+                barRect: barRect,
+                advance: covered.advance,
+                descent: lineFragment.descent,
+                coveredText: covered.text,
+                coveredFont: font
+            )
+        }
+        let yPosition = (estimatedLineFragmentHeight * lineFragmentHeightMultiplier - estimatedLineFragmentHeight) / 2
+        let barRect = CGRect(x: 0, y: yPosition, width: Caret.width, height: estimatedLineFragmentHeight)
+        return LineCaretMetrics(
+            barRect: barRect,
+            advance: spaceAdvance(font),
+            descent: font.descender.magnitude,
+            coveredText: "",
+            coveredFont: font
+        )
+    }
+
+    private func caretFont(at lineLocalLocation: Int) -> NSFont {
+        guard let attributedString, lineLocalLocation >= 0, lineLocalLocation < attributedString.length else {
+            return theme.font
+        }
+        return attributedString.attribute(.font, at: lineLocalLocation, effectiveRange: nil) as? NSFont ?? theme.font
+    }
+
+    /// Width of the grapheme after the caret, and the text a block caret redraws. A caret at the
+    /// end of the line (or on a newline) is one space wide and covers nothing.
+    private func coveredCharacter(in lineFragment: LineFragment, caretLocation: Int, font: NSFont) -> (advance: CGFloat, text: String) {
+        let space = spaceAdvance(font)
+        let upper = lineFragment.visibleRange.upperBound
+        guard caretLocation < upper else {
+            return (space, "")
+        }
+        let absolute = line.location + caretLocation
+        guard absolute >= 0, absolute < stringView.length else {
+            return (space, "")
+        }
+        let cluster = stringView.rangeOfComposedCharacterSequence(at: absolute)
+        let endLocal = cluster.upperBound - line.location
+        guard endLocal > caretLocation, endLocal <= upper else {
+            return (space, "")
+        }
+        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, caretLocation, nil)
+        let endX = CTLineGetOffsetForStringIndex(lineFragment.line, endLocal, nil)
+        let advance = endX - startX
+        guard advance >= 1 else {
+            return (space, "")
+        }
+        let text = stringView.substring(in: NSRange(location: absolute, length: endLocal - caretLocation)) ?? ""
+        if text.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }) {
+            return (advance, "")
+        }
+        return (advance, text)
+    }
+
+    private func spaceAdvance(_ font: NSFont) -> CGFloat {
+        max((" " as NSString).size(withAttributes: [.font: font]).width, 1)
     }
 
     func firstRect(for lineLocalRange: NSRange) -> CGRect {

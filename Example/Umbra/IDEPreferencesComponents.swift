@@ -149,6 +149,8 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.fontName) { applyLivePreferences() }
             .onChange(of: preferences.fontSize) { applyLivePreferences() }
             .onChange(of: preferences.themeID) { applyLivePreferences() }
+            .onChange(of: preferences.caretShape) { applyLivePreferences() }
+            .onChange(of: preferences.caretColorHex) { applyLivePreferences() }
             .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
             .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
     }
@@ -296,6 +298,29 @@ struct IDESettingsToggle: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 20)
             }
+        }
+    }
+}
+
+/// A color well in the settings control column.
+struct IDESettingsColorWell: View {
+    let title: String
+    @Binding var hex: UInt32
+    var isEnabled = true
+
+    var body: some View {
+        IDESettingsRow(title) {
+            ColorPicker(
+                title,
+                selection: Binding(
+                    get: { Color(hex: hex) },
+                    set: { hex = $0.sRGBHex ?? hex }
+                ),
+                supportsOpacity: false
+            )
+            .labelsHidden()
+            .disabled(!isEnabled)
+            .accessibilityLabel(title)
         }
     }
 }

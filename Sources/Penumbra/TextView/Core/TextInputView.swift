@@ -107,6 +107,13 @@ final class TextInputView: EditorView {
             }
         }
     }
+    var caretShape: CaretShape = .bar {
+        didSet {
+            if caretShape != oldValue {
+                selectionOverlayController.updateLayout()
+            }
+        }
+    }
     @objc var selectionBarColor: NSColor = .label {
         didSet {
             if selectionBarColor != oldValue {

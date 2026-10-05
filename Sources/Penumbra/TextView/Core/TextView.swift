@@ -233,6 +233,15 @@ public struct DocumentTextExport: Sendable {
             textInputView.insertionPointColor = newValue
         }
     }
+    /// Bar, block, or underline. Defaults to a vertical bar. Does not change ``caretRect(at:)``.
+    public var caretShape: CaretShape {
+        get {
+            textInputView.caretShape
+        }
+        set {
+            textInputView.caretShape = newValue
+        }
+    }
     /// The color of the selection bar. It is most common to set this to the same color as the color used for the insertion point.
     public var selectionBarColor: NSColor {
         get {

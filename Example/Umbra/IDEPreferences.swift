@@ -19,6 +19,8 @@ public final class IDEPreferences {
         static let welcomeBackground = "com.umbra.editor.welcomeBackground"
         static let uiColorSchemeID = "com.umbra.editor.uiColorSchemeID"
         static let themeID = "com.umbra.editor.themeID"
+        static let caretShape = "com.umbra.editor.caretShape"
+        static let caretColorHex = "com.umbra.editor.caretColorHex"
         static let scaleMarkdownHeadings = "com.umbra.editor.scaleMarkdownHeadings"
         static let tabWidth = "com.umbra.editor.tabWidth"
         static let useSpacesForTab = "com.umbra.editor.useSpacesForTab"
@@ -115,6 +117,22 @@ public final class IDEPreferences {
 
     var themeID: String {
         didSet { UserDefaults.standard.set(themeID, forKey: Keys.themeID); applyTheme() }
+    }
+
+    /// Bar, block, or underline. The bar is the thin vertical caret.
+    var caretShape: CaretShape {
+        didSet { UserDefaults.standard.set(caretShape.rawValue, forKey: Keys.caretShape) }
+    }
+
+    /// Custom caret color. `nil` follows the theme's text color.
+    var caretColorHex: UInt32? {
+        didSet {
+            if let caretColorHex {
+                UserDefaults.standard.set(Int(caretColorHex), forKey: Keys.caretColorHex)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.caretColorHex)
+            }
+        }
     }
 
     /// Renders markdown headings (H1–H6) at progressively larger sizes in the editor.
@@ -478,6 +496,12 @@ public final class IDEPreferences {
         default: IDEUIColorSchemeCatalog.defaultID
         }
         themeID = defaults.string(forKey: Keys.themeID) ?? ThemeCatalog.defaultDarkID
+        caretShape = defaults.string(forKey: Keys.caretShape).flatMap(CaretShape.init(rawValue:)) ?? .bar
+        if let storedCaretColor = defaults.object(forKey: Keys.caretColorHex) as? NSNumber {
+            caretColorHex = UInt32(truncatingIfNeeded: storedCaretColor.intValue)
+        } else {
+            caretColorHex = nil
+        }
         scaleMarkdownHeadings = defaults.object(forKey: Keys.scaleMarkdownHeadings) as? Bool ?? true
         tabWidth = defaults.object(forKey: Keys.tabWidth) as? Int ?? 4
         useSpacesForTab = defaults.object(forKey: Keys.useSpacesForTab) as? Bool ?? true
@@ -570,6 +594,12 @@ public final class IDEPreferences {
         textView.isFocusModeEnabled = isFocusModeEnabled
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
+        textView.caretShape = caretShape
+        if let caretColorHex {
+            textView.insertionPointColor = NSColor(rgb: caretColorHex)
+        } else {
+            textView.insertionPointColor = textView.theme.textColor
+        }
         if repaint {
             textView.redisplayVisibleLines()
             textView.refreshGutterChrome()
@@ -616,6 +646,8 @@ public final class IDEPreferences {
             uiFontName: uiFontName,
             uiFontSize: uiFontSize,
             themeID: themeID,
+            caretShape: caretShape,
+            caretColorHex: caretColorHex,
             scaleMarkdownHeadings: scaleMarkdownHeadings,
             tabWidth: tabWidth,
             useSpacesForTab: useSpacesForTab,
@@ -647,6 +679,8 @@ public final class IDEPreferences {
         IDEUIFonts.setCurrentFamilyName(uiFontName)
         IDEUIFonts.setCurrentFontSize(uiFontSize)
         themeID = snapshot.themeID
+        caretShape = snapshot.caretShape
+        caretColorHex = snapshot.caretColorHex
         scaleMarkdownHeadings = snapshot.scaleMarkdownHeadings
         tabWidth = snapshot.tabWidth
         useSpacesForTab = snapshot.useSpacesForTab
@@ -676,6 +710,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var uiFontName: String
     var uiFontSize: Double
     var themeID: String
+    var caretShape: CaretShape
+    var caretColorHex: UInt32?
     var scaleMarkdownHeadings: Bool
     var tabWidth: Int
     var useSpacesForTab: Bool
@@ -703,6 +739,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         uiFontName: String = IDEUIFonts.defaultFamilyName,
         uiFontSize: Double = IDEUIFonts.defaultFontSize,
         themeID: String = ThemeCatalog.defaultDarkID,
+        caretShape: CaretShape = .bar,
+        caretColorHex: UInt32? = nil,
         scaleMarkdownHeadings: Bool = true,
         tabWidth: Int,
         useSpacesForTab: Bool,
@@ -729,6 +767,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.uiFontName = uiFontName
         self.uiFontSize = uiFontSize
         self.themeID = themeID
+        self.caretShape = caretShape
+        self.caretColorHex = caretColorHex
         self.scaleMarkdownHeadings = scaleMarkdownHeadings
         self.tabWidth = tabWidth
         self.useSpacesForTab = useSpacesForTab
@@ -762,6 +802,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
             ?? IDEUIFonts.defaultFontSize
         themeID = try container.decodeIfPresent(String.self, forKey: .themeID)
             ?? ThemeCatalog.defaultDarkID
+        caretShape = try container.decodeIfPresent(CaretShape.self, forKey: .caretShape) ?? .bar
+        caretColorHex = try container.decodeIfPresent(UInt32.self, forKey: .caretColorHex)
         scaleMarkdownHeadings = try container.decodeIfPresent(Bool.self, forKey: .scaleMarkdownHeadings) ?? true
         tabWidth = try container.decode(Int.self, forKey: .tabWidth)
         useSpacesForTab = try container.decode(Bool.self, forKey: .useSpacesForTab)

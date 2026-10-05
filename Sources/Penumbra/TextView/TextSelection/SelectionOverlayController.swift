@@ -108,11 +108,15 @@ final class SelectionOverlayController {
     }
 
     func updateColors() {
-        caretView.caretColor = textInputView.insertionPointColor
-        secondaryCaretViews.forEach { $0.caretColor = textInputView.insertionPointColor.withAlphaComponent(0.85) }
+        let color = textInputView.insertionPointColor
+        // A block caret is opaque so the glyph knocked out of it stays solid. A second bar
+        // is dimmed so the primary one stays obvious.
+        let secondary = textInputView.caretShape == .block ? color : color.withAlphaComponent(0.85)
+        caretView.caretColor = color
+        secondaryCaretViews.forEach { $0.caretColor = secondary }
         selectionOverlayView.highlightColor = textInputView.selectionHighlightColor
-        startHandle.handleColor = textInputView.insertionPointColor
-        endHandle.handleColor = textInputView.insertionPointColor
+        startHandle.handleColor = color
+        endHandle.handleColor = color
     }
 
     func selectionDidChange() {
@@ -257,9 +261,8 @@ private extension SelectionOverlayController {
             secondaryCaretViews.append(caretView)
         }
         for (index, range) in ranges.enumerated() {
-            let caretRect = caretRectService.caretRect(at: range.location, allowMovingCaretToNextLineFragment: true)
             let view = index == 0 ? caretView : secondaryCaretViews[index - 1]
-            view.frame = caretRect
+            configureCaret(view, at: range.location, isPrimary: index == 0)
             view.isHidden = !isCaretVisible
             overlayHostView.bringSubviewToFront(view)
         }
@@ -268,6 +271,23 @@ private extension SelectionOverlayController {
                 secondaryCaretViews[index].isHidden = true
             }
         }
+    }
+
+    private func configureCaret(_ view: CaretView, at location: Int, isPrimary: Bool) {
+        let shape = textInputView.caretShape
+        let presentation = caretRectService.caretPresentation(
+            at: location,
+            shape: shape,
+            allowMovingCaretToNextLineFragment: true
+        )
+        let color = textInputView.insertionPointColor
+        view.shape = shape
+        view.frame = presentation.frame
+        view.coveredText = presentation.coveredText
+        view.coveredFont = presentation.coveredFont
+        view.baselineFromBottom = presentation.descent
+        view.coveredTextColor = textInputView.backgroundColor ?? .textBackgroundColor
+        view.caretColor = isPrimary || shape == .block ? color : color.withAlphaComponent(0.85)
     }
 
     private func updateCaretBlinkState() {

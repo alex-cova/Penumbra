@@ -46,6 +46,60 @@ final class CaretRectService {
             return globalRect.offsetBy(dx: leadingLineSpacing, dy: textContainerInset.top)
         }
     }
+
+    /// The caret's painted frame. ``caretRect(at:allowMovingCaretToNextLineFragment:)`` stays the
+    /// thin bar so selection and popups do not move when the shape changes.
+    func caretPresentation(at location: Int, shape: CaretShape, allowMovingCaretToNextLineFragment: Bool) -> CaretPresentation {
+        if shape == .bar {
+            return CaretPresentation(frame: caretRect(at: location, allowMovingCaretToNextLineFragment: allowMovingCaretToNextLineFragment))
+        }
+        let adjustedLocation = foldingModel?.visibleCaretLocation(for: location) ?? location
+        let safeLocation = min(max(adjustedLocation, 0), stringView.length)
+        guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
+            let frame = CGRect(x: leadingLineSpacing, y: textContainerInset.top, width: 0, height: 0)
+            return CaretPresentation(frame: frame)
+        }
+        let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+        let lineLocalLocation = safeLocation - line.location
+        if allowMovingCaretToNextLineFragment && shouldMoveCaretToNextLineFragment(forLocation: lineLocalLocation, in: line) {
+            var presentation = caretPresentation(at: location + 1, shape: shape, allowMovingCaretToNextLineFragment: false)
+            presentation.frame.origin.x = leadingLineSpacing
+            return presentation
+        }
+        let metrics = lineController.caretMetrics(atIndex: lineLocalLocation)
+        let globalBar = metrics.barRect.offsetBy(dx: leadingLineSpacing, dy: line.yPosition + textContainerInset.top)
+        let width = max(metrics.advance, 1)
+        let frame: CGRect
+        switch shape {
+        case .bar:
+            frame = globalBar
+        case .block:
+            frame = CGRect(x: globalBar.minX, y: globalBar.minY, width: width, height: globalBar.height)
+        case .underline:
+            let thickness = min(Caret.width, globalBar.height)
+            var y = globalBar.maxY - metrics.descent
+            if y + thickness > globalBar.maxY {
+                y = globalBar.maxY - thickness
+            }
+            if y < globalBar.minY {
+                y = globalBar.minY
+            }
+            frame = CGRect(x: globalBar.minX, y: y, width: width, height: thickness)
+        }
+        return CaretPresentation(
+            frame: frame,
+            coveredText: shape == .block ? metrics.coveredText : "",
+            coveredFont: metrics.coveredFont,
+            descent: metrics.descent
+        )
+    }
+}
+
+struct CaretPresentation {
+    var frame: CGRect
+    var coveredText = ""
+    var coveredFont: NSFont?
+    var descent: CGFloat = 0
 }
 
 private extension CaretRectService {
