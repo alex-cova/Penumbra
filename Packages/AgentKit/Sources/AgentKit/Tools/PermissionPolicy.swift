@@ -14,7 +14,14 @@ public enum PermissionPolicy {
         gate: (any PermissionGate)? = nil,
         secretPatterns: [GlobPattern] = []
     ) async -> PermissionVerdict {
-        if call.risk == .read { return .allow }
+        if call.risk == .read {
+            // A read stays on this Mac, so rules do not apply to it. The exception is a read that
+            // sends the call off the machine: a deny rule naming it still refuses.
+            if call.honorsDenyRules, let rule = firstRule(in: rules.deny, touching: call) {
+                return .deny("Blocked by the user's permission rules (deny \(rule)). Do not try this again; ask the user or take another approach.")
+            }
+            return .allow
+        }
         if mode == .plan { return .deny("\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead.") }
 
         if let rule = firstRule(in: rules.deny, touching: call) {
@@ -72,6 +79,8 @@ public enum PermissionPolicy {
                     || parsed.segments.contains { rule.matches(command: $0) }
             case .paths(let paths):
                 return paths.contains { rule.matches(path: $0) }
+            case .text(let text):
+                return rule.matches(command: text.trimmingCharacters(in: .whitespacesAndNewlines))
             case .none:
                 return false
             }
@@ -92,6 +101,9 @@ public enum PermissionPolicy {
             return parsed.segments.allSatisfy { segment in applicable.contains { $0.matches(command: segment) } }
         case .paths(let paths):
             return !paths.isEmpty && paths.allSatisfy { path in applicable.contains { $0.matches(path: path) } }
+        case .text(let text):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return applicable.contains { $0.matches(command: trimmed) }
         case .none:
             return applicable.contains { $0.pattern == nil }
         }

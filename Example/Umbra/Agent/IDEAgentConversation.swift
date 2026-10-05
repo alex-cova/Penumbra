@@ -696,7 +696,8 @@ final class IDEAgentConversation: Identifiable {
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
             + [IDEShowFileTool(root: root, box: box)]
-            + EditingTools.all()
+        if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
+        tools += EditingTools.all()
             + [IDERunCommandTool(support: support)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]

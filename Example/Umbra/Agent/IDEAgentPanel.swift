@@ -1011,6 +1011,7 @@ struct IDEAgentSettingsView: View {
     var width: CGFloat? = 380
     let manageModels: () -> Void
     @State private var keyDraft = ""
+    @State private var webSearchKeyDraft = ""
     @State private var isConfirmingClear = false
 
     var body: some View {
@@ -1053,6 +1054,25 @@ struct IDEAgentSettingsView: View {
                 Text("Commands (/name) and skills are also read from .umbra and .claude in the project, and from Umbra's own folder. Turn this off if a sandboxed build cannot read your home folder.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Toggle("Web search", isOn: $settings.webSearchEnabled)
+                Text("Queries are sent to api.search.brave.com, including while the model runs on this Mac. Nothing is sent until the agent calls the tool.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                if settings.webSearchEnabled {
+                    SecureField(settings.hasWebSearchKey ? "Saved in the Keychain" : "Brave Search API key", text: $webSearchKeyDraft)
+                        .onSubmit(saveWebSearchKey)
+                    HStack {
+                        Button("Save Key", action: saveWebSearchKey)
+                            .disabled(webSearchKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button("Remove Key") { settings.removeWebSearchKey() }
+                            .disabled(!settings.hasWebSearchKey)
+                    }
+                    if !settings.hasWebSearchKey {
+                        Text("Add a Brave Search API key to turn this on.")
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+                }
             }
             if isFullPane { advancedSections(settings) }
 
@@ -1212,6 +1232,11 @@ struct IDEAgentSettingsView: View {
     private func saveKey() {
         settings.saveAPIKey(keyDraft)
         keyDraft = ""
+    }
+
+    private func saveWebSearchKey() {
+        settings.saveWebSearchKey(webSearchKeyDraft)
+        webSearchKeyDraft = ""
     }
 }
 

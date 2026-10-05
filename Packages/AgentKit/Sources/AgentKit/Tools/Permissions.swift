@@ -78,6 +78,9 @@ public enum PermissionSubject: Sendable, Equatable {
     case command(String)
     /// Project-relative paths the call would change.
     case paths([String])
+    /// Free text, such as a search query. Matched with the same wildcards as a command, and not
+    /// split into shell segments: a query is not a command.
+    case text(String)
     case none
 }
 
@@ -86,11 +89,14 @@ public struct ToolCallInfo: Sendable, Equatable {
     public var name: String
     public var risk: ToolRisk
     public var subject: PermissionSubject
+    /// See `AgentTool.honorsDenyRules`. Off for every read that stays on this Mac.
+    public var honorsDenyRules: Bool
 
-    public init(name: String, risk: ToolRisk, subject: PermissionSubject) {
+    public init(name: String, risk: ToolRisk, subject: PermissionSubject, honorsDenyRules: Bool = false) {
         self.name = name
         self.risk = risk
         self.subject = subject
+        self.honorsDenyRules = honorsDenyRules
     }
 }
 

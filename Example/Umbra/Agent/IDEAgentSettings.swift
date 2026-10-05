@@ -105,6 +105,10 @@ final class IDEAgentSettings {
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
     /// Whether commands and skills in `~/.claude` are offered, besides the project's and Umbra's own.
     var loadsUserSkills: Bool { didSet { defaults.set(loadsUserSkills, forKey: Keys.userSkills) } }
+    /// Whether the agent may call `web_search`. Off until the user turns it on; a key is also required.
+    var webSearchEnabled: Bool { didSet { defaults.set(webSearchEnabled, forKey: Keys.webSearch) } }
+    /// Whether a Brave Search key is saved. Held here so views never read the Keychain.
+    private(set) var hasWebSearchKey = false
     /// What the agent may do without asking in a new chat (see `PermissionMode`); each chat can change its own.
     var mode: PermissionMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
     /// Model turns per message before the run pauses; `AgentConfiguration.maxIterations` when unset.
@@ -138,6 +142,7 @@ final class IDEAgentSettings {
         static let mode = "umbra.agent.mode"
         static let page = "umbra.agent.opensAsPage"
         static let userSkills = "umbra.agent.loadsUserSkills"
+        static let webSearch = "umbra.agent.webSearch"
         static let prices = "umbra.agent.priceTable"
         static let secretPatterns = "umbra.agent.secretFilePatterns"
         static let iterationCap = "umbra.agent.iterationCap"
@@ -173,6 +178,7 @@ final class IDEAgentSettings {
         commandEnvironmentText = defaults.string(forKey: Keys.commandEnvironment) ?? ""
         opensAsPage = defaults.bool(forKey: Keys.page)
         loadsUserSkills = defaults.object(forKey: Keys.userSkills) as? Bool ?? true
+        webSearchEnabled = defaults.bool(forKey: Keys.webSearch)
         priceTableText = defaults.string(forKey: Keys.prices) ?? IDEAgentPrices.defaultText
         secretFilePatternsText = defaults.string(forKey: Keys.secretPatterns) ?? ""
         mode = defaults.string(forKey: Keys.mode).flatMap(PermissionMode.init(persisted:)) ?? .acceptEdits
@@ -181,6 +187,7 @@ final class IDEAgentSettings {
         contextWindowOverride = max(0, defaults.integer(forKey: Keys.contextOverride))
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         refreshKeyState()
+        refreshWebSearchKeyState()
     }
 
     private func store(_ key: String, _ value: String) {
@@ -272,6 +279,39 @@ final class IDEAgentSettings {
 
     func apiKey() -> String? {
         try? keyStore.load(account: endpointHost)
+    }
+
+    // MARK: - Web search
+
+    /// Keychain account for the Brave Search key. Not the model endpoint's account.
+    static let webSearchAccount = "api.search.brave.com"
+
+    func refreshWebSearchKeyState() {
+        hasWebSearchKey = (try? keyStore.load(account: Self.webSearchAccount))?.isEmpty == false
+    }
+
+    func saveWebSearchKey(_ key: String) {
+        do {
+            try keyStore.save(key, account: Self.webSearchAccount)
+            keyError = nil
+        } catch {
+            keyError = error.localizedDescription
+        }
+        refreshWebSearchKeyState()
+    }
+
+    func removeWebSearchKey() {
+        do {
+            try keyStore.delete(account: Self.webSearchAccount)
+            keyError = nil
+        } catch {
+            keyError = error.localizedDescription
+        }
+        refreshWebSearchKeyState()
+    }
+
+    func webSearchAPIKey() -> String? {
+        try? keyStore.load(account: Self.webSearchAccount)
     }
 
     /// What the panel's empty state asks for, or `nil` when the agent can be used.
@@ -370,7 +410,7 @@ final class IDEAgentSettings {
 
     var fingerprint: String {
         let local = provider == .ollama || provider == .mlx
-        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(contextWindow ?? 0)|\(secretFilePatternsText)"
+        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(contextWindow ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)"
     }
 
     func makeClient() throws -> any LLMClient {

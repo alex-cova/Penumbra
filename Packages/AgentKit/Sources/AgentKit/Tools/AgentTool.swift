@@ -169,6 +169,9 @@ public protocol AgentTool: Sendable {
     func permissionSubject(for arguments: ToolArguments) -> PermissionSubject
     /// Whether the model is told about the tool in this mode. By default what the mode offers by risk.
     func isOffered(in mode: PermissionMode) -> Bool
+    /// When true, a deny rule naming this tool is honored even though reads otherwise skip rules.
+    /// Set by a read that sends data off the machine (`web_search`). Ask and allow rules still are not.
+    var honorsDenyRules: Bool { get }
 }
 
 extension AgentTool {
@@ -178,6 +181,7 @@ extension AgentTool {
     public func editPreview(for arguments: ToolArguments, context: ToolContext) async -> EditPreview? { nil }
     public var waitsForUser: Bool { false }
     public var isExemptFromRepeatGuard: Bool { false }
+    public var honorsDenyRules: Bool { false }
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }
 

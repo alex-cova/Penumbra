@@ -19,6 +19,8 @@ public protocol LLMTransport: Sendable {
     func open(_ request: URLRequest) async throws -> LLMHTTPResponse
     /// A whole response body, for JSON endpoints such as a model list.
     func fetch(_ request: URLRequest) async throws -> (status: Int, data: Data)
+    /// Like `fetch`, plus response headers (lowercased names). A client that retries on `Retry-After` uses this.
+    func fetchResponse(_ request: URLRequest) async throws -> (status: Int, headers: [String: String], data: Data)
 }
 
 extension LLMTransport {
@@ -27,6 +29,11 @@ extension LLMTransport {
         var text = ""
         for try await line in response.lines { text += line + "\n" }
         return (response.status, Data(text.utf8))
+    }
+
+    public func fetchResponse(_ request: URLRequest) async throws -> (status: Int, headers: [String: String], data: Data) {
+        let (status, data) = try await fetch(request)
+        return (status, [:], data)
     }
 }
 

@@ -139,7 +139,7 @@ Both plug in as `LLMClient`s, so the loop, tools, approvals and checkpoints don'
 | `ask_user` | Pauses the run until the user answers in the panel. |
 | `todo` | Checklist the model keeps; shown at the top of the panel, stored with the session. |
 
-No web fetch or search in v1: it would be an exfiltration path and a second source of injected instructions.
+`web_search` (opt-in, Brave Search API, snippets only) shipped after v1. It is absent until the user turns it on and saves a key; a deny rule can still block it; results are labeled untrusted. Fetching pages is still absent: that would be an open exfiltration path and a larger injection surface.
 
 ### 5. Safety and permissions
 

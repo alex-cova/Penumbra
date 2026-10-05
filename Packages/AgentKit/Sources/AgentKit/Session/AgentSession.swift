@@ -638,9 +638,12 @@ public actor AgentSession {
             var end = start + 1
             if plans[start].isConcurrent {
                 while end < calls.count, plans[end].isConcurrent { end += 1 }
-            }
-            // Commands ask first, one call at a time (they never share a batch).
-            if !plans[start].isConcurrent {
+                // A read that leaves the machine still runs in this batch, unless a deny rule names it.
+                for index in start..<end {
+                    plans[index] = await refusedByDenyRule(plans[index], call: calls[index])
+                }
+            } else {
+                // Commands and edits ask first, one call at a time (they never share a batch).
                 plans[start] = await approved(plans[start], call: calls[start], out)
                 if Task.isCancelled { break }
             }
@@ -673,6 +676,22 @@ public actor AgentSession {
         return cancelled ? .stopped : .continue
     }
 
+    /// A concurrent read skips the approval card. One that sets `honorsDenyRules` still refuses when
+    /// a deny rule names it, and otherwise runs with the rest of the batch.
+    private func refusedByDenyRule(_ plan: Plan, call: PendingCall) async -> Plan {
+        guard case .run(let tool, let arguments, _) = plan, tool.honorsDenyRules,
+              configuration.approval == .askForCommands,
+              let parsed = try? ToolArguments(json: arguments)
+        else { return plan }
+        let verdict = await PermissionPolicy.evaluate(
+            ToolCallInfo(
+                name: call.name, risk: tool.risk, subject: tool.permissionSubject(for: parsed),
+                honorsDenyRules: true),
+            mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
+        if case .deny(let reason) = verdict { return .answered(.error(reason)) }
+        return plan
+    }
+
     /// Applies the permission policy to a call that changes files or runs a command, and returns the
     /// plan to follow: unchanged, with the user's edit, or settled as a refusal. Nothing a tool
     /// returns can approve a call; only `resolveApproval` does.
@@ -683,7 +702,7 @@ public actor AgentSession {
 
         let subject = tool.permissionSubject(for: parsed)
         let verdict = await PermissionPolicy.evaluate(
-            ToolCallInfo(name: call.name, risk: tool.risk, subject: subject),
+            ToolCallInfo(name: call.name, risk: tool.risk, subject: subject, honorsDenyRules: tool.honorsDenyRules),
             mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
         let notes: [String]
         switch verdict {

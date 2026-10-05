@@ -45,6 +45,16 @@ private struct FixedGate: PermissionGate {
         #expect(await evaluate(command("ls -la"), .auto) == .allow)
 
         #expect(await evaluate(read, .plan) == .allow)
+        let search = ToolCallInfo(name: "web_search", risk: .read, subject: .text("swift actors"), honorsDenyRules: true)
+        #expect(await evaluate(search, .plan) == .allow, "web search is a read, so plan mode keeps it")
+        #expect(isDeny(await evaluate(search, .plan, rules(deny: ["web_search"]))))
+        #expect(isDeny(await evaluate(search, .acceptEdits, rules(deny: ["web_search"]))))
+        let password = ToolCallInfo(name: "web_search", risk: .read, subject: .text("password reset flow"), honorsDenyRules: true)
+        #expect(isDeny(await evaluate(password, .auto, rules(deny: ["web_search(password:*)"]))))
+        #expect(await evaluate(search, .auto, rules(deny: ["web_search(password:*)"])) == .allow)
+        #expect(await evaluate(read, .manual, rules(deny: ["read_file"])) == .allow, "a read that stays on this Mac ignores deny rules")
+        let unmarked = ToolCallInfo(name: "web_search", risk: .read, subject: .text("swift actors"))
+        #expect(await evaluate(unmarked, .acceptEdits, rules(deny: ["web_search"])) == .allow)
         #expect(isDeny(await evaluate(edit("A.java"), .plan)))
         #expect(isDeny(await evaluate(command("ls"), .plan)), "plan offers no commands, even safe ones")
     }

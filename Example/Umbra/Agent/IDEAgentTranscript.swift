@@ -97,6 +97,7 @@ enum IDEAgentToolSummary {
         case "list_dir": object["path"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? "."
         case "glob": object["pattern"]?.stringValue
         case "grep": object["pattern"]?.stringValue.map { "“\($0)”" }
+        case "web_search": object["query"]?.stringValue.map { "“\($0)”" }
         case "diagnostics", "edit_file", "write_file": object["path"]?.stringValue
         case "show_file":
             if let path = object["path"]?.stringValue {
