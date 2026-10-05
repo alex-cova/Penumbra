@@ -358,7 +358,8 @@ struct IDEGradleTreeView: View {
                             }
                         }
                         .padding(.vertical, IDEAppearance.Spacing.xs)
-                        .frame(minWidth: proxy.size.width, alignment: .leading)
+                        // A two-axis ScrollView centers content shorter than the viewport.
+                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                     }
                     .focusable()
                     .focusEffectDisabled()
