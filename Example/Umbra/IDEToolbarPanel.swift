@@ -48,7 +48,9 @@ struct IDEToolbarPanel: View {
                     javaDebugHelp: workspace.javaDebugHelp,
                     isHTTPFile: workspace.statusLanguage == "http",
                     isHTTPSendable: workspace.httpFileCanSend,
+                    canRunMarkdownWithAgent: workspace.canRunMarkdownWithAgent,
                     toggleMarkdownPreview: workspace.toggleMarkdownPreview,
+                    runMarkdownWithAgent: workspace.runActiveMarkdownWithAgent,
                     buildGradle: workspace.buildGradleProject,
                     runJava: workspace.runActiveJava,
                     debugJava: workspace.debugActiveJava,
@@ -233,7 +235,9 @@ private struct IDEToolbarActionCluster: View {
     let javaDebugHelp: String
     let isHTTPFile: Bool
     let isHTTPSendable: Bool
+    let canRunMarkdownWithAgent: Bool
     let toggleMarkdownPreview: () -> Void
+    let runMarkdownWithAgent: () -> Void
     let buildGradle: () -> Void
     let runJava: () -> Void
     let debugJava: () -> Void
@@ -304,6 +308,15 @@ private struct IDEToolbarActionCluster: View {
                     tint: IDEAppearance.ColorToken.accent,
                     help: "Send HTTP Request",
                     action: sendHTTPRequest
+                )
+            }
+
+            if isMarkdownFile && canRunMarkdownWithAgent {
+                IDEToolbarIconButton(
+                    systemName: "sparkles",
+                    tint: IDEAppearance.ColorToken.accent,
+                    help: "Run with Agent (selection or whole file)",
+                    action: runMarkdownWithAgent
                 )
             }
 

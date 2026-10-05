@@ -15,6 +15,8 @@ final class IDEIntelligenceServices {
     /// `.java` documents as the primary provider, so the engine only falls back to the generic
     /// Symbol/Word results when it has nothing (in comments and strings) and never after a `.`.
     let javaSupport = IDEJavaSupport()
+    /// `@file` references in Markdown. The window sets its file source (`setSource`).
+    let markdownFileMentions = MarkdownFileMentionCompletionProvider()
 
     init() {
         let parser = IDEWorkbenchLanguageParser()
@@ -24,7 +26,8 @@ final class IDEIntelligenceServices {
             WordCompletionProvider(index: symbolIndex),
             // The built-in snippets are JavaScript-flavored (`function`, `for (let i ...`).
             SnippetCompletionProvider(excludedLanguageIdentifiers: ["java"]),
-            javaSupport.completionProvider
+            javaSupport.completionProvider,
+            markdownFileMentions
         ])
         hoverEngine = HoverEngine(providers: [
             javaSupport.hoverProvider,

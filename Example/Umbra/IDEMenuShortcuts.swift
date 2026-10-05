@@ -29,6 +29,8 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case debugSmartStepInto, debugDropFrame, debugForceReturn, showExecutionPoint, traceStream
     // HTTP
     case sendHTTPRequest
+    // Agent
+    case runMarkdownWithAgent
     // View
     case splitRight, splitDown
     case toggleSidebar, toggleStructure, revealActiveFile, markdownPreview
@@ -128,6 +130,8 @@ enum IDEMenuShortcuts {
         .runLastConfiguration: KeyboardShortcut("r", modifiers: [.control, .option]),
         .debugLastConfiguration: KeyboardShortcut("d", modifiers: [.control, .option]),
         .sendHTTPRequest: KeyboardShortcut("r", modifiers: [.command, .shift]),
+        // ⌃⌘↩ is bound by no preset's `Keymap`, so one key serves all of them.
+        .runMarkdownWithAgent: KeyboardShortcut(.return, modifiers: [.control, .command]),
         .splitRight: KeyboardShortcut("\\", modifiers: .command),
         .splitDown: KeyboardShortcut("\\", modifiers: [.command, .shift]),
         .toggleSidebar: KeyboardShortcut("0", modifiers: .command),

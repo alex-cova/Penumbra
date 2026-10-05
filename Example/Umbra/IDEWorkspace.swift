@@ -560,6 +560,9 @@ public final class IDEWorkspace {
 
     func bootstrap() {
         applyLaunchConfiguration()
+        intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
+            await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
+        }
         intelligenceServices.javaSupport.requestTrust = { [weak self] url in
             guard let self else { return false }
             return await self.promptGradleTrust(for: url)
@@ -4841,6 +4844,9 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.putLocalHistoryLabel() }),
             EditorCommand(id: "agent.askAboutSelection", title: "Ask Agent About Selection", group: "Agent",
                           action: { [weak self] in self?.askAgentAboutActiveSelection() }),
+            EditorCommand(id: "agent.runMarkdownFile", title: "Run Markdown with Agent", group: "Agent",
+                          shortcutDisplay: "⌃⌘↩",
+                          action: { [weak self] in self?.runActiveMarkdownWithAgent() }),
             EditorCommand(id: "agent.newConversation", title: "New Agent Chat", group: "Agent",
                           shortcutDisplay: "⌥⌘T",
                           action: { [weak self] in self?.newAgentChat() }),
