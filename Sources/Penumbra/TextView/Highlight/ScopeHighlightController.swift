@@ -55,16 +55,14 @@ final class ScopeHighlightController {
     private func schedule() {
         generation += 1
         let current = generation
-        let work = { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.generation == current else { return }
-                self.resolve()
-            }
-        }
         if debounceInterval <= 0 {
-            work()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval, execute: work)
+            resolve()
+            return
+        }
+        let delay = debounceInterval
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { @MainActor [weak self] in
+            guard let self, self.generation == current else { return }
+            self.resolve()
         }
     }
 

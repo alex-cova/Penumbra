@@ -119,20 +119,12 @@ struct IDEPreferencesTypePreview: View {
         let indent = useSpacesForTab
             ? String(repeating: " ", count: tabWidth)
             : "\t"
-        return Text("func ")
-            .foregroundStyle(Color(hex: palette.keyword))
-        + Text("greet")
-            .foregroundStyle(Color(hex: palette.function))
-        + Text("(name: ")
-            .foregroundStyle(Color(hex: palette.text))
-        + Text("String")
-            .foregroundStyle(Color(hex: palette.type))
-        + Text(") {\n")
-            .foregroundStyle(Color(hex: palette.text))
-        + Text("\(indent)print")
-            .foregroundStyle(Color(hex: palette.function))
-        + Text("(name)\n}")
-            .foregroundStyle(Color(hex: palette.text))
+        func token(_ string: String, _ hex: UInt32) -> Text {
+            Text(string).foregroundStyle(Color(hex: hex))
+        }
+        let signature = Text("\(token("func ", palette.keyword))\(token("greet", palette.function))\(token("(name: ", palette.text))\(token("String", palette.type))\(token(") {\n", palette.text))")
+        let body = Text("\(token("\(indent)print", palette.function))\(token("(name)\n}", palette.text))")
+        return Text("\(signature)\(body)")
     }
 
     private var accessibilityPreview: String {

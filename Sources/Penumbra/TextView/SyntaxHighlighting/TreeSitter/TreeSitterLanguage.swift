@@ -104,7 +104,7 @@ extension TreeSitterLanguage {
         /// - Parameters:
         ///   - fileURL: URL of file to load contents from.
         public init?(contentsOf fileURL: URL) {
-            string = try? String(contentsOf: fileURL)
+            string = try? String(contentsOf: fileURL, encoding: .utf8)
         }
 
         /// Creates a query with the specified string.

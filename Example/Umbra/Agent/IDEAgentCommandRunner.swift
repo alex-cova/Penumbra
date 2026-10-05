@@ -192,12 +192,12 @@ nonisolated final class AgentProcess: @unchecked Sendable {
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, fds[1], 1)
         posix_spawn_file_actions_adddup2(&actions, fds[1], 2)
-        posix_spawn_file_actions_addchdir_np(&actions, spec.workingDirectory.path)
+        posix_spawn_file_actions_addchdir(&actions, spec.workingDirectory.path)
 
         let arguments = ["/bin/zsh", "-c", spec.command]
         let environment = spec.environment.map { "\($0.key)=\($0.value)" }
-        var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
-        var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0) } + [nil]
+        let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+        let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0) } + [nil]
         defer {
             argv.forEach { free($0) }
             envp.forEach { free($0) }

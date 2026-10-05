@@ -466,9 +466,7 @@ private struct IDEFileTreeRow: View {
         guard !needle.isEmpty, let range = name.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) else {
             return Text(name).fontWeight(isOpen ? .semibold : .regular).foregroundStyle(foreground)
         }
-        return Text(name[..<range.lowerBound]).foregroundStyle(foreground)
-            + Text(name[range]).fontWeight(.semibold).foregroundStyle(IDEAppearance.ColorToken.accent)
-            + Text(name[range.upperBound...]).foregroundStyle(foreground)
+        return Text("\(Text(name[..<range.lowerBound]).foregroundStyle(foreground))\(Text(name[range]).fontWeight(.semibold).foregroundStyle(IDEAppearance.ColorToken.accent))\(Text(name[range.upperBound...]).foregroundStyle(foreground))")
     }
 
     private var iconName: String {

@@ -185,9 +185,7 @@ private struct IDEUsageRowView: View {
         let before = line.substring(with: NSRange(location: lead, length: match.location - lead))
         let hit = line.substring(with: match)
         let after = line.substring(from: NSMaxRange(match))
-        return Text(before).foregroundStyle(IDEAppearance.ColorToken.muted)
-            + Text(hit).bold().foregroundStyle(IDEAppearance.ColorToken.accent)
-            + Text(after).foregroundStyle(IDEAppearance.ColorToken.muted)
+        return Text("\(Text(before).foregroundStyle(IDEAppearance.ColorToken.muted))\(Text(hit).bold().foregroundStyle(IDEAppearance.ColorToken.accent))\(Text(after).foregroundStyle(IDEAppearance.ColorToken.muted))")
     }
 }
 

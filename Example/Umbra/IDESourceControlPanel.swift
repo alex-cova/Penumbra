@@ -780,8 +780,7 @@ private struct IDESourceControlCommitRow: View {
                 IDEGitGraphView(row: graph)
             }
             VStack(alignment: .leading, spacing: 2) {
-                (Text(refsPrefix).foregroundStyle(IDEAppearance.ColorToken.gitAdded)
-                    + Text(commit.subject).foregroundStyle(IDEAppearance.ColorToken.foreground))
+                Text("\(Text(refsPrefix).foregroundStyle(IDEAppearance.ColorToken.gitAdded))\(Text(commit.subject).foregroundStyle(IDEAppearance.ColorToken.foreground))")
                     .font(IDEAppearance.Typography.tabLabel)
                     .lineLimit(1)
                 Text("\(commit.shortHash)  \(commit.author) · \(commit.relativeDate)")
