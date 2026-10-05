@@ -55,6 +55,9 @@ nonisolated struct IDEDiagramPalette: Sendable {
             case .library: return IDEDiagramPalette(fill: 0x2B2D33, stroke: 0x8A8F9C, header: 0x2B2D33)
             case .replacedLibrary: return IDEDiagramPalette(fill: 0x3B3023, stroke: 0xE8A04A, header: 0x3B3023)
             case .unresolvedLibrary: return IDEDiagramPalette(fill: 0x3D2727, stroke: 0xE56B6B, header: 0x3D2727)
+            case .jsonObject: return IDEDiagramPalette(fill: 0x243044, stroke: 0x7EB0E8, header: 0x2C3C56)
+            case .jsonArray: return IDEDiagramPalette(fill: 0x24342F, stroke: 0x6FCBB0, header: 0x2C4740)
+            case .jsonValue: return IDEDiagramPalette(fill: 0x2E2C28, stroke: 0xC4B08A, header: 0x3A362F)
             }
         }
         switch kind {
@@ -68,6 +71,9 @@ nonisolated struct IDEDiagramPalette: Sendable {
         case .library: return IDEDiagramPalette(fill: 0xF4F4F6, stroke: 0x7A7F8C, header: 0xF4F4F6)
         case .replacedLibrary: return IDEDiagramPalette(fill: 0xFFF3E3, stroke: 0xD98A1E, header: 0xFFF3E3)
         case .unresolvedLibrary: return IDEDiagramPalette(fill: 0xFDECEC, stroke: 0xD14343, header: 0xFDECEC)
+        case .jsonObject: return IDEDiagramPalette(fill: 0xF3F7FD, stroke: 0x3D74C4, header: 0xE3EDF9)
+        case .jsonArray: return IDEDiagramPalette(fill: 0xF2FBF8, stroke: 0x2E8F74, header: 0xDDF3EC)
+        case .jsonValue: return IDEDiagramPalette(fill: 0xFBF8F3, stroke: 0xA6844A, header: 0xF4EDE0)
         }
     }
 

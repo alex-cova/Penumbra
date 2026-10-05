@@ -128,16 +128,21 @@ private struct IDEDiagramContentView: View {
 
     @ViewBuilder
     private func nodeMenu(for node: IDEDiagramNode) -> some View {
-        if node.fileURL != nil {
+        let offersSource = node.fileURL != nil
+        let offersAround = session.request.isClassDiagram && node.kind.isType
+        let offersLibraries = node.kind == .project
+        if offersSource {
             Button("Open Source") { session.open(node) }
         }
-        if session.request.isClassDiagram, node.kind.isType {
+        if offersAround {
             Button("Show Diagram Around Type") { session.showDiagramAround(node) }
         }
-        if node.kind == .project {
+        if offersLibraries {
             Button("Show Dependencies of Module") { session.showLibraries(of: node) }
         }
-        Divider()
+        if offersSource || offersAround || offersLibraries {
+            Divider()
+        }
         Button("Copy Name") { session.copyName(of: node) }
     }
 }

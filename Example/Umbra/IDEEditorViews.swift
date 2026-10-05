@@ -12,8 +12,14 @@ final class IDEEditorPaneHost: NSView {
     let imageViewerController: ImageViewerController
     /// Laid over the editor while a diff tab is selected.
     let diffViewer = IDEDiffViewerView()
-    /// Laid over the editor while a class or dependency diagram tab is selected.
+    /// Laid over the editor while a class or dependency diagram tab is selected, and while a JSON
+    /// file's diagram preview is showing.
     let diagramViewer = IDEDiagramViewerView()
+    /// True while this pane's JSON file is covered by its diagram.
+    private(set) var isJSONDiagramVisible = false
+    private var jsonDiagramSession: IDEDiagramSession?
+    private var jsonRefreshTask: Task<Void, Never>?
+    private var editorWasSelectableBeforeJSONDiagram = true
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
@@ -89,18 +95,111 @@ final class IDEEditorPaneHost: NSView {
 
     override var acceptsFirstResponder: Bool { false }
 
-    func wireMarkdownPreview() {
+    func wireMarkdownPreview(onToggle: @escaping () -> Void) {
         markdownPreviewController.installMetalFailureHandler(chaining: textView.onMetalRenderingFailure)
         markdownPreviewController.installTextObservation(chaining: textView.editorDelegate)
         markdownPreviewController.codeBlockLanguageResolver = { IDELanguageSupport.language(forIdentifier: $0) }
 
         let previousHandler = textView.editorActionHandler
-        textView.editorActionHandler = { [markdownPreviewController] action in
+        textView.editorActionHandler = { [weak self] action in
+            guard let self else { return previousHandler?(action) ?? false }
             if action == .toggleMarkdownPreview {
-                return markdownPreviewController.toggle()
+                let handled = self.textView.languageIdentifier == "json"
+                    ? self.toggleJSONDiagram()
+                    : self.markdownPreviewController.toggle()
+                if handled { onToggle() }
+                return handled
             }
             return previousHandler?(action) ?? false
         }
+    }
+
+    /// Covers the editor with a diagram of the JSON buffer, or returns to the source.
+    /// Returns `false` when the buffer is not JSON.
+    @discardableResult
+    func toggleJSONDiagram() -> Bool {
+        guard textView.languageIdentifier == "json" else { return false }
+        if isJSONDiagramVisible {
+            hideJSONDiagram()
+        } else {
+            editorWasSelectableBeforeJSONDiagram = textView.isSelectable
+            textView.isSelectable = false
+            isJSONDiagramVisible = true
+            refreshJSONDiagram()
+        }
+        return true
+    }
+
+    /// Hides the diagram when this pane is no longer showing JSON. A JSON file keeps whatever
+    /// the play button last did.
+    func closeJSONDiagramIfNotJSON() {
+        guard textView.languageIdentifier != "json" else { return }
+        hideJSONDiagram()
+    }
+
+    /// Drops the diagram. `hidingViewer` is false when another overlay is about to take the same
+    /// view, so it is not hidden and shown again in one turn.
+    func hideJSONDiagram(hidingViewer: Bool = true) {
+        jsonRefreshTask?.cancel()
+        jsonRefreshTask = nil
+        guard isJSONDiagramVisible else { return }
+        isJSONDiagramVisible = false
+        textView.isSelectable = editorWasSelectableBeforeJSONDiagram
+        jsonDiagramSession?.cancel()
+        if hidingViewer { diagramViewer.hide() }
+    }
+
+    /// Rebuilds the diagram from the live buffer. A first show lets the viewer start the load;
+    /// later shows reload, because the viewer only loads an empty session.
+    func refreshJSONDiagram() {
+        jsonRefreshTask?.cancel()
+        jsonRefreshTask = nil
+        guard isJSONDiagramVisible, textView.languageIdentifier == "json" else { return }
+        let session = ensureJSONSession()
+        session.loadJSONText = { [weak self] in self?.textView.text ?? "" }
+        let firstShow = session.loadedAt == nil && session.state == .loading && session.document.nodes.isEmpty
+        diagramViewer.show(session)
+        if !firstShow { session.reload() }
+    }
+
+    /// Puts the diagram back on top without reading the buffer again.
+    func revealJSONDiagramIfVisible() {
+        guard isJSONDiagramVisible, let jsonDiagramSession else { return }
+        diagramViewer.show(jsonDiagramSession)
+    }
+
+    /// Schedules a rebuild. The buffer is read once the pause has elapsed, not on the keystroke.
+    func noteJSONDiagramEdited() {
+        guard isJSONDiagramVisible, textView.languageIdentifier == "json" else { return }
+        jsonRefreshTask?.cancel()
+        jsonRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.refreshJSONDiagram()
+        }
+    }
+
+    private func ensureJSONSession() -> IDEDiagramSession {
+        let title = jsonDiagramTitle()
+        if let jsonDiagramSession {
+            jsonDiagramSession.setJSONPreviewTitle(title)
+            return jsonDiagramSession
+        }
+        let session = IDEDiagramSession(request: .jsonPreview(title: title))
+        jsonDiagramSession = session
+        return session
+    }
+
+    private func jsonDiagramTitle() -> String {
+        if let url = textView.documentURL {
+            let name = url.deletingPathExtension().lastPathComponent
+            if !name.isEmpty { return name }
+        }
+        return "JSON"
     }
 
     /// Routes F2 / ⇧F2 (next / previous problem) to the workspace, which owns the problem list.

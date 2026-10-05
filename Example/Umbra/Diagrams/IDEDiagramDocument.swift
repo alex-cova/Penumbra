@@ -19,12 +19,18 @@ nonisolated enum IDEDiagramNodeKind: String, Codable, Sendable, Equatable {
     case replacedLibrary
     /// A dependency Gradle could not resolve.
     case unresolvedLibrary
+    /// A JSON object. The subtitle is how many keys it has.
+    case jsonObject
+    /// A JSON array. The subtitle is how many elements it has.
+    case jsonArray
+    /// A JSON string, number, boolean, or null. The subtitle is the value.
+    case jsonValue
 
     var isType: Bool {
         switch self {
         case .classType, .abstractClass, .interfaceType, .enumType, .recordType, .annotationType, .externalType:
             true
-        case .project, .library, .replacedLibrary, .unresolvedLibrary:
+        case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonObject, .jsonArray, .jsonValue:
             false
         }
     }
@@ -40,6 +46,8 @@ nonisolated enum IDEDiagramEdgeKind: String, Codable, Sendable, Equatable, CaseI
     case libraryDependency
     /// Gradle chose another version than the one requested.
     case replaced
+    /// A JSON value contained in the value the edge leaves. No arrow: the child box names itself.
+    case containment
 
     var isDashed: Bool {
         switch self {
@@ -49,6 +57,7 @@ nonisolated enum IDEDiagramEdgeKind: String, Codable, Sendable, Equatable, CaseI
     }
 
     /// Supertype edges point from the subtype up; layouts rank the destination above the source.
+    /// Containment points from the parent down, so it is left alone.
     var ranksDestinationFirst: Bool {
         self == .inheritance || self == .realization
     }

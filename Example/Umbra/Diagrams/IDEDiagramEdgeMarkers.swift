@@ -46,6 +46,8 @@ nonisolated enum IDEDiagramEdgeMarkers {
             if let marker = trianglePlacement(&line, length: size, width: size * 0.8) {
                 shapes.append(IDEDiagramMarkerShape(points: marker, closed: true, fill: .stroke))
             }
+        case .containment:
+            break
         }
         return IDEDiagramEdgeGeometry(line: line, shapes: shapes)
     }

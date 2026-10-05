@@ -37,6 +37,8 @@ struct IDEToolbarPanel: View {
                     showsCloseGroup: workspace.tabsByPane.count > 1,
                     isMarkdownFile: workspace.statusLanguage == "markdown",
                     isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
+                    isJSONFile: workspace.statusLanguage == "json",
+                    isJSONDiagramVisible: workspace.isJSONDiagramVisible,
                     isGradleProject: workspace.javaSupport.isGradleProject,
                     isJavaRunnable: workspace.javaFileCanRun,
                     isJavaDebuggable: workspace.javaFileCanDebug,
@@ -220,6 +222,8 @@ private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
     let isMarkdownFile: Bool
     let isMarkdownPreviewVisible: Bool
+    let isJSONFile: Bool
+    let isJSONDiagramVisible: Bool
     let isGradleProject: Bool
     let isJavaRunnable: Bool
     let isJavaDebuggable: Bool
@@ -303,18 +307,19 @@ private struct IDEToolbarActionCluster: View {
                 )
             }
 
-            if isMarkdownFile {
-                if isMarkdownPreviewVisible {
-                    IDEToolbarIconButton(
-                        systemName: "square.and.arrow.down",
-                        help: "Export Markdown Preview to PDF",
-                        action: exportMarkdownPreviewToPDF
-                    )
-                }
+            if isMarkdownFile, isMarkdownPreviewVisible {
                 IDEToolbarIconButton(
-                    systemName: isMarkdownPreviewVisible ? "stop.fill" : "play.fill",
-                    isActive: isMarkdownPreviewVisible,
-                    help: "Toggle Markdown Preview",
+                    systemName: "square.and.arrow.down",
+                    help: "Export Markdown Preview to PDF",
+                    action: exportMarkdownPreviewToPDF
+                )
+            }
+            if isMarkdownFile || isJSONFile {
+                let previewVisible = isJSONFile ? isJSONDiagramVisible : isMarkdownPreviewVisible
+                IDEToolbarIconButton(
+                    systemName: previewVisible ? "stop.fill" : "play.fill",
+                    isActive: previewVisible,
+                    help: isJSONFile ? "Toggle JSON Diagram" : "Toggle Markdown Preview",
                     action: toggleMarkdownPreview
                 )
             }

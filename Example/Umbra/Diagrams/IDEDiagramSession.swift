@@ -35,6 +35,8 @@ final class IDEDiagramSession {
     @ObservationIgnored var loadClassGraph: ((JavaClassGraphScope, JavaClassGraphOptions) async -> JavaClassGraph)?
     @ObservationIgnored var loadModuleGraph: (() async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure>)?
     @ObservationIgnored var loadLibraryGraph: ((_ projectPath: String, _ configuration: String) async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure>)?
+    /// The editor buffer a JSON preview draws. Read on the main actor when a load starts.
+    @ObservationIgnored var loadJSONText: (() -> String)?
     @ObservationIgnored var openSource: ((URL) -> Void)?
     /// Opens (or reuses) another diagram tab; the Int is the least neighbour depth it should show.
     @ObservationIgnored var openDiagram: ((IDEDiagramRequest, Int) -> Void)?
@@ -149,6 +151,13 @@ final class IDEDiagramSession {
         return nil
     }
 
+    /// Points a JSON preview at another file without dropping the viewport. The next reload reads
+    /// the buffer through ``loadJSONText``.
+    func setJSONPreviewTitle(_ title: String) {
+        guard case .jsonPreview = request, request.title != title else { return }
+        request = .jsonPreview(title: title)
+    }
+
     private struct Outcome {
         var document: IDEDiagramDocument
         var notice: String?
@@ -190,6 +199,21 @@ final class IDEDiagramSession {
             }
             return await outcome(for: await loadLibraryGraph(projectPath, configuration), title: title, layout: layout, routing: routing,
                                  emptyMessage: "\(configuration) has no dependencies in this project.")
+        case .jsonPreview:
+            let text = loadJSONText?() ?? ""
+            let built = await Task.detached(priority: .userInitiated) {
+                let parsed = JSONDiagramBuilder.build(text: text, title: title)
+                let document = parsed.failure == nil
+                    ? Self.laidOut(parsed.document, layout: layout, routing: routing)
+                    : parsed.document
+                return JSONDiagramBuild(document: document, notice: parsed.notice, failure: parsed.failure)
+            }.value
+            return Outcome(
+                document: built.document,
+                notice: built.notice,
+                emptyMessage: "This JSON value has nothing to draw.",
+                failure: built.failure
+            )
         }
     }
 
@@ -258,7 +282,14 @@ final class IDEDiagramSession {
     private static func summary(for document: IDEDiagramDocument, request: IDEDiagramRequest) -> String {
         let nodes = document.nodes.count
         let edges = document.edges.count
-        let noun = request.isClassDiagram ? (nodes == 1 ? "type" : "types") : (nodes == 1 ? "node" : "nodes")
+        let noun: String
+        if request.isClassDiagram {
+            noun = nodes == 1 ? "type" : "types"
+        } else if request.isJSONPreview {
+            noun = nodes == 1 ? "value" : "values"
+        } else {
+            noun = nodes == 1 ? "node" : "nodes"
+        }
         return "\(nodes) \(noun) · \(edges) \(edges == 1 ? "link" : "links")"
     }
 

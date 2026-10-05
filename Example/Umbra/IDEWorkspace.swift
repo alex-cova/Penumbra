@@ -363,6 +363,7 @@ public final class IDEWorkspace {
     var terminalCommandTicket: UInt64 = 0
     var pendingTerminalCommand: String?
     var isMarkdownPreviewVisible = false
+    var isJSONDiagramVisible = false
     var statusSelectionLength = 0
     var tabsByPane: [UUID: [IDETabRow]] = [:]
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
@@ -534,7 +535,7 @@ public final class IDEWorkspace {
             host.diffViewer.focus()
             return
         }
-        if workbench.activePane.selectedDocument?.contentKind == .diagram {
+        if workbench.activePane.selectedDocument?.contentKind == .diagram || host.isJSONDiagramVisible {
             host.diagramViewer.focus()
             return
         }
@@ -864,9 +865,12 @@ public final class IDEWorkspace {
         host.textView.setLanguageMode(languageMode)
         host.markdownPreviewController.documentBaseURL = url
         host.markdownPreviewController.closeIfNotMarkdown()
+        host.closeJSONDiagramIfNotJSON()
 
         if pane.id == workbench.activePaneID {
             statusLanguage = identifier
+            isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+            isJSONDiagramVisible = host.isJSONDiagramVisible
         }
         scheduleSemanticHighlighting(host: host, languageIdentifier: identifier, delay: 0)
         Task { await workspaceBridge.syncPane(pane) }
@@ -3550,8 +3554,19 @@ public final class IDEWorkspace {
 
     public func toggleMarkdownPreview() {
         adapter.textView?.perform(.toggleMarkdownPreview)
-        isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
-        focusActiveEditor()
+    }
+
+    /// The play button changed on `host`. Updates the titlebar and moves the keyboard to the
+    /// diagram, or back to the editor.
+    private func notePreviewVisibility(of host: IDEEditorPaneHost) {
+        guard hostCache.peek(workbench.activePaneID) === host else { return }
+        isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+        isJSONDiagramVisible = host.isJSONDiagramVisible
+        if host.isJSONDiagramVisible {
+            host.diagramViewer.focus()
+        } else {
+            focusActiveEditor()
+        }
     }
 
     /// Exports the currently visible markdown preview to a PDF the user picks a location for.
@@ -4005,7 +4020,10 @@ public final class IDEWorkspace {
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
                 + self.localHistoryContextMenuItems(url: url)
         }
-        host.wireMarkdownPreview()
+        host.wireMarkdownPreview { [weak self, weak host] in
+            guard let self, let host else { return }
+            self.notePreviewVisibility(of: host)
+        }
         host.wireHTTPActions(sendRequest: { [weak self] in
             self?.sendActiveHTTPRequest()
         })
@@ -5070,7 +5088,9 @@ public final class IDEWorkspace {
         let openPaths = Set(workbench.panes.flatMap(\.documents).compactMap { $0.url?.standardizedFileURL.path })
         if openPaths != openDocumentPaths { openDocumentPaths = openPaths }
         autoRevealActiveDocumentIfNeeded()
-        isMarkdownPreviewVisible = hostCache.peek(workbench.activePaneID)?.markdownPreviewController.isVisible ?? false
+        let activeHost = hostCache.peek(workbench.activePaneID)
+        isMarkdownPreviewVisible = activeHost?.markdownPreviewController.isVisible ?? false
+        isJSONDiagramVisible = activeHost?.isJSONDiagramVisible ?? false
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · \(projectTitle)"
             let pathItems = pathBreadcrumbItems(for: document)
@@ -5765,6 +5785,7 @@ public final class IDEWorkspace {
             }
             if applied, sibling.host.textView.documentLength == textView.documentLength {
                 sibling.host.markdownPreviewController.refresh()
+                sibling.host.noteJSONDiagramEdited()
                 scheduleSemanticHighlighting(host: sibling.host, languageIdentifier: document.languageIdentifier)
             } else {
                 needsReload.append(sibling)
@@ -5830,11 +5851,16 @@ public final class IDEWorkspace {
             return
         }
         host.diffViewer.hide()
-        host.diagramViewer.hide()
         host.imageViewerController.hide()
         host.textView.languageIdentifier = document.languageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
+        host.closeJSONDiagramIfNotJSON()
+        if host.isJSONDiagramVisible {
+            host.revealJSONDiagramIfVisible()
+        } else {
+            host.diagramViewer.hide()
+        }
         adapter.bindNavigationHistory(to: host.textView, document: document)
         let isSameDocument = host.loadedDocumentID == document.id
         if isSameDocument, document.pendingState == nil, host.loadedGeneration == document.contentGeneration {
@@ -5908,6 +5934,7 @@ public final class IDEWorkspace {
             previous.pendingState = host.textView.makeCapturedState()
         }
         host.markdownPreviewController.closeIfNotMarkdown()
+        host.hideJSONDiagram()
         host.imageViewerController.hide()
         host.diffViewer.onJumpToSource = { [weak self] path, line in
             self?.openDiffSource(path: path, line: line)
@@ -5936,6 +5963,7 @@ public final class IDEWorkspace {
             previous.pendingState = host.textView.makeCapturedState()
         }
         host.markdownPreviewController.closeIfNotMarkdown()
+        host.hideJSONDiagram(hidingViewer: false)
         host.imageViewerController.hide()
         host.diffViewer.hide()
         host.diagramViewer.show(session)
@@ -5985,6 +6013,7 @@ public final class IDEWorkspace {
             previous.pendingState = host.textView.makeCapturedState()
         }
         host.markdownPreviewController.closeIfNotMarkdown()
+        host.hideJSONDiagram()
         changeMarkers.hide(on: host.textView)
         host.imageViewerController.show(url: url)
         host.loadedDocumentID = document.id
@@ -6034,6 +6063,7 @@ public final class IDEWorkspace {
         // from the previous document in this pane would otherwise keep showing stale content
         // until the next keystroke.
         host.markdownPreviewController.refresh()
+        host.refreshJSONDiagram()
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
@@ -6042,7 +6072,11 @@ public final class IDEWorkspace {
         changeMarkers.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true, delay: .zero)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()
-            host.textView.focusTextInputWhenReady()
+            if host.isJSONDiagramVisible {
+                host.diagramViewer.focus()
+            } else {
+                host.textView.focusTextInputWhenReady()
+            }
             host.intelligenceController?.refreshDiagnostics()
         }
     }
@@ -6212,6 +6246,9 @@ extension IDEWorkspace: TextViewDelegate {
 
     public func textViewDidChange(_ textView: TextView) {
         mirrorEdits(from: textView)
+        if let pane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === textView }) {
+            hostCache.peek(pane.id)?.noteJSONDiagramEdited()
+        }
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)

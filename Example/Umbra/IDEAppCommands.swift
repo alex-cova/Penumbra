@@ -524,7 +524,11 @@ private struct IDEViewCommands: View {
             .disabled(!(workspace?.hasOpenProject ?? false) || (workspace?.agent.conversations.count ?? 0) < 2)
         Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace?.revealActiveFileInExplorer() })
             .menuShortcut(.revealActiveFile, in: preset)
-        Button("Markdown Preview", systemImage: "doc.richtext", action: { workspace?.toggleMarkdownPreview() })
+        Button(
+            workspace?.statusLanguage == "json" ? "JSON Diagram" : "Markdown Preview",
+            systemImage: workspace?.statusLanguage == "json" ? "curlybraces" : "doc.richtext",
+            action: { workspace?.toggleMarkdownPreview() }
+        )
             .menuShortcut(.markdownPreview, in: preset)
         Button("Toggle Terminal", systemImage: "terminal", action: { workspace?.toggleTerminal() })
             .menuShortcut(.toggleTerminal, in: preset)

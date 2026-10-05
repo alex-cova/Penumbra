@@ -10,6 +10,9 @@ nonisolated enum IDEDiagramRequest: Hashable, Sendable {
     case gradleModules
     /// The libraries one Gradle project resolves for a configuration.
     case gradleLibraries(projectPath: String, configuration: String)
+    /// The JSON buffer open in an editor, drawn over that editor. Not a diagram tab: every preview
+    /// shares one id because the session lives on the pane, not in `diagramSessions`.
+    case jsonPreview(title: String)
 
     var id: String {
         switch self {
@@ -19,6 +22,7 @@ nonisolated enum IDEDiagramRequest: Hashable, Sendable {
         case .classes(.project): "classes:project"
         case .gradleModules: "gradle:modules"
         case .gradleLibraries(let projectPath, _): "gradle:libraries:" + projectPath
+        case .jsonPreview: "json:preview"
         }
     }
 
@@ -32,6 +36,7 @@ nonisolated enum IDEDiagramRequest: Hashable, Sendable {
         case .classes(.project): "Classes: Project"
         case .gradleModules: "Gradle Modules"
         case .gradleLibraries(let projectPath, _): "Dependencies: " + projectPath
+        case .jsonPreview(let title): title
         }
     }
 
@@ -40,6 +45,7 @@ nonisolated enum IDEDiagramRequest: Hashable, Sendable {
         case .classes: "square.stack.3d.up"
         case .gradleModules: "shippingbox"
         case .gradleLibraries: "cube.transparent"
+        case .jsonPreview: "curlybraces"
         }
     }
 
@@ -48,5 +54,15 @@ nonisolated enum IDEDiagramRequest: Hashable, Sendable {
         return false
     }
 
-    var isGradleDiagram: Bool { !isClassDiagram }
+    var isGradleDiagram: Bool {
+        switch self {
+        case .gradleModules, .gradleLibraries: true
+        case .classes, .jsonPreview: false
+        }
+    }
+
+    var isJSONPreview: Bool {
+        if case .jsonPreview = self { return true }
+        return false
+    }
 }

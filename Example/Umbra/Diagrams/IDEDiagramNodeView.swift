@@ -118,7 +118,9 @@ struct IDEDiagramNodeView: View {
         case .recordType: "R"
         case .annotationType: "@"
         case .externalType: "C"
-        case .project, .library, .replacedLibrary, .unresolvedLibrary: nil
+        case .jsonObject: "{}"
+        case .jsonArray: "[]"
+        case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonValue: nil
         }
     }
 
@@ -128,6 +130,7 @@ struct IDEDiagramNodeView: View {
         case .library: "shippingbox.fill"
         case .replacedLibrary: "arrow.triangle.swap"
         case .unresolvedLibrary: "exclamationmark.triangle.fill"
+        case .jsonValue: "text.quote"
         default: "circle"
         }
     }
