@@ -102,7 +102,7 @@ A SwiftUI Preview hosted inside a SwiftPM executable target fails with *"needs t
 `ENABLE_DEBUG_DYLIB` set to `YES`"*, because SwiftPM executables can't produce the debug-dylib split
 Previews require — regardless of which file you're previewing. To preview any view in `Example/Umbra/`
 (e.g. `IDEPreferencesView.swift`), open **`Example/Umbra.xcodeproj`** and select the `Umbra` scheme —
-a thin Xcode app project that compiles the same source files directly as a real app target, which gets
+a thin Xcode app project that compiles the same source folder directly as a real app target (new Swift files are picked up without editing the project), which gets
 `ENABLE_DEBUG_DYLIB` for free. It also gives you ⌘R to run/debug a real bundle. It's a dev convenience
 only — it doesn't build or ship the release `.app`.
 

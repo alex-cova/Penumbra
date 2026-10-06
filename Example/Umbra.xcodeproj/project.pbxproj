@@ -3,87 +3,130 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		000000000000000000000010 /* UmbraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000009 /* UmbraApp.swift */; };
-		000000000000000000000051 /* FindInFilesPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000031 /* FindInFilesPanel.swift */; };
-		000000000000000000000052 /* IDEAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000032 /* IDEAppDelegate.swift */; };
-		000000000000000000000053 /* IDEAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000033 /* IDEAppearance.swift */; };
-		000000000000000000000054 /* IDEEditorTabsBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000034 /* IDEEditorTabsBar.swift */; };
-		000000000000000000000055 /* IDEEditorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000035 /* IDEEditorTheme.swift */; };
-		000000000000000000000056 /* IDEEditorViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000036 /* IDEEditorViews.swift */; };
-		000000000000000000000057 /* IDEFileTreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000037 /* IDEFileTreeView.swift */; };
-		000000000000000000000058 /* IDEIntelligenceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000038 /* IDEIntelligenceServices.swift */; };
-		000000000000000000000059 /* IDELanguageSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000039 /* IDELanguageSupport.swift */; };
-		000000000000000000000060 /* IDEPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000040 /* IDEPreferences.swift */; };
-		000000000000000000000061 /* IDEPreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000041 /* IDEPreferencesView.swift */; };
-		000000000000000000000062 /* IDEProjectModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000042 /* IDEProjectModel.swift */; };
-		000000000000000000000063 /* IDERootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000043 /* IDERootView.swift */; };
-		000000000000000000000064 /* IDESessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000044 /* IDESessionStore.swift */; };
-		000000000000000000000065 /* IDESidebarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000045 /* IDESidebarPanel.swift */; };
-		000000000000000000000076 /* IDEFlattenedPackages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000075 /* IDEFlattenedPackages.swift */; };
-		00000000000000000000007A /* IDEGitStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000079 /* IDEGitStatus.swift */; };
-		00000000000000000000007C /* IDEProjectWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000007B /* IDEProjectWatcher.swift */; };
-		00000000000000000000007E /* IDEFileOperations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000007D /* IDEFileOperations.swift */; };
-		000000000000000000000078 /* IDEGradleConsoleLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000077 /* IDEGradleConsoleLog.swift */; };
-		000000000000000000000066 /* IDEStatusBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000046 /* IDEStatusBarPanel.swift */; };
-		000000000000000000000067 /* IDEToolbarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000047 /* IDEToolbarPanel.swift */; };
-		000000000000000000000068 /* IDEWelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000048 /* IDEWelcomeView.swift */; };
-		000000000000000000000069 /* IDEWorkbenchLanguageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */; };
-		000000000000000000000070 /* IDEWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000050 /* IDEWorkspace.swift */; };
-		000000000000000000000072 /* IDEFirstRunGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000071 /* IDEFirstRunGuideView.swift */; };
-		000000000000000000000073 /* IDETerminalPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000074 /* IDETerminalPanel.swift */; };
-		000000000000000000000028 /* Penumbra in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000025 /* Penumbra */; };
-		000000000000000000000029 /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000026 /* PenumbraLanguages */; };
-		000000000000000000000030 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000027 /* PenumbraMarkdownLanguage */; };
-		000000000000000000000081 /* Umbra.jpeg in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000080 /* Umbra.jpeg */; };
+		000000000000000000000017 /* java-debug-adapter.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* java-debug-adapter.jar */; };
+		00000000000000000000006C /* Penumbra in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006B /* Penumbra */; };
+		00000000000000000000006E /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006D /* PenumbraLanguages */; };
+		000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006F /* PenumbraMarkdownLanguage */; };
+		000000000000000000000072 /* JavaIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000071 /* JavaIntelligence */; };
+		000000000000000000000074 /* EditorIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000073 /* EditorIntelligence */; };
+		000000000000000000000076 /* GitIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000075 /* GitIntelligence */; };
+		000000000000000000000078 /* SubprocessKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000077 /* SubprocessKit */; };
+		00000000000000000000007A /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000079 /* AgentKit */; };
+		00000000000000000000007C /* AgentKitMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007B /* AgentKitMLX */; };
+		00000000000000000000007E /* LocalModelStore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007D /* LocalModelStore */; };
+		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
+		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
+		00000000000000000000000E /* Umbra.jpeg in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* Umbra.jpeg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		000000000000000000000016 /* java-debug-adapter.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-debug-adapter.jar; path = Umbra/Tools/JavaDebugAdapter/build/java-debug-adapter.jar; sourceTree = "<group>"; };
 		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		000000000000000000000009 /* UmbraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmbraApp.swift; sourceTree = "<group>"; };
-		000000000000000000000011 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		000000000000000000000012 /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
-		000000000000000000000031 /* FindInFilesPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindInFilesPanel.swift; sourceTree = "<group>"; };
-		000000000000000000000032 /* IDEAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEAppDelegate.swift; sourceTree = "<group>"; };
-		000000000000000000000033 /* IDEAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEAppearance.swift; sourceTree = "<group>"; };
-		000000000000000000000034 /* IDEEditorTabsBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEEditorTabsBar.swift; sourceTree = "<group>"; };
-		000000000000000000000035 /* IDEEditorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEEditorTheme.swift; sourceTree = "<group>"; };
-		000000000000000000000036 /* IDEEditorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEEditorViews.swift; sourceTree = "<group>"; };
-		000000000000000000000037 /* IDEFileTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFileTreeView.swift; sourceTree = "<group>"; };
-		000000000000000000000038 /* IDEIntelligenceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEIntelligenceServices.swift; sourceTree = "<group>"; };
-		000000000000000000000039 /* IDELanguageSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDELanguageSupport.swift; sourceTree = "<group>"; };
-		000000000000000000000040 /* IDEPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEPreferences.swift; sourceTree = "<group>"; };
-		000000000000000000000041 /* IDEPreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEPreferencesView.swift; sourceTree = "<group>"; };
-		000000000000000000000042 /* IDEProjectModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEProjectModel.swift; sourceTree = "<group>"; };
-		000000000000000000000043 /* IDERootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDERootView.swift; sourceTree = "<group>"; };
-		000000000000000000000044 /* IDESessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDESessionStore.swift; sourceTree = "<group>"; };
-		000000000000000000000045 /* IDESidebarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDESidebarPanel.swift; sourceTree = "<group>"; };
-		000000000000000000000075 /* IDEFlattenedPackages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFlattenedPackages.swift; sourceTree = "<group>"; };
-		000000000000000000000079 /* IDEGitStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEGitStatus.swift; sourceTree = "<group>"; };
-		00000000000000000000007B /* IDEProjectWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEProjectWatcher.swift; sourceTree = "<group>"; };
-		00000000000000000000007D /* IDEFileOperations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFileOperations.swift; sourceTree = "<group>"; };
-		000000000000000000000077 /* IDEGradleConsoleLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEGradleConsoleLog.swift; sourceTree = "<group>"; };
-		000000000000000000000046 /* IDEStatusBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEStatusBarPanel.swift; sourceTree = "<group>"; };
-		000000000000000000000047 /* IDEToolbarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEToolbarPanel.swift; sourceTree = "<group>"; };
-		000000000000000000000048 /* IDEWelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWelcomeView.swift; sourceTree = "<group>"; };
-		000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWorkbenchLanguageParser.swift; sourceTree = "<group>"; };
-		000000000000000000000050 /* IDEWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEWorkspace.swift; sourceTree = "<group>"; };
-		000000000000000000000071 /* IDEFirstRunGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDEFirstRunGuideView.swift; sourceTree = "<group>"; };
-		000000000000000000000074 /* IDETerminalPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IDETerminalPanel.swift; sourceTree = "<group>"; };
-		000000000000000000000080 /* Umbra.jpeg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = Umbra.jpeg; path = umbra.icon/Assets/Umbra.jpeg; sourceTree = "<group>"; };
+		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		00000000000000000000000C /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
+		00000000000000000000000D /* Umbra.jpeg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = Umbra.jpeg; path = umbra.icon/Assets/Umbra.jpeg; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		00000000000000000000000F /* Exceptions for "Umbra" folder in "Umbra" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				CLAUDE.md,
+				SplitView/LICENSE,
+				SplitView/README.md,
+				Tools/JavaDebugAdapter/build.sh,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$1.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Cache.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Invocation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Output$1.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Output.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Parameter.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$SignatureReader.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Source.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Breakpoint.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Hit.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Kind.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$OutputForwarder.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Stop.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$ArrayInit.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Assign.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Binary.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Call.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Cast.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Compiler.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Conditional.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Converted.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$ConvertedArgs.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$EvaluationException.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Index.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$InstanceOf.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Invocation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Kind.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Lexer.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Literal.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Member.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Name.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$NeedsCompilation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$New.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$NewArray.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Node.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Parser.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Pinned.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$This.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Token.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Unary.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Unparsed.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Json$Parser.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Json.class,
+				Tools/JavaDebugAdapter/build/java-debug-adapter.jar,
+				Tools/JavaDebugAdapter/build/sources.txt,
+				Tools/JavaDebugAdapter/build/test-classes/com/umbra/debug/JsonTest.class,
+				Tools/JavaDebugAdapter/build/test-sources.txt,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/CompilingEvaluator.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/DebugAdapter.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/Evaluator.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/Json.java,
+				Tools/JavaDebugAdapter/src/test/java/com/umbra/debug/JsonTest.java,
+			);
+			target = 000000000000000000000005 /* Umbra */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		000000000000000000000009 /* Umbra */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00000000000000000000000F /* Exceptions for "Umbra" folder in "Umbra" target */,
+			);
+			path = Umbra;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		000000000000000000000007 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000028 /* Penumbra in Frameworks */,
-				000000000000000000000029 /* PenumbraLanguages in Frameworks */,
-				000000000000000000000030 /* PenumbraMarkdownLanguage in Frameworks */,
+				00000000000000000000006C /* Penumbra in Frameworks */,
+				00000000000000000000006E /* PenumbraLanguages in Frameworks */,
+				000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */,
+				000000000000000000000072 /* JavaIntelligence in Frameworks */,
+				000000000000000000000074 /* EditorIntelligence in Frameworks */,
+				000000000000000000000076 /* GitIntelligence in Frameworks */,
+				000000000000000000000078 /* SubprocessKit in Frameworks */,
+				00000000000000000000007A /* AgentKit in Frameworks */,
+				00000000000000000000007C /* AgentKitMLX in Frameworks */,
+				00000000000000000000007E /* LocalModelStore in Frameworks */,
+				000000000000000000000080 /* SwiftTerm in Frameworks */,
+				000000000000000000000082 /* DiagramKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -93,9 +136,10 @@
 		000000000000000000000002 = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000013 /* Umbra */,
-				000000000000000000000014 /* Resources */,
-				000000000000000000000080 /* Umbra.jpeg */,
+				000000000000000000000009 /* Umbra */,
+				00000000000000000000000A /* Resources */,
+				00000000000000000000000D /* Umbra.jpeg */,
+				000000000000000000000016 /* java-debug-adapter.jar */,
 				000000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -108,49 +152,12 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		000000000000000000000013 /* Umbra */ = {
+		00000000000000000000000A /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000009 /* UmbraApp.swift */,
-				000000000000000000000031 /* FindInFilesPanel.swift */,
-				000000000000000000000032 /* IDEAppDelegate.swift */,
-				000000000000000000000033 /* IDEAppearance.swift */,
-				000000000000000000000034 /* IDEEditorTabsBar.swift */,
-				000000000000000000000035 /* IDEEditorTheme.swift */,
-				000000000000000000000036 /* IDEEditorViews.swift */,
-				000000000000000000000071 /* IDEFirstRunGuideView.swift */,
-				000000000000000000000037 /* IDEFileTreeView.swift */,
-				000000000000000000000038 /* IDEIntelligenceServices.swift */,
-				000000000000000000000039 /* IDELanguageSupport.swift */,
-				000000000000000000000040 /* IDEPreferences.swift */,
-				000000000000000000000041 /* IDEPreferencesView.swift */,
-				000000000000000000000042 /* IDEProjectModel.swift */,
-				000000000000000000000043 /* IDERootView.swift */,
-				000000000000000000000044 /* IDESessionStore.swift */,
-				000000000000000000000045 /* IDESidebarPanel.swift */,
-				000000000000000000000075 /* IDEFlattenedPackages.swift */,
-				000000000000000000000079 /* IDEGitStatus.swift */,
-				00000000000000000000007B /* IDEProjectWatcher.swift */,
-				00000000000000000000007D /* IDEFileOperations.swift */,
-				000000000000000000000077 /* IDEGradleConsoleLog.swift */,
-				000000000000000000000046 /* IDEStatusBarPanel.swift */,
-				000000000000000000000047 /* IDEToolbarPanel.swift */,
-				000000000000000000000048 /* IDEWelcomeView.swift */,
-				000000000000000000000049 /* IDEWorkbenchLanguageParser.swift */,
-				000000000000000000000050 /* IDEWorkspace.swift */,
-				000000000000000000000074 /* IDETerminalPanel.swift */,
+				00000000000000000000000B /* Info.plist */,
+				00000000000000000000000C /* Umbra.entitlements */,
 			);
-			name = Umbra;
-			path = Umbra;
-			sourceTree = "<group>";
-		};
-		000000000000000000000014 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				000000000000000000000011 /* Info.plist */,
-				000000000000000000000012 /* Umbra.entitlements */,
-			);
-			name = Resources;
 			path = Resources;
 			sourceTree = "<group>";
 		};
@@ -159,7 +166,7 @@
 /* Begin PBXNativeTarget section */
 		000000000000000000000005 /* Umbra */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000000000021 /* Build configuration list for PBXNativeTarget "Umbra" */;
+			buildConfigurationList = 000000000000000000000013 /* Build configuration list for PBXNativeTarget "Umbra" */;
 			buildPhases = (
 				000000000000000000000006 /* Sources */,
 				000000000000000000000007 /* Frameworks */,
@@ -169,11 +176,23 @@
 			);
 			dependencies = (
 			);
+			fileSystemSynchronizedGroups = (
+				000000000000000000000009 /* Umbra */,
+			);
 			name = Umbra;
 			packageProductDependencies = (
-				000000000000000000000025 /* Penumbra */,
-				000000000000000000000026 /* PenumbraLanguages */,
-				000000000000000000000027 /* PenumbraMarkdownLanguage */,
+				00000000000000000000006B /* Penumbra */,
+				00000000000000000000006D /* PenumbraLanguages */,
+				00000000000000000000006F /* PenumbraMarkdownLanguage */,
+				000000000000000000000071 /* JavaIntelligence */,
+				000000000000000000000073 /* EditorIntelligence */,
+				000000000000000000000075 /* GitIntelligence */,
+				000000000000000000000077 /* SubprocessKit */,
+				000000000000000000000079 /* AgentKit */,
+				00000000000000000000007B /* AgentKitMLX */,
+				00000000000000000000007D /* LocalModelStore */,
+				00000000000000000000007F /* SwiftTerm */,
+				000000000000000000000081 /* DiagramKit */,
 			);
 			productName = Umbra;
 			productReference = 000000000000000000000004 /* Umbra.app */;
@@ -193,7 +212,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 000000000000000000000018 /* Build configuration list for PBXProject "Umbra" */;
+			buildConfigurationList = 000000000000000000000010 /* Build configuration list for PBXProject "Umbra" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -203,8 +222,15 @@
 			);
 			mainGroup = 000000000000000000000002;
 			packageReferences = (
-				000000000000000000000015 /* XCLocalSwiftPackageReference "../" */,
+				000000000000000000000064 /* XCLocalSwiftPackageReference ".." */,
+				000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */,
+				000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */,
+				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
+				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
+				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 000000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -219,7 +245,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000081 /* Umbra.jpeg in Resources */,
+				00000000000000000000000E /* Umbra.jpeg in Resources */,
+				000000000000000000000017 /* java-debug-adapter.jar in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -230,41 +257,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000010 /* UmbraApp.swift in Sources */,
-				000000000000000000000051 /* FindInFilesPanel.swift in Sources */,
-				000000000000000000000052 /* IDEAppDelegate.swift in Sources */,
-				000000000000000000000053 /* IDEAppearance.swift in Sources */,
-				000000000000000000000054 /* IDEEditorTabsBar.swift in Sources */,
-				000000000000000000000055 /* IDEEditorTheme.swift in Sources */,
-				000000000000000000000056 /* IDEEditorViews.swift in Sources */,
-				000000000000000000000072 /* IDEFirstRunGuideView.swift in Sources */,
-				000000000000000000000057 /* IDEFileTreeView.swift in Sources */,
-				000000000000000000000058 /* IDEIntelligenceServices.swift in Sources */,
-				000000000000000000000059 /* IDELanguageSupport.swift in Sources */,
-				000000000000000000000060 /* IDEPreferences.swift in Sources */,
-				000000000000000000000061 /* IDEPreferencesView.swift in Sources */,
-				000000000000000000000062 /* IDEProjectModel.swift in Sources */,
-				000000000000000000000063 /* IDERootView.swift in Sources */,
-				000000000000000000000064 /* IDESessionStore.swift in Sources */,
-				000000000000000000000065 /* IDESidebarPanel.swift in Sources */,
-				000000000000000000000076 /* IDEFlattenedPackages.swift in Sources */,
-				00000000000000000000007A /* IDEGitStatus.swift in Sources */,
-				00000000000000000000007C /* IDEProjectWatcher.swift in Sources */,
-				00000000000000000000007E /* IDEFileOperations.swift in Sources */,
-				000000000000000000000078 /* IDEGradleConsoleLog.swift in Sources */,
-				000000000000000000000066 /* IDEStatusBarPanel.swift in Sources */,
-				000000000000000000000067 /* IDEToolbarPanel.swift in Sources */,
-				000000000000000000000068 /* IDEWelcomeView.swift in Sources */,
-				000000000000000000000069 /* IDEWorkbenchLanguageParser.swift in Sources */,
-				000000000000000000000070 /* IDEWorkspace.swift in Sources */,
-				000000000000000000000073 /* IDETerminalPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		000000000000000000000019 /* Debug */ = {
+		000000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -290,7 +289,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000000000020 /* Release */ = {
+		000000000000000000000012 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -309,7 +308,7 @@
 			};
 			name = Release;
 		};
-		000000000000000000000022 /* Debug */ = {
+		000000000000000000000014 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Resources/Umbra.entitlements;
@@ -333,7 +332,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000000000023 /* Release */ = {
+		000000000000000000000015 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Resources/Umbra.entitlements;
@@ -360,20 +359,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		000000000000000000000018 /* Build configuration list for PBXProject "Umbra" */ = {
+		000000000000000000000010 /* Build configuration list for PBXProject "Umbra" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000000000019 /* Debug */,
-				000000000000000000000020 /* Release */,
+				000000000000000000000011 /* Debug */,
+				000000000000000000000012 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		000000000000000000000021 /* Build configuration list for PBXNativeTarget "Umbra" */ = {
+		000000000000000000000013 /* Build configuration list for PBXNativeTarget "Umbra" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000000000022 /* Debug */,
-				000000000000000000000023 /* Release */,
+				000000000000000000000014 /* Debug */,
+				000000000000000000000015 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -381,24 +380,107 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		000000000000000000000015 /* XCLocalSwiftPackageReference "../" */ = {
+		000000000000000000000064 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "..";
 		};
+		000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/GitIntelligence";
+		};
+		000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/SubprocessKit";
+		};
+		000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKit";
+		};
+		000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKitMLX";
+		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.20.0;
+			};
+		};
+		00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/alex-cova/DiagramKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
-		000000000000000000000025 /* Penumbra */ = {
+		00000000000000000000006B /* Penumbra */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = Penumbra;
 		};
-		000000000000000000000026 /* PenumbraLanguages */ = {
+		00000000000000000000006D /* PenumbraLanguages */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = PenumbraLanguages;
 		};
-		000000000000000000000027 /* PenumbraMarkdownLanguage */ = {
+		00000000000000000000006F /* PenumbraMarkdownLanguage */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = PenumbraMarkdownLanguage;
+		};
+		000000000000000000000071 /* JavaIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = JavaIntelligence;
+		};
+		000000000000000000000073 /* EditorIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = EditorIntelligence;
+		};
+		000000000000000000000075 /* GitIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */;
+			productName = GitIntelligence;
+		};
+		000000000000000000000077 /* SubprocessKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */;
+			productName = SubprocessKit;
+		};
+		000000000000000000000079 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */;
+			productName = AgentKit;
+		};
+		00000000000000000000007B /* AgentKitMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
+			productName = AgentKitMLX;
+		};
+		00000000000000000000007D /* LocalModelStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
+			productName = LocalModelStore;
+		};
+		00000000000000000000007F /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		000000000000000000000081 /* DiagramKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */;
+			productName = DiagramKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
