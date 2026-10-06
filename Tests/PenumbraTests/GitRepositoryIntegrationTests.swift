@@ -104,6 +104,39 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         XCTAssertTrue(filtered.isEmpty)
     }
 
+    func testVisibleFilesHonorsGitignoreAndStaysInsideANestedProject() async throws {
+        let app = directory.appendingPathComponent("app")
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "keep\n".write(to: app.appendingPathComponent("src/Keep.txt"), atomically: true, encoding: .utf8)
+        try "skip\n".write(to: app.appendingPathComponent("src/Skip.txt"), atomically: true, encoding: .utf8)
+        try "Skip.txt\n".write(to: app.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "fresh\n".write(to: app.appendingPathComponent("src/Fresh.txt"), atomically: true, encoding: .utf8)
+        try "sibling\n".write(to: directory.appendingPathComponent("sibling.txt"), atomically: true, encoding: .utf8)
+        try "logged\n".write(to: app.appendingPathComponent("tracked.log"), atomically: true, encoding: .utf8)
+        let repo = try await makeRepo()
+        _ = try await repo.commit(
+            message: "base",
+            paths: [],
+            untrackedPaths: ["app/src/Keep.txt", "app/.gitignore", "sibling.txt", "app/tracked.log"],
+            amend: false
+        )
+        // A tracked file stays visible after a later ignore rule. A new match of that rule does not.
+        // The working tree's ignore file is what `ls-files` reads, so Skip.txt has to stay in it.
+        try "Skip.txt\n*.log\n".write(to: app.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "other\n".write(to: app.appendingPathComponent("other.log"), atomically: true, encoding: .utf8)
+
+        let paths = await GitRepository.visibleFiles(under: app)
+        XCTAssertEqual(
+            Set(paths ?? []),
+            ["src/Keep.txt", "src/Fresh.txt", ".gitignore", "tracked.log"]
+        )
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("not-a-repo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let missing = await GitRepository.visibleFiles(under: outside)
+        XCTAssertNil(missing)
+    }
+
     func testPushWithoutRemoteFailsQuickly() async throws {
         let repo = try await makeRepo()
         try write("a.txt", "a\n")

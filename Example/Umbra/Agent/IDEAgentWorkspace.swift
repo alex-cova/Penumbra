@@ -1,6 +1,7 @@
 import AgentKit
 import EditorIntelligence
 import Foundation
+import GitIntelligence
 
 /// Turns the agent's UTF-16 offsets into the line and column positions `WorkspaceEdit` uses. Pure,
 /// so it is checked against `WorkspaceEdit.apply`, which is what a closed file goes through.
@@ -61,6 +62,8 @@ struct IDEAgentWorkspace: AgentWorkspace {
         self.onWrite = onWrite
         disk = DiskAgentWorkspace(root: root, unsavedBuffers: {
             await box.read(default: [:]) { $0.agentUnsavedBuffers() }
+        }, visibleFiles: {
+            await IDEGitVisibleFiles.relativePaths(under: root)
         })
     }
 

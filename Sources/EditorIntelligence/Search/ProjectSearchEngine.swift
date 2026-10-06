@@ -42,6 +42,19 @@ public struct FileEnumerationPolicy: Sendable {
     ]
 
     public static let `default` = FileEnumerationPolicy()
+
+    /// Whether a project-relative path would survive the disk walk: a hidden name or an ignored
+    /// directory name anywhere in it is skipped. Used when a caller already has the file list.
+    public func includes(relativePath: String) -> Bool {
+        let parts = relativePath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !parts.isEmpty else { return false }
+        for name in parts {
+            if (skipsHiddenFiles && name.hasPrefix(".")) || ignoredDirectoryNames.contains(name) {
+                return false
+            }
+        }
+        return true
+    }
 }
 
 /// Narrows a project search or replace. One value feeds both Find and Replace, so the two can
@@ -95,10 +108,16 @@ public actor ProjectSearchEngine {
     /// Recursive listing of text-file candidates under `root`, filtered by `policy` and `filter`.
     /// Directories are walked depth-first and sorted case-insensitively. A directory the mask
     /// excludes is never read, and a file the mask rejects is never opened.
+    ///
+    /// `visibleRelativePaths`, when set, replaces the walk: only those project-relative paths are
+    /// considered (still subject to `policy` and `filter`). That is how a host passes the files
+    /// git would show. Nil keeps the walk. An explicit `filter.onlyFiles` list is never cut by it,
+    /// because the user named those files.
     public func files(
         under root: URL,
         policy: FileEnumerationPolicy = .default,
-        filter: ProjectSearchFilter = .none
+        filter: ProjectSearchFilter = .none,
+        visibleRelativePaths: Set<String>? = nil
     ) async -> [URL] {
         guard filter.mask.isValid else { return [] }
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
@@ -119,6 +138,11 @@ public actor ProjectSearchEngine {
                 guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
                 files.append(url)
             }
+        } else if let visible = visibleRelativePaths {
+            let scopeRelative = scopePath == rootPath ? "" : String(scopePath.dropFirst(rootPath.count + 1))
+            collectVisible(
+                visible, root: root, rootPath: rootPath, scopeRelative: scopeRelative,
+                policy: policy, mask: filter.mask, into: &files)
         } else {
             let scopeRelative = scopePath == rootPath ? "" : String(scopePath.dropFirst(rootPath.count + 1))
             let start = scopeRelative.isEmpty ? root : root.appendingPathComponent(scopeRelative, isDirectory: true)
@@ -134,12 +158,13 @@ public actor ProjectSearchEngine {
         in root: URL,
         policy: FileEnumerationPolicy = .default,
         filter: ProjectSearchFilter = .none,
-        maxResults: Int = 2_000
+        maxResults: Int = 2_000,
+        visibleRelativePaths: Set<String>? = nil
     ) async -> [ProjectSearchResult] {
         guard !isEffectivelyEmpty(query) else {
             return []
         }
-        let files = await files(under: root, policy: policy, filter: filter)
+        let files = await files(under: root, policy: policy, filter: filter, visibleRelativePaths: visibleRelativePaths)
         return await search(query, files: files, policy: policy, maxResults: maxResults)
     }
 
@@ -163,6 +188,33 @@ public actor ProjectSearchEngine {
             searchFile(file, regex: regex, policy: policy, maxResults: maxResults, into: &results)
         }
         return results
+    }
+
+    /// `visible` paths are project-relative. A symlink is skipped unless the policy follows them,
+    /// matching the walk, and a path that resolves outside `root` is dropped.
+    private func collectVisible(
+        _ visible: Set<String>,
+        root: URL,
+        rootPath: String,
+        scopeRelative: String,
+        policy: FileEnumerationPolicy,
+        mask: FileMask,
+        into files: inout [URL]
+    ) {
+        for relative in visible {
+            guard !Task.isCancelled else { return }
+            guard policy.includes(relativePath: relative), mask.matches(relativePath: relative) else { continue }
+            if !scopeRelative.isEmpty, relative != scopeRelative, !relative.hasPrefix(scopeRelative + "/") { continue }
+            let url = root.appendingPathComponent(relative)
+            let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            if values?.isSymbolicLink == true && !policy.followsSymbolicLinks { continue }
+            if values?.isDirectory == true { continue }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+            let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard resolved == rootPath || resolved.hasPrefix(rootPath + "/") else { continue }
+            files.append(url)
+        }
     }
 
     private func enumerateFiles(

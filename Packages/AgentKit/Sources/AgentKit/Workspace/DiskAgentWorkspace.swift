@@ -25,6 +25,15 @@ public struct FileFilter: Sendable {
     func skipsFile(_ name: String) -> Bool {
         name.hasPrefix(".") || binaryExtensions.contains(URL(fileURLWithPath: name).pathExtension.lowercased())
     }
+
+    /// The same skips a disk walk applies, checked on a project-relative path: a hidden name or an
+    /// ignored directory name anywhere in it drops the file.
+    func admits(relativePath: String) -> Bool {
+        let parts = relativePath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let name = parts.last else { return false }
+        guard !skipsFile(name) else { return false }
+        return parts.dropLast().allSatisfy { !skipsDirectory($0) }
+    }
 }
 
 /// An `AgentWorkspace` over a folder on disk, for tests and the eval CLI. Umbra has its own, which
@@ -37,6 +46,10 @@ public struct DiskAgentWorkspace: AgentWorkspace {
     /// Text of open files with edits not yet saved, keyed by absolute path. Asked once per read or
     /// search, so it should return only the files that differ from disk.
     private let unsavedBuffers: @Sendable () async -> [String: String]
+    /// Project-relative paths git lists (`ls-files --cached --others --exclude-standard`). Nil from
+    /// the closure means this folder is not a work tree, or git could not answer, and the walk
+    /// below is used. An empty set is a real answer: nothing git would show.
+    private let visibleFiles: (@Sendable () async -> Set<String>?)?
     public let writeProtection: WriteProtection
 
     public var rootPath: String { jail.root.path }
@@ -46,13 +59,15 @@ public struct DiskAgentWorkspace: AgentWorkspace {
         filter: FileFilter = .default,
         maxReadBytes: Int = 5_000_000,
         writeProtection: WriteProtection = .default,
-        unsavedBuffers: @escaping @Sendable () async -> [String: String] = { [:] }
+        unsavedBuffers: @escaping @Sendable () async -> [String: String] = { [:] },
+        visibleFiles: (@Sendable () async -> Set<String>?)? = nil
     ) {
         self.jail = PathJail(root: root)
         self.filter = filter
         self.maxReadBytes = maxReadBytes
         self.writeProtection = writeProtection
         self.unsavedBuffers = unsavedBuffers
+        self.visibleFiles = visibleFiles
     }
 
     /// Unsaved buffers by resolved path, so `/var/...` and `/private/var/...` spellings agree.
@@ -103,10 +118,89 @@ public struct DiskAgentWorkspace: AgentWorkspace {
     }
 
     public func allFiles() async throws -> [String] {
-        try files(under: nil)
+        try await candidateFiles(under: nil)
     }
 
-    private func files(under subpath: String?) throws -> [String] {
+    /// Files `glob` and `grep` should open. A git listing replaces the walk, so an ignored tree
+    /// such as `node_modules` is never visited; the fixed filter still drops hidden names, build
+    /// folders and binaries. Unsaved buffers are added even when git hides them, because the
+    /// editor is showing text the disk listing does not have.
+    private func candidateFiles(under subpath: String?) async throws -> [String] {
+        let scope = try scope(for: subpath)
+        // A named file is opened directly, as the walk does, so `grep` of one path still sees a
+        // file git ignores. The listing is what stops a directory search from entering that tree.
+        if case .file = scope.kind { return try walkFiles(under: subpath) }
+        if let visibleFiles, let listed = await visibleFiles() {
+            return await files(from: listed, scope: scope)
+        }
+        return try walkFiles(under: subpath)
+    }
+
+    private func files(from listed: Set<String>, scope: SearchScope) async -> [String] {
+        let unsaved = await buffers()
+        var result = Set<String>()
+        for relative in listed {
+            if Task.isCancelled { break }
+            guard scope.contains(relative), filter.admits(relativePath: relative) else { continue }
+            guard let url = try? jail.resolve(relative) else { continue }
+            if unsaved[url.path] != nil {
+                result.insert(relative)
+                continue
+            }
+            guard isRegularFile(url) else { continue }
+            result.insert(relative)
+        }
+        for absolute in unsaved.keys {
+            guard let relative = relativePath(ofAbsolute: absolute),
+                  scope.contains(relative),
+                  filter.admits(relativePath: relative)
+            else { continue }
+            result.insert(relative)
+        }
+        return result.sorted()
+    }
+
+    private func isRegularFile(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        return values?.isSymbolicLink != true && values?.isRegularFile == true
+    }
+
+    /// A resolved absolute path inside the project, or nil.
+    private func relativePath(ofAbsolute absolute: String) -> String? {
+        let path = URL(fileURLWithPath: absolute).resolvingSymlinksInPath().standardizedFileURL.path
+        guard path == jail.root.path || path.hasPrefix(jail.root.path + "/") else { return nil }
+        let relative = jail.relativePath(of: URL(fileURLWithPath: path))
+        return relative.isEmpty ? nil : relative
+    }
+
+    private struct SearchScope {
+        enum Kind { case all, directory(String), file(String) }
+        var kind: Kind
+
+        func contains(_ relative: String) -> Bool {
+            switch kind {
+            case .all: return true
+            case .directory(let directory):
+                return directory.isEmpty || relative == directory || relative.hasPrefix(directory + "/")
+            case .file(let file):
+                return relative == file
+            }
+        }
+    }
+
+    private func scope(for subpath: String?) throws -> SearchScope {
+        guard let subpath, !subpath.isEmpty, subpath != "." else { return SearchScope(kind: .all) }
+        let start = try jail.resolve(subpath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: start.path, isDirectory: &isDirectory) else {
+            throw AgentWorkspaceError.notFound(subpath)
+        }
+        let relative = jail.relativePath(of: start)
+        if isDirectory.boolValue { return SearchScope(kind: .directory(relative)) }
+        return SearchScope(kind: .file(relative))
+    }
+
+    private func walkFiles(under subpath: String?) throws -> [String] {
         let start = try jail.resolve(subpath ?? ".")
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: start.path, isDirectory: &isDirectory) else {
@@ -144,7 +238,7 @@ public struct DiskAgentWorkspace: AgentWorkspace {
 
         var matches: [SearchMatch] = []
         var truncated = false
-        files: for relative in try files(under: query.path) {
+        files: for relative in try await candidateFiles(under: query.path) {
             try Task.checkCancellation()
             if let glob, !glob.matches(relative) { continue }
             guard let text = readSearchable(relative, unsaved: unsaved) else { continue }

@@ -76,6 +76,36 @@ final class ProjectSearchEngineTests: XCTestCase {
         XCTAssertEqual(byRoot.map(\.url), byFiles.map(\.url))
     }
 
+    func testVisiblePathsReplaceTheWalkAndKeepTheFixedIgnoreList() async throws {
+        try "needle\n".write(to: root.appendingPathComponent("kept.txt"), atomically: true, encoding: .utf8)
+        let vendor = root.appendingPathComponent("vendor", isDirectory: true)
+        try FileManager.default.createDirectory(at: vendor, withIntermediateDirectories: true)
+        try "needle\n".write(to: vendor.appendingPathComponent("hidden.txt"), atomically: true, encoding: .utf8)
+        let git = root.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+        try "needle\n".write(to: git.appendingPathComponent("packed-refs"), atomically: true, encoding: .utf8)
+
+        let visible: Set<String> = ["kept.txt", ".git/packed-refs"]
+        let hits = await engine.search(WorkspaceSearchQuery(text: "needle"), in: root, visibleRelativePaths: visible)
+        XCTAssertEqual(hits.map(\.url.lastPathComponent), ["kept.txt"])
+
+        // An explicit file list (Open Files, Changed Files) is what the user named, so the
+        // visible set does not remove it.
+        let hidden = vendor.appendingPathComponent("hidden.txt")
+        let scoped = await engine.search(
+            WorkspaceSearchQuery(text: "needle"),
+            in: root,
+            filter: ProjectSearchFilter(onlyFiles: [hidden]),
+            visibleRelativePaths: visible
+        )
+        XCTAssertEqual(scoped.map(\.url.lastPathComponent), ["hidden.txt"])
+    }
+
+    func testAnEmptyVisibleSetDoesNotFallBackToTheWalk() async throws {
+        let hits = await engine.search(WorkspaceSearchQuery(text: "hello"), in: root, visibleRelativePaths: [])
+        XCTAssertTrue(hits.isEmpty)
+    }
+
     func testIgnoredDirectoryIsSkipped() async throws {
         let ignored = root.appendingPathComponent(".git", isDirectory: true)
         try FileManager.default.createDirectory(at: ignored, withIntermediateDirectories: true)

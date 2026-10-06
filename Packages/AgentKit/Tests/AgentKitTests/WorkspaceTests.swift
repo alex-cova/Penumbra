@@ -168,6 +168,40 @@ final class TempProject: @unchecked Sendable {
             _ = try await project.workspace.search(SearchQuery(pattern: "("))
         }
     }
+
+    @Test func aVisibleFileListReplacesTheWalk() async throws {
+        let project = try TempProject(files: [
+            "src/A.java": "needle\n",
+            "vendor/B.java": "needle\n",
+            "build/C.java": "needle\n",
+        ])
+        let scratch = project.root.appendingPathComponent("scratch/D.java").resolvingSymlinksInPath().path
+        let listed = DiskAgentWorkspace(root: project.root, unsavedBuffers: { [scratch: "needle\n"] }, visibleFiles: {
+            ["src/A.java", "vendor/B.java", "build/C.java"]
+        })
+        // `build/` is on the fixed list, so a git listing cannot bring it back. `vendor/` is not,
+        // and only stays because the listing names it. The unsaved file is not on disk and not listed.
+        let matches = try await listed.search(SearchQuery(pattern: "needle"))
+        #expect(matches.matches.map(\.path).sorted() == ["scratch/D.java", "src/A.java", "vendor/B.java"])
+        let names = try await listed.allFiles()
+        #expect(names == ["scratch/D.java", "src/A.java", "vendor/B.java"])
+
+        let hidden = DiskAgentWorkspace(root: project.root, visibleFiles: { ["src/A.java"] })
+        let onlySrc = try await hidden.search(SearchQuery(pattern: "needle"))
+        #expect(onlySrc.matches.map(\.path) == ["src/A.java"])
+
+        let underSrc = try await hidden.search(SearchQuery(pattern: "needle", path: "src"))
+        #expect(underSrc.matches.map(\.path) == ["src/A.java"])
+        let noVendor = try await hidden.allFiles()
+        #expect(!noVendor.contains("vendor/B.java"))
+
+        // Nil means git could not answer, so the walk (and its fixed list) is used. An empty set
+        // is an answer: git listed nothing.
+        let walked = DiskAgentWorkspace(root: project.root, visibleFiles: { nil })
+        #expect(try await walked.allFiles().contains("vendor/B.java"))
+        let empty = DiskAgentWorkspace(root: project.root, visibleFiles: { [] })
+        #expect(try await empty.allFiles().isEmpty)
+    }
 }
 
 @Suite struct UnsavedBufferTests {

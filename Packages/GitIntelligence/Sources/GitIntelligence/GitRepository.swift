@@ -43,6 +43,38 @@ public struct GitRepository: Sendable {
         return GitRepository(root: URL(fileURLWithPath: path).standardizedFileURL, runner: runner)
     }
 
+    /// Files under `directory` that a search should open: tracked files, plus untracked files that
+    /// `.gitignore`, `.git/info/exclude` and the global excludes file do not hide. Paths are
+    /// relative to `directory`, so a project folder inside a larger repository does not see its
+    /// siblings. Nil when `directory` is not inside a work tree, or when git cannot answer;
+    /// callers then walk the disk with their own ignore list.
+    public static func visibleFiles(under directory: URL, runner: any GitRunning = SystemGitRunner()) async -> [String]? {
+        guard let repository = await discover(from: directory, runner: runner) else { return nil }
+        let root = repository.root.resolvingSymlinksInPath().standardizedFileURL.path
+        let project = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        guard project == root || project.hasPrefix(root + "/") else { return nil }
+        let prefix = project == root ? "" : String(project.dropFirst(root.count + 1))
+        return try? await repository.listedFiles(under: prefix)
+    }
+
+    /// `git ls-files --cached --others --exclude-standard`, limited to `prefix` (a directory
+    /// relative to the repository root, or empty for the whole tree). Results are relative to
+    /// `prefix`. `--exclude-standard` is what makes a negated pattern and an info/exclude rule count.
+    func listedFiles(under prefix: String) async throws -> [String] {
+        var args = ["--literal-pathspecs", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+        let strip = prefix.isEmpty ? "" : (prefix.hasSuffix("/") ? prefix : prefix + "/")
+        if !strip.isEmpty { args += ["--", strip] }
+        let out = try await readOnly(args)
+        return out.text.split(separator: "\0", omittingEmptySubsequences: true).compactMap { piece in
+            let path = String(piece)
+            guard !path.isEmpty else { return nil }
+            guard !strip.isEmpty else { return path }
+            guard path.hasPrefix(strip) else { return nil }
+            let relative = String(path.dropFirst(strip.count))
+            return relative.isEmpty ? nil : relative
+        }
+    }
+
     private func readOnly(_ args: [String], stdin: Data? = nil) async throws -> GitOutput {
         try await runner.run(["--no-optional-locks"] + args, in: root, stdin: stdin, environment: nil)
     }

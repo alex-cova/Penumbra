@@ -2967,13 +2967,15 @@ public final class IDEWorkspace {
         let filter = findInFilesFilter
         findInFilesStatus = "Searching…"
         Task {
+            let visible = await IDEGitVisibleFiles.relativePaths(under: root)
             let hits = await intelligenceController.searchProject(
                 query,
                 in: root,
                 isCaseSensitive: findInFilesCaseSensitive,
                 matchWholeWord: findInFilesWholeWord,
                 useRegularExpression: findInFilesRegex,
-                filter: filter
+                filter: filter,
+                visibleRelativePaths: visible
             )
             findInFilesHits = hits
             if hits.isEmpty {
@@ -3017,6 +3019,7 @@ public final class IDEWorkspace {
         let replacement = findInFilesReplacement
         findInFilesStatus = "Preparing the replacement…"
         Task {
+            let visible = await IDEGitVisibleFiles.relativePaths(under: root)
             // The search only picks the files; each is then read as the editor or disk has it now.
             let hits = await intelligenceController.searchProject(
                 query.text,
@@ -3024,7 +3027,8 @@ public final class IDEWorkspace {
                 isCaseSensitive: query.isCaseSensitive,
                 matchWholeWord: query.matchWholeWord,
                 useRegularExpression: query.useRegularExpression,
-                filter: filter
+                filter: filter,
+                visibleRelativePaths: visible
             )
             var urls: [URL] = []
             var seen = Set<String>()
