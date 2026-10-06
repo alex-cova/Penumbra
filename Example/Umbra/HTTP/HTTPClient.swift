@@ -214,12 +214,21 @@ enum HTTPClient {
             return lines.joined(separator: "\n")
         }
 
-        if let contentType = response.value(forHTTPHeaderField: "Content-Type"),
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")
+        if let contentType,
            contentType.lowercased().contains("json"),
            let object = try? JSONSerialization.jsonObject(with: data),
            let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
            let prettyText = String(data: pretty, encoding: .utf8) {
             lines.append(prettyText)
+        } else if HTTPProtobuf.isProtobuf(contentType: contentType),
+                  let decoded = HTTPProtobuf.render(
+                      data,
+                      contentType: contentType,
+                      grpcEncoding: response.value(forHTTPHeaderField: "grpc-encoding")
+                  ) {
+            // Before the UTF-8 branch: a protobuf body can happen to be valid UTF-8.
+            lines.append(decoded)
         } else if let text = String(data: data, encoding: .utf8) {
             lines.append(text)
         } else {

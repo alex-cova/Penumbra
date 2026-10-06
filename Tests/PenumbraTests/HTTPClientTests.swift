@@ -188,6 +188,30 @@ final class HTTPClientTests: XCTestCase {
         XCTAssertTrue(formatted.contains("\"ok\""))
     }
 
+    func testSendDecodesProtobufResponse() async throws {
+        StubHTTPURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/x-protobuf"]
+            )!
+            return (response, Data([0x0A, 0x08] + Array("John Doe".utf8) + [0x10, 0x01]))
+        }
+
+        let prepared = HTTPPreparedRequest(
+            method: "GET",
+            url: URL(string: "https://example.com/contact")!,
+            headers: [:],
+            body: nil
+        )
+        let (response, data) = try await HTTPClient.send(prepared, session: session)
+        let formatted = HTTPClient.formatResponse(response, data: data)
+        XCTAssertTrue(formatted.contains("1: \"John Doe\""))
+        XCTAssertTrue(formatted.contains("2: 1  // sint: -1"))
+        XCTAssertFalse(formatted.contains("bytes of binary data"))
+    }
+
     func testFormatRequestShowsLineHeadersAndBody() {
         let withBody = HTTPPreparedRequest(
             method: "POST",
