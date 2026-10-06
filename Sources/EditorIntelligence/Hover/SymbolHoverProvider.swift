@@ -19,7 +19,7 @@ public actor SymbolHoverProvider: HoverProvider {
             return nil
         }
         let word = context.document.wordAtCursor()
-        guard !word.isEmpty else { return nil }
+        guard !word.isEmpty, word.count <= IndexingService.maxNameLength else { return nil }
         // Only symbols with something to say: a bare name (every indexed word in a plain-text or
         // `.http` buffer) would just echo the word under the caret back.
         let symbols = await index.search(exact: word)

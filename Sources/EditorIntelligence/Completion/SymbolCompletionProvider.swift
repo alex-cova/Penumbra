@@ -13,7 +13,7 @@ public actor SymbolCompletionProvider: CompletionProvider {
         let prefix = context.prefix
         // Plain buffer words come from `WordCompletionProvider` (as `.text`, which never opens the
         // popup on its own while typing prose); reporting them here as variables would.
-        let symbols = await index.search(prefix: prefix).filter { $0.kind != .word }
+        let symbols = await index.search(prefix: prefix, limit: WordCompletionProvider.maxCandidates) { $0.kind != .word }
         return symbols.map { symbol in
             CompletionItem(
                 label: symbol.name,

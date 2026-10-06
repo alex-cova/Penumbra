@@ -11,14 +11,18 @@ public actor SymbolIndex {
 
     public init() {}
 
-    /// Replace the symbols for a single document. Previous symbols for the document are removed.
+    /// Replace the symbols for a single document. Only the difference from the previous set touches
+    /// the trie, so re-indexing after a small edit costs the change, not the document.
     public func index(_ symbols: [Symbol], for documentID: DocumentID) {
-        remove(documentID: documentID)
         let symbolSet = Set(symbols)
-        symbolsByDocument[documentID] = symbolSet
-        for symbol in symbolSet {
+        let previous = symbolsByDocument[documentID] ?? []
+        for symbol in previous.subtracting(symbolSet) {
+            trie.remove(symbol.name, value: symbol)
+        }
+        for symbol in symbolSet.subtracting(previous) {
             trie.insert(symbol.name, value: symbol)
         }
+        symbolsByDocument[documentID] = symbolSet
     }
 
     /// Remove all symbols associated with a document.
@@ -29,17 +33,23 @@ public actor SymbolIndex {
         }
     }
 
-    /// Find symbols whose name begins with the given prefix.
-    public func search(prefix: String) -> [Symbol] {
+    /// Find symbols whose name begins with the given prefix, shortest names first when `limit` is set.
+    ///
+    /// `include` runs before `limit`, so filtered-out symbols never use up the cap.
+    public func search(
+        prefix: String,
+        limit: Int? = nil,
+        where include: @Sendable (Symbol) -> Bool = { _ in true }
+    ) -> [Symbol] {
         EditorPerformanceTrace.shared.measure(.indexQuery) {
-            trie.search(prefix: prefix)
+            trie.search(prefix: prefix, limit: limit, where: include)
         }
     }
 
     /// Find symbols whose name matches the query exactly.
     public func search(exact: String) -> [Symbol] {
         EditorPerformanceTrace.shared.measure(.indexQuery) {
-            trie.search(prefix: exact).filter { $0.name == exact }
+            trie.search(exact: exact)
         }
     }
 

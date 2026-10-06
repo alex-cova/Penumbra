@@ -19,7 +19,7 @@ public actor FindReferencesProvider: NavigationProvider {
             return nil
         }
         let target = context.document.wordAtCursor()
-        guard !target.isEmpty else { return nil }
+        guard !target.isEmpty, target.count <= IndexingService.maxNameLength else { return nil }
         let symbols = await index.search(exact: target)
         guard !symbols.isEmpty else { return nil }
         let locations = symbols.map { symbol in

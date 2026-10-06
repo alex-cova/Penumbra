@@ -24,6 +24,20 @@ final class SymbolIndexTests: XCTestCase {
         XCTAssertEqual(barResults.map(\.name), ["bar"])
     }
 
+    func testReindexKeepsSharedSymbolsAndSwapsTheRest() async {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let keep = makeSymbol(name: "keep", kind: .function, documentID: documentID)
+        let drop = makeSymbol(name: "drop", kind: .function, documentID: documentID)
+        let add = makeSymbol(name: "add", kind: .function, documentID: documentID)
+        await index.index([keep, drop], for: documentID)
+        await index.index([keep, add], for: documentID)
+        let names = await index.search(prefix: "").map(\.name).sorted()
+        XCTAssertEqual(names, ["add", "keep"])
+        let stored = await index.symbols(in: documentID).map(\.name).sorted()
+        XCTAssertEqual(stored, ["add", "keep"])
+    }
+
     func testRemoveDocument() async {
         let index = SymbolIndex()
         let documentID = DocumentID()

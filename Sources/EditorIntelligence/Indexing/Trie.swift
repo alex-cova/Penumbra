@@ -39,14 +39,37 @@ final class Trie<Value: Hashable> {
         return true
     }
 
-    /// Find all values whose key starts with the given prefix.
-    func search(prefix: String) -> [Value] {
+    /// Releasing a deep chain of nodes would recurse once per character, so detach the tree level by
+    /// level instead. Each node is released with no children left, which keeps the cascade one deep.
+    deinit {
+        var pending = [root]
+        while let current = pending.popLast() {
+            pending.append(contentsOf: current.children.values)
+            current.children.removeAll()
+        }
+    }
+
+    /// Find values whose key starts with the given prefix, shortest keys first.
+    ///
+    /// `include` is applied before `limit`, so a filtered-out value never uses up the cap. With no
+    /// `limit` every matching value is returned.
+    func search(prefix: String, limit: Int? = nil, where include: (Value) -> Bool = { _ in true }) -> [Value] {
         var node = root
         for char in prefix {
             guard let child = node.children[char] else { return [] }
             node = child
         }
-        return collectValues(from: node)
+        return collectValues(from: node, limit: limit, where: include)
+    }
+
+    /// Find all values stored under exactly this key. Cost is the key length, not the size of the subtree.
+    func search(exact key: String) -> [Value] {
+        var node = root
+        for char in key {
+            guard let child = node.children[char] else { return [] }
+            node = child
+        }
+        return Array(node.values)
     }
 
     private func cleanup(path: [(Character, Node)]) {
@@ -59,10 +82,27 @@ final class Trie<Value: Hashable> {
         }
     }
 
-    private func collectValues(from node: Node) -> [Value] {
-        var result = Array(node.values)
-        for child in node.children.values {
-            result.append(contentsOf: collectValues(from: child))
+    /// Iterative on purpose: keys can be arbitrarily long (generated or minified identifiers), and a
+    /// recursive walk costs one stack frame per character, which overflows the small stacks of
+    /// cooperative-pool threads.
+    ///
+    /// Breadth-first, so shorter keys come out before longer ones and a `limit` keeps the best
+    /// candidates for a length-tiebreaking ranker.
+    private func collectValues(from node: Node, limit: Int?, where include: (Value) -> Bool) -> [Value] {
+        var result: [Value] = []
+        if let limit, limit <= 0 { return result }
+        var level = [node]
+        var next: [Node] = []
+        while !level.isEmpty {
+            for current in level {
+                for value in current.values where include(value) {
+                    result.append(value)
+                    if let limit, result.count >= limit { return result }
+                }
+                next.append(contentsOf: current.children.values)
+            }
+            level = next
+            next.removeAll(keepingCapacity: true)
         }
         return result
     }

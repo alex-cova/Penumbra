@@ -21,7 +21,7 @@ public actor GoToDefinitionProvider: NavigationProvider {
             return nil
         }
         let target = context.document.wordAtCursor()
-        guard !target.isEmpty else { return nil }
+        guard !target.isEmpty, target.count <= IndexingService.maxNameLength else { return nil }
         let symbols = await index.search(exact: target)
         guard let symbol = symbols.first else { return nil }
         return .single(Location(
