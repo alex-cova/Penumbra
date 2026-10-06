@@ -34,6 +34,33 @@ final class DiagnosticTests: XCTestCase {
         XCTAssertEqual(diagnostics.first?.severity, .warning)
     }
 
+    func testDuplicateSymbolProviderSkipsConfiguredLanguages() async {
+        let index = SymbolIndex()
+        let documentID = DocumentID()
+        let first = Symbol(name: "GET", kind: .function, documentID: documentID, range: makeRange(line: 0, startColumn: 0, endColumn: 3))
+        let second = Symbol(name: "GET", kind: .function, documentID: documentID, range: makeRange(line: 4, startColumn: 0, endColumn: 3))
+        await index.index([first, second], for: documentID)
+
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let http = Document(
+            id: documentID,
+            displayName: "stock.http",
+            contentSnapshot: TextSnapshot(version: 0, text: "GET a\n\n###\n\nGET b"),
+            selection: Selection(range: TextRange(start: position, end: position)),
+            cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+            languageIdentifier: "http"
+        )
+
+        let skipping = DuplicateSymbolDiagnosticProvider(index: index, skippingLanguages: ["http"])
+        let skipped = await skipping.diagnostics(for: http)
+        XCTAssertTrue(skipped.isEmpty)
+
+        let reporting = DuplicateSymbolDiagnosticProvider(index: index)
+        let reported = await reporting.diagnostics(for: http)
+        XCTAssertEqual(reported.count, 1)
+    }
+
     func testDiagnosticSorting() async {
         let info = Diagnostic(severity: .information, message: "info", range: makeRange(line: 0, startColumn: 0, endColumn: 1), source: "A")
         let error = Diagnostic(severity: .error, message: "error", range: makeRange(line: 0, startColumn: 2, endColumn: 3), source: "A")

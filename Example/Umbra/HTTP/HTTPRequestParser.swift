@@ -97,7 +97,15 @@ enum HTTPRequestParser {
         (try? parse(text: text, caretUTF16Offset: caretUTF16Offset, fileURL: fileURL)) != nil
     }
 
-    static func parse(text: String, caretUTF16Offset: Int, fileURL: URL?) throws -> HTTPPreparedRequest {
+    static func parse(
+        text: String,
+        caretUTF16Offset: Int,
+        fileURL: URL?,
+        globals: [String: String] = [:],
+        now: Date = Date(),
+        random: any HTTPRandomSource = SystemHTTPRandom(),
+        historyFolder: URL? = nil
+    ) throws -> HTTPPreparedRequest {
         guard let tree = parseTree(text) else {
             throw HTTPRequestParserError.parseFailed
         }
@@ -108,7 +116,21 @@ enum HTTPRequestParser {
             throw HTTPRequestParserError.noRequestAtCaret
         }
         let tail = sourceSlice(tree.sourceBytes, from: span.node.endByte, to: span.boundary)
-        return try buildRequest(from: span.node, fileURL: fileURL, tail: tail)
+        let environment = HTTPTemplateEnvironment(
+            fileVariables: HTTPSyntax.fileVariables(in: text),
+            globals: globals,
+            now: now,
+            random: random,
+            historyFolder: historyFolder ?? HTTPSyntax.historyDirectory()
+        )
+        let options = HTTPSyntax.optionsByLine(in: text)[span.startLine] ?? HTTPRequestOptions()
+        return try buildRequest(
+            from: span.node,
+            fileURL: fileURL,
+            tail: tail,
+            environment: environment,
+            options: options
+        )
     }
 
     /// Where each request in `text` starts, for the gutter's send buttons. One parse and one pass
@@ -141,11 +163,6 @@ enum HTTPRequestParser {
         }
     }
 
-    private static let requestMethods: Set<String> = [
-        "OPTIONS", "GET", "HEAD", "POST", "PUT", "DELETE",
-        "TRACE", "CONNECT", "PATCH", "LIST", "GRAPHQL", "WEBSOCKET",
-    ]
-
     private static func requestSpans(in tree: HTTPTSyntaxTree) -> [RequestSpan] {
         var requests: [HTTPTSyntaxNode] = []
         var separatorStarts: [Int] = []
@@ -158,7 +175,7 @@ enum HTTPRequestParser {
         }
         let bytes = tree.sourceBytes
         let real = requests
-            .filter { isRequestLine(lineText(bytes, at: $0.startByte)) }
+            .filter { HTTPSyntax.isRequestLine(lineText(bytes, at: $0.startByte)) }
             .sorted { $0.startByte < $1.startByte }
         guard !real.isEmpty else { return [] }
         separatorStarts.sort()
@@ -196,19 +213,6 @@ enum HTTPRequestParser {
             ))
         }
         return spans
-    }
-
-    /// The request line itself: `PUT https://…` or a bare `https://…`. A body line such as `}` is not.
-    private static func isRequestLine(_ line: String) -> Bool {
-        let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
-        let lowered = trimmed.prefix(8).lowercased()
-        if lowered.hasPrefix("https://") || lowered.hasPrefix("http://") {
-            return true
-        }
-        guard let space = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
-            return false
-        }
-        return requestMethods.contains(String(trimmed[..<space]))
     }
 
     private static func lineText(_ bytes: [UInt8], at byte: Int) -> String {
@@ -250,27 +254,49 @@ enum HTTPRequestParser {
         return text.utf8.distance(from: text.utf8.startIndex, to: stringIndex)
     }
 
-    private static func buildRequest(from node: HTTPTSyntaxNode, fileURL: URL?, tail: String) throws -> HTTPPreparedRequest {
-        if node.text.contains("{{") || tail.contains("{{") {
-            throw HTTPRequestParserError.unsupportedVariable
-        }
-
+    private static func buildRequest(
+        from node: HTTPTSyntaxNode,
+        fileURL: URL?,
+        tail: String,
+        environment: HTTPTemplateEnvironment,
+        options: HTTPRequestOptions
+    ) throws -> HTTPPreparedRequest {
         let method = node.child(byFieldName: "method")?.text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             ?? "GET"
         let targetText = node.child(byFieldName: "url")?.text ?? ""
-        let normalizedTarget = normalizeTargetURL(targetText)
-        var headers = parseHeaders(in: node)
-        let body = try parseBody(in: node, fileURL: fileURL, tail: tail)
+        let normalizedTarget = try HTTPSyntax.expand(normalizeTargetURL(targetText), in: environment)
+        var headers: [String: String] = [:]
+        for (name, value) in parseHeaders(in: node) {
+            let expandedName = try HTTPSyntax.expand(name, in: environment)
+            headers[expandedName] = try HTTPSyntax.expand(value, in: environment)
+        }
+        let body = try parseBody(in: node, fileURL: fileURL, tail: tail, environment: environment)
+        let digest = HTTPSyntax.applyAuthorization(&headers)
+        let lengthKeys = headers.keys.filter { $0.caseInsensitiveCompare("Content-Length") == .orderedSame }
+        for key in lengthKeys {
+            headers.removeValue(forKey: key)
+        }
+        if let body {
+            headers["Content-Length"] = String(body.count)
+        }
 
-        guard let url = try resolveURL(target: normalizedTarget, headers: headers) else {
+        let urlText = HTTPSyntax.encodedURL(normalizedTarget, autoEncode: options.autoEncodeURL)
+        guard let url = try resolveURL(target: urlText, headers: headers) else {
             throw HTTPRequestParserError.invalidURL(normalizedTarget)
         }
 
-        if body != nil, headers["Content-Length"] == nil, headers["content-length"] == nil {
-            headers["Content-Length"] = String(body?.count ?? 0)
-        }
-
-        return HTTPPreparedRequest(method: method, url: url, headers: headers, body: body)
+        let scope = node.text + tail
+        let output = try HTTPSyntax.output(in: scope, fileURL: fileURL, environment: environment)
+        return HTTPPreparedRequest(
+            method: method,
+            url: url,
+            headers: headers,
+            body: body,
+            options: options,
+            bindings: HTTPSyntax.bindings(in: scope),
+            output: output,
+            digest: digest
+        )
     }
 
     private static func normalizeTargetURL(_ text: String) -> String {
@@ -294,30 +320,62 @@ enum HTTPRequestParser {
 
     /// `tail` is source the grammar left outside the request node, usually a closing `}` or `]`
     /// on the last line when the file has no newline after it. It belongs to the body.
-    private static func parseBody(in request: HTTPTSyntaxNode, fileURL: URL?, tail: String) throws -> Data? {
+    /// `>>` and `> {% %}` lines are response directives, not body text.
+    private static func parseBody(
+        in request: HTTPTSyntaxNode,
+        fileURL: URL?,
+        tail: String,
+        environment: HTTPTemplateEnvironment
+    ) throws -> Data? {
         if let bodyNode = request.child(byFieldName: "body") {
             if bodyNode.type == "external_body" {
-                return try externalBodyData(from: bodyNode, fileURL: fileURL)
+                return try externalBodyData(from: bodyNode, fileURL: fileURL, environment: environment)
             }
-            return textBody(bodyNode.text, tail: tail)
+            return try textualBody(
+                bodyNode.text,
+                tail: tail,
+                dropComments: dropsFileComments(bodyNode.type),
+                environment: environment
+            )
         }
         if let external = findDescendant(ofType: "external_body", in: request) {
-            return try externalBodyData(from: external, fileURL: fileURL)
+            return try externalBodyData(from: external, fileURL: fileURL, environment: environment)
         }
         if let rawBody = findDescendant(ofType: "raw_body", in: request)
             ?? findDescendant(ofType: "json_body", in: request)
             ?? findDescendant(ofType: "xml_body", in: request)
             ?? findDescendant(ofType: "graphql_body", in: request)
             ?? findDescendant(ofType: "multipart_form_data", in: request) {
-            return textBody(rawBody.text, tail: tail)
+            return try textualBody(
+                rawBody.text,
+                tail: tail,
+                dropComments: dropsFileComments(rawBody.type),
+                environment: environment
+            )
         }
         let inline = inlineBodyText(in: request) ?? ""
-        return textBody(inline, tail: tail)
+        return try textualBody(inline, tail: tail, dropComments: true, environment: environment)
     }
 
-    private static func textBody(_ text: String, tail: String) -> Data? {
-        let combined = (text + tail).trimmingCharacters(in: .whitespacesAndNewlines)
-        return combined.isEmpty ? nil : Data(combined.utf8)
+    /// A `//` or `#` line above `>>` is a file comment. The grammar still folds it into `raw_body`.
+    /// JSON, XML, GraphQL, and multipart bodies keep those lines: a GraphQL `#` comment is payload.
+    private static func dropsFileComments(_ bodyType: String) -> Bool {
+        bodyType == "raw_body"
+    }
+
+    private static func textualBody(
+        _ text: String,
+        tail: String,
+        dropComments: Bool,
+        environment: HTTPTemplateEnvironment
+    ) throws -> Data? {
+        let cleaned = HTTPSyntax.cleaningBody(text + tail, dropComments: dropComments)
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let expanded = try HTTPSyntax.expand(trimmed, in: environment)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expanded.isEmpty else { return nil }
+        return Data(expanded.utf8)
     }
 
     private static func inlineBodyText(in request: HTTPTSyntaxNode) -> String? {
@@ -328,10 +386,15 @@ enum HTTPRequestParser {
         return String(text[separatorRange.upperBound...])
     }
 
-    private static func externalBodyData(from node: HTTPTSyntaxNode, fileURL: URL?) throws -> Data {
+    private static func externalBodyData(
+        from node: HTTPTSyntaxNode,
+        fileURL: URL?,
+        environment: HTTPTemplateEnvironment
+    ) throws -> Data {
         let pathText = node.child(byFieldName: "path")?.text
             ?? node.text.replacingOccurrences(of: "<", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return try loadExternalBody(pathText, fileURL: fileURL)
+        let expanded = try HTTPSyntax.expand(pathText, in: environment)
+        return try loadExternalBody(expanded, fileURL: fileURL)
     }
 
     private static func findDescendant(ofType type: String, in node: HTTPTSyntaxNode) -> HTTPTSyntaxNode? {

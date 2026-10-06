@@ -17,6 +17,8 @@ final class IDEIntelligenceServices {
     let javaSupport = IDEJavaSupport()
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
     let markdownFileMentions = MarkdownFileMentionCompletionProvider()
+    /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
+    let httpCompletion = HTTPCompletionProvider()
 
     init() {
         let parser = IDEWorkbenchLanguageParser()
@@ -25,16 +27,17 @@ final class IDEIntelligenceServices {
             SymbolCompletionProvider(index: symbolIndex),
             WordCompletionProvider(index: symbolIndex),
             // The built-in snippets are JavaScript-flavored (`function`, `for (let i ...`).
-            SnippetCompletionProvider(excludedLanguageIdentifiers: ["java"]),
+            SnippetCompletionProvider(excludedLanguageIdentifiers: ["java", "http"]),
             javaSupport.completionProvider,
-            markdownFileMentions
+            markdownFileMentions,
+            httpCompletion
         ])
         hoverEngine = HoverEngine(providers: [
             javaSupport.hoverProvider,
             SymbolHoverProvider(index: symbolIndex, skippingLanguages: ["java"])
         ])
         diagnosticEngine = DiagnosticEngine(providers: [
-            DuplicateSymbolDiagnosticProvider(index: symbolIndex),
+            DuplicateSymbolDiagnosticProvider(index: symbolIndex, skippingLanguages: ["http"]),
             javaSupport.compilerDiagnostics,
             javaSupport.inspectionService
         ])

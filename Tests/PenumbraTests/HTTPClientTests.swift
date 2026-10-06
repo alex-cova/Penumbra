@@ -125,14 +125,14 @@ final class HTTPRequestParserTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://example.com/second")
     }
 
-    func testRejectsVariables() {
+    func testSubstitutesAFileVariable() throws {
         let text = """
-        GET https://{{host}}/api HTTP/1.1
+        @host = https://example.com
+        GET {{host}}/api HTTP/1.1
 
         """
-        XCTAssertThrowsError(try HTTPRequestParser.parse(text: text, caretUTF16Offset: 0, fileURL: nil)) { error in
-            XCTAssertEqual(error as? HTTPRequestParserError, .unsupportedVariable)
-        }
+        let request = try HTTPRequestParser.parse(text: text, caretUTF16Offset: 0, fileURL: nil)
+        XCTAssertEqual(request.url.absoluteString, "https://example.com/api")
     }
 
     func testOriginFormRequiresHostHeader() {
@@ -213,6 +213,73 @@ final class HTTPClientTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testDigestRetriesWithTheRFC2617Response() async throws {
+        let challenge = """
+        Digest realm="testrealm@host.com", qop="auth", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41"
+        """
+        StubHTTPURLProtocol.handler = { request in
+            if request.value(forHTTPHeaderField: "Authorization") == nil {
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 401,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["WWW-Authenticate": challenge]
+                )!
+                return (response, Data())
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [:]
+            )!
+            return (response, Data("ok".utf8))
+        }
+
+        let prepared = HTTPPreparedRequest(
+            method: "GET",
+            url: URL(string: "https://example.com/dir/index.html")!,
+            headers: [:],
+            body: nil,
+            digest: HTTPDigestLogin(username: "Mufasa", password: "Circle Of Life")
+        )
+        let (response, _) = try await HTTPClient.send(prepared, session: session, cnonce: "0a4f113b")
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertNil(StubHTTPURLProtocol.requests.first?.value(forHTTPHeaderField: "Authorization"))
+        let authorization = try XCTUnwrap(StubHTTPURLProtocol.requests.last?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertTrue(authorization.contains(#"response="6629fae49393a05397450978507c4ef1""#), authorization)
+        XCTAssertTrue(authorization.contains("qop=auth"), authorization)
+        XCTAssertFalse(authorization.contains(#"qop="auth""#), authorization)
+        XCTAssertTrue(authorization.contains(#"username="Mufasa""#), authorization)
+        XCTAssertTrue(authorization.contains(#"uri="/dir/index.html""#), authorization)
+    }
+
+    func testNoCookieJarDisablesCookieStorage() {
+        let configuration = HTTPClient.configuration(
+            for: HTTPRequestOptions(useCookieJar: false),
+            cookies: HTTPCookieJar()
+        )
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+        XCTAssertNil(configuration.httpCookieStorage)
+    }
+
+    func testCookieJarIsAttachedAndResponsesAreNotCached() {
+        let jar = HTTPCookieJar()
+        let configuration = HTTPClient.configuration(for: HTTPRequestOptions(), cookies: jar)
+        XCTAssertTrue(configuration.httpCookieStorage === jar.storage)
+        XCTAssertEqual(configuration.requestCachePolicy, .reloadIgnoringLocalCacheData)
+    }
+
+    func testNoRedirectDropsTheProposedRequest() {
+        let proposed = URLRequest(url: URL(string: "https://example.com/next")!)
+        XCTAssertNil(HTTPRedirectPolicy.proposedRequest(followRedirects: false, request: proposed))
+        XCTAssertEqual(
+            HTTPRedirectPolicy.proposedRequest(followRedirects: true, request: proposed)?.url,
+            proposed.url
+        )
+    }
 }
 
 private final class StubHTTPURLProtocol: URLProtocol {
@@ -220,9 +287,12 @@ private final class StubHTTPURLProtocol: URLProtocol {
 
     nonisolated(unsafe) static var lastRequest: URLRequest?
 
+    nonisolated(unsafe) static var requests: [URLRequest] = []
+
     static func reset() {
         handler = nil
         lastRequest = nil
+        requests = []
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -239,6 +309,7 @@ private final class StubHTTPURLProtocol: URLProtocol {
             return
         }
         Self.lastRequest = request
+        Self.requests.append(request)
         do {
             let (response, data) = try handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

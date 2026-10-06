@@ -78,31 +78,95 @@ enum HTTPClientError: Error, LocalizedError {
     }
 }
 
+enum HTTPRedirectPolicy {
+    static func proposedRequest(followRedirects: Bool, request: URLRequest) -> URLRequest? {
+        followRedirects ? request : nil
+    }
+}
+
 enum HTTPClient {
     static let requestTimeout: TimeInterval = 30
 
+    /// `session` nil builds an ephemeral session for this call. A session passed in (tests) is used as-is.
+    /// Digest credentials retry once after a 401 challenge. `cnonce` is injectable for the RFC vector.
     static func send(
         _ request: HTTPPreparedRequest,
-        session: URLSession = .shared
+        session: URLSession? = nil,
+        cookies: HTTPCookieJar? = nil,
+        cnonce: String? = nil
     ) async throws -> (HTTPURLResponse, Data) {
-        var urlRequest = URLRequest(url: request.url, timeoutInterval: requestTimeout)
-        urlRequest.httpMethod = request.method
-        for (name, value) in request.headers {
-            urlRequest.setValue(value, forHTTPHeaderField: name)
-        }
-        urlRequest.httpBody = request.body
-
-        do {
-            let (data, response) = try await session.data(for: urlRequest)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw HTTPClientError.invalidResponse
+        let ownsSession = session == nil
+        let active = session ?? makeSession(options: request.options, cookies: cookies)
+        defer {
+            if ownsSession {
+                active.finishTasksAndInvalidate()
             }
-            return (httpResponse, data)
+        }
+
+        var urlRequest = makeURLRequest(request)
+        do {
+            let (response, data) = try await perform(urlRequest, session: active)
+            guard let login = request.digest,
+                  response.statusCode == 401,
+                  let header = response.value(forHTTPHeaderField: "WWW-Authenticate"),
+                  let challenge = HTTPDigest.parse(header),
+                  let authorization = HTTPDigest.authorization(
+                    username: login.username,
+                    password: login.password,
+                    method: request.method,
+                    uri: HTTPDigest.uri(for: request.url),
+                    challenge: challenge,
+                    nc: "00000001",
+                    cnonce: cnonce ?? HTTPDigest.randomCnonce()
+                  ) else {
+                return (response, data)
+            }
+            urlRequest.setValue(authorization, forHTTPHeaderField: "Authorization")
+            return try await perform(urlRequest, session: active)
         } catch let error as HTTPClientError {
             throw error
         } catch {
             throw HTTPClientError.transport(error)
         }
+    }
+
+    static func makeSession(options: HTTPRequestOptions, cookies: HTTPCookieJar?) -> URLSession {
+        let configuration = configuration(for: options, cookies: cookies)
+        let delegate = HTTPSessionDelegate(followRedirects: options.followRedirects)
+        return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+    }
+
+    static func configuration(for options: HTTPRequestOptions, cookies: HTTPCookieJar?) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout
+        configuration.httpShouldSetCookies = options.useCookieJar
+        configuration.httpCookieAcceptPolicy = options.useCookieJar ? .always : .never
+        configuration.httpCookieStorage = options.useCookieJar ? (cookies?.storage ?? HTTPCookieStorage()) : nil
+        return configuration
+    }
+
+    private static func makeURLRequest(_ request: HTTPPreparedRequest) -> URLRequest {
+        var urlRequest = URLRequest(url: request.url, timeoutInterval: requestTimeout)
+        urlRequest.httpMethod = request.method
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        for (name, value) in request.headers {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
+        urlRequest.httpBody = request.body
+        return urlRequest
+    }
+
+    private static func perform(
+        _ request: URLRequest,
+        session: URLSession
+    ) async throws -> (HTTPURLResponse, Data) {
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HTTPClientError.invalidResponse
+        }
+        return (httpResponse, data)
     }
 
     static func formatResponse(_ response: HTTPURLResponse, data: Data) -> String {
@@ -134,5 +198,22 @@ enum HTTPClient {
         }
 
         return lines.joined(separator: "\n")
+    }
+}
+
+private final class HTTPSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let followRedirects: Bool
+
+    init(followRedirects: Bool) {
+        self.followRedirects = followRedirects
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        HTTPRedirectPolicy.proposedRequest(followRedirects: followRedirects, request: request)
     }
 }

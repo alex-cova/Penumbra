@@ -9,6 +9,7 @@ public final class OutlineSidebarView: NSView {
     private var model = OutlineModel(items: [])
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
+    private var isApplyingModel = false
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -22,6 +23,10 @@ public final class OutlineSidebarView: NSView {
 
     public func update(model: OutlineModel) {
         self.model = model
+        // Reflecting the caret's item is not a user pick: reporting it would move the caret back
+        // to the item's (possibly stale) range, e.g. re-selecting a word that was just deleted.
+        isApplyingModel = true
+        defer { isApplyingModel = false }
         tableView.reloadData()
         if let selectedID = model.selectedItemID,
            let row = flattenedItems().firstIndex(where: { $0.item.id == selectedID }) {
@@ -106,6 +111,7 @@ extension OutlineSidebarView: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     public func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !isApplyingModel else { return }
         let row = tableView.selectedRow
         guard row >= 0 else { return }
         onSelectItem?(flattenedItems()[row].item)

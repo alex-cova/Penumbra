@@ -563,6 +563,8 @@ public final class IDEWorkspace {
         intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
+        let httpGlobals = httpSupport.globals
+        intelligenceServices.httpCompletion.setGlobals { httpGlobals.snapshot() }
         intelligenceServices.javaSupport.requestTrust = { [weak self] url in
             guard let self else { return false }
             return await self.promptGradleTrust(for: url)
@@ -3871,6 +3873,7 @@ public final class IDEWorkspace {
     ) -> IDEWindowSession {
         let shells = terminalTabs.filter { $0.agentCommandID == nil }
         let selectedShell = shells.contains { $0.id == selectedTerminalTabID } ? selectedTerminalTabID : shells.first?.id
+        syncLiveTextForSession()
         return IDEWindowSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
@@ -3889,6 +3892,22 @@ public final class IDEWorkspace {
             agentChats: agent.restorableTabs.ids,
             agentSelectedChat: agent.restorableTabs.selected
         )
+    }
+
+    /// A session stores a tab's text from `WorkbenchDocument.text`, which the live editor only
+    /// refreshes after a debounce or when its tab is left. Quitting soon after an edit would
+    /// otherwise restore the text the tab had before it. File-backed tabs store no text.
+    private func syncLiveTextForSession() {
+        for pane in workbench.panes {
+            guard let document = pane.selectedDocument,
+                  document.contentKind == .text,
+                  !document.isFileBacked,
+                  let host = hostCache.peek(pane.id),
+                  host.loadedDocumentID == document.id,
+                  host.loadedBufferGeneration != host.textView.contentGeneration
+            else { continue }
+            syncTextViewToDocument(host.textView, document: document, from: host)
+        }
     }
 
     func saveSession(

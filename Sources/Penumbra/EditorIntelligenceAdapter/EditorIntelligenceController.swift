@@ -1784,28 +1784,33 @@ public final class EditorIntelligenceController {
 
     /// The identifier run around the caret: from its start up to the caret (`location`/`length`
     /// cover only the part before the caret), or `nil` without a single caret.
+    /// Inside `{{ }}` the run includes `.`, so accepting `$random.uuid` replaces the whole token.
     private func liveIdentifierRange() -> NSRange? {
         guard let textView else { return nil }
         let caret = textView.selectedRange
         guard caret.length == 0 else { return nil }
         let windowStart = max(0, caret.location - 256)
-        let before = (textView.text(in: NSRange(location: windowStart, length: caret.location - windowStart)) ?? "") as NSString
-        var start = before.length
-        while start > 0, let scalar = UnicodeScalar(before.character(at: start - 1)), isCompletionIdentifierScalar(scalar) {
-            start -= 1
-        }
-        return NSRange(location: windowStart + start, length: before.length - start)
+        let before = textView.text(in: NSRange(location: windowStart, length: caret.location - windowStart)) ?? ""
+        let localStart = CompletionTokenScan.tokenStart(utf16Text: before, caret: (before as NSString).length)
+        return NSRange(location: windowStart + localStart, length: (before as NSString).length - localStart)
     }
 
     /// Length of the identifier characters right after the caret (replaced by Tab).
     private func identifierSuffixLength(after offset: Int) -> Int {
         guard let textView else { return 0 }
-        let after = (textView.text(in: NSRange(location: offset, length: min(256, max(0, textView.documentLength - offset)))) ?? "") as NSString
-        var length = 0
-        while length < after.length, let scalar = UnicodeScalar(after.character(at: length)), isCompletionIdentifierScalar(scalar) {
-            length += 1
-        }
-        return length
+        let after = textView.text(in: NSRange(location: offset, length: min(256, max(0, textView.documentLength - offset)))) ?? ""
+        return CompletionTokenScan.suffixLength(utf16Text: after, template: completionOpensTemplate(caret: offset))
+    }
+
+    /// `{{` before the token at `caret`, skipping spaces and tabs. Dots stay in the token only then.
+    private func completionOpensTemplate(caret: Int) -> Bool {
+        guard let textView else { return false }
+        let anchor = liveIdentifierRange()?.location ?? caret
+        let windowStart = max(0, anchor - 64)
+        let length = anchor - windowStart
+        guard length > 0 else { return false }
+        let before = textView.text(in: NSRange(location: windowStart, length: length)) ?? ""
+        return CompletionTokenScan.opensTemplate(utf16Text: before, tokenStart: (before as NSString).length)
     }
 
     private func dismissCompletionIfCaretLeftIdentifier() {
@@ -2540,7 +2545,12 @@ public final class EditorIntelligenceController {
 
     private func isIdentifierText(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }
-        return text.unicodeScalars.allSatisfy(isCompletionIdentifierScalar)
+        if text.unicodeScalars.allSatisfy(isCompletionIdentifierScalar) {
+            return true
+        }
+        // A dot inside `{{ }}` continues `$random.uuid`. Elsewhere it starts member access.
+        guard text == ".", let textView else { return false }
+        return completionOpensTemplate(caret: textView.selectedRange.location)
     }
 
     /// Characters that open the popup on their own: member access and annotations.

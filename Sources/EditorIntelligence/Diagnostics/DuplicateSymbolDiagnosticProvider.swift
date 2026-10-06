@@ -4,12 +4,19 @@ import Foundation
 public actor DuplicateSymbolDiagnosticProvider: DiagnosticProvider {
     public let name = "DuplicateSymbol"
     private let index: SymbolIndex
+    /// Languages whose "symbols" are repeated by design (an `.http` file names every request after
+    /// its method), so a repeat is not a mistake.
+    private let skippedLanguageIdentifiers: Set<String>
 
-    public init(index: SymbolIndex) {
+    public init(index: SymbolIndex, skippingLanguages: [String] = []) {
         self.index = index
+        self.skippedLanguageIdentifiers = Set(skippingLanguages)
     }
 
     public func diagnostics(for document: Document) async -> [Diagnostic] {
+        if let language = document.languageIdentifier, skippedLanguageIdentifiers.contains(language) {
+            return []
+        }
         let symbols = await index.symbols(in: document.id)
         var buckets: [String: [Symbol]] = [:]
         for symbol in symbols {

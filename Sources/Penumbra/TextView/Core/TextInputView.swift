@@ -3258,6 +3258,14 @@ extension TextInputView {
         EditorPerformanceTrace.shared.measure(.visibleLayout) {
             applyLineChangesToLayoutManager(lineChangeSet)
         }
+        if updateSelection {
+            // The caret was assigned before the text changed, so the notification from
+            // `_selectedRange.didSet` described the word under the caret in the old text.
+            occurrenceHighlightController.selectionDidChange(
+                selectedRange: _selectedRange,
+                isMultiCaret: isMultiCursorActive
+            )
+        }
         EditorPerformanceTrace.shared.measure(.incrementalParse) {
             restartSyntaxParseAfterCancelledEdit()
         }
