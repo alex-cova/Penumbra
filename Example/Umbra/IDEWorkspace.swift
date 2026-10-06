@@ -4087,6 +4087,7 @@ public final class IDEWorkspace {
                 + self.diffContextMenuItems(url: url)
                 + self.diagramContextMenuItems(url: url)
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
+                + self.textToolsContextMenuItems(context: context, textView: host.textView)
                 + self.localHistoryContextMenuItems(url: url)
         }
         host.wireMarkdownPreview { [weak self, weak host] in
