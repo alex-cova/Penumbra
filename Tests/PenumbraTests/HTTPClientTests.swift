@@ -38,7 +38,46 @@ final class HTTPRequestParserTests: XCTestCase {
         """
         let request = try HTTPRequestParser.parse(text: text, caretUTF16Offset: 0, fileURL: nil)
         XCTAssertEqual(request.method, "POST")
-        XCTAssertTrue(String(data: request.body ?? Data(), encoding: .utf8)?.contains("\"ok\": true") ?? false)
+        XCTAssertEqual(String(data: request.body ?? Data(), encoding: .utf8), "{\n  \"ok\": true\n}")
+    }
+
+    func testJSONBodyKeepsClosingBraceWhenTheFileHasNoTrailingNewline() throws {
+        let text = """
+        PUT https://api.example.com/settings
+        Authorization: token
+        Content-Type: application/json
+
+        {
+          "accountIdConfig": "5.5.5.5.5",
+          "order": "LEFT",
+          "enabled": true
+        }
+        """
+        let request = try HTTPRequestParser.parse(text: text, caretUTF16Offset: 0, fileURL: nil)
+        XCTAssertEqual(request.method, "PUT")
+        XCTAssertEqual(request.url.absoluteString, "https://api.example.com/settings")
+        XCTAssertEqual(request.headers["Authorization"], "token")
+        XCTAssertEqual(request.headers["Content-Type"], "application/json")
+        let body = """
+        {
+          "accountIdConfig": "5.5.5.5.5",
+          "order": "LEFT",
+          "enabled": true
+        }
+        """
+        XCTAssertEqual(String(data: request.body ?? Data(), encoding: .utf8), body)
+    }
+
+    func testCompactJSONOnTheLastLineIsTheBody() throws {
+        let text = """
+        POST https://example.com/second HTTP/1.1
+        Content-Type: application/json
+
+        {"n": 2}
+        """
+        let request = try HTTPRequestParser.parse(text: text, caretUTF16Offset: 0, fileURL: nil)
+        XCTAssertEqual(String(data: request.body ?? Data(), encoding: .utf8), "{\"n\": 2}")
+        XCTAssertEqual(HTTPRequestParser.requestLocations(in: text).map(\.startLine), [1])
     }
 
     func testParsesExternalBodyFromRelativePath() throws {

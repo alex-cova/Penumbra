@@ -50,5 +50,26 @@ final class HTTPRequestLocationTests: XCTestCase {
     func testFilesWithoutRequestsHaveNoLocations() {
         XCTAssertEqual(HTTPRequestParser.requestLocations(in: ""), [])
         XCTAssertEqual(HTTPRequestParser.requestLocations(in: "# just a comment\n"), [])
+        XCTAssertEqual(HTTPRequestParser.requestLocations(in: "}\n"), [])
+    }
+
+    func testClosingBraceWithoutNewlineIsNotARequest() {
+        let text = """
+        PUT https://api.example.com/settings
+        Authorization: token
+        Content-Type: application/json
+
+        {
+          "accountIdConfig": "5.5.5.5.5",
+          "order": "LEFT",
+          "enabled": true
+        }
+        """
+        XCTAssertEqual(HTTPRequestParser.requestLocations(in: text).map(\.startLine), [1])
+    }
+
+    func testURLOnlyRequestLineKeepsItsButton() {
+        let locations = HTTPRequestParser.requestLocations(in: "https://example.com/a\n")
+        XCTAssertEqual(locations.map(\.startLine), [1])
     }
 }

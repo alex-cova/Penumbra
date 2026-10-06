@@ -101,26 +101,68 @@ enum HTTPRequestParser {
         guard let tree = parseTree(text) else {
             throw HTTPRequestParserError.parseFailed
         }
+        let spans = requestSpans(in: tree)
         let caretByte = utf16OffsetToByteOffset(text: text, utf16Offset: caretUTF16Offset)
-        let requests = collectRequests(from: tree.rootNode)
-        guard let request = requests.first(where: { $0.startByte <= caretByte && caretByte <= $0.endByte })
-            ?? requests.first else {
+        let end = tree.sourceBytes.count
+        guard let span = spans.first(where: { $0.contains(caretByte, sourceEnd: end) }) ?? spans.first else {
             throw HTTPRequestParserError.noRequestAtCaret
         }
-        return try buildRequest(from: request, fileURL: fileURL)
+        let tail = sourceSlice(tree.sourceBytes, from: span.node.endByte, to: span.boundary)
+        return try buildRequest(from: span.node, fileURL: fileURL, tail: tail)
     }
 
     /// Where each request in `text` starts, for the gutter's send buttons. One parse and one pass
     /// over the bytes, so it costs the same however many requests the file has.
+    ///
+    /// A request line is a method (`PUT`, `GET`, …) or a URL that starts with `http://` or
+    /// `https://`. The grammar also reports a request for a trailing body line that has no newline
+    /// (the closing `}` of a JSON body). That line is not a request: it stays part of the body.
     static func requestLocations(in text: String) -> [HTTPRequestLocation] {
         guard let tree = parseTree(text) else {
             return []
         }
-        let nodes = collectRequests(from: tree.rootNode)
-        guard !nodes.isEmpty else {
-            return []
+        return requestSpans(in: tree).map {
+            HTTPRequestLocation(startLine: $0.startLine, utf16Range: $0.utf16Range)
+        }
+    }
+
+    /// One real request. `boundary` is the byte where the next request or `###` separator starts,
+    /// so a body the grammar split off (no newline before EOF) still belongs to this request.
+    private struct RequestSpan {
+        var node: HTTPTSyntaxNode
+        var startLine: Int
+        var utf16Range: Range<Int>
+        var boundary: Int
+
+        func contains(_ caretByte: Int, sourceEnd: Int) -> Bool {
+            guard node.startByte <= caretByte else { return false }
+            if caretByte < boundary { return true }
+            return boundary == sourceEnd && caretByte == sourceEnd
+        }
+    }
+
+    private static let requestMethods: Set<String> = [
+        "OPTIONS", "GET", "HEAD", "POST", "PUT", "DELETE",
+        "TRACE", "CONNECT", "PATCH", "LIST", "GRAPHQL", "WEBSOCKET",
+    ]
+
+    private static func requestSpans(in tree: HTTPTSyntaxTree) -> [RequestSpan] {
+        var requests: [HTTPTSyntaxNode] = []
+        var separatorStarts: [Int] = []
+        tree.rootNode.walk { node in
+            if node.type == "request" {
+                requests.append(node)
+            } else if node.type == "request_separator" {
+                separatorStarts.append(node.startByte)
+            }
         }
         let bytes = tree.sourceBytes
+        let real = requests
+            .filter { isRequestLine(lineText(bytes, at: $0.startByte)) }
+            .sorted { $0.startByte < $1.startByte }
+        guard !real.isEmpty else { return [] }
+        separatorStarts.sort()
+
         var cursor = 0
         var line = 1
         var utf16Offset = 0
@@ -137,15 +179,53 @@ enum HTTPRequestParser {
                 cursor += 1
             }
         }
-        var locations: [HTTPRequestLocation] = []
-        for node in nodes.sorted(by: { $0.startByte < $1.startByte }) {
+
+        var spans: [RequestSpan] = []
+        for (ordinal, node) in real.enumerated() {
             advance(to: node.startByte)
             let start = utf16Offset
             let startLine = line
             advance(to: node.endByte)
-            locations.append(HTTPRequestLocation(startLine: startLine, utf16Range: start..<max(start, utf16Offset)))
+            let nextReal = ordinal + 1 < real.count ? real[ordinal + 1].startByte : bytes.count
+            let nextSeparator = separatorStarts.first { $0 >= node.endByte } ?? bytes.count
+            spans.append(RequestSpan(
+                node: node,
+                startLine: startLine,
+                utf16Range: start..<max(start, utf16Offset),
+                boundary: min(nextReal, nextSeparator, bytes.count)
+            ))
         }
-        return locations
+        return spans
+    }
+
+    /// The request line itself: `PUT https://…` or a bare `https://…`. A body line such as `}` is not.
+    private static func isRequestLine(_ line: String) -> Bool {
+        let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+        let lowered = trimmed.prefix(8).lowercased()
+        if lowered.hasPrefix("https://") || lowered.hasPrefix("http://") {
+            return true
+        }
+        guard let space = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+            return false
+        }
+        return requestMethods.contains(String(trimmed[..<space]))
+    }
+
+    private static func lineText(_ bytes: [UInt8], at byte: Int) -> String {
+        var start = min(max(byte, 0), bytes.count)
+        while start > 0, bytes[start - 1] != 0x0A, bytes[start - 1] != 0x0D {
+            start -= 1
+        }
+        var end = min(max(byte, 0), bytes.count)
+        while end < bytes.count, bytes[end] != 0x0A, bytes[end] != 0x0D {
+            end += 1
+        }
+        return String(decoding: bytes[start..<end], as: UTF8.self)
+    }
+
+    private static func sourceSlice(_ bytes: [UInt8], from start: Int, to end: Int) -> String {
+        guard start >= 0, end <= bytes.count, start < end else { return "" }
+        return String(decoding: bytes[start..<end], as: UTF8.self)
     }
 
     private static func parseTree(_ text: String) -> HTTPTSyntaxTree? {
@@ -170,18 +250,8 @@ enum HTTPRequestParser {
         return text.utf8.distance(from: text.utf8.startIndex, to: stringIndex)
     }
 
-    private static func collectRequests(from root: HTTPTSyntaxNode) -> [HTTPTSyntaxNode] {
-        var requests: [HTTPTSyntaxNode] = []
-        root.walk { node in
-            if node.type == "request" {
-                requests.append(node)
-            }
-        }
-        return requests
-    }
-
-    private static func buildRequest(from node: HTTPTSyntaxNode, fileURL: URL?) throws -> HTTPPreparedRequest {
-        if node.text.contains("{{") {
+    private static func buildRequest(from node: HTTPTSyntaxNode, fileURL: URL?, tail: String) throws -> HTTPPreparedRequest {
+        if node.text.contains("{{") || tail.contains("{{") {
             throw HTTPRequestParserError.unsupportedVariable
         }
 
@@ -190,7 +260,7 @@ enum HTTPRequestParser {
         let targetText = node.child(byFieldName: "url")?.text ?? ""
         let normalizedTarget = normalizeTargetURL(targetText)
         var headers = parseHeaders(in: node)
-        let body = try parseBody(in: node, fileURL: fileURL)
+        let body = try parseBody(in: node, fileURL: fileURL, tail: tail)
 
         guard let url = try resolveURL(target: normalizedTarget, headers: headers) else {
             throw HTTPRequestParserError.invalidURL(normalizedTarget)
@@ -222,49 +292,40 @@ enum HTTPRequestParser {
         return headers
     }
 
-    private static func parseBody(in request: HTTPTSyntaxNode, fileURL: URL?) throws -> Data? {
+    /// `tail` is source the grammar left outside the request node, usually a closing `}` or `]`
+    /// on the last line when the file has no newline after it. It belongs to the body.
+    private static func parseBody(in request: HTTPTSyntaxNode, fileURL: URL?, tail: String) throws -> Data? {
         if let bodyNode = request.child(byFieldName: "body") {
-            return try bodyData(from: bodyNode, fileURL: fileURL)
+            if bodyNode.type == "external_body" {
+                return try externalBodyData(from: bodyNode, fileURL: fileURL)
+            }
+            return textBody(bodyNode.text, tail: tail)
         }
         if let external = findDescendant(ofType: "external_body", in: request) {
             return try externalBodyData(from: external, fileURL: fileURL)
         }
         if let rawBody = findDescendant(ofType: "raw_body", in: request)
             ?? findDescendant(ofType: "json_body", in: request)
-            ?? findDescendant(ofType: "xml_body", in: request) {
-            return textBodyData(from: rawBody)
+            ?? findDescendant(ofType: "xml_body", in: request)
+            ?? findDescendant(ofType: "graphql_body", in: request)
+            ?? findDescendant(ofType: "multipart_form_data", in: request) {
+            return textBody(rawBody.text, tail: tail)
         }
-        return inlineBodyData(in: request)
+        let inline = inlineBodyText(in: request) ?? ""
+        return textBody(inline, tail: tail)
     }
 
-    private static func inlineBodyData(in request: HTTPTSyntaxNode) -> Data? {
+    private static func textBody(_ text: String, tail: String) -> Data? {
+        let combined = (text + tail).trimmingCharacters(in: .whitespacesAndNewlines)
+        return combined.isEmpty ? nil : Data(combined.utf8)
+    }
+
+    private static func inlineBodyText(in request: HTTPTSyntaxNode) -> String? {
         let text = request.text
         guard let separatorRange = text.range(of: "\n\n") ?? text.range(of: "\r\n\r\n") else {
             return nil
         }
-        let body = text[separatorRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-        return body.isEmpty ? nil : Data(body.utf8)
-    }
-
-    private static func bodyData(from node: HTTPTSyntaxNode, fileURL: URL?) throws -> Data? {
-        switch node.type {
-        case "external_body":
-            return try externalBodyData(from: node, fileURL: fileURL)
-        case "json_body", "xml_body", "raw_body", "multipart_form_data", "graphql_body":
-            return textBodyData(from: node)
-        default:
-            for child in node.namedChildren {
-                if let data = try bodyData(from: child, fileURL: fileURL) {
-                    return data
-                }
-            }
-            return textBodyData(from: node)
-        }
-    }
-
-    private static func textBodyData(from node: HTTPTSyntaxNode) -> Data? {
-        let text = node.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : Data(text.utf8)
+        return String(text[separatorRange.upperBound...])
     }
 
     private static func externalBodyData(from node: HTTPTSyntaxNode, fileURL: URL?) throws -> Data {
