@@ -129,6 +129,7 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         let text = multilineText(lineCount: 10)
         let textView = makeFocusedTextView(text: text)
 
+        textView.bottomScrollPadding = 0
         textView.isTypewriterScrollingEnabled = false
         textView.layoutIfNeeded()
         drainMainQueue()
@@ -291,6 +292,7 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         let text = multilineText(lineCount: 10)
         let textView = makeFocusedTextView(text: text)
 
+        textView.bottomScrollPadding = 0
         textView.isTypewriterScrollingEnabled = true
         textView.layoutIfNeeded()
         drainMainQueue()

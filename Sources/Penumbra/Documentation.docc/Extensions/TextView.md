@@ -76,6 +76,7 @@
 ### Overscroll
 
 - ``verticalOverscrollFactor``
+- ``bottomScrollPadding``
 - ``horizontalOverscrollFactor``
 
 ### Page Guide

@@ -1084,6 +1084,17 @@ public struct DocumentTextExport: Sendable {
             }
         }
     }
+    /// Extra scrollable space, in points, below the last line so the end of the document can be
+    /// scrolled away from the bottom edge. It does not add to ``verticalOverscrollFactor`` or
+    /// typewriter overscroll; the larger of them wins. 0 turns it off. Defaults to 100.
+    public var bottomScrollPadding: CGFloat = 100 {
+        didSet {
+            if bottomScrollPadding != oldValue {
+                hasPendingContentSizeUpdate = true
+                handleContentSizeUpdateIfNeeded()
+            }
+        }
+    }
     /// Amount of overscroll to add in the horizontal direction.
     ///
     /// The overscroll is a factor of the scrollable area height and will not take into account any insets or the width of the gutter. 0 means no overscroll and 1 means an amount equal to the width of the text view. Detaults to 0.
@@ -1392,6 +1403,7 @@ public struct DocumentTextExport: Sendable {
             )
             verticalOverscrollLength = max(verticalOverscrollLength, typewriterOverscrollLength)
         }
+        verticalOverscrollLength = max(verticalOverscrollLength, bottomScrollPadding, 0)
         let baseContentSize = textInputView.contentSize
         let width = isLineWrappingEnabled ? baseContentSize.width : baseContentSize.width + horizontalOverscrollLength
         let height = baseContentSize.height + verticalOverscrollLength

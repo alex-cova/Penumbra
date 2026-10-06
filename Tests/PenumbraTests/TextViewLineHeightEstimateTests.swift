@@ -92,7 +92,7 @@ final class TextViewLineHeightEstimateTests: XCTestCase {
         let lineManager = textView.lineManagerForTesting
         XCTAssertEqual(lineManager.lineInfo(atRow: 1_999).lineHeight, expected, accuracy: 0.01)
         XCTAssertEqual(lineManager.contentHeight, expected * 2_000, accuracy: 20)
-        XCTAssertEqual(textView.contentSize.height, expected * 2_000, accuracy: 40)
+        XCTAssertEqual(textView.contentSize.height, expected * 2_000 + textView.bottomScrollPadding, accuracy: 40)
     }
 
     /// The view applies its content size on the next run-loop turn, not during layout.
