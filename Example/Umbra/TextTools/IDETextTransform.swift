@@ -13,7 +13,7 @@ struct IDETextTransformContext: Sendable {
 struct IDETextTransform: Sendable {
     /// Menu sections, in the order they appear.
     enum Group: CaseIterable, Sendable {
-        case encoding, json, textCase
+        case encoding, json, textCase, lines
     }
 
     let id: String
@@ -28,6 +28,14 @@ enum IDETextTransforms {
         .init(id: "base64.decode", title: "Decode Base64", group: .encoding) { text, _ in IDEBase64Text.decode(text) },
         .init(id: "url.encode", title: "URL Encode", group: .encoding) { text, _ in IDEURLText.encode(text) },
         .init(id: "url.decode", title: "URL Decode", group: .encoding) { text, _ in IDEURLText.decode(text) },
+        .init(id: "html.encode", title: "Encode HTML Entities", group: .encoding) { text, _ in IDEHTMLText.encode(text) },
+        .init(id: "html.decode", title: "Decode HTML Entities", group: .encoding) { text, _ in IDEHTMLText.decode(text) },
+        .init(id: "hex.encode", title: "Hex Encode", group: .encoding) { text, _ in IDEHexText.encode(text) },
+        .init(id: "hex.decode", title: "Hex Decode", group: .encoding) { text, _ in IDEHexText.decode(text) },
+        .init(id: "string.escape", title: "Escape String", group: .encoding) { text, _ in IDEStringEscapeText.escape(text) },
+        .init(id: "string.unescape", title: "Unescape String", group: .encoding) { text, _ in IDEStringEscapeText.unescape(text) },
+        .init(id: "unicode.escape", title: "Unicode Escape", group: .encoding) { text, _ in IDEUnicodeEscapeText.escape(text) },
+        .init(id: "unicode.unescape", title: "Unicode Unescape", group: .encoding) { text, _ in IDEUnicodeEscapeText.unescape(text) },
         .init(id: "json.format", title: "Format JSON", group: .json) { text, context in
             IDEJSONText.format(text, indentUnit: context.indentUnit, baseIndent: context.baseIndent)
         },
@@ -41,6 +49,14 @@ enum IDETextTransforms {
         .init(id: "case.kebab", title: "kebab-case", group: .textCase) { text, _ in IDECaseText.convert(text, to: .kebab) },
         .init(id: "case.screaming", title: "SCREAMING_SNAKE_CASE", group: .textCase) { text, _ in
             IDECaseText.convert(text, to: .screamingSnake)
+        },
+        .init(id: "lines.sortAscending", title: "Sort Lines Ascending", group: .lines) { text, _ in IDELineText.sortAscending(text) },
+        .init(id: "lines.sortDescending", title: "Sort Lines Descending", group: .lines) { text, _ in IDELineText.sortDescending(text) },
+        .init(id: "lines.removeDuplicates", title: "Remove Duplicate Lines", group: .lines) { text, _ in IDELineText.removeDuplicates(text) },
+        .init(id: "lines.reverse", title: "Reverse Lines", group: .lines) { text, _ in IDELineText.reverse(text) },
+        .init(id: "lines.removeBlank", title: "Remove Blank Lines", group: .lines) { text, _ in IDELineText.removeBlankLines(text) },
+        .init(id: "lines.trimTrailing", title: "Trim Trailing Whitespace", group: .lines) { text, _ in
+            IDELineText.trimTrailingWhitespace(text)
         }
     ]
 
