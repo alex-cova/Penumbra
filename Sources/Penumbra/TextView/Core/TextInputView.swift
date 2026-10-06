@@ -3056,10 +3056,16 @@ extension TextInputView {
         if !supplementaryInlayHints.isEmpty { supplementaryInlayHints = [] }
         registerBatchUndo(inverseReplacements: application.inverseReplacements)
         invalidateLines()
+        // The edits went straight to the string and line tree, so the syntax tree and the typeset
+        // lines still describe the old text: a highlight computed from them would paint ranges
+        // that no longer fit the line. Drop them and reparse, as the `string` setter does.
+        lineControllerStorage.removeAllLineControllers()
+        contentSizeService.reset()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
         contentSizeService.invalidateContentSize()
         gutterWidthService.invalidateLineNumberWidth()
+        startFullParse()
         delegate?.textInputViewDidChange(self)
         if let oldLinePosition = oldLinePosition {
             // By restoring the selected range using the old line position we can better preserve the old selected language.

@@ -197,6 +197,11 @@ private extension TreeSitterSyntaxHighlighter {
         var changed = false
         let defaultFont = theme.font
         for token in coalesce(tokens) {
+            // A result computed off the main thread can arrive after the line changed; a range
+            // outside the string would raise NSRangeException.
+            guard token.range.location >= 0, token.range.upperBound <= attributedString.length else {
+                continue
+            }
             if token.fontTraits.isEmpty && token.font == nil {
                 if let foregroundColor = token.textColor,
                    !Self.attribute(attributedString: attributedString, key: .foregroundColor, equals: foregroundColor, in: token.range) {
