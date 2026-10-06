@@ -50,6 +50,12 @@
 	<string>1.6.5</string>
 	<key>CFBundleVersion</key>
 	<string>1.6.5</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://alex-cova.github.io/Penumbra/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>IPElzS5mueBDtsV3vOD76DSh9G5TgCFW6Xyi911LRtg=</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>

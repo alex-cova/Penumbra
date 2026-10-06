@@ -26,6 +26,8 @@ struct IDEAppCommands: Commands {
         Group {
             CommandGroup(replacing: .appInfo) {
                 Button("About Umbra") { IDEAbout.show() }
+                Button("Check for Updates…") { IDEAppUpdater.checkForUpdates(nil) }
+                    .disabled(!IDEAppUpdater.canCheckForUpdates)
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…", systemImage: "gearshape") { workspace?.showSettings() }

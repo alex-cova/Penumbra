@@ -26,6 +26,15 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
+SPARKLE_FRAMEWORK="$(find "$root/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework" -path '*/Sparkle.framework' -print -quit)"
+if [[ -z "$SPARKLE_FRAMEWORK" || ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "error: Sparkle.framework not found; run 'swift build -c $CONFIGURATION --product Umbra' first" >&2
+  exit 1
+fi
+mkdir -p "$APP_DIR/Contents/Frameworks"
+ditto "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+
 # On-device models (MLX) need their compiled Metal kernels at run time. SwiftPM builds them into a
 # resource bundle next to the binary; Umbra looks for `Contents/Resources/mlx.metallib` and tells MLX
 # where it is, and without it the on-device provider reports "this build has no MLX shaders".

@@ -10,6 +10,8 @@ Pre-built releases are published on [GitHub Releases](https://github.com/alex-co
 2. Move `Umbra.app` to Applications (or anywhere you like).
 3. Open Umbra. Signed/notarized builds launch without Gatekeeper workarounds.
 
+Release builds check for updates automatically (Application menu ▸ Check for Updates…, or Settings ▸ General ▸ Updates). Updates are delivered through [Sparkle](https://sparkle-project.org/) from the stable feed at `https://alex-cova.github.io/Penumbra/appcast.xml`.
+
 ## Features
 
 **Editing**
@@ -144,6 +146,22 @@ For local signed builds, set:
 | `APPLE_TEAM_ID` | Team ID |
 
 CI releases use `.github/workflows/release-app.yml` with the secrets documented in the table above (`APPLE_CERTIFICATE_BASE64`, `KEYCHAIN_PASSWORD`, etc.).
+
+### Automatic updates (Sparkle)
+
+Release CI also regenerates `website/appcast.xml` and delta patches under `website/updates/`, then pushes them to `main` so GitHub Pages serves the feed.
+
+One-time signing key setup (run after `swift build --product Umbra` so Sparkle tools are available):
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys
+```
+
+This prints the `SUPublicEDKey` value for [`Example/Resources/Info.plist`](Resources/Info.plist) and stores the private key in your login keychain. Export the private key for CI and add it as the `SPARKLE_ED_PRIVATE_KEY` repository secret:
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /path/to/sparkle-ed-private.key
+```
 
 Trigger a release by pushing an unprefixed semver tag (this repo does not use a `v` prefix):
 
