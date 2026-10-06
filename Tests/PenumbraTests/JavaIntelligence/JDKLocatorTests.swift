@@ -238,6 +238,44 @@ final class JDKLocatorTests: XCTestCase {
         XCTAssertTrue(installation.hasCtSym || installation.hasJmods, "expected either ct.sym or jmods")
     }
 
+    /// `SystemProcessRunner` used to read stdout to the end and only then stderr, so a child that
+    /// wrote more than a pipe holds (64 KB) to stderr before finishing blocked on its write while
+    /// the runner blocked on stdout. Both pipes are now drained together; like the stdin test above,
+    /// this waits on a background thread so a regression fails instead of hanging the suite.
+    func testSystemProcessRunnerDoesNotHangWhenAChildFillsStderrAndFails() {
+        let finished = expectation(description: "the runner returns")
+        let box = ResultBox()
+        DispatchQueue.global().async {
+            do {
+                let output = try SystemProcessRunner().run(
+                    executable: "/bin/sh",
+                    arguments: ["-c", "echo partial; head -c 300000 /dev/zero | tr '\\0' 'e' >&2; exit 4"])
+                box.store(.success((output, 0)))
+            } catch {
+                box.store(.failure(error))
+            }
+            finished.fulfill()
+        }
+        let result = XCTWaiter.wait(for: [finished], timeout: 20)
+        XCTAssertEqual(result, .completed, "a child filling stderr must not deadlock the runner")
+        guard result == .completed else { return }
+        switch box.value {
+        case .failure(ProcessRunError.nonZeroExit(let status, let stderr)):
+            XCTAssertEqual(status, 4)
+            XCTAssertEqual(stderr.utf8.count, 300_000, "all of stderr is kept")
+        default:
+            XCTFail("expected nonZeroExit(4), got \(String(describing: box.value))")
+        }
+    }
+
+    func testSystemProcessRunnerReturnsStdoutAndTreatsAMissingProgramAsNotFound() throws {
+        let output = try SystemProcessRunner().run(executable: "/bin/sh", arguments: ["-c", "echo hello"])
+        XCTAssertEqual(output, "hello\n")
+        XCTAssertThrowsError(try SystemProcessRunner().run(executable: "/does/not/exist", arguments: [])) {
+            guard case ProcessRunError.executableNotFound = $0 else { return XCTFail("\($0)") }
+        }
+    }
+
     /// Same regression as `GradleCommandRunnerTests.testSystemLauncherClosesChildStandardInput`.
     /// `SystemProcessRunner` has no timeout of its own, so this waits on a background thread and
     /// fails the test if `cat` is still blocked after a few seconds.

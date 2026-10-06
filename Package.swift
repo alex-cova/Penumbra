@@ -26,6 +26,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "Packages/GitIntelligence"),
+        .package(path: "Packages/SubprocessKit"),
         .package(path: "Packages/AgentKit"),
         .package(path: "Packages/AgentKitMLX"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -99,7 +100,8 @@ let package = Package(
                 "EditorIntelligence",
                 "TreeSitter",
                 "TreeSitterJava",
-                .product(name: "FernflowerKit", package: "sunflower")
+                .product(name: "FernflowerKit", package: "sunflower"),
+                .product(name: "SubprocessKit", package: "SubprocessKit")
             ],
             exclude: ["CLAUDE.md"],
             swiftSettings: swift6
@@ -114,7 +116,10 @@ let package = Package(
         // The agent evaluator: scripted tasks, a real model, a verdict from the project's own tests.
         .target(
             name: "AgentEvalKit",
-            dependencies: [.product(name: "AgentKit", package: "AgentKit")],
+            dependencies: [
+                .product(name: "AgentKit", package: "AgentKit"),
+                .product(name: "SubprocessKit", package: "SubprocessKit")
+            ],
             path: "Tools/AgentEval/Sources/AgentEvalKit",
             swiftSettings: swift6
         ),
@@ -145,6 +150,7 @@ let package = Package(
                 "TreeSitter",
                 "TreeSitterHTTP",
                 .product(name: "GitIntelligence", package: "GitIntelligence"),
+                .product(name: "SubprocessKit", package: "SubprocessKit"),
                 .product(name: "AgentKit", package: "AgentKit"),
                 .product(name: "AgentKitMLX", package: "AgentKitMLX"),
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),

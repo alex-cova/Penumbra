@@ -1,4 +1,5 @@
 import Foundation
+import SubprocessKit
 
 public struct GitOutput: Sendable {
     public let stdout: Data
@@ -35,8 +36,9 @@ public extension GitRunning {
     }
 }
 
-/// Runs `/usr/bin/git`. Reads stdout and stderr concurrently so large `log`/`blame` output cannot
-/// fill a pipe while the other one is being drained, and terminates the process on cancellation.
+/// Runs `/usr/bin/git` through SubprocessKit. Both output pipes are drained concurrently, so large
+/// `log`/`blame` output cannot fill one while the other is being read, and a cancelled `Task` ends
+/// the process.
 public struct SystemGitRunner: GitRunning {
     public static let executablePath = "/usr/bin/git"
 
@@ -44,80 +46,18 @@ public struct SystemGitRunner: GitRunning {
 
     public func run(_ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?) async throws -> GitOutput {
         guard FileManager.default.isExecutableFile(atPath: Self.executablePath) else { throw GitError.gitNotFound }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: Self.executablePath)
-        process.arguments = ["-c", "core.quotepath=off"] + arguments
-        process.currentDirectoryURL = directory
+        var request = SubprocessRequest(executable: Self.executablePath, arguments: ["-c", "core.quotepath=off"] + arguments)
+        request.workingDirectory = directory
         if let environment {
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            request.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
         }
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        let stdinPipe = stdin == nil ? nil : Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        process.standardInput = stdinPipe ?? FileHandle.nullDevice
+        if let stdin { request.standardInput = .data(stdin) }
 
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let box = OutputBox()
-                let group = DispatchGroup()
-                let queue = DispatchQueue.global(qos: .utility)
-
-                // `waitUntilExit` spins a run loop that can miss the exit of a process that finishes
-                // almost immediately (a fast-failing git command), blocking forever; the
-                // termination handler is registered before launch, so it cannot be missed.
-                let exited = DispatchSemaphore(value: 0)
-                process.terminationHandler = { _ in exited.signal() }
-
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                group.enter()
-                queue.async {
-                    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    box.setOut(data)
-                    group.leave()
-                }
-                group.enter()
-                queue.async {
-                    let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    box.setErr(data)
-                    group.leave()
-                }
-                if let stdin, let stdinPipe {
-                    queue.async {
-                        try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
-                        try? stdinPipe.fileHandleForWriting.close()
-                    }
-                }
-                queue.async {
-                    exited.wait()
-                    group.wait()
-                    let (out, errData) = box.snapshot()
-                    let err = String(decoding: errData, as: UTF8.self)
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: GitOutput(stdout: out, stderr: err))
-                    } else {
-                        continuation.resume(throwing: GitError.failed(status: process.terminationStatus, stderr: err, stdout: out))
-                    }
-                }
-            }
-        } onCancel: {
-            if process.isRunning { process.terminate() }
+        let result = try await SubprocessRunner.run(request)
+        let err = String(decoding: result.stderr.data, as: UTF8.self)
+        guard result.exit.succeeded else {
+            throw GitError.failed(status: result.exit.status, stderr: err, stdout: result.stdout.data)
         }
+        return GitOutput(stdout: result.stdout.data, stderr: err)
     }
-}
-
-private final class OutputBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var out = Data()
-    private var err = Data()
-
-    func setOut(_ data: Data) { lock.lock(); out = data; lock.unlock() }
-    func setErr(_ data: Data) { lock.lock(); err = data; lock.unlock() }
-    func snapshot() -> (Data, Data) { lock.lock(); defer { lock.unlock() }; return (out, err) }
 }

@@ -10,9 +10,13 @@ let package = Package(
     products: [
         .library(name: "GitIntelligence", targets: ["GitIntelligence"])
     ],
+    dependencies: [
+        .package(path: "../SubprocessKit")
+    ],
     targets: [
         .target(
             name: "GitIntelligence",
+            dependencies: [.product(name: "SubprocessKit", package: "SubprocessKit")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

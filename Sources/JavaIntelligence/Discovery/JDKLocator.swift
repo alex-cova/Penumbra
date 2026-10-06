@@ -1,4 +1,5 @@
 import Foundation
+import SubprocessKit
 
 /// Finds installed JDKs on disk, the equivalent of `SdkEntity`/`Sdk.getRootProvider()` root
 /// discovery in the handoff doc, minus any IDE project-model integration (there is none here --
@@ -222,28 +223,23 @@ public struct SystemProcessRunner: ProcessRunning {
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             throw ProcessRunError.executableNotFound(executable)
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let currentDirectory { process.currentDirectoryURL = currentDirectory }
-        if let environment { process.environment = environment }
-        // Same reason as `SystemGradleProcessLauncher`: an inherited terminal stdin makes some
-        // tools (Gradle's client, anything that reads until EOF) block forever. This runner has
-        // no timeout, so a hang here would stick for good. Callers today are `java_home -X` and
-        // `command -v gradle`, which do not read stdin; closing it is still the safe default.
-        process.standardInput = FileHandle.nullDevice
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        try process.run()
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw ProcessRunError.nonZeroExit(process.terminationStatus, stderr: String(data: errData, encoding: .utf8) ?? "")
+        // Stdin is closed by default (see `SubprocessRequest`): an inherited terminal stdin makes some
+        // tools (Gradle's client, anything that reads until EOF) block forever, and this runner has
+        // no timeout. Both output pipes are drained together, so a child that fills either one
+        // cannot hang it.
+        var request = SubprocessRequest(executable: executable, arguments: arguments)
+        request.workingDirectory = currentDirectory
+        request.environment = environment
+        let result: SubprocessResult
+        do {
+            result = try SubprocessRunner.runBlocking(request)
+        } catch {
+            throw ProcessRunError.executableNotFound(executable)
         }
-        return String(data: outData, encoding: .utf8) ?? ""
+        guard result.exit.succeeded else {
+            throw ProcessRunError.nonZeroExit(result.exit.status, stderr: String(data: result.stderr.data, encoding: .utf8) ?? "")
+        }
+        return String(data: result.stdout.data, encoding: .utf8) ?? ""
     }
 }
 
