@@ -16,6 +16,8 @@ final class TextViewContentOffsetClampTests: XCTestCase {
     private func makeTextView(text: String, height: CGFloat) -> TextView {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 600, height: height))
         textView.theme = DefaultTheme()
+        // The default bottom padding gives even a short file a small scroll range; the clamp is what is tested here.
+        textView.bottomScrollPadding = 0
         textView.text = text
         textView.layoutSubtreeIfNeeded()
         drainMainQueue()

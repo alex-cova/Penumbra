@@ -270,7 +270,7 @@ final class IDEAgentShellShortcutTests: XCTestCase {
         await type(controller, "why did it build?")
 
         guard case .user(let sent) = try XCTUnwrap(client.requests.first?.items.first) else { return XCTFail("no message") }
-        XCTAssertTrue(sent.contains("[Commands the user ran themselves since your last turn"))
+        XCTAssertTrue(sent.contains("<untrusted source=\"commands the user ran\">"))
         XCTAssertTrue(sent.contains("$ echo built ok") && sent.contains("built ok"))
         XCTAssertTrue(sent.hasSuffix("why did it build?"))
         let row = try XCTUnwrap(controller.entries.last { $0.kind == .user })

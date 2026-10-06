@@ -67,6 +67,8 @@ final class IDEAgentRevertAfterRelaunchTests: XCTestCase {
             .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)),
             .toolCalls((id: "w", name: "write_file", arguments: #"{"path":"New.txt","content":"created\n"}"#)),
             .text("done"),
+            // The run changed files and ran no check, so the loop asks once more before it ends.
+            .text("checked"),
         ])
         controller.draft = "edit it"
         controller.submit()

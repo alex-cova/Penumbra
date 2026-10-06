@@ -144,12 +144,9 @@ final class GradleCommandRunnerTests: XCTestCase {
             projectDirectory: dir,
             tasks: ["tasks"],
             javaHome: nil,
-            output: { line in Task { await received.append(line) } }
+            output: { line in received.append(line) }
         )
-        // Let the fire-and-forget append Tasks land before asserting.
-        try await Task.sleep(for: .milliseconds(50))
-        let lines = await received.lines
-        XCTAssertEqual(lines.map(\.text), emitted.map(\.text))
+        XCTAssertEqual(received.lines.map(\.text), emitted.map(\.text))
     }
 
     // MARK: - SystemGradleProcessLauncher: real process behavior (no Gradle needed)
@@ -197,11 +194,10 @@ final class GradleCommandRunnerTests: XCTestCase {
         )
         let received = LineCollector()
         let result = try await SystemGradleProcessLauncher().launch(command, timeout: .seconds(10)) { line in
-            Task { await received.append(line) }
+            received.append(line)
         }
         XCTAssertEqual(result.exitCode, 0)
-        try await Task.sleep(for: .milliseconds(50))
-        let lines = await received.lines
+        let lines = received.lines
         XCTAssertEqual(lines.filter { $0.stream == .stdout }.map(\.text), ["a", "c"])
         XCTAssertEqual(lines.filter { $0.stream == .stderr }.map(\.text), ["b"])
     }
@@ -281,9 +277,13 @@ private struct FakeProcessRunner: ProcessRunning {
     }
 }
 
-private actor LineCollector {
-    private(set) var lines: [GradleOutputLine] = []
-    func append(_ line: GradleOutputLine) { lines.append(line) }
+/// Records lines in the order the handler is called. Not an actor, and the handler does not hop
+/// through a `Task`: unordered tasks could swap two lines and make the assertions flaky.
+private final class LineCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [GradleOutputLine] = []
+    func append(_ line: GradleOutputLine) { lock.withLock { stored.append(line) } }
+    var lines: [GradleOutputLine] { lock.withLock { stored } }
 }
 
 private actor RecordingLauncher: GradleProcessLaunching {

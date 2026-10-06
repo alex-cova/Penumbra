@@ -25,8 +25,8 @@ final class IDEInspectionPreferencesTests: XCTestCase {
         super.tearDown()
     }
 
-    func testEveryRuleIsEnabledAtItsDefaultSeverityByDefault() {
-        XCTAssertEqual(preferences.enabledJavaInspections, Set(JavaInspectionRule.allCases))
+    func testEveryRuleIsAtItsDefaultStateAndSeverityByDefault() {
+        XCTAssertEqual(preferences.enabledJavaInspections, JavaInspectionRule.enabledByDefault)
         XCTAssertTrue(preferences.javaInspectionSeverityOverrides.isEmpty)
         for rule in JavaInspectionRule.allCases {
             XCTAssertEqual(preferences.severity(of: rule), rule.defaultSeverity)
@@ -35,11 +35,11 @@ final class IDEInspectionPreferencesTests: XCTestCase {
 
     func testDisablingARuleStoresItsCode() {
         preferences.setEnabled(false, for: .selfAssignment)
-        XCTAssertEqual(preferences.javaDisabledInspections, ["self-assignment"])
+        XCTAssertEqual(preferences.javaDisabledInspections, IDEPreferences.defaultDisabledInspections.union(["self-assignment"]))
         XCTAssertFalse(preferences.isEnabled(.selfAssignment))
         XCTAssertFalse(preferences.enabledJavaInspections.contains(.selfAssignment))
         preferences.setEnabled(true, for: .selfAssignment)
-        XCTAssertTrue(preferences.javaDisabledInspections.isEmpty)
+        XCTAssertEqual(preferences.javaDisabledInspections, IDEPreferences.defaultDisabledInspections)
     }
 
     func testOnlyDeviationsFromTheDefaultSeverityAreStored() {
@@ -60,7 +60,7 @@ final class IDEInspectionPreferencesTests: XCTestCase {
         preferences.setEnabled(false, for: .unusedLabel)
         preferences.setSeverity(.info, for: .unusedLabel)
         preferences.resetJavaInspections()
-        XCTAssertTrue(preferences.javaDisabledInspections.isEmpty)
+        XCTAssertEqual(preferences.javaDisabledInspections, IDEPreferences.defaultDisabledInspections)
         XCTAssertTrue(preferences.javaInspectionSeverities.isEmpty)
     }
 }
