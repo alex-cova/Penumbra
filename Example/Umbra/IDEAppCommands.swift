@@ -24,6 +24,9 @@ struct IDEAppCommands: Commands {
     var body: some Commands {
         // `CommandsBuilder` only takes 10 children on older SDKs (Xcode 26.3 in CI); group to stay under.
         Group {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Umbra") { IDEAbout.show() }
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…", systemImage: "gearshape") { workspace?.showSettings() }
                     .keyboardShortcut(",", modifiers: .command)
