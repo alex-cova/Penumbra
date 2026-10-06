@@ -1,6 +1,35 @@
 import AppKit
 import SwiftUI
 
+/// The response log's text view. It takes focus on a click and answers ⌘C and ⌘A itself, so
+/// copying does not depend on the menu bar's Copy item finding this view in the responder chain
+/// (the editor and the terminal share the window).
+private final class IDEResponseTextView: NSTextView {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard window?.firstResponder === self, modifiers == .command else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c" where selectedRange().length > 0:
+            copy(nil)
+            return true
+        case "a":
+            selectAll(nil)
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+}
+
 /// Read-only live view of `IDEHTTPSupport.responseLog`, hosted as the "HTTP" tab in the bottom panel.
 struct IDEHTTPResponseView: NSViewRepresentable {
     let log: HTTPResponseLog
@@ -16,9 +45,12 @@ struct IDEHTTPResponseView: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = IDEAppearance.NSToken.editor
 
-        let textView = NSTextView()
+        let textView = IDEResponseTextView()
         textView.isEditable = false
         textView.isSelectable = true
+        // ⌘F while this view has focus opens the find bar (`IDEWorkspace.showFind` routes it here).
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.isRichText = true
         textView.drawsBackground = true
         textView.backgroundColor = IDEAppearance.NSToken.editor
@@ -30,6 +62,12 @@ struct IDEHTTPResponseView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.delegate = context.coordinator
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.controlAccentColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand
+        ]
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -53,7 +91,7 @@ struct IDEHTTPResponseView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         weak var textView: NSTextView?
         var lastRunID: UUID?
         var lastFontName: String?
@@ -89,6 +127,12 @@ struct IDEHTTPResponseView: NSViewRepresentable {
             }
         }
 
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL, url.isFileURL else { return false }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return true
+        }
+
         private func isScrolledToBottom(_ textView: NSTextView) -> Bool {
             guard let scrollView = textView.enclosingScrollView else { return true }
             let visibleMaxY = scrollView.contentView.bounds.maxY
@@ -99,7 +143,17 @@ struct IDEHTTPResponseView: NSViewRepresentable {
         private static func attributedString(for line: HTTPResponseLog.Line, font: NSFont) -> NSAttributedString {
             let color: NSColor
             switch line {
-            case .note:
+            case .savedFile(let url):
+                let result = NSMutableAttributedString(string: line.text + "  ", attributes: [
+                    .font: font,
+                    .foregroundColor: IDEAppearance.NSToken.muted
+                ])
+                result.append(NSAttributedString(string: "Reveal in Finder", attributes: [
+                    .font: font,
+                    .link: url
+                ]))
+                return result
+            case .note, .request:
                 color = IDEAppearance.NSToken.muted
             case .response:
                 color = IDEAppearance.NSToken.foreground

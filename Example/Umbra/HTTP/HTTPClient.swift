@@ -3,13 +3,18 @@ import Foundation
 struct HTTPResponseLog: Sendable {
     enum Line: Sendable {
         case note(String)
+        /// The request as it is sent, after variables are substituted.
+        case request(String)
         case response(String)
         case error(String)
+        case savedFile(URL)
 
         var text: String {
             switch self {
-            case .note(let text), .response(let text), .error(let text):
+            case .note(let text), .request(let text), .response(let text), .error(let text):
                 return text
+            case .savedFile(let url):
+                return "Saved response to \(url.path)"
             }
         }
     }
@@ -42,8 +47,16 @@ struct HTTPResponseLog: Sendable {
         append(.note(text))
     }
 
+    mutating func appendRequest(_ text: String) {
+        append(.request(text))
+    }
+
     mutating func appendResponse(_ text: String) {
         append(.response(text))
+    }
+
+    mutating func appendSavedFile(_ url: URL) {
+        append(.savedFile(url))
     }
 
     mutating func appendError(_ text: String) {
@@ -167,6 +180,22 @@ enum HTTPClient {
             throw HTTPClientError.invalidResponse
         }
         return (httpResponse, data)
+    }
+
+    /// The request the way the log shows it: request line, headers, then the body. Headers are
+    /// the ones set on the request; the client adds its own (`User-Agent`, cookies) when sending.
+    static func formatRequest(_ request: HTTPPreparedRequest) -> String {
+        var lines = ["\(request.method) \(request.url.absoluteString)"]
+        for (key, value) in request.headers.sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
+            lines.append("\(key): \(value)")
+        }
+        if let body = request.body, !body.isEmpty {
+            lines.append("")
+            lines.append(String(data: body, encoding: .utf8) ?? "<\(body.count) bytes of binary data>")
+        }
+        // The trailing blank line separates the request from the response that follows.
+        lines.append("")
+        return lines.joined(separator: "\n")
     }
 
     static func formatResponse(_ response: HTTPURLResponse, data: Data) -> String {

@@ -261,7 +261,7 @@ enum HTTPRequestParser {
         environment: HTTPTemplateEnvironment,
         options: HTTPRequestOptions
     ) throws -> HTTPPreparedRequest {
-        let method = node.child(byFieldName: "method")?.text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var method = node.child(byFieldName: "method")?.text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             ?? "GET"
         let targetText = node.child(byFieldName: "url")?.text ?? ""
         let normalizedTarget = try HTTPSyntax.expand(normalizeTargetURL(targetText), in: environment)
@@ -272,6 +272,13 @@ enum HTTPRequestParser {
         }
         let body = try parseBody(in: node, fileURL: fileURL, tail: tail, environment: environment)
         let digest = HTTPSyntax.applyAuthorization(&headers)
+        if method == "GRAPHQL" {
+            // `GRAPHQL` is not an HTTP verb: it sends the query as a POST, typed unless the file says otherwise.
+            method = "POST"
+            if body != nil, !headers.keys.contains(where: { $0.caseInsensitiveCompare("Content-Type") == .orderedSame }) {
+                headers["Content-Type"] = "application/graphql"
+            }
+        }
         let lengthKeys = headers.keys.filter { $0.caseInsensitiveCompare("Content-Length") == .orderedSame }
         for key in lengthKeys {
             headers.removeValue(forKey: key)

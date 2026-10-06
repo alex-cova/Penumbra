@@ -80,7 +80,11 @@ private struct IDEEditorTabItem: View {
             Button("Split Editor Down") { workspace.splitDown(in: paneID) }
             Divider()
             Button("Rename File…") { workspace.renameTab(tab.id, in: paneID) }
-            if let url = workspace.workbench.panes.flatMap(\.documents).first(where: { $0.id == tab.id })?.url {
+            if let document = workspace.workbench.panes.flatMap(\.documents).first(where: { $0.id == tab.id }),
+               let url = document.url {
+                if document.contentKind == .text {
+                    Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
+                }
                 Button("Show History") { workspace.showLocalHistory(for: url) }
             }
             Divider()

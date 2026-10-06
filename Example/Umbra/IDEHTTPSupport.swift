@@ -29,7 +29,6 @@ final class IDEHTTPSupport {
     func send(text: String, caretUTF16Offset: Int, fileURL: URL?) {
         cancel()
         responseLog.reset()
-        responseLog.appendNote("Preparing request…")
         isSending = true
 
         sendTask = Task { @MainActor in
@@ -42,7 +41,7 @@ final class IDEHTTPSupport {
                     globals: globals.snapshot(),
                     historyFolder: HTTPSyntax.historyDirectory()
                 )
-                responseLog.appendNote("\(prepared.method) \(prepared.url.absoluteString)")
+                responseLog.appendRequest(HTTPClient.formatRequest(prepared))
                 let (response, data) = try await HTTPClient.send(
                     prepared,
                     cookies: prepared.options.useCookieJar ? cookieJar : nil
@@ -56,10 +55,16 @@ final class IDEHTTPSupport {
                 for message in captured.errors {
                     responseLog.appendError(message)
                 }
-                if let output = prepared.output {
+                let output = prepared.output ?? HTTPResponseDownload.output(
+                    for: response,
+                    data: data,
+                    requestURL: prepared.url,
+                    folder: HTTPSyntax.historyDirectory()
+                )
+                if let output {
                     do {
                         let written = try HTTPResponseFiles.write(data, to: output)
-                        responseLog.appendNote("Saved response to \(written.path)")
+                        responseLog.appendSavedFile(written)
                     } catch {
                         responseLog.appendError(error.localizedDescription)
                     }

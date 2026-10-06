@@ -1424,6 +1424,14 @@ public final class IDEWorkspace {
     }
 
     public func showFind() {
+        // A read-only log with focus (the HTTP response) has its own find bar; the editor's
+        // would open on a view the user is not looking at.
+        if let log = NSApp.keyWindow?.firstResponder as? NSTextView, log.usesFindBar, !log.isEditable {
+            let item = NSMenuItem()
+            item.tag = NSTextFinder.Action.showFindInterface.rawValue
+            log.performFindPanelAction(item)
+            return
+        }
         adapter.textView?.perform(.toggleFindPanel)
     }
 
@@ -3833,6 +3841,39 @@ public final class IDEWorkspace {
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
+    /// Replaces the tab's content with what is on disk. A tab with unsaved edits asks first,
+    /// since they cannot be recovered. Every pane showing the document is refreshed.
+    func reloadTabFromDisk(_ id: UUID, in paneID: UUID) {
+        guard let pane = workbench.layout.findPane(id: paneID),
+              let document = pane.documents.first(where: { $0.id == id }),
+              document.contentKind == .text, let url = document.url else { return }
+        if document.isDirty {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Reload \(document.displayName) from disk?"
+            alert.informativeText = "This discards your unsaved changes to \(document.displayName). It cannot be undone."
+            // Cancel first, so it is the default answer to Return.
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Reload")
+            alert.buttons[1].hasDestructiveAction = true
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+        Task {
+            do {
+                let loaded = try await loadDocument(from: url)
+                guard workbench.panes.contains(where: { $0.documents.contains { $0 === document } }) else { return }
+                installReloaded(loaded, onto: document)
+                document.contentGeneration &+= 1
+                for showing in workbench.panes where showing.selectedDocument === document {
+                    showDocument(in: showing, host: host(for: showing.id))
+                }
+                refreshPresentation()
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
     /// Renames the tab's underlying file on disk (or, for an unsaved document, just its
     /// in-memory display name) via a simple name-prompt alert.
     func renameTab(_ id: UUID, in paneID: UUID) {
@@ -3897,14 +3938,16 @@ public final class IDEWorkspace {
     /// A session stores a tab's text from `WorkbenchDocument.text`, which the live editor only
     /// refreshes after a debounce or when its tab is left. Quitting soon after an edit would
     /// otherwise restore the text the tab had before it. File-backed tabs store no text.
+    ///
+    /// Not gated on the buffer generation: other paths (mirroring edits to a split) advance
+    /// `loadedBufferGeneration` without writing `document.text`, which hid stale text here.
     private func syncLiveTextForSession() {
         for pane in workbench.panes {
             guard let document = pane.selectedDocument,
                   document.contentKind == .text,
                   !document.isFileBacked,
                   let host = hostCache.peek(pane.id),
-                  host.loadedDocumentID == document.id,
-                  host.loadedBufferGeneration != host.textView.contentGeneration
+                  host.loadedDocumentID == document.id
             else { continue }
             syncTextViewToDocument(host.textView, document: document, from: host)
         }

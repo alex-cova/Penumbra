@@ -409,6 +409,37 @@ final class HTTPTemplateTests: XCTestCase {
         XCTAssertTrue(String(decoding: graphqlBody, as: UTF8.self).contains("# keep"))
     }
 
+    func testGraphQLRequestIsPostedWithGraphQLContentType() throws {
+        let request = try parse("""
+        GRAPHQL https://api.example.com/shop/v1
+        Authorization: token
+        Content-Length: 76
+        X-Branch-id: 19838
+
+        query {
+          farmacopeaFractions(codes: ["7502224228565"]) {
+            fraction
+          }
+        }
+
+        """)
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.headers["Content-Type"], "application/graphql")
+        XCTAssertEqual(request.headers["X-Branch-id"], "19838")
+        XCTAssertEqual(request.headers["Content-Length"], String(try XCTUnwrap(request.body).count))
+
+        let typed = try parse("""
+        GRAPHQL https://api.example.com/shop/v1
+        content-type: application/json
+
+        { me { id } }
+
+        """)
+        XCTAssertEqual(typed.method, "POST")
+        XCTAssertEqual(typed.headers["content-type"], "application/json")
+        XCTAssertNil(typed.headers["Content-Type"])
+    }
+
     func testResponseFileSuffixAndOverwrite() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -420,6 +451,60 @@ final class HTTPTemplateTests: XCTestCase {
         XCTAssertEqual(forced, url)
         let written = try HTTPResponseFiles.write(Data("new".utf8), to: HTTPResponseOutput(url: url, overwrite: true))
         XCTAssertEqual(try String(contentsOf: written, encoding: .utf8), "new")
+    }
+
+    func testNonTextResponsesAreSavedAsFiles() throws {
+        let url = try XCTUnwrap(URL(string: "https://api.example.com/report/excel"))
+        let folder = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        let binary = Data([0x50, 0x4B, 0x03, 0x04, 0xFF, 0xFE])
+
+        let sheet = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+            "Content-Type": xlsx,
+            "Content-Disposition": "attachment; filename=\"reporte-2026-10-06T05:35:45.161.xlsx\"",
+        ]))
+        let output = try XCTUnwrap(HTTPResponseDownload.output(for: sheet, data: binary, requestURL: url, folder: folder))
+        XCTAssertEqual(output.url.lastPathComponent, "reporte-2026-10-06T05-35-45.161.xlsx")
+        XCTAssertEqual(output.url.deletingLastPathComponent().path, folder.path)
+        XCTAssertFalse(output.overwrite)
+
+        let json = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+            "Content-Type": "application/problem+json; charset=utf-8",
+        ]))
+        XCTAssertNil(HTTPResponseDownload.output(for: json, data: Data("{}".utf8), requestURL: url, folder: folder))
+
+        let untyped = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:]))
+        XCTAssertNil(HTTPResponseDownload.output(for: untyped, data: Data("plain".utf8), requestURL: url, folder: folder))
+        XCTAssertNotNil(HTTPResponseDownload.output(for: untyped, data: binary, requestURL: url, folder: folder))
+    }
+
+    func testDownloadFileNames() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/files/"))
+        XCTAssertEqual(
+            HTTPResponseDownload.fileName(
+                contentDisposition: "attachment; filename=\"a.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+                contentType: "application/pdf",
+                requestURL: url
+            ),
+            "résumé.pdf"
+        )
+        XCTAssertEqual(
+            HTTPResponseDownload.fileName(
+                contentDisposition: "attachment; filename=\"../../etc/.passwd\"",
+                contentType: nil,
+                requestURL: url
+            ),
+            "passwd.bin"
+        )
+        XCTAssertEqual(
+            HTTPResponseDownload.fileName(contentDisposition: nil, contentType: "image/png", requestURL: url),
+            "files.png"
+        )
+        XCTAssertEqual(
+            HTTPResponseDownload.fileName(contentDisposition: nil, contentType: "application/octet-stream", requestURL: URL(string: "https://example.com/")!),
+            "response.bin"
+        )
     }
 
     func testDirectivesAreNotRequestLines() {

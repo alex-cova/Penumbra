@@ -188,6 +188,24 @@ final class HTTPClientTests: XCTestCase {
         XCTAssertTrue(formatted.contains("\"ok\""))
     }
 
+    func testFormatRequestShowsLineHeadersAndBody() {
+        let withBody = HTTPPreparedRequest(
+            method: "POST",
+            url: URL(string: "https://example.com/items")!,
+            headers: ["Content-Type": "application/json", "Accept": "*/*"],
+            body: Data("{\"a\":1}".utf8)
+        )
+        XCTAssertEqual(
+            HTTPClient.formatRequest(withBody),
+            "POST https://example.com/items\nAccept: */*\nContent-Type: application/json\n\n{\"a\":1}\n"
+        )
+
+        let withoutBody = HTTPPreparedRequest(
+            method: "GET", url: URL(string: "https://example.com/")!, headers: [:], body: nil
+        )
+        XCTAssertEqual(HTTPClient.formatRequest(withoutBody), "GET https://example.com/\n")
+    }
+
     func testSendSurfacesTransportErrors() async {
         StubHTTPURLProtocol.handler = { _ in
             throw URLError(.notConnectedToInternet)

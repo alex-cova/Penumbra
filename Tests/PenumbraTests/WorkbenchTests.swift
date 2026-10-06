@@ -347,6 +347,34 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertNotNil(reloaded?.rangeReader)
     }
 
+    func testReloadReplacesStaleTextOfCleanTabAndKeepsDirtyTabText() async throws {
+        let cleanURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dirtyURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let missingURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try "fresh on disk\n".write(to: cleanURL, atomically: true, encoding: .utf8)
+        try "fresh on disk\n".write(to: dirtyURL, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: cleanURL)
+            try? FileManager.default.removeItem(at: dirtyURL)
+        }
+        let bench = EditorWorkbench()
+        bench.openDocument(WorkbenchDocument(url: missingURL, displayName: "gone", text: "old"))
+        bench.openDocument(WorkbenchDocument(url: cleanURL, displayName: "clean", text: "stale session text"))
+        bench.openDocument(WorkbenchDocument(url: dirtyURL, displayName: "dirty", text: "unsaved edits", isDirty: true))
+
+        try await bench.reloadFileBackedDocuments()
+
+        let documents = bench.activePane.documents
+        XCTAssertEqual(documents[0].text, "old")
+        XCTAssertEqual(documents[1].text, "")
+        XCTAssertEqual(
+            documents[1].pendingState?.stringView.substring(in: NSRange(location: 0, length: 14)),
+            "fresh on disk\n"
+        )
+        XCTAssertEqual(documents[2].text, "unsaved edits")
+        XCTAssertNil(documents[2].pendingState)
+    }
+
     func testRestorationPreservesSplitLayout() throws {
         let bench = EditorWorkbench()
         bench.openDocument(WorkbenchDocument(displayName: "left", text: "L"))

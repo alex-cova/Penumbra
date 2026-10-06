@@ -122,7 +122,7 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
         }
     }
 
-    /// For each document with `isFileBacked && url != nil`, ``WorkbenchDocument/load(contentsOf:language:languageIdentifier:parsePolicy:io:)``
+    /// For each text document with a `url` that is `isFileBacked` or not dirty, ``WorkbenchDocument/load(contentsOf:language:languageIdentifier:parsePolicy:io:)``
     /// and splice `id`, `documentID`, selection, scroll, and `isDirty` onto the loaded instance
     /// (loaded `pendingState` / `rangeReader` / `isFileBacked` win). Dirty mmap edits are discarded.
     public func reloadFileBackedDocuments(
@@ -130,14 +130,20 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     ) async throws {
         var replacements: [UUID: WorkbenchDocument] = [:]
         for document in allDocuments() {
-            guard document.contentKind == .text, document.isFileBacked, let url = document.url else {
+            // A clean tab's stored text can only be older than the file, so disk wins. A dirty
+            // tab that is not file-backed keeps its stored text: it is the only copy of the edits.
+            guard document.contentKind == .text, let url = document.url,
+                  document.isFileBacked || !document.isDirty else {
                 continue
             }
-            let loaded = try await WorkbenchDocument.load(
+            // One missing or unreadable file must not leave every other tab on stale text.
+            guard let loaded = try? await WorkbenchDocument.load(
                 contentsOf: url,
                 language: languageResolver(document) ?? document.language,
                 languageIdentifier: document.languageIdentifier
-            )
+            ) else {
+                continue
+            }
             let spliced = WorkbenchDocument(
                 id: document.id,
                 documentID: document.documentID,
