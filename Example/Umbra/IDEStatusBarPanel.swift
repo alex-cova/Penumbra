@@ -127,17 +127,6 @@ struct IDEStatusBarPanel: View {
                 Text("·")
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else if let statusCode = workspace.httpSupport.lastStatusCode,
-                      let duration = workspace.httpSupport.lastDuration {
-                Button("HTTP \(statusCode) (\(Int(duration * 1000)) ms)") {
-                    workspace.showHTTPResponse()
-                }
-                .buttonStyle(.borderless)
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
     }

@@ -1,5 +1,19 @@
 import Foundation
 import Observation
+import SwiftUI
+
+extension Color {
+    /// Status colour for an HTTP response: 2xx green, 3xx blue, 4xx yellow, 5xx red, otherwise nil.
+    static func httpStatus(_ code: Int) -> Color? {
+        switch code {
+        case 200..<300: .green
+        case 300..<400: .blue
+        case 400..<500: .yellow
+        case 500..<600: .red
+        default: nil
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -11,6 +25,17 @@ final class IDEHTTPSupport {
     private(set) var responseLog = HTTPResponseLog()
     private(set) var isSending = false
     private var sendTask: Task<Void, Never>?
+    /// What the last `send` was given, so the response panel can send the same request again.
+    private var lastRequest: (text: String, caretUTF16Offset: Int, fileURL: URL?)?
+
+    var canResend: Bool {
+        lastRequest != nil && !isSending
+    }
+
+    func resend() {
+        guard let lastRequest, !isSending else { return }
+        send(text: lastRequest.text, caretUTF16Offset: lastRequest.caretUTF16Offset, fileURL: lastRequest.fileURL)
+    }
 
     var lastStatusCode: Int? {
         responseLog.statusCode
@@ -28,6 +53,7 @@ final class IDEHTTPSupport {
 
     func send(text: String, caretUTF16Offset: Int, fileURL: URL?) {
         cancel()
+        lastRequest = (text, caretUTF16Offset, fileURL)
         responseLog.reset()
         isSending = true
 

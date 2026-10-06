@@ -655,7 +655,7 @@ private struct IDEHTTPConsoleControls: View {
             if let statusCode = workspace.httpSupport.lastStatusCode {
                 Text("HTTP \(statusCode)")
                     .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .foregroundStyle(Color.httpStatus(statusCode) ?? IDEAppearance.ColorToken.muted)
             } else if workspace.httpSupport.isSending {
                 Text("Sending…")
                     .font(IDEAppearance.Typography.monoSmall)
@@ -666,6 +666,14 @@ private struct IDEHTTPConsoleControls: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
+            Button(action: { workspace.httpSupport.resend() }) {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .disabled(!workspace.httpSupport.canResend)
+            .help("Send Request Again")
+            .accessibilityLabel("Send Request Again")
             Button(action: copyOutput) {
                 Image(systemName: "doc.on.doc")
             }
