@@ -4889,6 +4889,7 @@ public final class IDEWorkspace {
             )
             _ = IDEIntelligenceServices.openLocation(location, adapter: self.adapter)
         }
+        palette.commandRegistry.register(textToolsPaletteCommands())
         palette.commandRegistry.register([
             EditorCommand(id: "app.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
