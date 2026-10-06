@@ -206,6 +206,123 @@ final class IDETextTransformTests: XCTestCase {
         XCTAssertEqual(IDELineText.trimTrailingWhitespace("a  \r\nb\t\r\n"), "a\r\nb\r\n")
     }
 
+    // MARK: Hashes
+
+    func testHashesOfKnownInputs() {
+        XCTAssertEqual(IDEHashText.hash("abc", using: .md5), "900150983cd24fb0d6963f7d28e17f72")
+        XCTAssertEqual(IDEHashText.hash("abc", using: .sha1), "a9993e364706816aba3e25717850c26c9cd0d89d")
+        XCTAssertEqual(IDEHashText.hash("abc", using: .sha256),
+                       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(IDEHashText.hash("abc", using: .sha512).prefix(32), "ddaf35a193617abacc417349ae204131")
+        XCTAssertEqual(IDEHashText.hash("", using: .sha256),
+                       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    }
+
+    func testHashCoversTheWholeTextIncludingLineBreaks() {
+        XCTAssertNotEqual(IDEHashText.hash("a\nb", using: .sha256), IDEHashText.hash("a b", using: .sha256))
+        XCTAssertEqual(IDEHashText.hash("é", using: .md5), "66ddcd97cfdeabb2f6fb8a999b4bc76f", "hashes the UTF-8 bytes")
+    }
+
+    // MARK: Unix time
+
+    func testEpochToDateReadsSecondsAndMilliseconds() {
+        XCTAssertEqual(IDEConversionText.epochToDate("1700000000"), "2023-11-14T22:13:20Z")
+        XCTAssertEqual(IDEConversionText.epochToDate("1700000000000"), "2023-11-14T22:13:20Z")
+        XCTAssertEqual(IDEConversionText.epochToDate("1700000000123"), "2023-11-14T22:13:20.123Z")
+        XCTAssertEqual(IDEConversionText.epochToDate("0"), "1970-01-01T00:00:00Z")
+        XCTAssertEqual(IDEConversionText.epochToDate("-1"), "1969-12-31T23:59:59Z")
+        XCTAssertEqual(IDEConversionText.epochToDate("-1500"), "1969-12-31T23:35:00Z", "negative values are not milliseconds below 12 digits")
+    }
+
+    func testDateToEpochAcceptsCommonFormats() {
+        XCTAssertEqual(IDEConversionText.dateToEpoch("2023-11-14T22:13:20Z"), "1700000000")
+        XCTAssertEqual(IDEConversionText.dateToEpoch("2023-11-14T23:13:20+01:00"), "1700000000")
+        XCTAssertEqual(IDEConversionText.dateToEpoch("2023-11-14T22:13:20.999Z"), "1700000000")
+        XCTAssertEqual(IDEConversionText.dateToEpoch("2023-11-14"), "1699920000")
+        XCTAssertEqual(IDEConversionText.dateToEpoch("2023-11-14 22:13:20"), "1700000000")
+        XCTAssertNil(IDEConversionText.dateToEpoch("next tuesday"))
+        XCTAssertNil(IDEConversionText.dateToEpoch("2023-11-14 garbage"), "trailing text is not ignored")
+        XCTAssertNil(IDEConversionText.dateToEpoch("2023-11-14T22:13:20Z garbage"))
+        XCTAssertNil(IDEConversionText.dateToEpoch("2023-02-31"), "not a real date")
+    }
+
+    func testTimeConversionsWorkLineByLineAndKeepBlankLines() {
+        XCTAssertEqual(IDEConversionText.epochToDate("  0\n\n1700000000 "), "  1970-01-01T00:00:00Z\n\n2023-11-14T22:13:20Z ")
+        XCTAssertNil(IDEConversionText.epochToDate("0\nnope"), "one bad line refuses the whole selection")
+        XCTAssertNil(IDEConversionText.epochToDate("\n\n"), "nothing to convert")
+    }
+
+    // MARK: Number bases
+
+    func testNumberBases() {
+        XCTAssertEqual(IDEConversionText.toHex("255"), "0xff")
+        XCTAssertEqual(IDEConversionText.toBinary("255"), "0b11111111")
+        XCTAssertEqual(IDEConversionText.toDecimal("0xff"), "255")
+        XCTAssertEqual(IDEConversionText.toDecimal("0b1010"), "10")
+        XCTAssertEqual(IDEConversionText.toDecimal("0o17"), "15")
+        XCTAssertEqual(IDEConversionText.toHex("-255"), "-0xff")
+        XCTAssertEqual(IDEConversionText.toHex("1_000L"), "0x3e8", "Java separators and suffix")
+        XCTAssertEqual(IDEConversionText.toHex("18446744073709551615"), "0xffffffffffffffff")
+    }
+
+    func testNumberBasesRejectNonNumbersAndConvertEachLine() {
+        XCTAssertNil(IDEConversionText.toHex("ff"), "hex needs its 0x prefix")
+        XCTAssertNil(IDEConversionText.toHex("12.5"))
+        XCTAssertNil(IDEConversionText.toDecimal("0xzz"))
+        XCTAssertEqual(IDEConversionText.toHex("1\n  16\n"), "0x1\n  0x10\n")
+    }
+
+    // MARK: JWT
+
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testJWTDecodesHeaderPayloadAndSignature() throws {
+        let token = IDEJWTTestToken.make(
+            header: #"{"alg":"HS256","typ":"JWT"}"#,
+            payload: #"{"sub":"1234567890","name":"Jane","admin":true,"iat":1699999000,"exp":1700003600}"#,
+            signature: "c2lnbmF0dXJl")
+        let decoding = try XCTUnwrap(IDEJWTText.decode(token, now: now))
+        XCTAssertEqual(decoding.algorithm, "HS256")
+        XCTAssertEqual(decoding.header, "{\n  \"alg\": \"HS256\",\n  \"typ\": \"JWT\"\n}")
+        XCTAssertTrue(decoding.payload.contains("\"name\": \"Jane\""))
+        XCTAssertEqual(decoding.signature, "c2lnbmF0dXJl")
+        XCTAssertEqual(decoding.timeClaims.map(\.name), ["iat", "exp"])
+        XCTAssertEqual(decoding.status, .valid(until: Date(timeIntervalSince1970: 1_700_003_600)))
+    }
+
+    func testJWTStatusExpiredNotYetValidAndNoExpiry() throws {
+        func status(_ payload: String) throws -> IDEJWTDecoding.Status {
+            try XCTUnwrap(IDEJWTText.decode(IDEJWTTestToken.make(header: #"{"alg":"none"}"#, payload: payload), now: now)).status
+        }
+        XCTAssertEqual(try status(#"{"exp":1699999999}"#), .expired(at: Date(timeIntervalSince1970: 1_699_999_999)))
+        XCTAssertEqual(try status(#"{"nbf":1700000100,"exp":1700009999}"#), .notYetValid(from: Date(timeIntervalSince1970: 1_700_000_100)))
+        XCTAssertEqual(try status(#"{"sub":"x"}"#), .noExpiry)
+        XCTAssertEqual(try status(#"{"exp":true}"#), .noExpiry, "a boolean is not a time")
+    }
+
+    func testJWTIgnoresBearerPrefixQuotesAndWhitespace() throws {
+        let token = IDEJWTTestToken.make(header: #"{"alg":"HS256"}"#, payload: #"{"a":1}"#)
+        XCTAssertNotNil(IDEJWTText.decode("Bearer \(token)"))
+        XCTAssertNotNil(IDEJWTText.decode("Authorization: bearer \(token)\n"))
+        XCTAssertNotNil(IDEJWTText.decode("\"\(token)\""))
+        let parts = token.components(separatedBy: ".")
+        XCTAssertNotNil(IDEJWTText.decode(parts.joined(separator: ".\n  ")))
+    }
+
+    func testJWTUnsecuredTokenHasNoSignature() throws {
+        let token = IDEJWTTestToken.make(header: #"{"alg":"none"}"#, payload: #"{"a":1}"#, signature: "")
+        XCTAssertEqual(try XCTUnwrap(IDEJWTText.decode(token)).signature, "")
+    }
+
+    func testJWTRejectsWhatIsNotAToken() {
+        XCTAssertNil(IDEJWTText.decode(""))
+        XCTAssertNil(IDEJWTText.decode("not.a.token"))
+        XCTAssertNil(IDEJWTText.decode("a.b"))
+        XCTAssertNil(IDEJWTText.decode("a.b.c.d.e"), "an encrypted JWE")
+        XCTAssertNil(IDEJWTText.decode(IDEJWTTestToken.make(header: "[1]", payload: #"{"a":1}"#)), "header must be an object")
+        XCTAssertNil(IDEJWTText.decode(IDEJWTTestToken.make(header: #"{"alg":"x"}"#, payload: "plain text")))
+    }
+
     // MARK: Registry
 
     func testRegistryIsConsistent() {
@@ -239,28 +356,106 @@ final class IDETextToolsMenuTests: XCTestCase {
         return try XCTUnwrap(items.first { $0.title == "Tools" }?.submenu)
     }
 
-    func testSubmenuListsEveryTransformInGroupOrder() throws {
+    private func item(titled title: String, in tools: NSMenu) throws -> NSMenuItem {
+        try XCTUnwrap(tools.items.compactMap(\.submenu).flatMap(\.items).first { $0.title == title }, title)
+    }
+
+    func testToolsMenuHasOneSubmenuPerGroupInOrder() throws {
         let textView = makeTextView("abc")
         textView.selectedRange = NSRange(location: 0, length: 3)
-        let menu = try submenu(for: textView)
-        let titles = menu.items.map { $0.isSeparatorItem ? "-" : $0.title }
-        XCTAssertEqual(titles, [
+        let tools = try submenu(for: textView)
+        XCTAssertEqual(tools.items.map(\.title), ["Encode / Decode", "JSON", "Case", "Lines", "Hash", "Convert"])
+        func titles(_ group: String) -> [String] {
+            tools.items.first { $0.title == group }?.submenu?.items.map { $0.isSeparatorItem ? "-" : $0.title } ?? []
+        }
+        XCTAssertEqual(titles("Encode / Decode"), [
             "Encode Base64", "Decode Base64", "URL Encode", "URL Decode",
             "Encode HTML Entities", "Decode HTML Entities", "Hex Encode", "Hex Decode",
-            "Escape String", "Unescape String", "Unicode Escape", "Unicode Unescape", "-",
-            "Format JSON", "Minify JSON", "-",
+            "Escape String", "Unescape String", "Unicode Escape", "Unicode Unescape", "-", "Decode JWT…"
+        ])
+        XCTAssertEqual(titles("JSON"), ["Format JSON", "Minify JSON"])
+        XCTAssertEqual(titles("Case"), [
             "UPPERCASE", "lowercase", "Title Case", "camelCase", "PascalCase", "snake_case", "kebab-case",
-            "SCREAMING_SNAKE_CASE", "-",
+            "SCREAMING_SNAKE_CASE"
+        ])
+        XCTAssertEqual(titles("Lines"), [
             "Sort Lines Ascending", "Sort Lines Descending", "Remove Duplicate Lines", "Reverse Lines",
             "Remove Blank Lines", "Trim Trailing Whitespace"
         ])
+        XCTAssertEqual(titles("Hash"), ["MD5", "SHA-1", "SHA-256", "SHA-512"])
+        XCTAssertEqual(titles("Convert"), [
+            "Unix Time to Date", "Date to Unix Time", "Number to Hex", "Number to Binary", "Number to Decimal"
+        ])
+    }
+
+    func testDecodeJWTFromTheMenuOpensTheSheetWithoutChangingTheDocument() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let token = IDEJWTTestToken.make(header: #"{"alg":"HS256"}"#, payload: #"{"sub":"1"}"#)
+        let textView = makeTextView("token = \(token);")
+        textView.selectedRange = NSRange(location: 8, length: token.utf16.count)
+        let workspace = IDEWorkspace()
+        let context = EditorContextMenuContext(location: 8, selectedRange: textView.selectedRange)
+        let tools = try XCTUnwrap(workspace.textToolsContextMenuItems(context: context, textView: textView).first { $0.title == "Tools" }?.submenu)
+        let decode = try item(titled: "Decode JWT…", in: tools)
+        NSApp.sendAction(try XCTUnwrap(decode.action), to: decode.target, from: decode)
+        XCTAssertEqual(workspace.jwtDecoding?.algorithm, "HS256")
+        XCTAssertEqual(workspace.jwtDecoding?.anchorOffset, 8 + token.utf16.count)
+        XCTAssertEqual(textView.text, "token = \(token);")
+    }
+
+    func testInsertJWTAsCommentPutsTheDecodedTokenOnTheLinesAfterIt() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let workspace = IDEWorkspace()
+        workspace.bootstrap() // an editor host needs the adapter that bootstrap() wires
+        let textView = workspace.host(for: workspace.workbench.activePaneID).textView
+        let token = IDEJWTTestToken.make(header: #"{"alg":"HS256"}"#, payload: #"{"sub":"1"}"#)
+        textView.text = "first\ntoken = \(token)\nlast"
+        var decoding = try XCTUnwrap(IDEJWTText.decode(token))
+        decoding.anchorOffset = ("first\ntoken = " as NSString).length + 3
+        workspace.jwtDecoding = decoding
+
+        workspace.insertJWTAsComment(decoding)
+
+        XCTAssertNil(workspace.jwtDecoding, "the sheet closes")
+        let lines = textView.text.components(separatedBy: "\n")
+        XCTAssertEqual(lines.first, "first")
+        XCTAssertEqual(lines[1], "token = \(token)")
+        XCTAssertTrue(lines[2].hasSuffix("JWT header"), lines[2])
+        XCTAssertTrue(textView.text.contains("\"alg\": \"HS256\""))
+        XCTAssertEqual(lines.last, "last", "the text after the token is untouched")
+    }
+
+    func testInsertJWTAsCommentOnTheLastLine() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let workspace = IDEWorkspace()
+        workspace.bootstrap() // an editor host needs the adapter that bootstrap() wires
+        let textView = workspace.host(for: workspace.workbench.activePaneID).textView
+        let token = IDEJWTTestToken.make(header: #"{"alg":"HS256"}"#, payload: #"{"sub":"1"}"#)
+        textView.text = token
+        var decoding = try XCTUnwrap(IDEJWTText.decode(token))
+        decoding.anchorOffset = token.utf16.count
+        workspace.insertJWTAsComment(decoding)
+        XCTAssertTrue(textView.text.hasPrefix(token + "\n"))
+        XCTAssertTrue(textView.text.contains("JWT payload"))
+    }
+
+    func testInsertionPutsAFreshValueAtEveryCaretInOneUndoStep() {
+        let textView = makeTextView("a\nb\nc")
+        textView.selectedRanges = [NSRange(location: 1, length: 0), NSRange(location: 3, length: 0), NSRange(location: 4, length: 1)]
+        let counter = Counter()
+        let insertion = IDETextInsertion(id: "t", title: "T") { counter.next() }
+        IDEWorkspace.applyTextInsertion(insertion, in: textView)
+        XCTAssertEqual(textView.text, "a1\nb2\n3")
+        XCTAssertEqual(textView.selectedRanges, [NSRange(location: 2, length: 0), NSRange(location: 5, length: 0), NSRange(location: 7, length: 0)])
+        textView.undoManager?.undo()
+        XCTAssertEqual(textView.text, "a\nb\nc")
     }
 
     func testFormatJSONKeepsTheBlockIndentSelectsTheResultAndUndoesInOneStep() throws {
         let original = "    {\"a\":[1,2]}"
         let textView = makeTextView(original)
         textView.selectedRange = NSRange(location: 4, length: original.utf16.count - 4)
-        let item = try XCTUnwrap(submenu(for: textView).items.first { $0.title == "Format JSON" })
+        let item = try item(titled: "Format JSON", in: submenu(for: textView))
         NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item)
 
         let expected = "    {\n      \"a\": [\n        1,\n        2\n      ]\n    }"
@@ -273,7 +468,7 @@ final class IDETextToolsMenuTests: XCTestCase {
     func testSortLinesOnAMultiCaretSelectionSortsEachSelectionOnItsOwn() throws {
         let textView = makeTextView("b\na\n--\nd\nc")
         textView.selectedRanges = [NSRange(location: 0, length: 3), NSRange(location: 7, length: 3)]
-        let item = try XCTUnwrap(submenu(for: textView).items.first { $0.title == "Sort Lines Ascending" })
+        let item = try item(titled: "Sort Lines Ascending", in: submenu(for: textView))
         NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item)
         XCTAssertEqual(textView.text, "a\nb\n--\nc\nd")
         textView.undoManager?.undo()
@@ -294,5 +489,25 @@ final class IDETextToolsMenuTests: XCTestCase {
         let format = IDETextTransforms.transform(id: "json.format")!
         IDEWorkspace.applyTextTransform(format, in: textView, wholeDocumentWithoutSelection: false)
         XCTAssertEqual(textView.text, #"{"a":1}"#)
+    }
+}
+
+/// Builds JWT-shaped strings for tests.
+enum IDEJWTTestToken {
+    static func make(header: String, payload: String, signature: String = "c2ln") -> String {
+        func base64URL(_ text: String) -> String {
+            Data(text.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        return "\(base64URL(header)).\(base64URL(payload)).\(signature)"
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private var value = 0
+    func next() -> String {
+        value += 1
+        return String(value)
     }
 }

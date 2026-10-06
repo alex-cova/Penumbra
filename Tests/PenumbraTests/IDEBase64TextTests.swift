@@ -40,8 +40,8 @@ final class IDEBase64MenuTests: XCTestCase {
     }
 
     private func toolsItem(_ title: String, in items: [NSMenuItem]) throws -> NSMenuItem {
-        let tools = try XCTUnwrap(items.first { $0.title == "Tools" })
-        return try XCTUnwrap(tools.submenu?.items.first { $0.title == title })
+        let tools = try XCTUnwrap(items.first { $0.title == "Tools" }?.submenu)
+        return try XCTUnwrap(tools.items.compactMap(\.submenu).flatMap(\.items).first { $0.title == title })
     }
 
     private func fire(_ item: NSMenuItem) throws {

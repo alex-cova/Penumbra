@@ -243,6 +243,14 @@ public struct IDERootView: View {
                 .environment(workspace)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
+        .sheet(item: Binding(
+            get: { workspace.jwtDecoding },
+            set: { if $0 == nil { workspace.jwtDecoding = nil } }
+        )) { decoding in
+            IDEJWTSheet(decoding: decoding)
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in

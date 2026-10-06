@@ -329,6 +329,8 @@ public final class IDEWorkspace {
     var gradleRunTaskPrompt: IDEGradleRunTaskPrompt?
     /// The workspace edit being previewed (rename, extract variable, …).
     var workspaceEditPreview: IDEWorkspaceEditPreviewModel?
+    /// The JWT being read (Tools ▸ Encode / Decode ▸ Decode JWT…): its sheet shows while set.
+    var jwtDecoding: IDEJWTDecoding?
     var renamePreview: IDEWorkspaceEditPreviewModel? {
         get { workspaceEditPreview }
         set { workspaceEditPreview = newValue }

@@ -2,17 +2,18 @@ import AppKit
 import Penumbra
 
 extension IDEWorkspace {
-    /// The Tools submenu of the editor's right-click menu, built from `IDETextTransforms`; only
-    /// offered while text is selected.
+    /// The Tools submenu of the editor's right-click menu, built from `IDETextTransforms`, one
+    /// submenu per group; only offered while text is selected.
     func textToolsContextMenuItems(context: EditorContextMenuContext, textView: TextView) -> [NSMenuItem] {
         let hasSelection = textView.selectedRanges.contains { $0.length > 0 } || (context.selectedRange?.length ?? 0) > 0
         guard hasSelection else { return [] }
-        let submenu = NSMenu(title: "Tools")
-        submenu.autoenablesItems = false
-        for (index, group) in IDETextTransform.Group.allCases.enumerated() {
+        let tools = NSMenu(title: "Tools")
+        tools.autoenablesItems = false
+        for group in IDETextTransform.Group.allCases {
             let transforms = IDETextTransforms.all.filter { $0.group == group }
             guard !transforms.isEmpty else { continue }
-            if index > 0, !submenu.items.isEmpty { submenu.addItem(.separator()) }
+            let submenu = NSMenu(title: group.title)
+            submenu.autoenablesItems = false
             for transform in transforms {
                 let item = IDEClosureMenuItem(title: transform.title) { [weak textView] in
                     guard let textView else { return }
@@ -21,19 +22,41 @@ extension IDEWorkspace {
                 item.isEnabled = textView.isEditable
                 submenu.addItem(item)
             }
+            if group == .encoding {
+                submenu.addItem(.separator())
+                submenu.addItem(IDEClosureMenuItem(title: "Decode JWT…") { [weak self, weak textView] in
+                    guard let self, let textView else { return }
+                    self.showJWTDecoding(in: textView, fallbackToClipboard: false)
+                })
+            }
+            let parent = NSMenuItem(title: group.title, action: nil, keyEquivalent: "")
+            parent.submenu = submenu
+            tools.addItem(parent)
         }
         let item = NSMenuItem(title: "Tools", action: nil, keyEquivalent: "")
-        item.submenu = submenu
+        item.submenu = tools
         return [.separator(), item]
     }
 
-    /// One palette command per transform. Without a selection they convert the whole document.
+    /// One palette command per transform, plus the ones that need no selection. Transforms convert
+    /// the whole document when nothing is selected.
     func textToolsPaletteCommands() -> [EditorCommand] {
-        IDETextTransforms.all.map { transform in
+        let transforms = IDETextTransforms.all.map { transform in
             EditorCommand(id: "tools.\(transform.id)", title: transform.title, group: "Tools") { [weak self] in
                 self?.applyTextTransformToActiveEditor(transform)
             }
         }
+        let insertions = IDETextInsertions.all.map { insertion in
+            EditorCommand(id: "tools.\(insertion.id)", title: insertion.title, group: "Tools") { [weak self] in
+                guard let self else { return }
+                Self.applyTextInsertion(insertion, in: self.host(for: self.workbench.activePaneID).textView)
+            }
+        }
+        let jwt = EditorCommand(id: "tools.jwt.decode", title: "Decode JWT", group: "Tools") { [weak self] in
+            guard let self else { return }
+            self.showJWTDecoding(in: self.host(for: self.workbench.activePaneID).textView, fallbackToClipboard: true)
+        }
+        return transforms + insertions + [jwt]
     }
 
     func applyTextTransformToActiveEditor(_ transform: IDETextTransform) {
@@ -88,5 +111,64 @@ extension IDEWorkspace {
             context.baseIndent = String(prefix.prefix { $0 == " " || $0 == "\t" })
         }
         return context
+    }
+
+    /// Puts a fresh value at every caret, over every selection, as one undo step.
+    @MainActor
+    static func applyTextInsertion(_ insertion: IDETextInsertion, in textView: TextView) {
+        guard textView.isEditable else { return }
+        let ranges = textView.selectedRanges.sorted { $0.location < $1.location }
+        guard !ranges.isEmpty else { return }
+        let values = ranges.map { _ in insertion.make() }
+        textView.replaceText(in: BatchReplaceSet(replacements: zip(ranges, values).map { .init(range: $0, text: $1) }))
+        var delta = 0
+        var carets: [NSRange] = []
+        for (range, value) in zip(ranges, values) {
+            let length = (value as NSString).length
+            carets.append(NSRange(location: range.location + delta + length, length: 0))
+            delta += length - range.length
+        }
+        textView.selectedRanges = carets
+    }
+
+    // MARK: - JWT
+
+    /// Decodes the selected JWT (or, from the palette with no selection, the one on the clipboard)
+    /// into the read-only sheet. Nothing in the document changes.
+    func showJWTDecoding(in textView: TextView, fallbackToClipboard: Bool) {
+        let selection = textView.selectedRanges.first { $0.length > 0 }
+        var source = selection.flatMap { textView.text(in: $0) }
+        if source == nil, fallbackToClipboard { source = NSPasteboard.general.string(forType: .string) }
+        guard let source, var decoding = IDEJWTText.decode(source) else {
+            NSSound.beep()
+            return
+        }
+        decoding.anchorOffset = selection?.upperBound
+        jwtDecoding = decoding
+    }
+
+    /// "Insert as Comment" in the JWT sheet: the decoded header and payload go on the lines after the
+    /// token's line, commented with the file's own comment syntax when it has one.
+    func insertJWTAsComment(_ decoding: IDEJWTDecoding) {
+        jwtDecoding = nil
+        let textView = host(for: workbench.activePaneID).textView
+        guard textView.isEditable else { return }
+        let anchor = min(decoding.anchorOffset ?? textView.selectedRange.upperBound, textView.documentLength)
+        let block = "JWT header\n\(decoding.header)\nJWT payload\n\(decoding.payload)"
+        let nextLine = textView.textLocation(at: anchor).flatMap {
+            textView.location(at: TextLocation(lineNumber: $0.lineNumber + 1, column: 0))
+        }
+        let inserted: NSRange
+        if let nextLine {
+            textView.replace(NSRange(location: nextLine, length: 0), withText: block + "\n")
+            inserted = NSRange(location: nextLine, length: (block as NSString).length)
+        } else {
+            let end = textView.documentLength
+            textView.replace(NSRange(location: end, length: 0), withText: "\n" + block)
+            inserted = NSRange(location: end + 1, length: (block as NSString).length)
+        }
+        textView.selectedRange = inserted
+        textView.toggleComment()
+        focusActiveEditor()
     }
 }

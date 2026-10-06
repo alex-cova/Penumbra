@@ -13,7 +13,19 @@ struct IDETextTransformContext: Sendable {
 struct IDETextTransform: Sendable {
     /// Menu sections, in the order they appear.
     enum Group: CaseIterable, Sendable {
-        case encoding, json, textCase, lines
+        case encoding, json, textCase, lines, hashes, convert
+
+        /// The name of the group's submenu.
+        var title: String {
+            switch self {
+            case .encoding: "Encode / Decode"
+            case .json: "JSON"
+            case .textCase: "Case"
+            case .lines: "Lines"
+            case .hashes: "Hash"
+            case .convert: "Convert"
+            }
+        }
     }
 
     let id: String
@@ -57,7 +69,16 @@ enum IDETextTransforms {
         .init(id: "lines.removeBlank", title: "Remove Blank Lines", group: .lines) { text, _ in IDELineText.removeBlankLines(text) },
         .init(id: "lines.trimTrailing", title: "Trim Trailing Whitespace", group: .lines) { text, _ in
             IDELineText.trimTrailingWhitespace(text)
-        }
+        },
+        .init(id: "hash.md5", title: "MD5", group: .hashes) { text, _ in IDEHashText.hash(text, using: .md5) },
+        .init(id: "hash.sha1", title: "SHA-1", group: .hashes) { text, _ in IDEHashText.hash(text, using: .sha1) },
+        .init(id: "hash.sha256", title: "SHA-256", group: .hashes) { text, _ in IDEHashText.hash(text, using: .sha256) },
+        .init(id: "hash.sha512", title: "SHA-512", group: .hashes) { text, _ in IDEHashText.hash(text, using: .sha512) },
+        .init(id: "convert.epochToDate", title: "Unix Time to Date", group: .convert) { text, _ in IDEConversionText.epochToDate(text) },
+        .init(id: "convert.dateToEpoch", title: "Date to Unix Time", group: .convert) { text, _ in IDEConversionText.dateToEpoch(text) },
+        .init(id: "convert.toHex", title: "Number to Hex", group: .convert) { text, _ in IDEConversionText.toHex(text) },
+        .init(id: "convert.toBinary", title: "Number to Binary", group: .convert) { text, _ in IDEConversionText.toBinary(text) },
+        .init(id: "convert.toDecimal", title: "Number to Decimal", group: .convert) { text, _ in IDEConversionText.toDecimal(text) }
     ]
 
     static func transform(id: String) -> IDETextTransform? {
