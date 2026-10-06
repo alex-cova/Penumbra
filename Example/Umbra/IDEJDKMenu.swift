@@ -8,6 +8,12 @@ extension IDEWorkspace {
         !showsWelcome && (statusLanguage == "java" || javaSupport.isGradleProject)
     }
 
+    /// The Java menu-bar menu exists under the same condition as the JDK picker.
+    var showsJavaMenu: Bool { showsJDKPicker }
+
+    /// The HTTP menu-bar menu exists while an `.http` file is the selected tab.
+    var showsHTTPMenu: Bool { statusLanguage == "http" }
+
     /// Asks for a JDK folder (a home, a `.jdk` bundle or a home's `bin`), adds it to the list and
     /// hands it to `completion`. A folder that isn't a JDK is reported instead.
     func addJDKFromPanel(completion: ((JDKInstallation) -> Void)? = nil) {

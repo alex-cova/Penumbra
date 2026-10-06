@@ -82,12 +82,18 @@ struct IDEAppCommands: Commands {
             if let focused { IDEGitCommands(ref: focused) } else { IDENoWindowCommand() }
         }
 
-        CommandMenu("Java") {
-            if let focused { IDEJavaCommands(ref: focused) } else { IDENoWindowCommand() }
+        // Language menus only exist while they apply: Java for a Java file or Gradle project, HTTP
+        // for a shown `.http` file. Both read the workspace through `focused`, so they follow focus.
+        if workspace?.showsJavaMenu == true, let focused {
+            CommandMenu("Java") {
+                IDEJavaCommands(ref: focused)
+            }
         }
 
-        CommandMenu("HTTP") {
-            if let focused { IDEHTTPCommands(ref: focused) } else { IDENoWindowCommand() }
+        if workspace?.showsHTTPMenu == true, let focused {
+            CommandMenu("HTTP") {
+                IDEHTTPCommands(ref: focused)
+            }
         }
 
         CommandMenu("View") {
