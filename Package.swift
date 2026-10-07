@@ -25,8 +25,6 @@ let package = Package(
         .library(name: "JavaIntelligence", targets: ["JavaIntelligence"])
     ],
     dependencies: [
-        .package(path: "Packages/GitIntelligence"),
-        .package(path: "Packages/SubprocessKit"),
         .package(path: "Packages/AgentKit"),
         .package(path: "Packages/AgentKitMLX"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -70,6 +68,19 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(name: "EditorIntelligence", dependencies: [], exclude: ["CLAUDE.md"], swiftSettings: swift6),
+        // Vendored as targets (not separate SPM packages) so editor consumers like Hextech do not
+        // resolve SubprocessKit in their package graph.
+        .target(
+            name: "SubprocessKit",
+            path: "Packages/SubprocessKit/Sources/SubprocessKit",
+            swiftSettings: swift6
+        ),
+        .target(
+            name: "GitIntelligence",
+            dependencies: ["SubprocessKit"],
+            path: "Packages/GitIntelligence/Sources/GitIntelligence",
+            swiftSettings: swift6
+        ),
         .target(
             name: "EditorIntelligenceLSP",
             dependencies: [
@@ -102,7 +113,7 @@ let package = Package(
                 "TreeSitter",
                 "TreeSitterJava",
                 .product(name: "FernflowerKit", package: "sunflower"),
-                .product(name: "SubprocessKit", package: "SubprocessKit")
+                "SubprocessKit"
             ],
             exclude: ["CLAUDE.md"],
             swiftSettings: swift6
@@ -119,7 +130,7 @@ let package = Package(
             name: "AgentEvalKit",
             dependencies: [
                 .product(name: "AgentKit", package: "AgentKit"),
-                .product(name: "SubprocessKit", package: "SubprocessKit")
+                "SubprocessKit"
             ],
             path: "Tools/AgentEval/Sources/AgentEvalKit",
             swiftSettings: swift6
@@ -150,8 +161,8 @@ let package = Package(
                 "JavaIntelligence",
                 "TreeSitter",
                 "TreeSitterHTTP",
-                .product(name: "GitIntelligence", package: "GitIntelligence"),
-                .product(name: "SubprocessKit", package: "SubprocessKit"),
+                "GitIntelligence",
+                "SubprocessKit",
                 .product(name: "AgentKit", package: "AgentKit"),
                 .product(name: "AgentKitMLX", package: "AgentKitMLX"),
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),
@@ -388,7 +399,7 @@ let package = Package(
             "PenumbraBeautifulMermaid",
             "JavaIntelligence",
             "Umbra",
-            .product(name: "GitIntelligence", package: "GitIntelligence"),
+            "GitIntelligence",
             .product(name: "AgentKit", package: "AgentKit"),
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
