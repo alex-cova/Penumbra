@@ -587,7 +587,7 @@ public final class CommandPaletteController {
             onSelect: { [weak self] range in
                 guard let textView = self?.textView else { return }
                 textView.selectedRange = range
-                textView.scrollRangeToVisible(range)
+                textView.scrollRangeToCenterIfNeeded(range)
             }
         )
     }

@@ -30,7 +30,7 @@ private final class FakeFindTarget: FindPanelTarget {
         selection = range
     }
 
-    func scrollRangeToVisible(_ range: NSRange) {
+    func revealFindMatch(_ range: NSRange) {
         scrolledRanges.append(range)
     }
 
@@ -110,6 +110,42 @@ final class FindPanelControllerTests: XCTestCase {
         await waitForDebounce()
         XCTAssertEqual(target.selection, NSRange(location: 0, length: 6))
         XCTAssertEqual(controller.panelView.matchLabelText, "1/2")
+    }
+
+    func testShowRevealsTheFirstMatch() async {
+        let target = FakeFindTarget(text: "alpha beta alpha")
+        let controller = FindPanelController(target: target)
+        controller.show(initialQuery: "alpha")
+        await waitForImmediateSearch()
+
+        // A search reports partial and final outcomes, so the same match can be revealed twice;
+        // the second reveal is a no-op once the match is on screen.
+        XCTAssertFalse(target.scrolledRanges.isEmpty)
+        XCTAssertTrue(target.scrolledRanges.allSatisfy { $0 == NSRange(location: 0, length: 5) })
+    }
+
+    func testNextRevealsTheSteppedToMatch() async {
+        let target = FakeFindTarget(text: "a b a")
+        let controller = FindPanelController(target: target)
+        controller.show(initialQuery: "a")
+        await waitForImmediateSearch()
+
+        controller.panelView.onNext?()
+
+        XCTAssertEqual(target.scrolledRanges.last, NSRange(location: 4, length: 1))
+    }
+
+    func testDocumentRefreshDoesNotReveal() async {
+        let target = FakeFindTarget(text: "a b a")
+        let controller = FindPanelController(target: target)
+        controller.show(initialQuery: "a")
+        await waitForImmediateSearch()
+        let revealed = target.scrolledRanges.count
+
+        controller.refreshIfVisible()
+        await waitForDebounce()
+
+        XCTAssertEqual(target.scrolledRanges.count, revealed)
     }
 
     func testNextMatchWrapsWhenWrapAroundEnabled() async {

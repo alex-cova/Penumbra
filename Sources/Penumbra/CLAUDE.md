@@ -66,6 +66,7 @@ Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour note
 - Built-in find/replace panel (`FindPanelController`, `showFindPanel`/`hideFindPanel`/`toggleFindPanel`).
 - `UIFindInteraction` integration for system find UI.
 - Highlighted-range navigation (`selectNextHighlightedRange`, looping modes).
+- Find-panel matches (typing, Next/Previous, ⌘G) and `#` palette matches are revealed with `TextView.scrollRangeToCenterIfNeeded(_:)`: an off-screen match is centered below the find bar, an on-screen one doesn't move the view. Document edits while the panel is open never scroll (`FindPanelController.scheduleFind(reveal:)`).
 
 **Navigation**
 - Go to line (`goToLine`) with selection-at-beginning/end options.

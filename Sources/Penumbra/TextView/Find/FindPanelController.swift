@@ -29,7 +29,7 @@ final class FindPanelController {
         panelView.isHidden = true
         panelView.onFindTextChanged = { [weak self] text in
             self?.session.query = text
-            self?.scheduleFind()
+            self?.scheduleFind(reveal: true)
         }
         panelView.onPrevious = { [weak self] in self?.selectPreviousMatch() }
         panelView.onNext = { [weak self] in self?.selectNextMatch() }
@@ -38,14 +38,14 @@ final class FindPanelController {
         panelView.onClose = { [weak self] in self?.hide() }
         panelView.onMatchCaseChanged = { [weak self] matchCase in
             self?.session.matchCase = matchCase
-            self?.scheduleFind()
+            self?.scheduleFind(reveal: true)
         }
         panelView.onWrapAroundChanged = { [weak self] wrapAround in
             self?.wrapAround = wrapAround
         }
         panelView.onUsesRegularExpressionChanged = { [weak self] usesRegex in
             self?.session.useRegex = usesRegex
-            self?.scheduleFind()
+            self?.scheduleFind(reveal: true)
         }
         panelView.onModeChanged = { [weak self] _ in
             guard let self else {
@@ -73,7 +73,7 @@ final class FindPanelController {
         // Triggers `onFindTextChanged`, which updates `session.query`; the explicit `immediate:
         // true` below skips the 200ms debounce so opening the panel doesn't read as unresponsive.
         panelView.focusFindField(selecting: query)
-        scheduleFind(immediate: true)
+        scheduleFind(immediate: true, reveal: true)
     }
 
     func hide() {
@@ -119,7 +119,7 @@ final class FindPanelController {
 }
 
 private extension FindPanelController {
-    private func scheduleFind(immediate: Bool = false) {
+    private func scheduleFind(immediate: Bool = false, reveal: Bool = false) {
         guard let target else {
             return
         }
@@ -138,15 +138,18 @@ private extension FindPanelController {
             anchorLocation: anchorLocation,
             immediate: immediate,
             isCurrent: { [weak self] in self?.isVisible ?? false },
-            apply: { [weak self] in self?.didUpdateSearchOutcome() }
+            apply: { [weak self] in self?.didUpdateSearchOutcome(reveal: reveal) }
         )
     }
 
-    private func didUpdateSearchOutcome() {
+    private func didUpdateSearchOutcome(reveal: Bool) {
         updateMatchLabel()
         updateFindEmphases()
         if let currentRange = session.currentRange {
             target?.setSelectedRange(currentRange)
+            if reveal {
+                target?.revealFindMatch(currentRange)
+            }
         }
     }
 
@@ -219,7 +222,7 @@ private extension FindPanelController {
             return
         }
         target.setSelectedRange(next)
-        target.scrollRangeToVisible(next)
+        target.revealFindMatch(next)
         refreshAfterStep()
     }
 
@@ -240,7 +243,7 @@ private extension FindPanelController {
             return
         }
         target.setSelectedRange(previous)
-        target.scrollRangeToVisible(previous)
+        target.revealFindMatch(previous)
         refreshAfterStep()
     }
 

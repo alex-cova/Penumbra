@@ -10,7 +10,8 @@ protocol FindPanelTarget: AnyObject {
     var findTextSource: any FindTextSource { get }
     func selectedTextForFind() -> String?
     func setSelectedRange(_ range: NSRange)
-    func scrollRangeToVisible(_ range: NSRange)
+    /// Brings a match into view: centered when it is off-screen, left alone when already visible.
+    func revealFindMatch(_ range: NSRange)
     func search(for query: SearchQuery) -> [SearchResult]
     func search(for query: SearchQuery, replacingMatchesWith replacementText: String) -> [SearchReplaceResult]
     func replace(_ range: NSRange, withText text: String)

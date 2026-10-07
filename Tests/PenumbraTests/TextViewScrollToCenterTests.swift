@@ -30,6 +30,33 @@ final class TextViewScrollToCenterTests: XCTestCase {
         XCTAssertEqual(caretOffsetInViewport(target, textView), textView.frame.height / 2, accuracy: lineHeight)
     }
 
+    func testIfNeededCentersAnOffScreenMatch() {
+        let textView = makeTextView(lines: 500)
+        let target = location(ofLine: 250, in: textView)
+        textView.scrollRangeToCenterIfNeeded(NSRange(location: target, length: 4))
+        textView.layoutIfNeeded()
+        let lineHeight = textView.caretRectInViewport(at: target).height
+        XCTAssertEqual(caretOffsetInViewport(target, textView), textView.frame.height / 2, accuracy: lineHeight)
+    }
+
+    func testIfNeededLeavesAnOnScreenMatchAlone() {
+        let textView = makeTextView(lines: 500)
+        let before = textView.contentOffset
+        textView.scrollRangeToCenterIfNeeded(NSRange(location: location(ofLine: 3, in: textView), length: 4))
+        XCTAssertEqual(textView.contentOffset.y, before.y, accuracy: 0.5)
+    }
+
+    func testIfNeededCentersBelowTheFindBar() {
+        let textView = makeTextView(lines: 500)
+        textView.findPanelWillShow(panelHeight: 40)
+        textView.layoutIfNeeded()
+        let target = location(ofLine: 250, in: textView)
+        textView.scrollRangeToCenterIfNeeded(NSRange(location: target, length: 4))
+        textView.layoutIfNeeded()
+        let lineHeight = textView.caretRectInViewport(at: target).height
+        XCTAssertEqual(caretOffsetInViewport(target, textView), 40 + (textView.frame.height - 40) / 2, accuracy: lineHeight)
+    }
+
     func testLineNearTheStartIsNotScrolledPastTheTop() {
         let textView = makeTextView(lines: 500)
         textView.contentOffset = CGPoint(x: 0, y: 2000)
