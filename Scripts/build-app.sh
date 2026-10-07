@@ -45,6 +45,27 @@ else
   echo "warning: $MLX_METALLIB not found; on-device models will be unavailable in this build" >&2
 fi
 
+# SwiftPM puts each target's resources (Penumbra's Localizable.strings, the tree-sitter .scm queries,
+# Theme assets, …) in a `<Package>_<Target>.bundle` next to the binary, and the generated `Bundle.module`
+# accessor looks for it in the app's Resources. Without them the accessor falls back to the build
+# directory baked into the binary, which does not exist on a user's machine, and `Bundle.module`
+# traps (e.g. on the first Backspace, via `L10n.Undo.ActionName.typing`).
+shopt -s nullglob
+resource_bundles=("$BIN_PATH"/*.bundle)
+shopt -u nullglob
+if [[ ${#resource_bundles[@]} -eq 0 ]]; then
+  echo "error: no SwiftPM resource bundles found in $BIN_PATH" >&2
+  exit 1
+fi
+for bundle in "${resource_bundles[@]}"; do
+  case "$(basename "$bundle")" in *Tests.bundle) continue ;; esac
+  ditto "$bundle" "$APP_DIR/Contents/Resources/$(basename "$bundle")"
+done
+if ! ls "$APP_DIR"/Contents/Resources/*_Penumbra.bundle >/dev/null 2>&1; then
+  echo "error: Penumbra resource bundle missing from $APP_DIR/Contents/Resources" >&2
+  exit 1
+fi
+
 cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"
