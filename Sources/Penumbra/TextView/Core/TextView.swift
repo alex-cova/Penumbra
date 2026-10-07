@@ -2401,6 +2401,25 @@ extension TextView {
         }
         contentOffset = offset
     }
+
+    /// Reveals `range` the way search does: when the line holding its start is already inside
+    /// the viewport, scrolls only as needed (horizontally) like ``scrollRangeToVisible(_:)``;
+    /// otherwise centers it like ``scrollRangeToCenter(_:)``.
+    public func scrollRangeToCenterIfNeeded(_ range: NSRange) {
+        guard frame.height > 0 else {
+            scrollRangeToCenter(range)
+            return
+        }
+        syncContentSizeIfNeeded()
+        textInputView.prepareLineForDisplay(atLocation: range.lowerBound)
+        let caretRect = textInputView.caretRect(at: range.lowerBound)
+        let viewport = scrollViewport(at: contentOffset)
+        if caretRect.minY >= viewport.minY && caretRect.maxY <= viewport.maxY {
+            scrollRangeToVisible(range)
+        } else {
+            scrollRangeToCenter(range)
+        }
+    }
 }
 
 private extension TextView {
@@ -3047,6 +3066,10 @@ extension TextView: FindPanelTarget {
 
     func setSelectedRange(_ range: NSRange) {
         textInputView.selection = range
+    }
+
+    func revealFindMatch(_ range: NSRange) {
+        scrollRangeToCenterIfNeeded(range)
     }
 
     func findPanelWillShow(panelHeight: CGFloat) {
