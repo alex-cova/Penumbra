@@ -8,6 +8,8 @@ public struct InlayHint: Sendable, Hashable {
     public enum Kind: Sendable, Hashable {
         /// The name of the parameter an argument is passed to.
         case parameter
+        /// The type of a variable declared without one (`var`, an implicit lambda parameter): `: List<String>`.
+        case type
         case other
     }
 

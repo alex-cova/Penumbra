@@ -26,6 +26,11 @@ final class JavaInlayHintProviderTests: XCTestCase {
         static void over(int a) {}
         static void over(int a, int b) {}
         static void over(String s, int b) {}
+        static int count() { return 0; }
+        static Lib make() { return null; }
+        static String[] words() { return null; }
+        interface Visitor { void visit(String item, int depth); }
+        static void walk(Visitor visitor) {}
     }
     """
 
@@ -38,7 +43,9 @@ final class JavaInlayHintProviderTests: XCTestCase {
         return result as String
     }
 
-    private func hints(_ source: String, range: Range<Int>? = nil) async throws -> [InlayHint] {
+    private func hints(
+        _ source: String, range: Range<Int>? = nil, options: JavaInlayHintOptions? = nil
+    ) async throws -> [InlayHint] {
         let libURL = scratch.appendingPathComponent("Lib.java")
         try lib.write(to: libURL, atomically: true, encoding: .utf8)
         let shard = scratch.appendingPathComponent("\(UUID().uuidString).idx")
@@ -49,6 +56,7 @@ final class JavaInlayHintProviderTests: XCTestCase {
         let index = JavaIndex()
         await index.setSources([.init(precedence: 1, reader: try JavaIndexShardReader(url: shard))])
         let provider = JavaInlayHintProvider(index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache")))
+        if let options { await provider.setOptions(options) }
         let length = (source as NSString).length
         let bounds = range ?? 0..<length
         let document = Document(
@@ -141,5 +149,88 @@ final class JavaInlayHintProviderTests: XCTestCase {
         )
         let result = await provider.inlayHints(for: document, in: EditorIntelligence.TextRange(start: position, end: position))
         XCTAssertTrue(result.isEmpty)
+    }
+
+    // MARK: - Type hints
+
+    private let typeHints = JavaInlayHintOptions(parameterNames: false, variableTypes: true, lambdaParameterTypes: false)
+
+    private func labels(_ source: String, options: JavaInlayHintOptions) async throws -> [String] {
+        try await hints(source, options: options).sorted { $0.utf16Offset < $1.utf16Offset }.map(\.label)
+    }
+
+    func testVarLocalsGetTheirInitializersType() async throws {
+        let source = "class T { void m() { var n = Lib.count(); var l = Lib.make(); } }"
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [": int", ": Lib"])
+    }
+
+    func testTypeHintSitsRightAfterTheName() async throws {
+        let source = "class T { void m() { var n = Lib.count(); } }"
+        let result = try await hints(source, options: typeHints)
+        XCTAssertEqual(result.map(\.kind), [.type])
+        XCTAssertEqual(result.first?.utf16Offset, (source as NSString).range(of: "n =").location + 1)
+    }
+
+    func testObviousInitializersGetNoTypeHint() async throws {
+        let source = """
+        class T { void m(Object x) {
+            var a = new Lib(1, "x"); var b = 5; var c = "s"; var d = (Lib) x; var e = true; var f = Lib.make();
+        } }
+        """
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [": Lib"], "only the call says nothing about its type")
+    }
+
+    func testExplicitTypesGetNoTypeHint() async throws {
+        let source = "class T { void m() { int n = Lib.count(); Lib l = Lib.make(); } }"
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [])
+    }
+
+    func testVarLoopVariablesGetTheElementType() async throws {
+        let source = "class T { void m() { for (var w : Lib.words()) { } } }"
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [": String"])
+    }
+
+    func testLaterVarsAreTypedFromEarlierOnes() async throws {
+        let source = "class T { void m() { var l = Lib.make(); var again = l; } }"
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [": Lib", ": Lib"])
+    }
+
+    func testLambdaParametersGetTheirFunctionalInterfaceTypes() async throws {
+        let source = "class T { void m() { Lib.walk((item, depth) -> { }); } }"
+        let both = JavaInlayHintOptions(parameterNames: false, variableTypes: false, lambdaParameterTypes: true)
+        let result = try await labels(source, options: both)
+        XCTAssertEqual(result, [": String", ": int"])
+    }
+
+    func testEachKindFollowsItsOption() async throws {
+        let source = "class T { void m() { var n = Lib.count(); Lib.walk((item, depth) -> { }); Lib.area(1, 2); } }"
+        let none = JavaInlayHintOptions(parameterNames: false, variableTypes: false, lambdaParameterTypes: false)
+        let empty = try await labels(source, options: none)
+        XCTAssertEqual(empty, [])
+        let onlyParameters = try await labels(source, options: JavaInlayHintOptions())
+        XCTAssertEqual(onlyParameters, ["width:", "height:"])
+        let onlyVariables = try await labels(source, options: typeHints)
+        XCTAssertEqual(onlyVariables, [": int"])
+        let all = JavaInlayHintOptions(parameterNames: true, variableTypes: true, lambdaParameterTypes: true)
+        let everything = try await labels(source, options: all)
+        XCTAssertEqual(everything.count, 5)
+    }
+
+    func testUntypeableInitializersGetNoTypeHint() async throws {
+        let source = "class T { void m() { var x = unknown(); } }"
+        let result = try await labels(source, options: typeHints)
+        XCTAssertEqual(result, [])
+    }
+
+    func testOnlyDeclarationsInTheRequestedRangeAreTyped() async throws {
+        let source = "class T { void m() { var a = Lib.count(); } void n() { var b = Lib.make(); } }"
+        let start = (source as NSString).range(of: "void n").location
+        let result = try await hints(source, range: start..<source.utf16.count, options: typeHints)
+        XCTAssertEqual(result.map(\.label), [": Lib"])
     }
 }

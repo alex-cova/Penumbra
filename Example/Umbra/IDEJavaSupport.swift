@@ -230,7 +230,9 @@ final class IDEJavaSupport {
         callHierarchyProvider = JavaCallHierarchyProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)
         inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache, usageProvider: findUsagesProvider)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
-        inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
+        let inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
+        self.inlayHintProvider = inlayHintProvider
+        Task { await inlayHintProvider.setOptionsSource { IDEPreferences.currentJavaInlayHintOptions() } }
         lineMarkerProvider = JavaLineMarkerProvider(index: javaIndex, indexPaths: paths)
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)

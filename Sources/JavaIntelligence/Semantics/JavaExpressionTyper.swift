@@ -131,9 +131,9 @@ public enum JavaExpressionTyper {
         return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
     }
 
-    /// Resolves the `var` locals in `locals` by typing their initializers (each against the locals
-    /// declared before it), and implicitly typed lambda parameters from their call site. Other
-    /// locals pass through unchanged.
+    /// Resolves the `var` locals in `locals` by typing their initializers (each against the other
+    /// locals, as resolved so far), and implicitly typed lambda parameters from their call site.
+    /// Other locals pass through unchanged.
     public static func resolvingVarLocals(
         _ locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
     ) async -> [JavaLocalVariable] {
@@ -143,19 +143,30 @@ public enum JavaExpressionTyper {
                 result[position] = JavaLocalVariable(name: local.name, type: typed.type)
             }
         }
-        for (position, local) in locals.enumerated() where local.isVarDeclaration {
-            guard let initializer = local.initializerText else { continue }
-            // `locals` is innermost-first, so everything after this one was declared before it.
-            let visible = Array(result[(position + 1)...])
-            if let info = await typeOfExpression(initializer, locals: visible, context: context, index: index), !info.isTypeReference {
+        // `locals` lists an inner block's variables before an outer block's, but the variables of one
+        // block in source order, so a `var` can depend on one listed after it (`var b = a;` in an inner
+        // block) or before it (`var a = f(); var b = a;`). Resolve in passes, each against every other
+        // local as resolved so far, until a pass resolves nothing. A name is declared once per scope,
+        // so seeing a later declaration cannot change what an initializer means in valid code.
+        for _ in 0 ..< 3 {
+            var progressed = false
+            for (position, local) in locals.enumerated() where local.isVarDeclaration && result[position].isVarDeclaration {
+                guard let initializer = local.initializerText else { continue }
+                var visible = result
+                visible.remove(at: position)
+                guard let info = await typeOfExpression(initializer, locals: visible, context: context, index: index),
+                      !info.isTypeReference else { continue }
                 if local.isIterationVariable {
                     if let element = await iteratedElementType(of: info.type, context: context, index: index) {
                         result[position] = JavaLocalVariable(name: local.name, type: element)
+                        progressed = true
                     }
                 } else {
                     result[position] = JavaLocalVariable(name: local.name, type: info.type)
+                    progressed = true
                 }
             }
+            if !progressed { break }
         }
         return result
     }

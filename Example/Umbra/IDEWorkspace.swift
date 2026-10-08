@@ -4065,7 +4065,7 @@ public final class IDEWorkspace {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
-        host.intelligenceController?.inlayHintsEnabled = preferences.javaInlayHints
+        host.intelligenceController?.inlayHintsEnabled = preferences.areInlayHintsEnabled
         host.intelligenceController?.onOpenLocationInOtherDocument = { [weak self] location in
             self?.openNavigationLocation(location) ?? false
         }
@@ -4533,7 +4533,10 @@ public final class IDEWorkspace {
 
     func javaInlayHintsPreferenceChanged() {
         for paneID in hostedPaneIDs {
-            host(for: paneID).intelligenceController?.inlayHintsEnabled = preferences.javaInlayHints
+            let controller = host(for: paneID).intelligenceController
+            controller?.inlayHintsEnabled = preferences.areInlayHintsEnabled
+            // The kinds shown changed, which `inlayHintsEnabled` alone does not notice.
+            controller?.refreshInlayHints()
         }
     }
 

@@ -56,6 +56,8 @@ public final class IDEPreferences {
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
+        static let javaInlayVariableTypes = "com.umbra.editor.javaInlayVariableTypes"
+        static let javaInlayLambdaTypes = "com.umbra.editor.javaInlayLambdaTypes"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
         static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
@@ -385,6 +387,32 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaInlayHints, forKey: Keys.javaInlayHints) }
     }
 
+    /// `var items`: the type after a `var` local or loop variable.
+    var javaInlayVariableTypes: Bool {
+        didSet { UserDefaults.standard.set(javaInlayVariableTypes, forKey: Keys.javaInlayVariableTypes) }
+    }
+
+    /// `(a, b) -> …`: the types of implicitly typed lambda parameters.
+    var javaInlayLambdaTypes: Bool {
+        didSet { UserDefaults.standard.set(javaInlayLambdaTypes, forKey: Keys.javaInlayLambdaTypes) }
+    }
+
+    /// Whether any kind of inlay hint is on, which is when the editor asks for hints at all.
+    var areInlayHintsEnabled: Bool {
+        javaInlayHints || javaInlayVariableTypes || javaInlayLambdaTypes
+    }
+
+    /// The hint kinds the Java provider produces, read from the defaults at call time so the provider
+    /// (an actor, off the main thread) always sees the current settings.
+    nonisolated static func currentJavaInlayHintOptions() -> JavaInlayHintOptions {
+        let defaults = UserDefaults.standard
+        return JavaInlayHintOptions(
+            parameterNames: defaults.bool(forKey: Keys.javaInlayHints),
+            variableTypes: defaults.bool(forKey: Keys.javaInlayVariableTypes),
+            lambdaParameterTypes: defaults.bool(forKey: Keys.javaInlayLambdaTypes)
+        )
+    }
+
     /// Draws inlay hints in the editor font instead of the system UI font.
     var inlayHintsUseEditorFont: Bool {
         didSet { UserDefaults.standard.set(inlayHintsUseEditorFont, forKey: Keys.inlayHintsUseEditorFont) }
@@ -610,6 +638,8 @@ public final class IDEPreferences {
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
+        javaInlayVariableTypes = defaults.bool(forKey: Keys.javaInlayVariableTypes)
+        javaInlayLambdaTypes = defaults.bool(forKey: Keys.javaInlayLambdaTypes)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
         javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? Array(Self.defaultDisabledInspections))

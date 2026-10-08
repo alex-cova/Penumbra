@@ -50,6 +50,24 @@ struct IDEPreferencesJavaPane: View {
                 }
 
             IDESettingsToggle(
+                "Variable Type Hints",
+                isOn: $preferences.javaInlayVariableTypes,
+                detail: "Shows the type after a `var` local or loop variable, unless the initializer already says it (`new Foo()`, a cast, a literal)."
+            )
+            .onChange(of: preferences.javaInlayVariableTypes) {
+                workspace.javaInlayHintsPreferenceChanged()
+            }
+
+            IDESettingsToggle(
+                "Lambda Parameter Type Hints",
+                isOn: $preferences.javaInlayLambdaTypes,
+                detail: "Shows the types of implicitly typed lambda parameters, read off the method they are passed to."
+            )
+            .onChange(of: preferences.javaInlayLambdaTypes) {
+                workspace.javaInlayHintsPreferenceChanged()
+            }
+
+            IDESettingsToggle(
                 "Use Editor Font for Hints",
                 isOn: $preferences.inlayHintsUseEditorFont,
                 detail: "Draws inlay hints in the editor font, one point smaller, instead of the system font."
