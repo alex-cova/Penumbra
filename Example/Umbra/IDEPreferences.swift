@@ -67,6 +67,9 @@ public final class IDEPreferences {
         static let showsErrorStripe = "com.umbra.editor.showsErrorStripe"
         static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
+        static let showStickyLines = "com.umbra.editor.showStickyLines"
+        static let maximumStickyLines = "com.umbra.editor.maximumStickyLines"
+        static let stickyLinesDisabledLanguages = "com.umbra.editor.stickyLinesDisabledLanguages"
         static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
         static let tooltipDelayMilliseconds = "com.umbra.editor.tooltipDelayMilliseconds"
         /// AppKit's own key for how long a native tooltip waits, in milliseconds.
@@ -268,6 +271,22 @@ public final class IDEPreferences {
     /// A bar in the fold ribbon beside the block the caret is in.
     var highlightsCurrentScope: Bool {
         didSet { UserDefaults.standard.set(highlightsCurrentScope, forKey: Keys.highlightsCurrentScope) }
+    }
+
+    /// Pins the headers of the blocks around the first visible line (class, method, `if`, loop) to
+    /// the top of the editor while their bodies scroll by. Kept on this Mac, like the other code insight settings.
+    var showStickyLines: Bool {
+        didSet { UserDefaults.standard.set(showStickyLines, forKey: Keys.showStickyLines) }
+    }
+
+    /// The most lines sticky lines pin at once (1...10).
+    var maximumStickyLines: Int {
+        didSet { UserDefaults.standard.set(maximumStickyLines, forKey: Keys.maximumStickyLines) }
+    }
+
+    /// Language identifiers sticky lines are switched off for, from "Disable for <language>".
+    var stickyLinesDisabledLanguages: [String] {
+        didSet { UserDefaults.standard.set(stickyLinesDisabledLanguages, forKey: Keys.stickyLinesDisabledLanguages) }
     }
 
     /// Documentation of the symbol under the pointer once it rests.
@@ -561,6 +580,9 @@ public final class IDEPreferences {
         showsErrorStripe = defaults.object(forKey: Keys.showsErrorStripe) as? Bool ?? true
         errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
         highlightsCurrentScope = defaults.object(forKey: Keys.highlightsCurrentScope) as? Bool ?? true
+        showStickyLines = defaults.object(forKey: Keys.showStickyLines) as? Bool ?? true
+        maximumStickyLines = min(max(defaults.object(forKey: Keys.maximumStickyLines) as? Int ?? 5, 1), 10)
+        stickyLinesDisabledLanguages = defaults.stringArray(forKey: Keys.stickyLinesDisabledLanguages) ?? []
         showsDocumentationOnHover = defaults.object(forKey: Keys.showsDocumentationOnHover) as? Bool ?? true
         let storedTooltipDelay = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500
         tooltipDelayMilliseconds = storedTooltipDelay
@@ -617,6 +639,7 @@ public final class IDEPreferences {
         textView.showsErrorStripe = showsErrorStripe
         textView.errorStripeMinimumMarkHeight = CGFloat(errorStripeMarkMinHeight)
         textView.highlightsCurrentScope = highlightsCurrentScope
+        applyStickyLines(to: textView)
         textView.showTabs = showInvisibleCharacters
         textView.showSpaces = showInvisibleCharacters
         textView.showPageGuide = showPageGuide
@@ -645,6 +668,31 @@ public final class IDEPreferences {
         if repaint {
             textView.redisplayVisibleLines()
             textView.refreshGutterChrome()
+        }
+    }
+
+    /// Switches sticky lines on for `textView` unless they are off for its language, and wires the
+    /// pinned lines' context menu to these settings.
+    func applyStickyLines(to textView: TextView) {
+        let language = textView.languageIdentifier
+        let disabledForLanguage = language.map { stickyLinesDisabledLanguages.contains($0) } ?? false
+        textView.showsStickyLines = showStickyLines && !disabledForLanguage
+        textView.maximumStickyLineCount = maximumStickyLines
+        textView.stickyLinesConfigureHandler = {
+            guard let workspace = IDEWindowRegistry.shared.activeWorkspace else { return }
+            workspace.requestedSettingsDomain = .editor
+            workspace.showSettings()
+        }
+        textView.stickyLinesDisableHandler = { [weak textView] languageOnly in
+            let preferences = IDEPreferences.shared
+            if languageOnly, let language = textView?.languageIdentifier {
+                if !preferences.stickyLinesDisabledLanguages.contains(language) {
+                    preferences.stickyLinesDisabledLanguages.append(language)
+                }
+            } else {
+                preferences.showStickyLines = false
+            }
+            IDEWindowRegistry.shared.activeWorkspace?.applyPreferencesToAllHosts()
         }
     }
 

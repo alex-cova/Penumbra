@@ -90,7 +90,10 @@ public extension LanguageConfiguration {
             nameNodeTypes: ["variable_declarator", "identifier"],
             isBreadcrumbSegment: false
         )
-    ])
+    ], stickyNodeTypes: LanguageConfiguration.commonStickyNodeTypes.union([
+        "enhanced_for_statement", "try_with_resources_statement", "synchronized_statement",
+        "catch_clause", "finally_clause"
+    ]))
 
     /// Swift. Node type names follow tree-sitter-swift. Data-only until a host registers the grammar.
     static let swift = LanguageConfiguration(declarations: [

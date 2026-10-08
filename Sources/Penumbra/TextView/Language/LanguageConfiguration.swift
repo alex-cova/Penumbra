@@ -95,14 +95,26 @@ public struct LanguageConfiguration: Sendable, Hashable {
     public var highlightsOccurrences: Bool
     /// Shortest selected / word-under-caret term that triggers occurrence highlighting.
     public var minimumOccurrenceLength: Int
+    /// Node types, besides the type and function declarations in ``declarations``, whose first
+    /// line stays pinned to the top of the editor while their body scrolls by (sticky lines):
+    /// `if`, loops, `switch`, `try`.
+    public var stickyNodeTypes: Set<String>
+
+    /// Statement nodes most grammars name alike (tree-sitter-java, -swift, -javascript, -python…).
+    public static let commonStickyNodeTypes: Set<String> = [
+        "if_statement", "for_statement", "while_statement", "do_statement", "switch_statement",
+        "try_statement", "for_in_statement", "with_statement", "guard_statement"
+    ]
 
     public init(
         declarations: [DeclarationRule],
         showsMethodSeparators: Bool = true,
         showsBreadcrumbs: Bool = true,
         highlightsOccurrences: Bool = true,
-        minimumOccurrenceLength: Int = 2
+        minimumOccurrenceLength: Int = 2,
+        stickyNodeTypes: Set<String> = LanguageConfiguration.commonStickyNodeTypes
     ) {
+        self.stickyNodeTypes = stickyNodeTypes
         self.declarations = declarations
         self.showsMethodSeparators = showsMethodSeparators
         self.showsBreadcrumbs = showsBreadcrumbs

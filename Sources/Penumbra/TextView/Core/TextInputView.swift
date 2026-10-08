@@ -918,7 +918,7 @@ final class TextInputView: EditorView {
     private(set) var isRestoringPreviouslyDeletedText = false
 
     // MARK: - Private
-    private var languageMode: InternalLanguageMode = PlainTextInternalLanguageMode() {
+    var languageMode: InternalLanguageMode = PlainTextInternalLanguageMode() {
         didSet {
             if languageMode !== oldValue {
                 indentController.languageMode = languageMode
@@ -1054,6 +1054,8 @@ final class TextInputView: EditorView {
         set { foldPreviewController.hoverDelay = newValue }
     }
     let methodSeparatorController = MethodSeparatorController()
+    /// Called when rows moved, text changed or a parse finished, so sticky lines drop what they cached.
+    var onStickyLinesInvalidated: (() -> Void)?
     let occurrenceHighlightController: OccurrenceHighlightController
     let scopeHighlightController = ScopeHighlightController()
     /// Marks the block the caret is in along the fold ribbon. Needs line folding on, since the
@@ -1066,6 +1068,7 @@ final class TextInputView: EditorView {
     /// registry changes; drives method separators and occurrence highlighting.
     var languageConfiguration: LanguageConfiguration? {
         didSet {
+            onStickyLinesInvalidated?()
             methodSeparatorController.configuration = languageConfiguration
             occurrenceHighlightController.configuration = languageConfiguration
             methodSeparatorController.recompute()
@@ -2130,6 +2133,7 @@ private extension TextInputView {
     }
 
     private func noteRowsNeedingSyntaxColor(_ lineChangeSet: LineChangeSet) {
+        onStickyLinesInvalidated?()
         if !lineChangeSet.insertedLines.isEmpty || !lineChangeSet.removedLines.isEmpty {
             // Rows recorded before this edit are now off by the delta.
             rowsShiftedSinceSyntaxParse = true
@@ -2185,6 +2189,7 @@ private extension TextInputView {
     }
 
     private func applySyntaxColorRefreshAfterParse() {
+        onStickyLinesInvalidated?()
         var rows = rowsEditedSinceSyntaxParse
         let rowsShifted = rowsShiftedSinceSyntaxParse
         rowsEditedSinceSyntaxParse.removeAll()
@@ -2291,6 +2296,66 @@ private extension TextInputView {
 }
 
 extension TextInputView {
+    /// The sticky-line scopes around `row`, outermost first (see ``StickyScopeResolver``). Empty
+    /// without a syntax tree or a language configuration.
+    func stickyScopes(containingRow row: Int) -> [StickyScope] {
+        guard row > 0, row < lineManager.lineCount,
+              let mode = languageMode as? TreeSitterInternalLanguageMode,
+              let configuration = languageConfiguration,
+              let root = mode.rootSyntaxNode else {
+            return []
+        }
+        return StickyScopeResolver.scopes(containingRow: row, root: root, configuration: configuration)
+    }
+
+    /// Whether sticky lines have a syntax tree to work from.
+    var hasStickyScopeSource: Bool {
+        languageMode is TreeSitterInternalLanguageMode && languageConfiguration != nil
+    }
+
+    /// X, in content coordinates, where a line's text starts.
+    var stickyTextOriginX: CGFloat {
+        layoutManager.leadingLineSpacing
+    }
+
+    /// Width of the gutter, which sticky lines repeat, or 0 when the gutter takes no room.
+    var stickyGutterWidth: CGFloat {
+        max(layoutManager.leadingLineSpacing - textContainerInset.left, 0)
+    }
+
+    /// Height of a one-row sticky line: a single unwrapped line of the editor's font.
+    var stickyRowHeight: CGFloat {
+        (theme.font.totalLineHeight * lineHeightMultiplier).rounded(.up)
+    }
+
+    /// The text of `row` (without its line break), highlighted like the editor. A handle-free,
+    /// synchronous read for the few rows a sticky panel shows.
+    func stickyLineContent(forRow row: Int) -> NSAttributedString? {
+        guard row >= 0, row < lineManager.lineCount else {
+            return nil
+        }
+        let info = lineManager.lineInfo(atRow: row)
+        let range = NSRange(location: info.location, length: info.length)
+        guard let string = stringView.substring(in: range) else {
+            return nil
+        }
+        let attributed = NSMutableAttributedString(string: string)
+        let defaultAttributes = DefaultStringAttributes(textColor: theme.textColor, font: theme.font, kern: kern,
+                                                        tabWidth: indentController.tabWidth)
+        defaultAttributes.apply(to: attributed)
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        (highlighter as? TreeSitterSyntaxHighlighter)?.semanticHighlights = semanticHighlights
+        highlighter.theme = theme
+        if highlighter.canHighlight, !string.isEmpty {
+            let byteRange = ByteRange(location: ByteCount(utf16Length: info.location),
+                                      length: ByteCount(utf16Length: info.length))
+            highlighter.syntaxHighlight(LineSyntaxHighlighterInput(attributedString: attributed,
+                                                                   byteRange: byteRange,
+                                                                   hasOnlyDefaultAttributes: true))
+        }
+        return attributed
+    }
+
     func updateFoldPreview(at point: CGPoint) {
         let hit = layoutManager.foldPlaceholderHitTest(at: point)
         foldPreviewController.mouseMoved(

@@ -151,6 +151,33 @@ struct IDEPreferencesEditorPane: View {
         }
 
         IDESettingsSection(
+            "Sticky Lines",
+            footer: "While you scroll, the headers of the classes, methods and blocks around the top line stay pinned. Click one to jump to it; right-click for these settings."
+        ) {
+            IDESettingsToggle("Show Sticky Lines", isOn: $preferences.showStickyLines)
+
+            IDEPreferencesIntStepper(
+                title: "Maximum Lines",
+                value: $preferences.maximumStickyLines,
+                range: 1...10,
+                valueWidth: 24
+            )
+            .disabled(!preferences.showStickyLines)
+
+            if !preferences.stickyLinesDisabledLanguages.isEmpty {
+                IDESettingsRow("Disabled For") {
+                    HStack(spacing: IDEAppearance.Spacing.sm) {
+                        Text(preferences.stickyLinesDisabledLanguages.sorted().joined(separator: ", "))
+                            .font(IDEAppearance.Typography.monoCaption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        Button("Enable All") { preferences.stickyLinesDisabledLanguages = [] }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+
+        IDESettingsSection(
             "Code Insight",
             footer: "The error stripe ticks every problem along the trailing edge. The scope bar marks the block the caret is in, beside the fold arrows (code folding must be on). Tooltips show a problem's message, and optionally documentation, when the pointer rests on code. The tooltip delay also paces fold previews and the gutter's tooltips; those may need a relaunch to follow a change."
         ) {

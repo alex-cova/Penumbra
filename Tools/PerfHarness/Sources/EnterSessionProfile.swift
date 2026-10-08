@@ -112,6 +112,27 @@ enum EnterSessionProfile {
                     pageTimes.count, pageMedian * 1000, pageP90 * 1000))
         ResultLog.row("scroll_page", file: file, sizeBytes: sizeBytes, seconds: pageMedian,
                       extra: "p90=\(String(format: "%.6f", pageP90)) pages=\(pageTimes.count)")
+        // Small steps from the middle of the file: a real scroll moves a few lines per frame, which is
+        // when per-frame overlays (sticky lines) run most often.
+        var stepTimes: [Double] = []
+        let stepStart = textView.contentSize.height / 2
+        for step in 0 ..< 400 {
+            autoreleasepool {
+                let start = CFAbsoluteTimeGetCurrent()
+                textView.contentOffset = CGPoint(x: 0, y: stepStart + CGFloat(step) * 24)
+                textView.layoutIfNeeded()
+                textView.displayIfNeeded()
+                stepTimes.append(CFAbsoluteTimeGetCurrent() - start)
+            }
+            Measurement.pumpRunLoop(seconds: 0.002)
+        }
+        let stepMedian = Measurement.percentile(stepTimes, 0.5)
+        let stepP90 = Measurement.percentile(stepTimes, 0.9)
+        warn(String(format: "  Scroll step (%d steps of 24 pt)     median=%7.3f ms  p90=%7.3f ms",
+                    stepTimes.count, stepMedian * 1000, stepP90 * 1000))
+        ResultLog.row("scroll_step", file: file, sizeBytes: sizeBytes, seconds: stepMedian,
+                      extra: "p90=\(String(format: "%.6f", stepP90)) steps=\(stepTimes.count)")
+        warn("  Sticky lines pinned after the last step: \(textView.stickyLineCountForBenchmarks)")
         reportHandles("scrolled_whole_file")
         for fraction in [0.1, 0.5, 0.9] {
             _ = textView.goToLine(Int(Double(lineCount) * fraction))
@@ -211,6 +232,8 @@ enum EnterSessionProfile {
         textView.isLineFoldingEnabled = true
         textView.showMinimap = true
         textView.showMethodSeparators = true
+        // Umbra pins the enclosing class and method; PENUMBRA_NO_STICKY=1 measures without them.
+        textView.showsStickyLines = ProcessInfo.processInfo.environment["PENUMBRA_NO_STICKY"] == nil
         textView.isMetalRenderingEnabled = true
         // Umbra sets this; it selects the Java declaration rules (method separators).
         textView.languageIdentifier = "java"

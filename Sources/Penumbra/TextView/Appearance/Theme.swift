@@ -74,6 +74,13 @@ public protocol Theme: AnyObject {
     /// Color of the focus ring and active toggle pills (Case/Regex/Wrap) in the find bar.
     /// Defaults to ``selectionColor``.
     var findBarAccentColor: NSColor { get }
+    /// Background of the sticky lines pinned to the top of the editor (``TextView/showsStickyLines``).
+    /// `nil` uses the editor's background.
+    var stickyLinesBackgroundColor: NSColor? { get }
+    /// Color of the hairline under the sticky lines. Defaults to ``gutterHairlineColor``.
+    var stickyLinesBorderColor: NSColor { get }
+    /// Background of the sticky line under the pointer. Defaults to ``selectedLineBackgroundColor``.
+    var stickyLinesHoverColor: NSColor { get }
     /// Color of text matching the capture sequence.
     ///
     /// See <doc:CreatingATheme> for more information on higlight names.
@@ -103,6 +110,18 @@ public protocol Theme: AnyObject {
 }
 
 public extension Theme {
+    var stickyLinesBackgroundColor: NSColor? {
+        nil
+    }
+
+    var stickyLinesBorderColor: NSColor {
+        gutterHairlineColor
+    }
+
+    var stickyLinesHoverColor: NSColor {
+        selectedLineBackgroundColor
+    }
+
     var gutterHairlineWidth: CGFloat {
         hairlineLength
     }

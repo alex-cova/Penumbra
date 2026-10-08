@@ -215,6 +215,9 @@ public struct DocumentTextExport: Sendable {
         }
         set {
             textInputView.theme = newValue
+            if showsStickyLines {
+                stickyLinesController.invalidate()
+            }
             minimapView.applyTheme()
             scrollerOverlay.applyTheme()
             findPanelController.panelView.apply(theme: newValue)
@@ -1437,6 +1440,102 @@ public struct DocumentTextExport: Sendable {
         return controller
     }()
     private var findPanelTopInset: CGFloat = 0
+
+    // MARK: - Sticky lines
+
+    private lazy var stickyLinesController: StickyLinesController = {
+        let controller = StickyLinesController(textView: self)
+        addFixedOverlaySubview(controller.view)
+        controller.contextMenuProvider = { [weak self] in self?.makeStickyLinesMenu() }
+        return controller
+    }()
+
+    /// Pins the headers of the blocks around the first visible line — class, method, `if`, loop —
+    /// to the top of the editor while their bodies scroll by. Click one to jump to it. Needs a
+    /// syntax tree. Off by default.
+    public var showsStickyLines = false {
+        didSet {
+            if showsStickyLines != oldValue {
+                stickyLinesController.isEnabled = showsStickyLines
+                setNeedsLayout()
+            }
+        }
+    }
+
+    /// The most lines sticky lines may pin at once (1...10). The innermost blocks win when more enclose the top.
+    public var maximumStickyLineCount: Int {
+        get { stickyLinesController.maximumLineCount }
+        set { stickyLinesController.maximumLineCount = newValue }
+    }
+
+    /// Called for "Configure Sticky Lines…" in the context menu of a pinned line.
+    public var stickyLinesConfigureHandler: (() -> Void)?
+
+    /// Called for "Disable Sticky Lines" (`languageOnly == false`) and "Disable for <language>" in the
+    /// context menu of a pinned line. The host stores the choice and sets ``showsStickyLines``.
+    public var stickyLinesDisableHandler: ((_ languageOnly: Bool) -> Void)?
+
+    var stickyLinesInput: TextInputView { textInputView }
+
+    /// Where the pinned lines go: under the find bar, left of the minimap.
+    var stickyLinesAvailableFrame: CGRect {
+        let top = adjustedContentInset.top
+        let reservedMinimapWidth = showMinimap ? minimapWidth : 0
+        return CGRect(x: 0, y: top, width: max(bounds.width - reservedMinimapWidth, 0), height: max(bounds.height - top, 0))
+    }
+
+    /// The scopes currently pinned, outermost first, as 0-based header rows.
+    var stickyLineHeaderRowsForTesting: [Int] {
+        stickyLinesController.shownScopes.map(\.headerRow)
+    }
+
+    var stickyLinesViewForTesting: StickyLinesView { stickyLinesController.view }
+
+    /// How many sticky lines are pinned right now (PerfHarness checks that the overlay is really on).
+    @_spi(Benchmarks) public var stickyLineCountForBenchmarks: Int {
+        stickyLinesController.shownScopes.count
+    }
+
+    func clickStickyLineForTesting(slot: Int) {
+        stickyLinesController.select(slot: slot)
+    }
+
+    private func makeStickyLinesMenu() -> NSMenu? {
+        guard stickyLinesConfigureHandler != nil || stickyLinesDisableHandler != nil else {
+            return nil
+        }
+        let menu = NSMenu()
+        if stickyLinesConfigureHandler != nil {
+            let item = NSMenuItem(title: "Configure Sticky Lines…", action: #selector(stickyLinesConfigureAction(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        if stickyLinesDisableHandler != nil {
+            menu.addItem(.separator())
+            let all = NSMenuItem(title: "Disable Sticky Lines", action: #selector(stickyLinesDisableAction(_:)), keyEquivalent: "")
+            all.target = self
+            menu.addItem(all)
+            if let languageIdentifier {
+                let language = NSMenuItem(title: "Disable for \(languageIdentifier.capitalized)",
+                                          action: #selector(stickyLinesDisableLanguageAction(_:)), keyEquivalent: "")
+                language.target = self
+                menu.addItem(language)
+            }
+        }
+        return menu
+    }
+
+    @objc private func stickyLinesConfigureAction(_ sender: Any?) {
+        stickyLinesConfigureHandler?()
+    }
+
+    @objc private func stickyLinesDisableAction(_ sender: Any?) {
+        stickyLinesDisableHandler?(false)
+    }
+
+    @objc private func stickyLinesDisableLanguageAction(_ sender: Any?) {
+        stickyLinesDisableHandler?(true)
+    }
     /// A ``scrollRangeToCenter(_:)`` request made before the view had a height.
     private var pendingCenteredRange: NSRange?
     private var preferredContentSize: CGSize {
@@ -1490,6 +1589,10 @@ public struct DocumentTextExport: Sendable {
         minimapView.applyTheme()
         minimapView.collapseOverlay()
         addFixedOverlaySubview(minimapView)
+        textInputView.onStickyLinesInvalidated = { [weak self] in
+            guard let self, self.showsStickyLines else { return }
+            self.stickyLinesController.invalidate()
+        }
         errorStripeController.fractionForOffset = { [weak self] offset in
             guard let self else { return nil }
             let input = self.textInputView
@@ -1511,6 +1614,9 @@ public struct DocumentTextExport: Sendable {
                 self.minimapView.setNeedsDisplayForContentChange()
             }
             self.scrollerOverlay.handleScroll()
+            if self.showsStickyLines {
+                self.stickyLinesController.update()
+            }
             for observer in self.scrollObservers {
                 observer()
             }
@@ -1591,6 +1697,10 @@ public struct DocumentTextExport: Sendable {
         }
         textInputView.placeSelectionChromeAboveMetalCanvas()
         bringSubviewToFront(textInputView.gutterContainerView)
+        if showsStickyLines {
+            stickyLinesController.update()
+            bringFixedOverlaySubviewToFront(stickyLinesController.view)
+        }
         if showMinimap {
             minimapView.isHidden = false
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
@@ -2605,7 +2715,8 @@ private extension TextView {
         let chromeViews: [NSView] = [
             textInputView.gutterContainerView,
             minimapView,
-            findPanelController.panelView
+            findPanelController.panelView,
+            stickyLinesController.view
         ]
         if duration > 0 {
             NSAnimationContext.runAnimationGroup { context in

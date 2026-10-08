@@ -193,6 +193,9 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.showsErrorStripe) { applyLivePreferences() }
             .onChange(of: preferences.errorStripeMarkMinHeight) { applyLivePreferences() }
             .onChange(of: preferences.highlightsCurrentScope) { applyLivePreferences() }
+            .onChange(of: preferences.showStickyLines) { applyLivePreferences() }
+            .onChange(of: preferences.maximumStickyLines) { applyLivePreferences() }
+            .onChange(of: preferences.stickyLinesDisabledLanguages) { applyLivePreferences() }
             .onChange(of: preferences.showsDocumentationOnHover) { applyLivePreferences() }
             .onChange(of: preferences.tooltipDelayMilliseconds) { applyLivePreferences() }
             .onChange(of: preferences.autoreparseDelayMilliseconds) { applyLivePreferences() }

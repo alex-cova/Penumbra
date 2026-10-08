@@ -143,7 +143,7 @@ enum DeclarationScanner {
         }
     }
 
-    private static func firstChild(of node: TreeSitterNode, ofAnyType types: [String]) -> TreeSitterNode? {
+    static func firstChild(of node: TreeSitterNode, ofAnyType types: [String]) -> TreeSitterNode? {
         for index in 0 ..< node.childCount {
             guard let child = node.child(at: index), let type = child.type else {
                 continue

@@ -497,7 +497,8 @@ final class LayoutManager {
     }
 
     // MARK: - Sizing
-    private var leadingLineSpacing: CGFloat {
+    /// X, in content coordinates, where a line's text starts: past the gutter and the text inset.
+    var leadingLineSpacing: CGFloat {
         if gutterWidthService.reservesGutterSpace {
             return gutterWidthService.gutterWidth + textContainerInset.left
         } else {
