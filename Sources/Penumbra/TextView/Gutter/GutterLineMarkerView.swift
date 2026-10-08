@@ -219,7 +219,8 @@ final class GutterLineMarkerView: EditorView {
         guard lineHeight > 0 else { return nil }
         let fragmentHeight = min(rowHeight, lineHeight)
         let size = Self.iconSize
-        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + (fragmentHeight - size) / 2 - frame.minY
+        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + lineManager.textTopInset(ofRow: row)
+            + (fragmentHeight - size) / 2 - frame.minY
         let x = CGFloat(slot) * Self.slotWidth + (Self.slotWidth - size) / 2
         return CGRect(x: x, y: y, width: size, height: size)
     }

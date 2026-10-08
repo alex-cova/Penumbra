@@ -188,7 +188,8 @@ private extension FoldRibbonView {
         let size = image.size
         let rect = CGRect(
             x: (bounds.width - size.width) / 2,
-            y: textContainerInsetTop + lineManager.yPosition(ofRow: row) + (fragmentHeight - size.height) / 2,
+            y: textContainerInsetTop + lineManager.yPosition(ofRow: row) + lineManager.textTopInset(ofRow: row)
+                + (fragmentHeight - size.height) / 2,
             width: size.width,
             height: size.height
         )

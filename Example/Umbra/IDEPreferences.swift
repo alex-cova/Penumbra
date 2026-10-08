@@ -58,6 +58,8 @@ public final class IDEPreferences {
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
         static let javaInlayVariableTypes = "com.umbra.editor.javaInlayVariableTypes"
         static let javaInlayLambdaTypes = "com.umbra.editor.javaInlayLambdaTypes"
+        static let javaCodeVisionUsages = "com.umbra.editor.javaCodeVisionUsages"
+        static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
         static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
@@ -397,6 +399,30 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaInlayLambdaTypes, forKey: Keys.javaInlayLambdaTypes) }
     }
 
+    /// `3 usages` above classes, methods and constructors. A search per declaration, so off by default.
+    var javaCodeVisionUsages: Bool {
+        didSet { UserDefaults.standard.set(javaCodeVisionUsages, forKey: Keys.javaCodeVisionUsages) }
+    }
+
+    /// `2 implementations` above interfaces, abstract classes and abstract methods.
+    var javaCodeVisionImplementations: Bool {
+        didSet { UserDefaults.standard.set(javaCodeVisionImplementations, forKey: Keys.javaCodeVisionImplementations) }
+    }
+
+    /// Whether any code vision label is on, which is when the editor makes room above declarations.
+    var areCodeVisionLensesEnabled: Bool {
+        javaCodeVisionUsages || javaCodeVisionImplementations
+    }
+
+    /// The labels the Java provider produces, read from the defaults at call time (it is an actor).
+    nonisolated static func currentJavaCodeVisionOptions() -> JavaCodeVisionOptions {
+        let defaults = UserDefaults.standard
+        return JavaCodeVisionOptions(
+            usages: defaults.bool(forKey: Keys.javaCodeVisionUsages),
+            implementations: defaults.bool(forKey: Keys.javaCodeVisionImplementations)
+        )
+    }
+
     /// Whether any kind of inlay hint is on, which is when the editor asks for hints at all.
     var areInlayHintsEnabled: Bool {
         javaInlayHints || javaInlayVariableTypes || javaInlayLambdaTypes
@@ -640,6 +666,8 @@ public final class IDEPreferences {
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
         javaInlayVariableTypes = defaults.bool(forKey: Keys.javaInlayVariableTypes)
         javaInlayLambdaTypes = defaults.bool(forKey: Keys.javaInlayLambdaTypes)
+        javaCodeVisionUsages = defaults.bool(forKey: Keys.javaCodeVisionUsages)
+        javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
         javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? Array(Self.defaultDisabledInspections))
@@ -745,6 +773,8 @@ public final class IDEPreferences {
     func apply(to controller: EditorIntelligenceController) {
         controller.showsDocumentationOnMouseHover = showsDocumentationOnHover
         controller.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
+        controller.codeVisionConfiguration = "\(javaCodeVisionUsages)|\(javaCodeVisionImplementations)"
+        controller.codeVisionEnabled = areCodeVisionLensesEnabled
         controller.appliesRefactoringsInPlace = inPlaceRefactoring
         controller.confirmsInlineVariable = confirmsInlineVariable
     }

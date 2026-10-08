@@ -24,6 +24,8 @@ public struct EditorIntelligenceServices {
     public var inlayHintProvider: (any InlayHintProviding)?
     /// Optional host override for code folding descriptors.
     public var foldingProvider: (any FoldingProviding)?
+    /// Usage and implementation counts shown above declarations (see ``TextView/codeVisionLenses``).
+    public var codeVisionProvider: (any CodeVisionProviding)?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
     /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
@@ -41,6 +43,7 @@ public struct EditorIntelligenceServices {
         breadcrumbProvider: (any BreadcrumbProviding)? = nil,
         inlayHintProvider: (any InlayHintProviding)? = nil,
         foldingProvider: (any FoldingProviding)? = nil,
+        codeVisionProvider: (any CodeVisionProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
         projectSearchEngine: ProjectSearchEngine? = nil
@@ -54,6 +57,7 @@ public struct EditorIntelligenceServices {
         self.breadcrumbProvider = breadcrumbProvider
         self.inlayHintProvider = inlayHintProvider
         self.foldingProvider = foldingProvider
+        self.codeVisionProvider = codeVisionProvider
         self.symbolIndex = symbolIndex
         self.workspace = workspace
         self.projectSearchEngine = projectSearchEngine
@@ -109,6 +113,26 @@ public final class EditorIntelligenceController {
     private let breadcrumbProvider: (any BreadcrumbProviding)?
     private var inlayHintProvider: (any InlayHintProviding)?
     private var inlayHintTask: Task<Void, Never>?
+    private var codeVisionProvider: (any CodeVisionProviding)?
+    private var codeVisionTask: Task<Void, Never>?
+    /// Vertical range of content the last code vision request covered.
+    private var codeVisionRequestedYRange: ClosedRange<CGFloat>?
+    /// Whether lenses are shown. Off clears them; hosts flip it from a preference.
+    public var codeVisionEnabled = false {
+        didSet {
+            if codeVisionEnabled != oldValue { refreshCodeVision() }
+        }
+    }
+    /// Identifies which labels the host asked the provider for. A change while lenses are on asks for
+    /// them again, since ``codeVisionEnabled`` alone does not notice.
+    public var codeVisionConfiguration = "" {
+        didSet {
+            if codeVisionConfiguration != oldValue, codeVisionEnabled { refreshCodeVision(delay: 0.1) }
+        }
+    }
+    /// Called when a lens label is clicked and the controller has no action of its own for it.
+    /// Usage counts open Find Usages and implementation counts go to the implementations.
+    public var onCodeVisionClick: ((CodeVisionEntry, Int) -> Void)?
     /// Vertical range of content the last inlay hint request covered.
     private var inlayHintRequestedYRange: ClosedRange<CGFloat>?
     /// Whether hints are shown. Off clears them; hosts flip it from a preference.
@@ -205,6 +229,7 @@ public final class EditorIntelligenceController {
         self.codeGenerationProvider = services.codeGenerationProvider
         self.breadcrumbProvider = services.breadcrumbProvider
         self.inlayHintProvider = services.inlayHintProvider
+        self.codeVisionProvider = services.codeVisionProvider
         self.symbolIndex = services.symbolIndex
         self.workspace = services.workspace
         self.projectSearchEngine = services.projectSearchEngine ?? ProjectSearchEngine()
@@ -914,6 +939,7 @@ public final class EditorIntelligenceController {
         eventTask?.cancel()
         hoverTask?.cancel()
         inlayHintTask?.cancel()
+        codeVisionTask?.cancel()
         completionTask?.cancel()
         signatureHelpTask?.cancel()
         outlineTask?.cancel()
@@ -1231,6 +1257,91 @@ public final class EditorIntelligenceController {
         refreshInlayHints(delay: 0.15)
     }
 
+    // MARK: - Code vision
+
+    /// Shows the lenses above declarations in two steps: first the room for every declaration (so the
+    /// text does not move when numbers arrive), then the labels for the declarations on screen (a
+    /// viewport above and below included).
+    public func refreshCodeVision(delay: TimeInterval = 0.4) {
+        codeVisionTask?.cancel()
+        guard let textView else { return }
+        guard codeVisionEnabled, let codeVisionProvider else {
+            codeVisionRequestedYRange = nil
+            if !textView.codeVisionLenses.isEmpty { textView.codeVisionLenses = [] }
+            return
+        }
+        textView.codeVisionHandler = { [weak self] entry, offset in
+            self?.handleCodeVisionClick(entry, declarationOffset: offset)
+        }
+        codeVisionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            let request: (Document, UInt64)? = await MainActor.run {
+                guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
+                return (document, textView.contentGeneration)
+            }
+            guard let (document, generation) = request else { return }
+            let anchors = await codeVisionProvider.codeVisionAnchors(for: document).sorted()
+            guard !Task.isCancelled else { return }
+            // Step 1: room for every declaration, keeping the labels already shown on the same lines.
+            let visible: [Int]? = await MainActor.run {
+                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return nil }
+                let shownByLine = Dictionary(
+                    textView.codeVisionLenses.compactMap { lens in
+                        textView.textLocation(at: lens.utf16Offset).map { ($0.lineNumber, lens.entries) }
+                    },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                textView.codeVisionLenses = anchors.map { anchor in
+                    let line = textView.textLocation(at: anchor)?.lineNumber
+                    return CodeVisionLens(utf16Offset: anchor, entries: line.flatMap { shownByLine[$0] } ?? [])
+                }
+                let height = textView.bounds.height
+                let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
+                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? textView.documentLength
+                let offsetY = textView.contentOffset.y
+                self.codeVisionRequestedYRange = (offsetY - height)...(offsetY + height * 2)
+                return anchors.filter { $0 >= top && $0 <= bottom }
+            }
+            guard let visible, !visible.isEmpty else { return }
+            // Step 2: the numbers for what is on screen.
+            let lenses = await codeVisionProvider.codeVision(for: document, anchors: visible)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return }
+                let entriesByAnchor = Dictionary(lenses.map { ($0.utf16Offset, $0.entries) }, uniquingKeysWith: { first, _ in first })
+                let shown = Dictionary(textView.codeVisionLenses.map { ($0.utf16Offset, $0) }, uniquingKeysWith: { first, _ in first })
+                textView.codeVisionLenses = anchors.map { anchor in
+                    if let entries = entriesByAnchor[anchor] { return CodeVisionLens(utf16Offset: anchor, entries: entries) }
+                    return shown[anchor] ?? CodeVisionLens(utf16Offset: anchor)
+                }
+            }
+        }
+    }
+
+    /// Labels are computed for the viewport plus a screen above and below. Scrolling past that asks
+    /// again, once scrolling pauses.
+    func refreshCodeVisionIfViewportLeftRange() {
+        guard codeVisionEnabled, codeVisionProvider != nil, let textView else { return }
+        let top = textView.contentOffset.y
+        let bottom = top + textView.bounds.height
+        if let range = codeVisionRequestedYRange, range.contains(top), range.contains(bottom) {
+            return
+        }
+        refreshCodeVision(delay: 0.2)
+    }
+
+    private func handleCodeVisionClick(_ entry: CodeVisionEntry, declarationOffset: Int) {
+        switch entry.id {
+        case "usages":
+            navigate(kind: .references, atUTF16Offset: declarationOffset)
+        case "implementations":
+            navigate(kind: .implementation, atUTF16Offset: declarationOffset)
+        default:
+            onCodeVisionClick?(entry, declarationOffset)
+        }
+    }
+
     /// Refresh breadcrumb segments for the current cursor.
     public func refreshBreadcrumbs() {
         guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
@@ -1420,6 +1531,7 @@ public final class EditorIntelligenceController {
         textView.addScrollObserver { [weak self] in
             guard let self else { return }
             self.refreshInlayHintsIfViewportLeftRange()
+            self.refreshCodeVisionIfViewportLeftRange()
             if textView.isUserInitiatedScroll {
                 self.hideNavigationChoices()
             }
@@ -1468,6 +1580,7 @@ public final class EditorIntelligenceController {
             refreshDiagnostics()
             refreshOutline()
             refreshInlayHints()
+            refreshCodeVision()
         case .cursorMoved, .selectionChanged:
             dismissCompletionIfCaretLeftIdentifier()
             scheduleHoverRequest()
@@ -1477,6 +1590,7 @@ public final class EditorIntelligenceController {
             refreshOutline()
             refreshBreadcrumbs()
             refreshInlayHints()
+            refreshCodeVision()
         default:
             break
         }

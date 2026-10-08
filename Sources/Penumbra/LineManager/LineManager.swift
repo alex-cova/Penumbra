@@ -100,6 +100,16 @@ final class LineIterator: IteratorProtocol {
 
 final class LineManager {
     var stringView: StringView
+    /// The rooms above the text of rows that carry a code vision lens (see ``CodeVisionStore``).
+    /// Those lines are taller by that much, and whatever positions something against a line's text
+    /// (line numbers, gutter icons) adds ``textTopInset(ofRow:)``.
+    var rowTopInsets: CodeVisionStore?
+
+    /// The room above the text of `row` inside its line, 0 for nearly every row.
+    func textTopInset(ofRow row: Int) -> CGFloat {
+        rowTopInsets?.inset(forRow: row) ?? 0
+    }
+
     var lineCount: Int {
         packed.lineCount
     }

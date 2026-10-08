@@ -67,6 +67,7 @@ final class IDEJavaSupport {
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
     let inlayHintProvider: JavaInlayHintProvider
+    let codeVisionProvider: JavaCodeVisionProvider
     /// Override, implementation and recursion icons in the gutter (the Gutter Icons preferences).
     let lineMarkerProvider: JavaLineMarkerProvider
     /// Rename for classes, interfaces, enums, records, annotations, locals and parameters.
@@ -233,6 +234,9 @@ final class IDEJavaSupport {
         let inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
         self.inlayHintProvider = inlayHintProvider
         Task { await inlayHintProvider.setOptionsSource { IDEPreferences.currentJavaInlayHintOptions() } }
+        let codeVisionProvider = JavaCodeVisionProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)
+        self.codeVisionProvider = codeVisionProvider
+        Task { await codeVisionProvider.setOptionsSource { IDEPreferences.currentJavaCodeVisionOptions() } }
         lineMarkerProvider = JavaLineMarkerProvider(index: javaIndex, indexPaths: paths)
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
@@ -1107,6 +1111,7 @@ final class IDEJavaSupport {
         await hierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await callHierarchyProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inlayHintProvider.setSourceSetClasspath(model, indexPaths: paths)
+        await codeVisionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await lineMarkerProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inspectionService.setSourceSetClasspath(model, indexPaths: paths)
         reindexTests(model: model)
@@ -1425,6 +1430,7 @@ final class IDEJavaSupport {
         if let indexedJDKHomePath {
             await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await findUsagesProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
+            await codeVisionProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hoverProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await hierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await callHierarchyProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
@@ -1444,6 +1450,7 @@ final class IDEJavaSupport {
             await hierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await callHierarchyProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await inlayHintProvider.setSourceSetClasspath(nil, indexPaths: paths)
+            await codeVisionProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await lineMarkerProvider.setSourceSetClasspath(nil, indexPaths: paths)
             await inspectionService.setSourceSetClasspath(nil, indexPaths: paths)
         }

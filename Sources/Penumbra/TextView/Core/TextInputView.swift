@@ -207,6 +207,31 @@ final class TextInputView: EditorView {
     var caretIsBeforeInlayHint = false
     var hasInlayHints: Bool { !layoutManager.inlayHints.isEmpty }
 
+    /// The lenses above declarations (see ``CodeVisionLens``). They are kept on their lines through
+    /// edits and dropped when the document is replaced.
+    var codeVisionLenses: [CodeVisionLens] {
+        get {
+            layoutManager.codeVisionStore.lenses.map { lens in
+                CodeVisionLens(utf16Offset: lineManager.location(ofRow: lens.row) + lens.column, entries: lens.entries)
+            }
+        }
+        set {
+            let lenses: [CodeVisionStore.Lens] = newValue.compactMap { lens in
+                guard lens.utf16Offset >= 0, lens.utf16Offset <= documentLength,
+                      let row = lineManager.row(containingCharacterAt: lens.utf16Offset) else { return nil }
+                return CodeVisionStore.Lens(row: row, column: lens.utf16Offset - lineManager.location(ofRow: row), entries: lens.entries)
+            }
+            layoutManager.setCodeVision(lenses)
+        }
+    }
+
+    var codeVisionStore: CodeVisionStore { layoutManager.codeVisionStore }
+
+    var onCodeVisionChanged: (() -> Void)? {
+        get { layoutManager.onCodeVisionChanged }
+        set { layoutManager.onCodeVisionChanged = newValue }
+    }
+
     /// The room of the inlay hint in front of the character at `location`, or 0.
     func inlayHintWidth(atLocation location: Int) -> CGFloat {
         layoutManager.inlayHintWidth(atLocation: location)
@@ -1020,6 +1045,9 @@ final class TextInputView: EditorView {
     private let lineControllerFactory: LineControllerFactory
     private let lineControllerStorage: LineControllerStorage
     var lineControllerCount: Int { lineControllerStorage.numberOfLineControllers }
+
+    /// The current-line bar's frame, in content coordinates.
+    var lineSelectionRectForTesting: CGRect? { layoutManager.lineSelectionRectForTesting }
 
     func lineControllerHasInlayHintsForTesting(atRow row: Int) -> Bool {
         let line = lineManager.line(atRow: row)
@@ -3333,7 +3361,7 @@ extension TextInputView {
         let lineCountBeforeEdit = lineManager.lineCount
         let tracksStripe = layoutManager.showsGutterChangeStripe
         let followsLineBreaks = layoutManager.hasLineMarkers || layoutManager.hasGutterDecorations
-            || layoutManager.hasLineBackgrounds
+            || layoutManager.hasLineBackgrounds || layoutManager.hasCodeVision
         let describesEdit = tracksStripe || layoutManager.hasGutterAnnotations || followsLineBreaks
         let hasLineBreak = describesEdit
             ? Self.containsLineBreak(newString) || Self.containsLineBreak(currentText)
@@ -3380,6 +3408,9 @@ extension TextInputView {
             }
             if layoutManager.hasLineBackgrounds, hasLineBreak {
                 layoutManager.applyLineBackgroundEdit(markerEdit)
+            }
+            if layoutManager.hasCodeVision, hasLineBreak {
+                layoutManager.applyCodeVisionEdit(markerEdit)
             }
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
@@ -4821,7 +4852,10 @@ extension TextInputView: @preconcurrency LineControllerStorageDelegate {
         lineController.theme = theme
         lineController.lineBreakMode = lineBreakMode
         // Controllers made outside a layout pass (caret and hit-test queries) would otherwise
-        // measure the line without its hints until the next pass reaches it.
+        // measure the line without its hints or the room of its lens until the next pass reaches it.
+        if layoutManager.hasCodeVision {
+            lineController.topInset = layoutManager.codeVisionStore.inset(forRow: lineController.line.index)
+        }
         if !layoutManager.inlayHints.isEmpty {
             lineController.inlayHints = InlayHintIndex.localHints(
                 in: layoutManager.inlayHints,

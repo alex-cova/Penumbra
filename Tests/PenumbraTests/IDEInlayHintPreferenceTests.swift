@@ -6,11 +6,13 @@ import JavaIntelligence
 @MainActor
 final class IDEInlayHintPreferenceTests: XCTestCase {
     private var original: (Bool, Bool, Bool)?
+    private var originalCodeVision: (Bool, Bool)?
 
     override func setUp() {
         super.setUp()
         let preferences = IDEPreferences.shared
         original = (preferences.javaInlayHints, preferences.javaInlayVariableTypes, preferences.javaInlayLambdaTypes)
+        originalCodeVision = (preferences.javaCodeVisionUsages, preferences.javaCodeVisionImplementations)
     }
 
     override func tearDown() {
@@ -19,6 +21,11 @@ final class IDEInlayHintPreferenceTests: XCTestCase {
             preferences.javaInlayHints = original.0
             preferences.javaInlayVariableTypes = original.1
             preferences.javaInlayLambdaTypes = original.2
+        }
+        if let originalCodeVision {
+            let preferences = IDEPreferences.shared
+            preferences.javaCodeVisionUsages = originalCodeVision.0
+            preferences.javaCodeVisionImplementations = originalCodeVision.1
         }
         super.tearDown()
     }
@@ -53,5 +60,19 @@ final class IDEInlayHintPreferenceTests: XCTestCase {
             IDEPreferences.currentJavaInlayHintOptions(),
             JavaInlayHintOptions(parameterNames: false, variableTypes: true, lambdaParameterTypes: true)
         )
+    }
+
+    func testCodeVisionLabelsHaveTheirOwnSettings() {
+        let preferences = IDEPreferences.shared
+        preferences.javaCodeVisionUsages = false
+        preferences.javaCodeVisionImplementations = false
+        XCTAssertFalse(preferences.areCodeVisionLensesEnabled)
+
+        preferences.javaCodeVisionImplementations = true
+        XCTAssertTrue(preferences.areCodeVisionLensesEnabled)
+        XCTAssertEqual(IDEPreferences.currentJavaCodeVisionOptions(), JavaCodeVisionOptions(usages: false, implementations: true))
+
+        preferences.javaCodeVisionUsages = true
+        XCTAssertEqual(IDEPreferences.currentJavaCodeVisionOptions(), JavaCodeVisionOptions(usages: true, implementations: true))
     }
 }

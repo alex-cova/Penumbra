@@ -32,6 +32,8 @@ final class LineTypesetter {
     var lineBreakMode: LineBreakMode = .byWordWrapping
     var constrainingWidth: CGFloat = 0
     var lineFragmentHeightMultiplier: CGFloat = 1
+    /// Room above the first fragment (a code vision lens). Applied by ``reset()``.
+    var topInset: CGFloat = 0
     private(set) var lineFragments: [LineFragment] = []
     private(set) var maximumLineWidth: CGFloat = 0
     var bestGuessNumberOfLineFragments: Int {
@@ -72,7 +74,7 @@ final class LineTypesetter {
         typesetter = nil
         lineFragmentsMap = [:]
         startOffset = 0
-        nextYPosition = 0
+        nextYPosition = topInset
         lineFragmentIndex = 0
     }
 

@@ -71,7 +71,8 @@ final class GutterDecorationView: EditorView {
         for decoration in decorations {
             guard decoration.line >= 1, decoration.line <= lineCount else { continue }
             // Positions only: a `line(atRow:)` handle per decoration would be walked by every edit.
-            let y = textContainerInsetTop + lineManager.yPosition(ofRow: decoration.line - 1) + 2
+            let y = textContainerInsetTop + lineManager.yPosition(ofRow: decoration.line - 1)
+                + lineManager.textTopInset(ofRow: decoration.line - 1) + 2
             let rect = CGRect(x: (bounds.width - iconSize) / 2, y: y, width: iconSize, height: iconSize)
             guard rect.intersects(dirtyRect) else { continue }
             decoration.drawIcon(in: rect, defaultColor: iconColor)

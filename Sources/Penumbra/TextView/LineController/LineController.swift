@@ -76,7 +76,7 @@ final class LineController: @unchecked Sendable {
         if let lineHeight = _lineHeight {
             return lineHeight
         } else if typesetter.lineFragments.isEmpty {
-            let lineHeight = estimatedLineFragmentHeight * lineFragmentHeightMultiplier
+            let lineHeight = topInset + estimatedLineFragmentHeight * lineFragmentHeightMultiplier
             _lineHeight = lineHeight
             return lineHeight
         } else {
@@ -84,9 +84,20 @@ final class LineController: @unchecked Sendable {
             let remainingNumberOfLineFragments = typesetter.bestGuessNumberOfLineFragments - typesetter.lineFragments.count
             let lineFragmentHeight = estimatedLineFragmentHeight * lineFragmentHeightMultiplier
             let remainingLineFragmentHeight = CGFloat(remainingNumberOfLineFragments) * lineFragmentHeight
-            let lineHeight = knownLineFragmentHeight + remainingLineFragmentHeight
+            let lineHeight = topInset + knownLineFragmentHeight + remainingLineFragmentHeight
             _lineHeight = lineHeight
             return lineHeight
+        }
+    }
+    /// Room above the first line fragment, for a code vision lens drawn there. The line is that much
+    /// taller and its fragments (caret, selection, hit tests) start below it.
+    var topInset: CGFloat = 0 {
+        didSet {
+            if topInset != oldValue {
+                typesetter.topInset = topInset
+                isTypesetterInvalid = true
+                _lineHeight = nil
+            }
         }
     }
     var kern: CGFloat = 0 {

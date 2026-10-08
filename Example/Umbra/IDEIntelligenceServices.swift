@@ -63,6 +63,7 @@ final class IDEIntelligenceServices {
             codeGenerationProvider: JavaCodeGenerationProvider(),
             breadcrumbProvider: javaSupport.breadcrumbProvider,
             inlayHintProvider: javaSupport.inlayHintProvider,
+            codeVisionProvider: javaSupport.codeVisionProvider,
             symbolIndex: symbolIndex,
             workspace: workspace
         )

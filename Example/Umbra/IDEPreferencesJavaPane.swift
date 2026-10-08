@@ -68,6 +68,18 @@ struct IDEPreferencesJavaPane: View {
             }
 
             IDESettingsToggle(
+                "Code Vision: Usages",
+                isOn: $preferences.javaCodeVisionUsages,
+                detail: "Shows how many places use a class, method or constructor above its declaration. Counts come from the project index, so they follow saved files."
+            )
+
+            IDESettingsToggle(
+                "Code Vision: Implementations",
+                isOn: $preferences.javaCodeVisionImplementations,
+                detail: "Shows how many project types implement an interface, abstract class or abstract method."
+            )
+
+            IDESettingsToggle(
                 "Use Editor Font for Hints",
                 isOn: $preferences.inlayHintsUseEditorFont,
                 detail: "Draws inlay hints in the editor font, one point smaller, instead of the system font."

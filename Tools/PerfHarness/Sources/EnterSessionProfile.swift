@@ -1,4 +1,5 @@
 @preconcurrency import AppKit
+import EditorIntelligence
 import Foundation
 @_spi(Benchmarks) import Penumbra
 import PenumbraLanguages
@@ -242,6 +243,19 @@ enum EnterSessionProfile {
         textView.setState(TextViewState(text: text, language: TreeSitterLanguage.bundled(forIdentifier: "java") ?? .java))
         textView.layoutIfNeeded()
         Measurement.pumpRunLoop(seconds: 1.5)
+        if ProcessInfo.processInfo.environment["PENUMBRA_CODE_VISION"] != nil {
+            // A lens with a label above every method-looking line, as Umbra's code vision would.
+            var lenses: [CodeVisionLens] = []
+            var offset = 0
+            (text as NSString).enumerateSubstrings(in: NSRange(location: 0, length: (text as NSString).length), options: .byLines) { line, range, _, _ in
+                if let line, line.hasPrefix("    public ") || line.hasPrefix("    private ") || line.hasPrefix("    void ") {
+                    lenses.append(CodeVisionLens(utf16Offset: range.location, entries: [CodeVisionEntry(id: "usages", text: "3 usages")]))
+                }
+                offset = range.upperBound
+            }
+            textView.codeVisionLenses = lenses
+            warn("  Code vision lenses: \(lenses.count)")
+        }
         textView.layoutIfNeeded()
         return (window, textView)
     }

@@ -1453,6 +1453,45 @@ public struct DocumentTextExport: Sendable {
     }()
     private var findPanelTopInset: CGFloat = 0
 
+    // MARK: - Code vision
+
+    private lazy var codeVisionController: CodeVisionController = {
+        let controller = CodeVisionController(textView: self)
+        addFixedOverlaySubview(controller.view)
+        controller.handler = { [weak self] entry, offset in
+            self?.codeVisionHandler?(entry, offset)
+        }
+        return controller
+    }()
+
+    /// Labels shown in a line above declarations (`3 usages`), pushing the declaration down. A lens
+    /// with no entries reserves the room, so the text does not move when its numbers arrive.
+    ///
+    /// Lenses are display-only: not part of ``text``, never selected, copied or undone. Each is
+    /// above the line holding its `utf16Offset`. Edits that move lines move the lenses with them,
+    /// and replacing the whole document (``setState(_:addUndoAction:)``) clears them.
+    public var codeVisionLenses: [CodeVisionLens] {
+        get {
+            textInputView.codeVisionLenses
+        }
+        set {
+            textInputView.onCodeVisionChanged = { [weak self] in
+                guard let self else { return }
+                self.codeVisionController.update()
+                self.setNeedsLayout()
+            }
+            textInputView.codeVisionLenses = newValue
+        }
+    }
+
+    /// Called with the clicked label and the UTF-16 offset of the declaration's name.
+    public var codeVisionHandler: ((_ entry: CodeVisionEntry, _ declarationOffset: Int) -> Void)?
+
+    /// The rows whose lens is on screen, for tests.
+    var codeVisionShownRowsForTesting: [Int] { codeVisionController.shownRows }
+
+    var codeVisionViewForTesting: CodeVisionView { codeVisionController.view }
+
     // MARK: - Sticky lines
 
     private lazy var stickyLinesController: StickyLinesController = {
@@ -1628,6 +1667,9 @@ public struct DocumentTextExport: Sendable {
                 self.minimapView.setNeedsDisplayForContentChange()
             }
             self.scrollerOverlay.handleScroll()
+            if self.textInputView.codeVisionStore.isEmpty == false {
+                self.codeVisionController.update()
+            }
             if self.showsStickyLines {
                 self.stickyLinesController.update()
             }
@@ -1711,6 +1753,12 @@ public struct DocumentTextExport: Sendable {
         }
         textInputView.placeSelectionChromeAboveMetalCanvas()
         bringSubviewToFront(textInputView.gutterContainerView)
+        if !textInputView.codeVisionStore.isEmpty {
+            codeVisionController.update()
+            bringFixedOverlaySubviewToFront(codeVisionController.view)
+        } else if !codeVisionController.view.isHidden {
+            codeVisionController.update()
+        }
         if showsStickyLines {
             stickyLinesController.update()
             bringFixedOverlaySubviewToFront(stickyLinesController.view)

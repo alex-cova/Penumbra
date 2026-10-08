@@ -88,7 +88,8 @@ final class GutterAnnotationView: EditorView, NSViewToolTipOwner {
         guard lineHeight > 0 else { return nil }
         let fragmentHeight = min(rowHeight, lineHeight)
         let textHeight = font.lineHeight
-        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + (fragmentHeight - textHeight) / 2 - frame.minY
+        let y = textContainerInsetTop + lineManager.yPosition(ofRow: row) + lineManager.textTopInset(ofRow: row)
+            + (fragmentHeight - textHeight) / 2 - frame.minY
         return CGRect(x: Self.horizontalPadding, y: y, width: max(bounds.width - Self.horizontalPadding * 2, 0), height: textHeight)
     }
 

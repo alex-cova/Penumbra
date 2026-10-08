@@ -45,6 +45,12 @@ final class LayoutManager {
                 gutterAnnotationView.needsDisplay = true
                 changeStripeView.lineManager = lineManager
                 changeStripeView.needsDisplay = true
+                // Lenses belong to the old document's rows.
+                lineManager.rowTopInsets = codeVisionStore
+                if !codeVisionStore.isEmpty {
+                    codeVisionStore.replace(with: [])
+                    onCodeVisionChanged?()
+                }
                 setNeedsLayout()
             }
         }
@@ -209,9 +215,64 @@ final class LayoutManager {
     /// width depends on the font.
     var inlayHintAppearance: InlayHintAppearance = .standard {
         didSet {
-            guard inlayHintAppearance != oldValue, !inlayHints.isEmpty else { return }
+            guard inlayHintAppearance != oldValue else { return }
+            codeVisionStore.rowHeight = Self.codeVisionRowHeight(for: inlayHintAppearance)
+            if !codeVisionStore.isEmpty {
+                refreshCodeVisionInsetsOnLoadedLines()
+            }
+            guard !inlayHints.isEmpty else { return }
             refreshInlayHintsOnLoadedLines()
         }
+    }
+
+    // MARK: - Code vision
+
+    /// The lenses above declarations. Their lines are taller by ``CodeVisionStore/rowHeight``.
+    let codeVisionStore = CodeVisionStore()
+    /// Called when the lenses changed, moved or went, so the view that draws them updates.
+    var onCodeVisionChanged: (() -> Void)?
+
+    /// Room for one line of lens text in the hint font.
+    static func codeVisionRowHeight(for appearance: InlayHintAppearance) -> CGFloat {
+        ceil(appearance.font.lineHeight) + 6
+    }
+
+    var hasCodeVision: Bool {
+        !codeVisionStore.isEmpty
+    }
+
+    func setCodeVision(_ lenses: [CodeVisionStore.Lens]) {
+        guard !(lenses.isEmpty && codeVisionStore.isEmpty) else { return }
+        codeVisionStore.rowHeight = Self.codeVisionRowHeight(for: inlayHintAppearance)
+        codeVisionStore.replace(with: lenses)
+        refreshCodeVisionInsetsOnLoadedLines()
+        onCodeVisionChanged?()
+    }
+
+    /// Moves the lenses through an edit; see ``CodeVisionStore/applyEdit(_:)``.
+    func applyCodeVisionEdit(_ edit: GutterLineMarkerEdit) {
+        if codeVisionStore.applyEdit(edit) {
+            refreshCodeVisionInsetsOnLoadedLines()
+            onCodeVisionChanged?()
+        }
+    }
+
+    /// Gives every loaded line the room its row needs: lines that gained a lens grow, lines that lost
+    /// one shrink, and each is laid out again.
+    private func refreshCodeVisionInsetsOnLoadedLines() {
+        var changedLineIDs: Set<DocumentLineNodeID> = []
+        for lineController in lineControllerStorage {
+            let line = lineController.line
+            let inset = codeVisionStore.inset(forRow: line.index)
+            if inset != lineController.topInset {
+                lineController.topInset = inset
+                changedLineIDs.insert(line.id)
+            }
+        }
+        if !changedLineIDs.isEmpty { redisplayLines(withIDs: changedLineIDs) }
+        setNeedsLayout()
+        // The input view only walks its viewport when it is flagged; the lines just changed height.
+        textInputView?.setNeedsLayout()
     }
 
     /// The room of the inlay hint in front of the character at `location`, or 0. A hint at the first
@@ -597,6 +658,7 @@ final class LayoutManager {
          highlightService: HighlightService,
          invisibleCharacterConfiguration: InvisibleCharacterConfiguration) {
         self.lineManager = lineManager
+        lineManager.rowTopInsets = codeVisionStore
         self.languageMode = languageMode
         self.stringView = stringView
         self.invisibleCharacterConfiguration = invisibleCharacterConfiguration
@@ -1201,6 +1263,8 @@ extension LayoutManager {
         }
     }
 
+    var lineSelectionRectForTesting: CGRect? { getLineSelectionRect() }
+
     private func getLineSelectionRect() -> CGRect? {
         guard lineSelectionDisplayType.shouldShowLineSelection, var selectedRange = selectedRange else {
             return nil
@@ -1216,7 +1280,8 @@ extension LayoutManager {
         }
         switch lineSelectionDisplayType {
         case .line:
-            let minY = startLine.yPosition
+            // The room of a lens above the first line is not part of the line that is selected.
+            let minY = startLine.yPosition + lineManager.textTopInset(ofRow: startLine.index)
             let height = (realEndLine.yPosition + realEndLine.data.lineHeight) - minY
             return CGRect(x: 0, y: textContainerInset.top + minY, width: scrollViewWidth, height: height)
         case .lineFragment:
@@ -1324,6 +1389,7 @@ extension LayoutManager {
             let nextInlayHints = InlayHintIndex.localHints(
                 in: inlayHints, lineLocation: lineLocation, lineLength: line.data.length, appearance: inlayHintAppearance
             )
+            let nextTopInset = codeVisionStore.isEmpty ? 0 : codeVisionStore.inset(forRow: line.index)
             let widthUnchanged = abs(lineController.constrainingWidth - constrainingLineWidth) < 0.5
             let fragmentIDs = lineController.lineFragmentIDs
             let fragmentsAlreadyPainted = !fragmentIDs.isEmpty
@@ -1338,6 +1404,7 @@ extension LayoutManager {
                lineController.isPaintStable,
                fragmentsAlreadyPainted,
                lineController.inlayHints == nextInlayHints,
+               lineController.topInset == nextTopInset,
                paintBackend.isPaintCurrent(for: fragmentIDs) {
                 appearedLineFragmentIDs.formUnion(fragmentIDs)
                 // The label is cheap and its number changes when a line above is inserted.
@@ -1356,6 +1423,7 @@ extension LayoutManager {
             lineController.constrainingWidth = constrainingLineWidth
             // Set before the line is prepared: a change re-typesets it with the hints' room.
             lineController.inlayHints = nextInlayHints
+            lineController.topInset = nextTopInset
             let highlightAsynchronously = !recentlyEditedLineIDs.contains(line.id)
             lineController.prepareToDisplayString(in: lineLocalViewport, syntaxHighlightAsynchronously: highlightAsynchronously)
             layoutLineNumberView(for: line, lineYPosition: lineYPosition)
@@ -1475,12 +1543,15 @@ extension LayoutManager {
         let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
             + gutterWidthService.annotationColumnWidth
         var yPosition = textContainerInset.top + (lineYPosition ?? line.yPosition)
+        // A lens above the line pushes its text down; the number follows the text.
+        let topInset = lineController.topInset
+        yPosition += topInset
         if lineController.numberOfLineFragments > 1 {
             // There are more than one line fragments, so we align the line number at the top.
             yPosition += (fontLineHeight * lineHeightMultiplier - fontLineHeight) / 2
         } else {
             // There's a single line fragment, so we center the line number in the height of the line.
-            yPosition += (lineController.lineHeight - fontLineHeight) / 2
+            yPosition += (lineController.lineHeight - topInset - fontLineHeight) / 2
         }
         lineNumberView.text = "\(line.index + 1)"
         lineNumberView.font = theme.lineNumberFont
