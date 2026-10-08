@@ -7,28 +7,58 @@ struct LineInlayHint: Equatable {
     /// room for the hint is added after the character before it.
     let localOffset: Int
     let label: String
+    let kind: InlayHint.Kind
     /// Everything the hint adds to the line: its padding, its text and the gap before the next
     /// character.
     let width: CGFloat
+    /// How the hint is painted. Part of the hint, so a theme or font change repaints (and re-typesets)
+    /// the lines that have hints and nothing else.
+    let appearance: InlayHintAppearance
 }
 
-/// Look and metrics of inlay hints, shared by both paint paths.
-enum InlayHintStyle {
+/// Look and metrics of inlay hints, shared by both paint paths. One value per text view, made
+/// when the theme or the font choice changes (see ``make(theme:useEditorFont:)``).
+struct InlayHintAppearance: Equatable {
     static let horizontalPadding: CGFloat = 3
     /// Space between the hint and the character it precedes.
     static let trailingGap: CGFloat = 3
 
-    static var font: NSFont { .systemFont(ofSize: 11) }
-    static var textColor: NSColor { .secondaryLabelColor }
-    static var backgroundColor: NSColor { NSColor.labelColor.withAlphaComponent(0.09) }
+    var font: NSFont
+    var textColor: NSColor
+    var backgroundColor: NSColor
 
-    static func textWidth(of label: String) -> CGFloat {
+    /// The look before a theme is applied: system UI font, system label colors.
+    static let standard = InlayHintAppearance(
+        font: .systemFont(ofSize: 11),
+        textColor: .secondaryLabelColor,
+        backgroundColor: NSColor.labelColor.withAlphaComponent(0.09)
+    )
+
+    /// Sized from the editor font so hints follow its zoom: the editor font one point smaller, or the
+    /// system UI font two points smaller (about what 13 pt code gets today). Colors are the theme's
+    /// ``Theme/inlayHintTextColor`` / ``Theme/inlayHintBackgroundColor``, else shades of its text color.
+    static func make(theme: Theme, useEditorFont: Bool) -> InlayHintAppearance {
+        let editorFont = theme.font
+        let font: NSFont
+        if useEditorFont {
+            font = NSFont(descriptor: editorFont.fontDescriptor, size: max(editorFont.pointSize - 1, 8)) ?? editorFont
+        } else {
+            font = .systemFont(ofSize: max(editorFont.pointSize - 2, 9))
+        }
+        return InlayHintAppearance(
+            font: font,
+            textColor: theme.inlayHintTextColor ?? theme.textColor.withAlphaComponent(0.55),
+            backgroundColor: theme.inlayHintBackgroundColor ?? theme.textColor.withAlphaComponent(0.09)
+        )
+    }
+
+    func textWidth(of label: String) -> CGFloat {
         ceil((label as NSString).size(withAttributes: [.font: font]).width)
     }
 
     /// The horizontal room a hint needs.
-    static func width(of label: String) -> CGFloat {
-        textWidth(of: label) + horizontalPadding * 2 + trailingGap
+    func width(of label: String) -> CGFloat {
+        textWidth(of: label) + Self.horizontalPadding * 2 + Self.trailingGap
     }
 }
 
@@ -53,7 +83,12 @@ enum InlayHintIndex {
     /// The hints of a line covering `[location, location + length]`, line-local. `hints` must be
     /// normalized. A hint at the very start of the line has no character before it to widen and
     /// is not shown.
-    static func localHints(in hints: [InlayHint], lineLocation location: Int, lineLength length: Int) -> [LineInlayHint] {
+    static func localHints(
+        in hints: [InlayHint],
+        lineLocation location: Int,
+        lineLength length: Int,
+        appearance: InlayHintAppearance
+    ) -> [LineInlayHint] {
         guard !hints.isEmpty else { return [] }
         // First hint strictly after the line's first character.
         var low = 0
@@ -67,7 +102,11 @@ enum InlayHintIndex {
         while index < hints.count, hints[index].utf16Offset <= location + length {
             let hint = hints[index]
             result.append(LineInlayHint(
-                localOffset: hint.utf16Offset - location, label: hint.label, width: InlayHintStyle.width(of: hint.label)
+                localOffset: hint.utf16Offset - location,
+                label: hint.label,
+                kind: hint.kind,
+                width: appearance.width(of: hint.label),
+                appearance: appearance
             ))
             index += 1
         }

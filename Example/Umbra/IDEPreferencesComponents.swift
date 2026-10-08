@@ -194,6 +194,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.errorStripeMarkMinHeight) { applyLivePreferences() }
             .onChange(of: preferences.highlightsCurrentScope) { applyLivePreferences() }
             .onChange(of: preferences.showStickyLines) { applyLivePreferences() }
+            .onChange(of: preferences.inlayHintsUseEditorFont) { applyLivePreferences() }
             .onChange(of: preferences.maximumStickyLines) { applyLivePreferences() }
             .onChange(of: preferences.stickyLinesDisabledLanguages) { applyLivePreferences() }
             .onChange(of: preferences.showsDocumentationOnHover) { applyLivePreferences() }

@@ -502,6 +502,18 @@ public struct DocumentTextExport: Sendable {
         }
     }
 
+    /// Draws inlay hints in the editor font, one point smaller, instead of the system UI font two points
+    /// smaller than the editor's. Both follow the editor's size. Colors come from ``Theme/inlayHintTextColor``
+    /// and ``Theme/inlayHintBackgroundColor``.
+    public var inlayHintsUseEditorFont: Bool {
+        get {
+            textInputView.inlayHintsUseEditorFont
+        }
+        set {
+            textInputView.inlayHintsUseEditorFont = newValue
+        }
+    }
+
     /// Hints from a second source, shown together with ``inlayHints`` (hints at one offset are
     /// joined): a host can show, say, a debugger's variable values at line ends without replacing
     /// the parameter-name hints. They follow edits and are cleared with the document, like
@@ -1476,6 +1488,8 @@ public struct DocumentTextExport: Sendable {
     public var stickyLinesDisableHandler: ((_ languageOnly: Bool) -> Void)?
 
     var stickyLinesInput: TextInputView { textInputView }
+
+    var inlayHintAppearanceForTesting: InlayHintAppearance { textInputView.inlayHintAppearanceForTesting }
 
     /// Where the pinned lines go: under the find bar, left of the minimap.
     var stickyLinesAvailableFrame: CGRect {

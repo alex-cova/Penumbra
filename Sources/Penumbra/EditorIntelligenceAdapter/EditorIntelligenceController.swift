@@ -109,6 +109,8 @@ public final class EditorIntelligenceController {
     private let breadcrumbProvider: (any BreadcrumbProviding)?
     private var inlayHintProvider: (any InlayHintProviding)?
     private var inlayHintTask: Task<Void, Never>?
+    /// Vertical range of content the last inlay hint request covered.
+    private var inlayHintRequestedYRange: ClosedRange<CGFloat>?
     /// Whether hints are shown. Off clears them; hosts flip it from a preference.
     public var inlayHintsEnabled = true {
         didSet {
@@ -1177,32 +1179,34 @@ public final class EditorIntelligenceController {
 
     /// Asks the inlay hint provider for the hints around what is on screen (a viewport above and
     /// below included) and shows them, after a short pause so typing does not resolve every call.
-    /// Call it again after scrolling far; hints outside the last requested range are not shown.
-    public func refreshInlayHints() {
+    /// Scrolling out of the requested range asks again (see ``refreshInlayHintsIfViewportLeftRange()``).
+    public func refreshInlayHints(delay: TimeInterval = 0.25) {
         inlayHintTask?.cancel()
         guard let textView else { return }
         guard inlayHintsEnabled, let inlayHintProvider else {
+            inlayHintRequestedYRange = nil
             if !textView.inlayHints.isEmpty { textView.inlayHints = [] }
             return
         }
         inlayHintTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             let request: (Document, EditorIntelligence.TextRange, UInt64)? = await MainActor.run {
                 guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
                 let generation = textView.contentGeneration
-                let ns = textView.text as NSString
+                let length = textView.documentLength
                 let height = textView.bounds.height
                 let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
-                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? ns.length
-                let start = min(max(0, top), ns.length)
-                let end = min(max(start, bottom), ns.length)
+                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? length
+                let start = min(max(0, top), length)
+                let end = min(max(start, bottom), length)
+                // Line and column come from the line index, not from scanning the text.
                 func position(_ offset: Int) -> TextPosition {
-                    let before = ns.substring(to: offset)
-                    let line = before.utf16.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
-                    let lineStart = (before as NSString).range(of: "\n", options: .backwards)
-                    return TextPosition(line: line, column: lineStart.location == NSNotFound ? offset : offset - lineStart.location - 1, utf16Offset: offset)
+                    let location = textView.textLocation(at: offset)
+                    return TextPosition(line: location?.lineNumber ?? 0, column: location?.column ?? offset, utf16Offset: offset)
                 }
+                let offsetY = textView.contentOffset.y
+                self.inlayHintRequestedYRange = (offsetY - height)...(offsetY + height * 2)
                 return (document, EditorIntelligence.TextRange(start: position(start), end: position(end)), generation)
             }
             guard let (document, range, generation) = request else { return }
@@ -1213,6 +1217,18 @@ public final class EditorIntelligenceController {
                 textView.inlayHints = hints
             }
         }
+    }
+
+    /// Hints are requested for the viewport plus a screen above and below. Scrolling past that asks
+    /// again, once scrolling pauses, so hints appear in the part of the file that scrolled into view.
+    func refreshInlayHintsIfViewportLeftRange() {
+        guard inlayHintsEnabled, inlayHintProvider != nil, let textView else { return }
+        let top = textView.contentOffset.y
+        let bottom = top + textView.bounds.height
+        if let range = inlayHintRequestedYRange, range.contains(top), range.contains(bottom) {
+            return
+        }
+        refreshInlayHints(delay: 0.15)
     }
 
     /// Refresh breadcrumb segments for the current cursor.
@@ -1403,6 +1419,7 @@ public final class EditorIntelligenceController {
         }
         textView.addScrollObserver { [weak self] in
             guard let self else { return }
+            self.refreshInlayHintsIfViewportLeftRange()
             if textView.isUserInitiatedScroll {
                 self.hideNavigationChoices()
             }

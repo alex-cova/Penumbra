@@ -53,29 +53,30 @@ final class LineFragmentRenderer: @unchecked Sendable {
         guard !inlayHints.isEmpty else {
             return
         }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: InlayHintStyle.textColor,
-            .font: InlayHintStyle.font
-        ]
         let height = lineFragment.scaledSize.height
         for hint in inlayHints {
+            let appearance = hint.appearance
+            let attributes: [NSAttributedString.Key: Any] = [
+                .foregroundColor: appearance.textColor,
+                .font: appearance.font
+            ]
             // The room sits just before the character the hint precedes.
             let characterX = CTLineGetOffsetForStringIndex(lineFragment.line, hint.localOffset, nil)
-            let textWidth = InlayHintStyle.textWidth(of: hint.label)
+            let textWidth = appearance.textWidth(of: hint.label)
             let size = (hint.label as NSString).size(withAttributes: attributes)
             let pillRect = CGRect(
                 x: characterX - hint.width,
                 y: (height - size.height) / 2 - 1,
-                width: textWidth + InlayHintStyle.horizontalPadding * 2,
+                width: textWidth + InlayHintAppearance.horizontalPadding * 2,
                 height: size.height + 2
             )
             context.saveGState()
-            context.setFillColor(InlayHintStyle.backgroundColor.cgColor)
+            context.setFillColor(appearance.backgroundColor.cgColor)
             context.addPath(CGPath(roundedRect: pillRect, cornerWidth: 3, cornerHeight: 3, transform: nil))
             context.fillPath()
             (hint.label as NSString).draw(
                 in: CGRect(
-                    x: pillRect.minX + InlayHintStyle.horizontalPadding,
+                    x: pillRect.minX + InlayHintAppearance.horizontalPadding,
                     y: (height - size.height) / 2,
                     width: textWidth,
                     height: size.height

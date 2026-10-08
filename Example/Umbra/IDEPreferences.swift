@@ -56,6 +56,7 @@ public final class IDEPreferences {
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
+        static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
         static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
         static let javaInspectionSeverities = "com.umbra.editor.javaInspectionSeverities"
@@ -384,6 +385,11 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaInlayHints, forKey: Keys.javaInlayHints) }
     }
 
+    /// Draws inlay hints in the editor font instead of the system UI font.
+    var inlayHintsUseEditorFont: Bool {
+        didSet { UserDefaults.standard.set(inlayHintsUseEditorFont, forKey: Keys.inlayHintsUseEditorFont) }
+    }
+
     var javaCompilerDiagnostics: Bool {
         didSet { UserDefaults.standard.set(javaCompilerDiagnostics, forKey: Keys.javaCompilerDiagnostics) }
     }
@@ -604,6 +610,7 @@ public final class IDEPreferences {
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
+        inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
         javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? Array(Self.defaultDisabledInspections))
         javaInspectionSeverities = defaults.dictionary(forKey: Keys.javaInspectionSeverities) as? [String: String] ?? [:]
@@ -655,6 +662,7 @@ public final class IDEPreferences {
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
         textView.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
+        textView.inlayHintsUseEditorFont = inlayHintsUseEditorFont
         textView.caretShape = caretShape
         textView.caretBlinkingEnabled = caretBlinks
         textView.caretBlinkInterval = TimeInterval(caretBlinkIntervalMilliseconds) / 1000

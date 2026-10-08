@@ -74,6 +74,10 @@ public protocol Theme: AnyObject {
     /// Color of the focus ring and active toggle pills (Case/Regex/Wrap) in the find bar.
     /// Defaults to ``selectionColor``.
     var findBarAccentColor: NSColor { get }
+    /// Color of inlay hint text (``TextView/inlayHints``). `nil` uses a shade of ``textColor``.
+    var inlayHintTextColor: NSColor? { get }
+    /// Background of an inlay hint's rounded chip. `nil` uses a faint shade of ``textColor``.
+    var inlayHintBackgroundColor: NSColor? { get }
     /// Background of the sticky lines pinned to the top of the editor (``TextView/showsStickyLines``).
     /// `nil` uses the editor's background.
     var stickyLinesBackgroundColor: NSColor? { get }
@@ -110,6 +114,14 @@ public protocol Theme: AnyObject {
 }
 
 public extension Theme {
+    var inlayHintTextColor: NSColor? {
+        nil
+    }
+
+    var inlayHintBackgroundColor: NSColor? {
+        nil
+    }
+
     var stickyLinesBackgroundColor: NSColor? {
         nil
     }

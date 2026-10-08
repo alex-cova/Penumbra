@@ -48,6 +48,12 @@ struct IDEPreferencesJavaPane: View {
                 .onChange(of: preferences.javaInlayHints) {
                     workspace.javaInlayHintsPreferenceChanged()
                 }
+
+            IDESettingsToggle(
+                "Use Editor Font for Hints",
+                isOn: $preferences.inlayHintsUseEditorFont,
+                detail: "Draws inlay hints in the editor font, one point smaller, instead of the system font."
+            )
         }
 
         IDESettingsSection(

@@ -201,6 +201,21 @@ final class TextInputView: EditorView {
         }
     }
 
+    /// Draw inlay hints in the editor font (one point smaller) instead of the system UI font.
+    var inlayHintsUseEditorFont = false {
+        didSet {
+            if inlayHintsUseEditorFont != oldValue {
+                updateInlayHintAppearance()
+            }
+        }
+    }
+
+    var inlayHintAppearanceForTesting: InlayHintAppearance { layoutManager.inlayHintAppearance }
+
+    private func updateInlayHintAppearance() {
+        layoutManager.inlayHintAppearance = InlayHintAppearance.make(theme: theme, useEditorFont: inlayHintsUseEditorFont)
+    }
+
     private func inlayHintsDidChange() {
         layoutManager.inlayHints = InlayHintIndex.normalized(supplementaryInlayHints.isEmpty ? inlayHints : inlayHints + supplementaryInlayHints)
         layoutManager.setNeedsLayout()
@@ -1926,6 +1941,7 @@ final class TextInputView: EditorView {
 // MARK: - Theming
 private extension TextInputView {
     private func applyThemeToChildren() {
+        updateInlayHintAppearance()
         gutterWidthService.font = theme.lineNumberFont
         applyEstimatedLineHeight()
         indentController.indentFont = theme.font

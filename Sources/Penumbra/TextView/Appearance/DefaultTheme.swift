@@ -51,7 +51,20 @@ public final class DefaultTheme: Penumbra.Theme {
     private var fontTraitsCache: [String: FontTraits] = [:]
     private let cacheLock = NSLock()
 
-    public init() {}
+    public let inlayHintTextColor: NSColor?
+    public let inlayHintBackgroundColor: NSColor?
+
+    /// - Parameters:
+    ///   - inlayHintTextColor: Text color of inlay hints; `nil` uses a shade of the text color.
+    ///   - inlayHintBackgroundColor: Chip color of inlay hints; `nil` uses a faint shade of the text color.
+    public init(inlayHintTextColor: NSColor?, inlayHintBackgroundColor: NSColor?) {
+        self.inlayHintTextColor = inlayHintTextColor
+        self.inlayHintBackgroundColor = inlayHintBackgroundColor
+    }
+
+    public convenience init() {
+        self.init(inlayHintTextColor: nil, inlayHintBackgroundColor: nil)
+    }
 
     public func textColor(for highlightName: String) -> NSColor? {
         cacheLock.lock()

@@ -202,18 +202,32 @@ final class LayoutManager {
     var inlayHints: [InlayHint] = [] {
         didSet {
             guard inlayHints != oldValue else { return }
-            var changedLineIDs: Set<DocumentLineNodeID> = []
-            for lineController in lineControllerStorage {
-                let line = lineController.line
-                let local = InlayHintIndex.localHints(in: inlayHints, lineLocation: line.location, lineLength: line.data.length)
-                if local != lineController.inlayHints {
-                    lineController.inlayHints = local
-                    changedLineIDs.insert(line.id)
-                }
-            }
-            if !changedLineIDs.isEmpty { redisplayLines(withIDs: changedLineIDs) }
-            setNeedsLayout()
+            refreshInlayHintsOnLoadedLines()
         }
+    }
+    /// Font and colors of the hints. A change re-typesets the lines that have hints, since their
+    /// width depends on the font.
+    var inlayHintAppearance: InlayHintAppearance = .standard {
+        didSet {
+            guard inlayHintAppearance != oldValue, !inlayHints.isEmpty else { return }
+            refreshInlayHintsOnLoadedLines()
+        }
+    }
+
+    private func refreshInlayHintsOnLoadedLines() {
+        var changedLineIDs: Set<DocumentLineNodeID> = []
+        for lineController in lineControllerStorage {
+            let line = lineController.line
+            let local = InlayHintIndex.localHints(
+                in: inlayHints, lineLocation: line.location, lineLength: line.data.length, appearance: inlayHintAppearance
+            )
+            if local != lineController.inlayHints {
+                lineController.inlayHints = local
+                changedLineIDs.insert(line.id)
+            }
+        }
+        if !changedLineIDs.isEmpty { redisplayLines(withIDs: changedLineIDs) }
+        setNeedsLayout()
     }
     private var recentlyEditedLineIDs: Set<DocumentLineNodeID> = []
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>(hidesQueuedViews: true)
@@ -1291,7 +1305,7 @@ extension LayoutManager {
             let lineLocation = line.location
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let nextInlayHints = InlayHintIndex.localHints(
-                in: inlayHints, lineLocation: lineLocation, lineLength: line.data.length
+                in: inlayHints, lineLocation: lineLocation, lineLength: line.data.length, appearance: inlayHintAppearance
             )
             let widthUnchanged = abs(lineController.constrainingWidth - constrainingLineWidth) < 0.5
             let fragmentIDs = lineController.lineFragmentIDs
