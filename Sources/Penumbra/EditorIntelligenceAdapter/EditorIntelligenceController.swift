@@ -353,7 +353,7 @@ public final class EditorIntelligenceController {
 
     /// How long the pointer (or the caret) rests before a tooltip or documentation popup appears,
     /// in seconds. IntelliJ's "Tooltip delay".
-    public var tooltipDelay: TimeInterval = 0.35
+    public var tooltipDelay: TimeInterval = 0.5
     /// Show the documentation of the symbol under the pointer once it rests (IntelliJ's "Show
     /// quick documentation on hover"). Off by default.
     public var showsDocumentationOnMouseHover = false
@@ -1930,7 +1930,7 @@ public final class EditorIntelligenceController {
         if !hoverWindowView.isHidden { hideHover() }
         hoverTask?.cancel()
         hoverTask = Task { [weak self] in
-            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.35 }
+            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.5 }
             try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
@@ -2003,7 +2003,7 @@ public final class EditorIntelligenceController {
         mouseHoverTarget = target.range
         let range = target.range
         mouseHoverTask = Task { [weak self] in
-            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.35 }
+            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.5 }
             try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await self?.showMouseHover(for: target, expectedRange: range)

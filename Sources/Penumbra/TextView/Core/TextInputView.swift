@@ -1048,6 +1048,11 @@ final class TextInputView: EditorView {
     private let focusModeController: FocusModeController
     private let treeSitterFoldingProvider = TreeSitterFoldingProvider()
     private let foldPreviewController = FoldPreviewController()
+    /// Seconds the pointer rests on a collapsed fold's chip before its preview opens.
+    var foldPreviewDelay: TimeInterval {
+        get { foldPreviewController.hoverDelay }
+        set { foldPreviewController.hoverDelay = newValue }
+    }
     let methodSeparatorController = MethodSeparatorController()
     let occurrenceHighlightController: OccurrenceHighlightController
     let scopeHighlightController = ScopeHighlightController()

@@ -34,7 +34,8 @@ final class FoldPreviewController {
     private var hoveredRegionID: UUID?
 
     private let maxPreviewLines = 20
-    private let hoverDelayNanoseconds: UInt64 = 300_000_000
+    /// How long the pointer rests on the chip before the preview opens.
+    var hoverDelay: TimeInterval = 0.5
 
     func mouseMoved(at pointInTextInput: CGPoint, placeholderRect: CGRect?, region: FoldRegion?) {
         guard let region, let placeholderRect, placeholderRect.contains(pointInTextInput), region.isCollapsed else {
@@ -49,7 +50,8 @@ final class FoldPreviewController {
         hidePreview()
         hoveredRegionID = region.id
         hoverTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: self?.hoverDelayNanoseconds ?? 300_000_000)
+            let delay = self?.hoverDelay ?? 0.5
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else {
                 return
             }

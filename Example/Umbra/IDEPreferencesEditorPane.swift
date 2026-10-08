@@ -152,7 +152,7 @@ struct IDEPreferencesEditorPane: View {
 
         IDESettingsSection(
             "Code Insight",
-            footer: "The error stripe ticks every problem along the trailing edge. The scope bar marks the block the caret is in, beside the fold arrows (code folding must be on). Tooltips show a problem's message, and optionally documentation, when the pointer rests on code."
+            footer: "The error stripe ticks every problem along the trailing edge. The scope bar marks the block the caret is in, beside the fold arrows (code folding must be on). Tooltips show a problem's message, and optionally documentation, when the pointer rests on code. The tooltip delay also paces fold previews and the gutter's tooltips; those may need a relaunch to follow a change."
         ) {
             IDESettingsToggle("Error Stripe", isOn: $preferences.showsErrorStripe)
 

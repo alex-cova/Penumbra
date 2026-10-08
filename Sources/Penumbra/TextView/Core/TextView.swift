@@ -242,6 +242,16 @@ public struct DocumentTextExport: Sendable {
             textInputView.caretShape = newValue
         }
     }
+    /// Seconds the pointer rests on a collapsed fold's chip before its preview opens. Defaults to 0.5.
+    /// Hosts that show their own hover popups use the same value (`EditorIntelligenceController.tooltipDelay`).
+    public var tooltipDelay: TimeInterval {
+        get {
+            textInputView.foldPreviewDelay
+        }
+        set {
+            textInputView.foldPreviewDelay = max(newValue, 0)
+        }
+    }
     /// Whether the caret blinks. When off, the caret stays solid.
     public var caretBlinkingEnabled: Bool {
         get {

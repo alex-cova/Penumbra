@@ -69,6 +69,8 @@ public final class IDEPreferences {
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
         static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
         static let tooltipDelayMilliseconds = "com.umbra.editor.tooltipDelayMilliseconds"
+        /// AppKit's own key for how long a native tooltip waits, in milliseconds.
+        static let nativeTooltipDelay = "NSInitialToolTipDelay"
         static let autoreparseDelayMilliseconds = "com.umbra.editor.autoreparseDelayMilliseconds"
         static let nextErrorScope = "com.umbra.editor.nextErrorScope"
         static let inPlaceRefactoring = "com.umbra.editor.inPlaceRefactoring"
@@ -273,9 +275,14 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(showsDocumentationOnHover, forKey: Keys.showsDocumentationOnHover) }
     }
 
-    /// How long the pointer or caret rests before a tooltip or documentation popup shows.
+    /// How long the pointer or caret rests before a tooltip or documentation popup shows. Also the
+    /// delay of the fold preview and, through ``applyNativeTooltipDelay()``, of AppKit's own tooltips
+    /// (gutter icons, toolbar buttons).
     var tooltipDelayMilliseconds: Int {
-        didSet { UserDefaults.standard.set(tooltipDelayMilliseconds, forKey: Keys.tooltipDelayMilliseconds) }
+        didSet {
+            UserDefaults.standard.set(tooltipDelayMilliseconds, forKey: Keys.tooltipDelayMilliseconds)
+            applyNativeTooltipDelay()
+        }
     }
 
     /// How long typing pauses before the document is re-read for diagnostics, symbols and inspections.
@@ -555,7 +562,9 @@ public final class IDEPreferences {
         errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
         highlightsCurrentScope = defaults.object(forKey: Keys.highlightsCurrentScope) as? Bool ?? true
         showsDocumentationOnHover = defaults.object(forKey: Keys.showsDocumentationOnHover) as? Bool ?? true
-        tooltipDelayMilliseconds = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500
+        let storedTooltipDelay = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500
+        tooltipDelayMilliseconds = storedTooltipDelay
+        defaults.set(storedTooltipDelay, forKey: Keys.nativeTooltipDelay)
         autoreparseDelayMilliseconds = defaults.object(forKey: Keys.autoreparseDelayMilliseconds) as? Int ?? 200
         nextErrorScope = defaults.string(forKey: Keys.nextErrorScope).flatMap(ProblemNavigationScope.init(rawValue:)) ?? .all
         inPlaceRefactoring = defaults.object(forKey: Keys.inPlaceRefactoring) as? Bool ?? true
@@ -622,6 +631,7 @@ public final class IDEPreferences {
         textView.isFocusModeEnabled = isFocusModeEnabled
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
+        textView.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
         textView.caretShape = caretShape
         textView.caretBlinkingEnabled = caretBlinks
         textView.caretBlinkInterval = TimeInterval(caretBlinkIntervalMilliseconds) / 1000
@@ -636,6 +646,13 @@ public final class IDEPreferences {
             textView.redisplayVisibleLines()
             textView.refreshGutterChrome()
         }
+    }
+
+    /// AppKit reads `NSInitialToolTipDelay` (milliseconds) from the app's own defaults for every
+    /// native tooltip and SwiftUI `.help`. It is an undocumented key, so only the host app writes
+    /// it, never the library; AppKit may read it once, in which case a change applies after a relaunch.
+    func applyNativeTooltipDelay() {
+        UserDefaults.standard.set(tooltipDelayMilliseconds, forKey: Keys.nativeTooltipDelay)
     }
 
     /// Applies the code-insight settings to a pane's intelligence controller.
