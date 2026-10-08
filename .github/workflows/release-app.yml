@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 # A newer push to main supersedes an in-flight nightly; version tags always finish.
 concurrency:
@@ -20,6 +21,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Hand-made tags once shipped Umbra-1.6.8-macOS.zip as 1.6.9/1.6.10, which generate_appcast then
+      # treated as a duplicate version. A release tag must match VERSION.
+      - name: Verify VERSION matches tag
+        if: github.ref_type == 'tag'
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$VERSION" != "$GITHUB_REF_NAME" ]]; then
+            echo "error: tag $GITHUB_REF_NAME does not match VERSION ($VERSION); bump VERSION (Scripts/push-version.sh) and retag" >&2
+            exit 1
+          fi
 
       - name: Import code signing certificate
         env:
@@ -74,20 +86,9 @@ jobs:
           SCRATCH="$RUNNER_TEMP/umbra-updates"
           mkdir -p "$SCRATCH" website/updates
 
-          if [[ -f website/appcast.xml ]]; then
-            cp website/appcast.xml "$SCRATCH/"
-          fi
+          # Sparkle only needs the latest release. generate_appcast applies --download-url-prefix to every
+          # item it sees, so carrying older zips or the old appcast would rewrite their URLs to this tag.
           cp "dist/Umbra-${VERSION}-macOS.zip" "$SCRATCH/"
-          if [[ -d website/updates ]]; then
-            cp website/updates/*.delta "$SCRATCH/" 2>/dev/null || true
-          fi
-
-          gh release list --exclude-pre-releases --limit 5 --json tagName \
-            | jq -r '.[].tagName' \
-            | while read -r old_tag; do
-                if [[ "$old_tag" == "$TAG" ]]; then continue; fi
-                gh release download "$old_tag" -p "Umbra-${old_tag}-macOS.zip" -D "$SCRATCH" --clobber 2>/dev/null || true
-              done
 
           GENERATE_APPCAST="$(find .build/artifacts/sparkle/Sparkle/bin -name generate_appcast -print -quit)"
           if [[ -z "$GENERATE_APPCAST" ]]; then
@@ -113,7 +114,6 @@ jobs:
           git pull --ff-only origin main
 
           cp "$SCRATCH/appcast.xml" website/appcast.xml
-          find "$SCRATCH" -maxdepth 1 -name '*.delta' -exec cp {} website/updates/ \;
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -124,6 +124,10 @@ jobs:
           fi
           git commit -m "Update Sparkle appcast for ${TAG}."
           git push origin main
+
+          # Pushes made with GITHUB_TOKEN do not trigger other workflows, so deploy Pages explicitly;
+          # otherwise the published appcast never changes and Sparkle reports "newest version".
+          gh workflow run pages.yml --ref main
 
       - name: Publish nightly
         if: github.ref_type == 'branch'
