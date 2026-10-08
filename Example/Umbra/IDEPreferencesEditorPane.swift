@@ -82,6 +82,31 @@ struct IDEPreferencesEditorPane: View {
                     )
                 )
             }
+
+            IDESettingsToggle("Blink Caret", isOn: $preferences.caretBlinks)
+
+            IDEPreferencesIntStepper(
+                title: "Blink Interval",
+                value: $preferences.caretBlinkIntervalMilliseconds,
+                range: 100...2000,
+                step: 50,
+                valueWidth: 56,
+                valueSuffix: " ms"
+            )
+            .disabled(!preferences.caretBlinks)
+
+            IDESettingsToggle(
+                "Smooth Blinking",
+                isOn: $preferences.smoothCaretBlinking,
+                detail: "Fades the caret in and out instead of switching it. Ignored when the system asks to reduce motion."
+            )
+            .disabled(!preferences.caretBlinks)
+
+            IDESettingsToggle(
+                "Smooth Movement",
+                isOn: $preferences.smoothCaretMovement,
+                detail: "Glides the caret to its new position instead of jumping. Ignored when the system asks to reduce motion."
+            )
         }
 
         IDESettingsSection("Indentation") {

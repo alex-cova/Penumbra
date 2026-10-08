@@ -114,6 +114,28 @@ final class TextInputView: EditorView {
             }
         }
     }
+    var caretBlinkingEnabled = true {
+        didSet {
+            if caretBlinkingEnabled != oldValue {
+                selectionOverlayController.caretAnimationSettingsDidChange()
+            }
+        }
+    }
+    var caretBlinkInterval: TimeInterval = 0.5 {
+        didSet {
+            if caretBlinkInterval != oldValue {
+                selectionOverlayController.caretAnimationSettingsDidChange()
+            }
+        }
+    }
+    var smoothCaretBlinking = false {
+        didSet {
+            if smoothCaretBlinking != oldValue {
+                selectionOverlayController.caretAnimationSettingsDidChange()
+            }
+        }
+    }
+    var smoothCaretMovement = false
     @objc var selectionBarColor: NSColor = .label {
         didSet {
             if selectionBarColor != oldValue {

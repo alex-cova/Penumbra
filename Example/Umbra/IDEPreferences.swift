@@ -21,6 +21,10 @@ public final class IDEPreferences {
         static let themeID = "com.umbra.editor.themeID"
         static let caretShape = "com.umbra.editor.caretShape"
         static let caretColorHex = "com.umbra.editor.caretColorHex"
+        static let caretBlinks = "com.umbra.editor.caretBlinks"
+        static let caretBlinkIntervalMilliseconds = "com.umbra.editor.caretBlinkIntervalMilliseconds"
+        static let smoothCaretBlinking = "com.umbra.editor.smoothCaretBlinking"
+        static let smoothCaretMovement = "com.umbra.editor.smoothCaretMovement"
         static let scaleMarkdownHeadings = "com.umbra.editor.scaleMarkdownHeadings"
         static let tabWidth = "com.umbra.editor.tabWidth"
         static let useSpacesForTab = "com.umbra.editor.useSpacesForTab"
@@ -133,6 +137,26 @@ public final class IDEPreferences {
                 UserDefaults.standard.removeObject(forKey: Keys.caretColorHex)
             }
         }
+    }
+
+    /// Whether the caret blinks. Off keeps it solid.
+    var caretBlinks: Bool {
+        didSet { UserDefaults.standard.set(caretBlinks, forKey: Keys.caretBlinks) }
+    }
+
+    /// How long the caret stays visible, and then hidden, in a blink cycle (milliseconds).
+    var caretBlinkIntervalMilliseconds: Int {
+        didSet { UserDefaults.standard.set(caretBlinkIntervalMilliseconds, forKey: Keys.caretBlinkIntervalMilliseconds) }
+    }
+
+    /// Fade the caret in and out instead of switching it.
+    var smoothCaretBlinking: Bool {
+        didSet { UserDefaults.standard.set(smoothCaretBlinking, forKey: Keys.smoothCaretBlinking) }
+    }
+
+    /// Glide the caret to its new position instead of jumping.
+    var smoothCaretMovement: Bool {
+        didSet { UserDefaults.standard.set(smoothCaretMovement, forKey: Keys.smoothCaretMovement) }
     }
 
     /// Renders markdown headings (H1–H6) at progressively larger sizes in the editor.
@@ -502,6 +526,10 @@ public final class IDEPreferences {
         } else {
             caretColorHex = nil
         }
+        caretBlinks = defaults.object(forKey: Keys.caretBlinks) as? Bool ?? true
+        caretBlinkIntervalMilliseconds = defaults.object(forKey: Keys.caretBlinkIntervalMilliseconds) as? Int ?? 500
+        smoothCaretBlinking = defaults.object(forKey: Keys.smoothCaretBlinking) as? Bool ?? true
+        smoothCaretMovement = defaults.object(forKey: Keys.smoothCaretMovement) as? Bool ?? true
         scaleMarkdownHeadings = defaults.object(forKey: Keys.scaleMarkdownHeadings) as? Bool ?? true
         tabWidth = defaults.object(forKey: Keys.tabWidth) as? Int ?? 4
         useSpacesForTab = defaults.object(forKey: Keys.useSpacesForTab) as? Bool ?? true
@@ -595,6 +623,10 @@ public final class IDEPreferences {
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
         textView.caretShape = caretShape
+        textView.caretBlinkingEnabled = caretBlinks
+        textView.caretBlinkInterval = TimeInterval(caretBlinkIntervalMilliseconds) / 1000
+        textView.smoothCaretBlinking = smoothCaretBlinking
+        textView.smoothCaretMovement = smoothCaretMovement
         if let caretColorHex {
             textView.insertionPointColor = NSColor(rgb: caretColorHex)
         } else {
@@ -648,6 +680,10 @@ public final class IDEPreferences {
             themeID: themeID,
             caretShape: caretShape,
             caretColorHex: caretColorHex,
+            caretBlinks: caretBlinks,
+            caretBlinkIntervalMilliseconds: caretBlinkIntervalMilliseconds,
+            smoothCaretBlinking: smoothCaretBlinking,
+            smoothCaretMovement: smoothCaretMovement,
             scaleMarkdownHeadings: scaleMarkdownHeadings,
             tabWidth: tabWidth,
             useSpacesForTab: useSpacesForTab,
@@ -681,6 +717,10 @@ public final class IDEPreferences {
         themeID = snapshot.themeID
         caretShape = snapshot.caretShape
         caretColorHex = snapshot.caretColorHex
+        caretBlinks = snapshot.caretBlinks
+        caretBlinkIntervalMilliseconds = snapshot.caretBlinkIntervalMilliseconds
+        smoothCaretBlinking = snapshot.smoothCaretBlinking
+        smoothCaretMovement = snapshot.smoothCaretMovement
         scaleMarkdownHeadings = snapshot.scaleMarkdownHeadings
         tabWidth = snapshot.tabWidth
         useSpacesForTab = snapshot.useSpacesForTab
@@ -712,6 +752,10 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var themeID: String
     var caretShape: CaretShape
     var caretColorHex: UInt32?
+    var caretBlinks: Bool
+    var caretBlinkIntervalMilliseconds: Int
+    var smoothCaretBlinking: Bool
+    var smoothCaretMovement: Bool
     var scaleMarkdownHeadings: Bool
     var tabWidth: Int
     var useSpacesForTab: Bool
@@ -741,6 +785,10 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         themeID: String = ThemeCatalog.defaultDarkID,
         caretShape: CaretShape = .bar,
         caretColorHex: UInt32? = nil,
+        caretBlinks: Bool = true,
+        caretBlinkIntervalMilliseconds: Int = 500,
+        smoothCaretBlinking: Bool = true,
+        smoothCaretMovement: Bool = true,
         scaleMarkdownHeadings: Bool = true,
         tabWidth: Int,
         useSpacesForTab: Bool,
@@ -769,6 +817,10 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.themeID = themeID
         self.caretShape = caretShape
         self.caretColorHex = caretColorHex
+        self.caretBlinks = caretBlinks
+        self.caretBlinkIntervalMilliseconds = caretBlinkIntervalMilliseconds
+        self.smoothCaretBlinking = smoothCaretBlinking
+        self.smoothCaretMovement = smoothCaretMovement
         self.scaleMarkdownHeadings = scaleMarkdownHeadings
         self.tabWidth = tabWidth
         self.useSpacesForTab = useSpacesForTab
@@ -804,6 +856,10 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
             ?? ThemeCatalog.defaultDarkID
         caretShape = try container.decodeIfPresent(CaretShape.self, forKey: .caretShape) ?? .bar
         caretColorHex = try container.decodeIfPresent(UInt32.self, forKey: .caretColorHex)
+        caretBlinks = try container.decodeIfPresent(Bool.self, forKey: .caretBlinks) ?? true
+        caretBlinkIntervalMilliseconds = try container.decodeIfPresent(Int.self, forKey: .caretBlinkIntervalMilliseconds) ?? 500
+        smoothCaretBlinking = try container.decodeIfPresent(Bool.self, forKey: .smoothCaretBlinking) ?? true
+        smoothCaretMovement = try container.decodeIfPresent(Bool.self, forKey: .smoothCaretMovement) ?? true
         scaleMarkdownHeadings = try container.decodeIfPresent(Bool.self, forKey: .scaleMarkdownHeadings) ?? true
         tabWidth = try container.decode(Int.self, forKey: .tabWidth)
         useSpacesForTab = try container.decode(Bool.self, forKey: .useSpacesForTab)

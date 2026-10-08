@@ -12,9 +12,12 @@ final class SelectionOverlayController {
     private let selectionOverlayView = SelectionOverlayView()
     private let startHandle = SelectionHandleView(kind: .start)
     private let endHandle = SelectionHandleView(kind: .end)
-    private var blinkTimer: Timer?
-    private var isCaretVisible = true
     private var isAdjustingSelection = false
+    /// Set when the selection moved or text was edited, so the next ``updateCarets()`` shows the
+    /// carets solid again for a blink interval instead of leaving them in whatever phase they were.
+    private var needsBlinkRestart = true
+    /// Frames of the carets placed by the last ``updateCarets()``, to tell a move from a re-layout.
+    private var lastCaretFrames: [CGRect] = []
     /// Secondary caret views placed by the last ``updateCarets()``; the rest stay hidden.
     private var shownSecondaryCaretCount = 0
 
@@ -120,7 +123,17 @@ final class SelectionOverlayController {
     }
 
     func selectionDidChange() {
+        needsBlinkRestart = true
         updateLayout()
+    }
+
+    /// Blink or movement settings changed; applies them to the carets already on screen.
+    func caretAnimationSettingsDidChange() {
+        needsBlinkRestart = true
+        guard isEnabled else {
+            return
+        }
+        updateCaretBlinkState()
     }
 
     func editingDidChange(isEditing: Bool) {
@@ -141,12 +154,12 @@ final class SelectionOverlayController {
         guard isEnabled else {
             return
         }
-        isCaretVisible = true
         caretView.isHidden = false
         for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
             secondaryCaretViews[index].isHidden = false
         }
-        startCaretBlinkIfNeeded()
+        needsBlinkRestart = true
+        updateCaretBlinkState()
     }
 }
 
@@ -250,9 +263,11 @@ private extension SelectionOverlayController {
             caretView.isHidden = true
             secondaryCaretViews.forEach { $0.isHidden = true }
             shownSecondaryCaretCount = 0
+            lastCaretFrames = []
             return
         }
         let ranges = rangesNearViewport(caretRanges)
+        let previousShownCount = shownSecondaryCaretCount
         shownSecondaryCaretCount = max(ranges.count - 1, 0)
         while secondaryCaretViews.count < max(ranges.count - 1, 0) {
             let caretView = CaretView()
@@ -260,20 +275,31 @@ private extension SelectionOverlayController {
             overlayHostView.addSubview(caretView)
             secondaryCaretViews.append(caretView)
         }
+        var frames: [CGRect] = []
+        frames.reserveCapacity(ranges.count)
         for (index, range) in ranges.enumerated() {
             let view = index == 0 ? caretView : secondaryCaretViews[index - 1]
-            configureCaret(view, at: range.location, isPrimary: index == 0)
-            view.isHidden = !isCaretVisible
+            // Pooled secondary views are reassigned when the caret count changes, so they would
+            // glide from an unrelated caret's place.
+            let canGlide = !view.isHidden && (index == 0 || previousShownCount == shownSecondaryCaretCount)
+            configureCaret(view, at: range.location, isPrimary: index == 0, animatesMove: canGlide)
+            view.isHidden = false
             overlayHostView.bringSubviewToFront(view)
+            frames.append(view.frame)
         }
         if ranges.count - 1 < secondaryCaretViews.count {
             for index in (ranges.count - 1)..<secondaryCaretViews.count {
                 secondaryCaretViews[index].isHidden = true
+                secondaryCaretViews[index].layer?.removeAllAnimations()
             }
+        }
+        if frames != lastCaretFrames {
+            needsBlinkRestart = true
+            lastCaretFrames = frames
         }
     }
 
-    private func configureCaret(_ view: CaretView, at location: Int, isPrimary: Bool) {
+    private func configureCaret(_ view: CaretView, at location: Int, isPrimary: Bool, animatesMove: Bool) {
         let shape = textInputView.caretShape
         let presentation = caretRectService.caretPresentation(
             at: location,
@@ -282,7 +308,11 @@ private extension SelectionOverlayController {
         )
         let color = textInputView.insertionPointColor
         view.shape = shape
+        let previousPosition = view.layer.map { $0.presentation()?.position ?? $0.position }
         view.frame = presentation.frame
+        if animatesMove, let layer = view.layer, let previousPosition {
+            glide(layer, from: previousPosition)
+        }
         view.coveredText = presentation.coveredText
         view.coveredFont = presentation.coveredFont
         view.baselineFromBottom = presentation.descent
@@ -290,50 +320,66 @@ private extension SelectionOverlayController {
         view.caretColor = isPrimary || shape == .block ? color : color.withAlphaComponent(0.85)
     }
 
-    private func updateCaretBlinkState() {
-        if shouldShowCarets {
-            startCaretBlinkIfNeeded()
-        } else {
-            stopCaretBlink()
+    /// Slides `layer` from where it was drawn to its new position. The model position is already
+    /// the destination, so caret rects and popups anchored to it are never behind the animation.
+    private func glide(_ layer: CALayer, from previousPosition: CGPoint) {
+        guard textInputView.smoothCaretMovement, !Self.reduceMotion else {
+            layer.removeAnimation(forKey: CaretAnimation.moveKey)
+            return
         }
+        let delta = CGPoint(x: previousPosition.x - layer.position.x, y: previousPosition.y - layer.position.y)
+        let viewportHeight = max(textInputView.viewport.height, 1)
+        guard abs(delta.x) > 0.5 || abs(delta.y) > 0.5, abs(delta.y) <= viewportHeight else {
+            return
+        }
+        let animation = CABasicAnimation(keyPath: "position")
+        animation.isAdditive = true
+        animation.fromValue = NSValue(point: delta)
+        animation.toValue = NSValue(point: .zero)
+        animation.duration = CaretAnimation.moveDuration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(animation, forKey: CaretAnimation.moveKey)
     }
 
-    private func startCaretBlinkIfNeeded() {
+    private func updateCaretBlinkState() {
         guard shouldShowCarets else {
             stopCaretBlink()
             return
         }
-        guard blinkTimer == nil else {
+        guard needsBlinkRestart else {
             return
         }
-        isCaretVisible = true
-        caretView.isHidden = false
-        for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
-            secondaryCaretViews[index].isHidden = false
+        needsBlinkRestart = false
+        guard textInputView.caretBlinkingEnabled else {
+            stopCaretBlink()
+            return
         }
-        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.toggleCaretVisibility()
-            }
+        let smooth = textInputView.smoothCaretBlinking && !Self.reduceMotion
+        let animation = CaretAnimation.blink(interval: textInputView.caretBlinkInterval, smooth: smooth)
+        for view in shownCaretViews {
+            guard let layer = view.layer else { continue }
+            // Restarting at "now" keeps the caret solid for the first half of the cycle.
+            let restarted = animation.copy() as? CAKeyframeAnimation ?? animation
+            restarted.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+            layer.removeAnimation(forKey: CaretAnimation.blinkKey)
+            layer.add(restarted, forKey: CaretAnimation.blinkKey)
         }
     }
 
     private func stopCaretBlink() {
-        blinkTimer?.invalidate()
-        blinkTimer = nil
-        isCaretVisible = true
+        needsBlinkRestart = true
+        ([caretView] + secondaryCaretViews).forEach {
+            $0.layer?.removeAnimation(forKey: CaretAnimation.blinkKey)
+            $0.layer?.removeAnimation(forKey: CaretAnimation.moveKey)
+        }
     }
 
-    private func toggleCaretVisibility() {
-        guard shouldShowCarets else {
-            stopCaretBlink()
-            return
-        }
-        isCaretVisible.toggle()
-        caretView.isHidden = !isCaretVisible
-        for index in 0..<min(shownSecondaryCaretCount, secondaryCaretViews.count) {
-            secondaryCaretViews[index].isHidden = !isCaretVisible
-        }
+    private var shownCaretViews: [CaretView] {
+        [caretView] + secondaryCaretViews.prefix(shownSecondaryCaretCount)
+    }
+
+    private static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     private func handleStartDrag(with event: NSEvent) {

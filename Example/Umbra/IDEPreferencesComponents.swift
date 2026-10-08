@@ -151,6 +151,10 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.themeID) { applyLivePreferences() }
             .onChange(of: preferences.caretShape) { applyLivePreferences() }
             .onChange(of: preferences.caretColorHex) { applyLivePreferences() }
+            .onChange(of: preferences.caretBlinks) { applyLivePreferences() }
+            .onChange(of: preferences.caretBlinkIntervalMilliseconds) { applyLivePreferences() }
+            .onChange(of: preferences.smoothCaretBlinking) { applyLivePreferences() }
+            .onChange(of: preferences.smoothCaretMovement) { applyLivePreferences() }
             .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
             .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
     }

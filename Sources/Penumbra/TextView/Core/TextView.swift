@@ -242,6 +242,43 @@ public struct DocumentTextExport: Sendable {
             textInputView.caretShape = newValue
         }
     }
+    /// Whether the caret blinks. When off, the caret stays solid.
+    public var caretBlinkingEnabled: Bool {
+        get {
+            textInputView.caretBlinkingEnabled
+        }
+        set {
+            textInputView.caretBlinkingEnabled = newValue
+        }
+    }
+    /// How long the caret stays visible, and then hidden, in a blink cycle. Defaults to 0.5 s;
+    /// values are clamped to 0.1...2 s.
+    public var caretBlinkInterval: TimeInterval {
+        get {
+            textInputView.caretBlinkInterval
+        }
+        set {
+            textInputView.caretBlinkInterval = CaretAnimation.clampedBlinkInterval(newValue)
+        }
+    }
+    /// Fade the caret in and out instead of switching it. Ignored when the system asks to reduce motion.
+    public var smoothCaretBlinking: Bool {
+        get {
+            textInputView.smoothCaretBlinking
+        }
+        set {
+            textInputView.smoothCaretBlinking = newValue
+        }
+    }
+    /// Glide the caret to its new position instead of jumping. Ignored when the system asks to reduce motion.
+    public var smoothCaretMovement: Bool {
+        get {
+            textInputView.smoothCaretMovement
+        }
+        set {
+            textInputView.smoothCaretMovement = newValue
+        }
+    }
     /// The color of the selection bar. It is most common to set this to the same color as the color used for the insertion point.
     public var selectionBarColor: NSColor {
         get {

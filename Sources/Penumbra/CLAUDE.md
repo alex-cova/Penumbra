@@ -29,6 +29,7 @@ Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour note
 - Select whole line(s) touched by each caret (`selectLines`/⌘L), including the trailing break.
 - Select next occurrence (`selectNextOccurrence`/⌘⇧D), skip the current one (`skipCurrentOccurrence`/⌘K ⌘D), or select all occurrences (`selectAllOccurrences`/⌘⇧L).
 - Selection handles and caret rendering with customizable colors.
+- Caret animation (`CaretAnimation`, `SelectionOverlayController`): the blink is a repeating Core Animation opacity animation on each caret view's layer (no `Timer`, so it keeps running while the main thread is busy), restarted with `beginTime = now` whenever the caret frames change, the selection changes or text is typed, so the caret is solid right after a move. A pure re-layout (scroll, resize) keeps the phase. `TextView.caretBlinkingEnabled`, `caretBlinkInterval` (0.5 s, clamped to 0.1–2 s), `smoothCaretBlinking` (fade instead of switch) and `smoothCaretMovement` (a 70 ms additive `position` animation from where the caret was drawn; the model frame is already the destination, so caret rects and popups never lag; skipped for a freshly shown caret, a jump taller than the viewport, and a secondary caret when the caret count changed). Reduce Motion turns the fade and the glide off. Tests: `CaretBlinkTests`.
 - Shift-click range extension; column-aware line movement.
 - Multi-cursor-aware indent/outdent, move-line, newline, and undo (the whole caret set is restored, not just the primary caret).
 

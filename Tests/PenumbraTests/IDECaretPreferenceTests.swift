@@ -46,6 +46,34 @@ final class IDECaretPreferenceTests: XCTestCase {
         XCTAssertNil(decoded.caretColorHex)
     }
 
+    func testBlinkSettingsReachTheEditor() {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
+        IDEPreferences.shared.caretBlinks = false
+        IDEPreferences.shared.caretBlinkIntervalMilliseconds = 750
+        IDEPreferences.shared.smoothCaretBlinking = false
+        IDEPreferences.shared.smoothCaretMovement = false
+        IDEPreferences.shared.apply(to: textView)
+
+        XCTAssertFalse(textView.caretBlinkingEnabled)
+        XCTAssertEqual(textView.caretBlinkInterval, 0.75, accuracy: 0.0001)
+        XCTAssertFalse(textView.smoothCaretBlinking)
+        XCTAssertFalse(textView.smoothCaretMovement)
+    }
+
+    func testCaretAnimationDefaults() throws {
+        let snapshot = try XCTUnwrap(original)
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any]
+        for key in ["caretBlinks", "caretBlinkIntervalMilliseconds", "smoothCaretBlinking", "smoothCaretMovement"] {
+            object?.removeValue(forKey: key)
+        }
+        let stripped = try JSONSerialization.data(withJSONObject: try XCTUnwrap(object))
+        let decoded = try JSONDecoder().decode(IDEPreferencesSnapshot.self, from: stripped)
+        XCTAssertTrue(decoded.caretBlinks)
+        XCTAssertEqual(decoded.caretBlinkIntervalMilliseconds, 500)
+        XCTAssertTrue(decoded.smoothCaretBlinking)
+        XCTAssertTrue(decoded.smoothCaretMovement)
+    }
+
     private func sRGBHex(_ color: NSColor) -> UInt32? {
         guard let resolved = color.usingColorSpace(.sRGB) else { return nil }
         let red = UInt32((resolved.redComponent * 255).rounded())
