@@ -201,6 +201,22 @@ final class TextInputView: EditorView {
         }
     }
 
+    /// The caret sits at an inlay hint's offset but is drawn in front of the hint's chip instead of
+    /// after it. Plain ←/→ step over a chip in two moves (before it, then after it) without changing
+    /// the offset; any other selection change puts the caret after the chip again.
+    var caretIsBeforeInlayHint = false
+    var hasInlayHints: Bool { !layoutManager.inlayHints.isEmpty }
+
+    /// The room of the inlay hint in front of the character at `location`, or 0.
+    func inlayHintWidth(atLocation location: Int) -> CGFloat {
+        layoutManager.inlayHintWidth(atLocation: location)
+    }
+
+    /// Redraws the caret after ``caretIsBeforeInlayHint`` changed without the selection moving.
+    func inlayCaretAffinityDidChange() {
+        selectionOverlayController.selectionDidChange()
+    }
+
     /// Draw inlay hints in the editor font (one point smaller) instead of the system UI font.
     var inlayHintsUseEditorFont = false {
         didSet {
@@ -815,6 +831,7 @@ final class TextInputView: EditorView {
     private var _selectedRange: NSRange? {
         didSet {
             if _selectedRange != oldValue {
+                caretIsBeforeInlayHint = false
                 if !isApplyingMultipleSelectionUpdate,
                    let selectedRange = _selectedRange,
                    multiSelectionController.selections != [selectedRange] {
@@ -1003,6 +1020,11 @@ final class TextInputView: EditorView {
     private let lineControllerFactory: LineControllerFactory
     private let lineControllerStorage: LineControllerStorage
     var lineControllerCount: Int { lineControllerStorage.numberOfLineControllers }
+
+    func lineControllerHasInlayHintsForTesting(atRow row: Int) -> Bool {
+        let line = lineManager.line(atRow: row)
+        return !lineControllerStorage.getOrCreateLineController(for: line).inlayHints.isEmpty
+    }
     var selectionRectsForTesting: [TextSelectionRect] { selectionOverlayController.selectionRects }
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { foldingModel.regions.map(\.lineRange) }
@@ -4798,6 +4820,16 @@ extension TextInputView: @preconcurrency LineControllerStorageDelegate {
         lineController.tabWidth = indentController.tabWidth
         lineController.theme = theme
         lineController.lineBreakMode = lineBreakMode
+        // Controllers made outside a layout pass (caret and hit-test queries) would otherwise
+        // measure the line without its hints until the next pass reaches it.
+        if !layoutManager.inlayHints.isEmpty {
+            lineController.inlayHints = InlayHintIndex.localHints(
+                in: layoutManager.inlayHints,
+                lineLocation: lineController.line.location,
+                lineLength: lineController.line.data.length,
+                appearance: layoutManager.inlayHintAppearance
+            )
+        }
     }
 }
 

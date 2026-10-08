@@ -214,6 +214,23 @@ final class LayoutManager {
         }
     }
 
+    /// The room of the inlay hint in front of the character at `location`, or 0. A hint at the first
+    /// character of a line is not shown, so it has no width.
+    func inlayHintWidth(atLocation location: Int) -> CGFloat {
+        var low = 0
+        var high = inlayHints.count
+        while low < high {
+            let mid = (low + high) / 2
+            if inlayHints[mid].utf16Offset < location { low = mid + 1 } else { high = mid }
+        }
+        guard low < inlayHints.count, inlayHints[low].utf16Offset == location,
+              let row = lineManager.row(containingCharacterAt: location),
+              lineManager.location(ofRow: row) != location else {
+            return 0
+        }
+        return inlayHintAppearance.width(of: inlayHints[low].label)
+    }
+
     private func refreshInlayHintsOnLoadedLines() {
         var changedLineIDs: Set<DocumentLineNodeID> = []
         for lineController in lineControllerStorage {

@@ -304,7 +304,8 @@ private extension SelectionOverlayController {
         let presentation = caretRectService.caretPresentation(
             at: location,
             shape: shape,
-            allowMovingCaretToNextLineFragment: true
+            allowMovingCaretToNextLineFragment: true,
+            beforeInlayHint: isPrimary && textInputView.caretIsBeforeInlayHint
         )
         let color = textInputView.insertionPointColor
         view.shape = shape

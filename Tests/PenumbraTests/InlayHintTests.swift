@@ -133,4 +133,29 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(textView.inlayHintAppearanceForTesting.textColor, .systemPink)
         XCTAssertEqual(textView.inlayHintAppearanceForTesting.backgroundColor, .systemTeal)
     }
+
+    // MARK: - Chip geometry
+
+    /// Core Text's index offset at a kerned boundary is the middle of the gap inside a line and
+    /// the position in front of the gap at the end of a line; the glyph positions are exact.
+    func testChipEndIsTheLeadingEdgeOfTheNextGlyphNotCoreTextsIndexOffset() throws {
+        let font = try XCTUnwrap(NSFont(name: "Menlo", size: 14))
+        let kern: CGFloat = 40
+        func line(kerning index: Int, text: String) -> CTLine {
+            let string = NSMutableAttributedString(string: text, attributes: [.font: font])
+            string.addAttribute(.kern, value: kern, range: NSRange(location: index, length: 1))
+            return CTTypesetterCreateLine(CTTypesetterCreateWithAttributedString(string), CFRange(location: 0, length: text.utf16.count))
+        }
+        let advance = ("a" as NSString).size(withAttributes: [.font: font]).width
+
+        // Inside a line: the next glyph starts after the whole kern.
+        let inside = line(kerning: 4, text: "call(1, 2);")
+        XCTAssertEqual(InlayChipGeometry.chipEnd(forLocalOffset: 5, in: inside), 5 * advance + kern, accuracy: 0.01)
+        XCTAssertLessThan(CTLineGetOffsetForStringIndex(inside, 5, nil), 5 * advance + kern - 1,
+                          "Core Text puts the caret offset in the gap; if this fails the workaround can go")
+
+        // After the last character: the end of the line includes the kern.
+        let end = line(kerning: 10, text: "call(1, 2);")
+        XCTAssertEqual(InlayChipGeometry.chipEnd(forLocalOffset: 11, in: end), 11 * advance + kern, accuracy: 0.01)
+    }
 }

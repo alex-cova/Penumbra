@@ -61,7 +61,7 @@ final class LineFragmentRenderer: @unchecked Sendable {
                 .font: appearance.font
             ]
             // The room sits just before the character the hint precedes.
-            let characterX = CTLineGetOffsetForStringIndex(lineFragment.line, hint.localOffset, nil)
+            let characterX = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: lineFragment.line)
             let textWidth = appearance.textWidth(of: hint.label)
             let size = (hint.label as NSString).size(withAttributes: attributes)
             let pillRect = CGRect(

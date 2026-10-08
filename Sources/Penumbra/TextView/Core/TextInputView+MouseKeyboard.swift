@@ -614,7 +614,44 @@ extension TextInputView {
         }
     }
 
+    /// Plain ←/→ through an inlay hint: the caret first stops in front of the hint's chip, then after
+    /// it, at one offset. Returns `true` when the key was that second (or first) stop and nothing else
+    /// should move.
+    private func stepOverInlayHint(direction: EditorTextLayoutDirection) -> Bool {
+        guard direction == .left || direction == .right,
+              hasInlayHints, !isMultiCursorActive,
+              let selection, selection.length == 0 else {
+            return false
+        }
+        let hasHint = inlayHintWidth(atLocation: selection.location) > 0
+        if direction == .right, caretIsBeforeInlayHint {
+            setInlayCaretAffinity(beforeHint: false)
+            return true
+        }
+        if direction == .left, hasHint, !caretIsBeforeInlayHint {
+            setInlayCaretAffinity(beforeHint: true)
+            return true
+        }
+        return false
+    }
+
+    private func setInlayCaretAffinity(beforeHint: Bool) {
+        guard caretIsBeforeInlayHint != beforeHint else { return }
+        caretIsBeforeInlayHint = beforeHint
+        inlayCaretAffinityDidChange()
+    }
+
     private func moveSelectionForArrowKey(direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) {
+        if flags.isEmpty, stepOverInlayHint(direction: direction) {
+            return
+        }
+        defer {
+            // Arriving from the left at a hint: the caret is in front of the chip first.
+            if flags.isEmpty, direction == .right, !isMultiCursorActive, let selection, selection.length == 0,
+               inlayHintWidth(atLocation: selection.location) > 0 {
+                setInlayCaretAffinity(beforeHint: true)
+            }
+        }
         let textDirection = layoutDirectionToTextDirection(direction)
         let stop = caretStop(for: direction, flags: flags)
         if flags.contains(.shift), isMultiCursorActive {

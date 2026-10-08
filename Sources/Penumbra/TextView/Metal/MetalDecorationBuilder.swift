@@ -332,7 +332,7 @@ private extension MetalDecorationBuilder {
             let attributes: [NSAttributedString.Key: Any] = [.font: font]
             let size = (hint.label as NSString).size(withAttributes: attributes)
             let textWidth = appearance.textWidth(of: hint.label)
-            let pillX = context.x(at: hint.localOffset) - hint.width
+            let pillX = context.originX + InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: context.line) - hint.width
             let pillWidth = textWidth + InlayHintAppearance.horizontalPadding * 2
             let pillHeight = size.height + 2
             geometry.overlaySolids.append(SolidInstance(

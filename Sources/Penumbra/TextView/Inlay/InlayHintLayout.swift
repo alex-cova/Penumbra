@@ -62,6 +62,36 @@ struct InlayHintAppearance: Equatable {
     }
 }
 
+/// Where a hint's room really is on a line. A hint widens the kern of the character before it, and
+/// Core Text's index offsets are unreliable across a kern: inside a line `CTLineGetOffsetForStringIndex`
+/// returns the middle of the gap, and at the end of a line the position before the gap. The glyph
+/// positions are exact, so the room is measured from the leading edge of the glyph the hint precedes.
+enum InlayChipGeometry {
+    /// X where the hint's room ends and the next character begins: the leading edge of the glyph
+    /// at `offset`, or the end of the line when the hint sits after its last character.
+    static func chipEnd(forLocalOffset offset: Int, in line: CTLine) -> CGFloat {
+        let runs = CTLineGetGlyphRuns(line) as? [CTRun] ?? []
+        for run in runs {
+            let count = CTRunGetGlyphCount(run)
+            let range = CTRunGetStringRange(run)
+            guard count > 0, offset >= range.location, offset < range.location + range.length else {
+                continue
+            }
+            var indices = [CFIndex](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: count), &indices)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
+            if let glyph = indices.firstIndex(of: offset) {
+                return positions[glyph].x
+            }
+        }
+        let end = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        let fallback = CTLineGetOffsetForStringIndex(line, offset, nil)
+        // Past the last glyph the offset stops in front of the room; the line's width includes it.
+        return offset >= CTLineGetStringRange(line).location + CTLineGetStringRange(line).length ? end : fallback
+    }
+}
+
 enum InlayHintIndex {
     /// Sorts `hints`, merges those at one offset (their labels joined by a space) and drops
     /// negative offsets and empty labels.

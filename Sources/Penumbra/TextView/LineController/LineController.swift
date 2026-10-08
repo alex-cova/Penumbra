@@ -614,10 +614,10 @@ struct LineCaretMetrics {
 
 // MARK: - EditorTextInput
 extension LineController {
-    func caretRect(atIndex lineLocalLocation: Int) -> CGRect {
+    func caretRect(atIndex lineLocalLocation: Int, beforeInlayHint: Bool = false) -> CGRect {
         for lineFragment in typesetter.lineFragments {
             if let caretLocation = lineFragment.caretLocation(forLineLocalLocation: lineLocalLocation) {
-                let xPosition = CTLineGetOffsetForStringIndex(lineFragment.line, caretLocation, nil)
+                let xPosition = caretX(in: lineFragment, atLocalOffset: caretLocation, beforeInlayHint: beforeInlayHint)
                 let yPosition = lineFragment.yPosition + (lineFragment.scaledSize.height - lineFragment.baseSize.height) / 2
                 return CGRect(x: xPosition, y: yPosition, width: Caret.width, height: lineFragment.baseSize.height)
             }
@@ -629,13 +629,13 @@ extension LineController {
     /// Bar geometry plus the width and text of the character after the caret. Called only when the
     /// caret is a block or an underline. ``caretRect(atIndex:)`` stays the cheap bar lookup that
     /// selection and hit testing use.
-    func caretMetrics(atIndex lineLocalLocation: Int) -> LineCaretMetrics {
+    func caretMetrics(atIndex lineLocalLocation: Int, beforeInlayHint: Bool = false) -> LineCaretMetrics {
         let font = caretFont(at: lineLocalLocation)
         for lineFragment in typesetter.lineFragments {
             guard let caretLocation = lineFragment.caretLocation(forLineLocalLocation: lineLocalLocation) else {
                 continue
             }
-            let xPosition = CTLineGetOffsetForStringIndex(lineFragment.line, caretLocation, nil)
+            let xPosition = caretX(in: lineFragment, atLocalOffset: caretLocation, beforeInlayHint: beforeInlayHint)
             let yPosition = lineFragment.yPosition + (lineFragment.scaledSize.height - lineFragment.baseSize.height) / 2
             let barRect = CGRect(x: xPosition, y: yPosition, width: Caret.width, height: lineFragment.baseSize.height)
             let covered = coveredCharacter(in: lineFragment, caretLocation: caretLocation, font: font)
@@ -682,8 +682,9 @@ extension LineController {
         guard endLocal > caretLocation, endLocal <= upper else {
             return (space, "")
         }
-        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, caretLocation, nil)
-        let endX = CTLineGetOffsetForStringIndex(lineFragment.line, endLocal, nil)
+        let startX = caretX(in: lineFragment, atLocalOffset: caretLocation, beforeInlayHint: false)
+        // A hint right after the character widens it (kern); the caret covers the character only.
+        let endX = caretX(in: lineFragment, atLocalOffset: endLocal, beforeInlayHint: true)
         let advance = endX - startX
         guard advance >= 1 else {
             return (space, "")
@@ -703,10 +704,11 @@ extension LineController {
         for lineFragment in typesetter.lineFragments {
             if let caretRange = lineFragment.caretRange(forLineLocalRange: lineLocalRange) {
                 let finalIndex = min(lineFragment.visibleRange.upperBound, caretRange.upperBound)
-                let xStart = CTLineGetOffsetForStringIndex(lineFragment.line, caretRange.location, nil)
-                let xEnd = CTLineGetOffsetForStringIndex(lineFragment.line, finalIndex, nil)
+                let xStart = caretX(in: lineFragment, atLocalOffset: caretRange.location, beforeInlayHint: false)
+                // A range that ends at a hint does not include the hint's chip.
+                let xEnd = caretX(in: lineFragment, atLocalOffset: finalIndex, beforeInlayHint: true)
                 let yPosition = lineFragment.yPosition + (lineFragment.scaledSize.height - lineFragment.baseSize.height) / 2
-                return CGRect(x: xStart, y: yPosition, width: xEnd - xStart, height: lineFragment.baseSize.height)
+                return CGRect(x: xStart, y: yPosition, width: max(xEnd - xStart, 0), height: lineFragment.baseSize.height)
             }
         }
         return CGRect(x: 0, y: 0, width: 0, height: estimatedLineFragmentHeight * lineFragmentHeightMultiplier)
@@ -716,8 +718,46 @@ extension LineController {
         guard let closestLineFragment = lineFragment(closestTo: point) else {
             return line.location
         }
-        let localLocation = min(CTLineGetStringIndexForPosition(closestLineFragment.line, point), line.data.length)
+        var localLocation = min(CTLineGetStringIndexForPosition(closestLineFragment.line, point), line.data.length)
+        if !inlayHints.isEmpty, let adjusted = inlayAdjustedIndex(forX: point.x, in: closestLineFragment) {
+            localLocation = adjusted
+        }
         return line.location + localLocation
+    }
+
+    /// The width a hint in front of the character at `offset` adds to the character before it, or 0.
+    func inlayHintWidth(atLocalOffset offset: Int) -> CGFloat {
+        inlayHints.first { $0.localOffset == offset }?.width ?? 0
+    }
+
+    /// X of the caret at `offset` in `fragment`. At a hint's offset the caret is behind the chip, or
+    /// in front of it with `beforeInlayHint`; elsewhere it is where Core Text puts it.
+    func caretX(in fragment: LineFragment, atLocalOffset offset: Int, beforeInlayHint: Bool) -> CGFloat {
+        guard !inlayHints.isEmpty,
+              let hint = inlayHints.first(where: { $0.localOffset == offset }),
+              offset > fragment.range.location, offset <= fragment.range.upperBound else {
+            return CTLineGetOffsetForStringIndex(fragment.line, offset, nil)
+        }
+        let end = InlayChipGeometry.chipEnd(forLocalOffset: offset, in: fragment.line)
+        return beforeInlayHint ? end - hint.width : end
+    }
+
+    /// Core Text sees "character plus chip" as one wide glyph and splits it in the middle of the
+    /// whole. A click on the chip puts the caret at the hint; one on the character before it splits
+    /// at the middle of the character alone.
+    private func inlayAdjustedIndex(forX x: CGFloat, in fragment: LineFragment) -> Int? {
+        for hint in inlayHints where hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound {
+            let end = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: fragment.line)
+            let chipStart = end - hint.width
+            if x >= chipStart, x < end {
+                return hint.localOffset
+            }
+            let previousStart = CTLineGetOffsetForStringIndex(fragment.line, hint.localOffset - 1, nil)
+            if x >= previousStart, x < chipStart {
+                return x < (previousStart + chipStart) / 2 ? hint.localOffset - 1 : hint.localOffset
+            }
+        }
+        return nil
     }
 }
 

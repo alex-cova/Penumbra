@@ -31,7 +31,12 @@ final class SelectionRectService {
         let selectsLineEnding = range.upperBound == lineManager.location(ofRow: endRow)
         let adjustedRange = NSRange(location: range.location, length: selectsLineEnding ? range.length - 1 : range.length)
         let startCaretRect = caretRectService.caretRect(at: adjustedRange.lowerBound, allowMovingCaretToNextLineFragment: true)
-        let endCaretRect = caretRectService.caretRect(at: adjustedRange.upperBound, allowMovingCaretToNextLineFragment: false)
+        // A selection that ends at an inlay hint stops in front of the hint's chip.
+        let endCaretRect = caretRectService.caretRect(
+            at: adjustedRange.upperBound,
+            allowMovingCaretToNextLineFragment: false,
+            beforeInlayHint: true
+        )
         let fullWidth = max(contentSizeService.contentWidth, contentSizeService.scrollViewWidth) - leadingLineSpacing - textContainerInset.right
         if startCaretRect.minY == endCaretRect.minY && startCaretRect.maxY == endCaretRect.maxY {
             // Selecting text in the same line fragment.
