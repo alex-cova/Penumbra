@@ -14,14 +14,27 @@ ENTITLEMENTS="$root/Example/Resources/Umbra.entitlements"
 INFO_PLIST_TEMPLATE="$root/Example/Resources/Info.plist"
 ICON_SOURCE="$root/Example/umbra.icon"
 
-echo "==> Building Umbra ($CONFIGURATION)…"
-swift build -c "$CONFIGURATION" --product Umbra
+# The generated `Bundle.module` accessor depends on the build system. The native one only looks in
+# `Bundle.main.bundleURL` (the .app root, where codesign rejects loose bundles) and then in the build
+# directory baked into the binary, so every resource lookup traps on a user's machine (1.6.11 shipped
+# this way from CI and crashed opening a .rs file). Swift Build looks in `Contents/Resources`.
+BUILD_SYSTEM="${BUILD_SYSTEM:-swiftbuild}"
+BUILD_ARGS=(-c "$CONFIGURATION" --build-system "$BUILD_SYSTEM" --product Umbra)
 
-BIN_PATH="$(swift build -c "$CONFIGURATION" --product Umbra --show-bin-path)"
+echo "==> Building Umbra ($CONFIGURATION, $BUILD_SYSTEM)…"
+swift build "${BUILD_ARGS[@]}"
+
+BIN_PATH="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 BINARY="$BIN_PATH/Umbra"
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+
+# The native accessor's failure message; the Swift Build accessor never contains it.
+if strings -a "$BINARY" | grep -q "could not load resource bundle: from"; then
+  echo "error: $BINARY uses the app-root Bundle.module accessor, which cannot find the bundles in Contents/Resources; build with --build-system swiftbuild" >&2
+  exit 1
+fi
 
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
