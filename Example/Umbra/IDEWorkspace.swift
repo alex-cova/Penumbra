@@ -3994,7 +3994,6 @@ public final class IDEWorkspace {
     }
 
     private func loadSession(_ session: IDEWindowSession) {
-        // Explorer stays hidden on launch; users toggle it with ⌘0 or the toolbar button.
         isSidebarVisible = false
         selectedSidebarTab = session.sidebarTab ?? .explorer
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
@@ -4020,6 +4019,11 @@ public final class IDEWorkspace {
             restoredRoot = recentProjects.first { FileManager.default.fileExists(atPath: $0.path) }
         }
         applyProjectRoot(restoredRoot)
+        if hasOpenProject {
+            // A reopened project shows its Explorer, as Open Folder does.
+            isSidebarVisible = true
+            selectedSidebarTab = .explorer
+        }
         agentPanelWidth = session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth
         if hasOpenProject {
             // Restoring is not a change worth saving: the rest of the window is not back yet.

@@ -72,7 +72,15 @@ struct IDEWelcomeView: View {
         }
     }
 
-    private var content: some View {
+    @ViewBuilder private var content: some View {
+        if workspace.hasOpenProject {
+            IDEWelcomeProjectContent()
+        } else {
+            startContent
+        }
+    }
+
+    private var startContent: some View {
         HStack(spacing: 0) {
             Spacer(minLength: IDEAppearance.Spacing.xxl)
 
@@ -173,6 +181,100 @@ private struct IDEWelcomeBrandHeader: View {
     }
 }
 
+/// The welcome page of a window that already has a project: the Explorer is beside it, so it
+/// leads with the project and what to do next in it, not with how to open one.
+private struct IDEWelcomeProjectContent: View {
+    @Environment(IDEWorkspace.self) private var workspace
+
+    private var rootURL: URL? { workspace.project.rootURL }
+
+    /// Recent files that live inside this project.
+    private var projectFiles: [URL] {
+        guard let root = rootURL?.standardizedFileURL.path else { return [] }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return workspace.recentFileURLs
+            .filter { $0.standardizedFileURL.path.hasPrefix(prefix) }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: IDEAppearance.Spacing.xxl)
+
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {
+                if let rootURL {
+                    IDEWelcomeProjectHeader(url: rootURL, branch: workspace.gitStatus.currentBranch)
+                }
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                    IDEWelcomeActionRow(title: "Go to File…", systemImage: "magnifyingglass", shortcut: "⌘P", action: workspace.showQuickOpen)
+                    IDEWelcomeActionRow(title: "Find in Files…", systemImage: "text.magnifyingglass", shortcut: "⌘⇧F", action: workspace.showFindInFiles)
+                    IDEWelcomeActionRow(title: "New File", systemImage: "doc.badge.plus", shortcut: "⌘N", action: workspace.newFile)
+                    IDEWelcomeActionRow(title: "Open Terminal", systemImage: "terminal", shortcut: nil, action: workspace.showTerminal)
+                }
+                if !projectFiles.isEmpty {
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+                        Text("Recent in This Project")
+                            .font(IDEAppearance.Typography.sectionHeader)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .textCase(.uppercase)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(projectFiles, id: \.path) { url in
+                                IDEWelcomeRecentRow(
+                                    title: url.lastPathComponent,
+                                    systemImage: "doc.text",
+                                    path: url.path,
+                                    onOpen: { workspace.openRecentFile(url) },
+                                    onRemove: { workspace.removeRecentFile(url) }
+                                )
+                            }
+                        }
+                    }
+                }
+                IDEWelcomeShortcutsGrid()
+            }
+            .frame(maxWidth: IDEAppearance.Spacing.welcomeMaxWidth, alignment: .leading)
+
+            Spacer(minLength: IDEAppearance.Spacing.xxl)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct IDEWelcomeProjectHeader: View {
+    let url: URL
+    let branch: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            Label {
+                Text(url.lastPathComponent)
+                    .font(IDEAppearance.Typography.brandTitle)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: "folder.fill")
+                    .font(.title2)
+                    .foregroundStyle(IDEAppearance.ColorToken.accent)
+            }
+            .labelStyle(.titleAndIcon)
+
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                if let branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .labelStyle(.titleAndIcon)
+                }
+                Text((url.path as NSString).abbreviatingWithTildeInPath)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            .font(IDEAppearance.Typography.caption)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+    }
+}
+
 private struct IDEWelcomeActionList: View {
     let openFile: () -> Void
     let openFolder: () -> Void
@@ -190,7 +292,7 @@ private struct IDEWelcomeActionList: View {
 private struct IDEWelcomeActionRow: View {
     let title: String
     let systemImage: String
-    let shortcut: String
+    let shortcut: String?
     let action: () -> Void
 
     var body: some View {
@@ -200,9 +302,11 @@ private struct IDEWelcomeActionRow: View {
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 Spacer(minLength: 0)
-                Text(shortcut)
-                    .font(IDEAppearance.Typography.monoCaption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                if let shortcut {
+                    Text(shortcut)
+                        .font(IDEAppearance.Typography.monoCaption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.sm)
@@ -212,7 +316,7 @@ private struct IDEWelcomeActionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Keyboard shortcut \(shortcut)")
+        .accessibilityHint(shortcut.map { "Keyboard shortcut \($0)" } ?? "")
     }
 }
 
