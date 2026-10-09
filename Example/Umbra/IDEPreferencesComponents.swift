@@ -147,6 +147,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
     private func appearanceChanges(_ view: some View) -> some View {
         view
             .onChange(of: preferences.fontName) { applyLivePreferences() }
+            .onChange(of: preferences.fontLigatures) { applyLivePreferences() }
             .onChange(of: preferences.fontSize) { applyLivePreferences() }
             .onChange(of: preferences.themeID) { applyLivePreferences() }
             .onChange(of: preferences.caretShape) { applyLivePreferences() }

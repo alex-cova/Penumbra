@@ -14,16 +14,16 @@ final class IDEEditorTheme: @unchecked Sendable {
         theme = PaletteTheme(
             size: 13,
             palette: palette,
-            font: IDEEditorFonts.nsFont(familyName: IDEEditorFonts.defaultFamilyName, size: 13)
+            font: IDEEditorFonts.nsFont(familyName: IDEEditorFonts.defaultFamilyName, size: 13).withLigatures(false)
         )
     }
 
-    func rebuild(themeID: String, fontSize: Double, fontName: String, scaleMarkdownHeadings: Bool = true) {
+    func rebuild(themeID: String, fontSize: Double, fontName: String, ligatures: Bool = false, scaleMarkdownHeadings: Bool = true) {
         let palette = ThemeCatalog.palette(id: themeID, fallbackDark: true)
         theme = PaletteTheme(
             size: CGFloat(fontSize),
             palette: palette,
-            font: IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize)),
+            font: IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize)).withLigatures(ligatures),
             markupStyle: scaleMarkdownHeadings ? .default : .none
         )
     }

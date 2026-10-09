@@ -21,6 +21,12 @@ struct IDEPreferencesEditorPane: View {
                 }
             }
 
+            IDESettingsToggle(
+                "Font Ligatures",
+                isOn: $preferences.fontLigatures,
+                detail: "Shows sequences like != and -> as one symbol when the font has ligatures (JetBrains Mono, Fira Code, Cascadia Code)."
+            )
+
             IDEPreferencesDoubleStepper(
                 title: "Font Size",
                 value: $preferences.fontSize,

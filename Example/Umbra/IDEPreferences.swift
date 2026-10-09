@@ -14,6 +14,7 @@ public final class IDEPreferences {
     private enum Keys {
         static let fontSize = "com.umbra.editor.fontSize"
         static let fontName = "com.umbra.editor.fontName"
+        static let fontLigatures = "com.umbra.editor.fontLigatures"
         static let uiFontName = "com.umbra.editor.uiFontName"
         static let uiFontSize = "com.umbra.editor.uiFontSize"
         static let welcomeBackground = "com.umbra.editor.welcomeBackground"
@@ -96,6 +97,11 @@ public final class IDEPreferences {
 
     var fontName: String {
         didSet { UserDefaults.standard.set(fontName, forKey: Keys.fontName); applyTheme() }
+    }
+
+    /// Draws sequences such as `!=` and `->` as one symbol in fonts that have ligatures.
+    var fontLigatures: Bool {
+        didSet { UserDefaults.standard.set(fontLigatures, forKey: Keys.fontLigatures); applyTheme() }
     }
 
     var uiFontName: String {
@@ -595,6 +601,7 @@ public final class IDEPreferences {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
         fontName = defaults.string(forKey: Keys.fontName) ?? IDEEditorFonts.defaultFamilyName
+        fontLigatures = defaults.bool(forKey: Keys.fontLigatures)
         uiFontName = defaults.string(forKey: Keys.uiFontName) ?? IDEUIFonts.defaultFamilyName
         uiFontSize = defaults.object(forKey: Keys.uiFontSize) as? Double ?? IDEUIFonts.defaultFontSize
         welcomeBackground = defaults.string(forKey: Keys.welcomeBackground)
@@ -801,13 +808,14 @@ public final class IDEPreferences {
     }
 
     func applyTheme() {
-        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: effectiveFontSize, fontName: fontName, scaleMarkdownHeadings: scaleMarkdownHeadings)
+        IDEEditorTheme.shared.rebuild(themeID: themeID, fontSize: effectiveFontSize, fontName: fontName, ligatures: fontLigatures, scaleMarkdownHeadings: scaleMarkdownHeadings)
     }
 
     func snapshot() -> IDEPreferencesSnapshot {
         IDEPreferencesSnapshot(
             fontSize: fontSize,
             fontName: fontName,
+            fontLigatures: fontLigatures,
             uiFontName: uiFontName,
             uiFontSize: uiFontSize,
             themeID: themeID,
@@ -843,6 +851,7 @@ public final class IDEPreferences {
     func restore(from snapshot: IDEPreferencesSnapshot) {
         fontSize = snapshot.fontSize
         fontName = snapshot.fontName
+        fontLigatures = snapshot.fontLigatures
         uiFontName = snapshot.uiFontName
         uiFontSize = snapshot.uiFontSize
         IDEUIFonts.setCurrentFamilyName(uiFontName)
@@ -880,6 +889,7 @@ public final class IDEPreferences {
 struct IDEPreferencesSnapshot: Codable, Equatable {
     var fontSize: Double
     var fontName: String
+    var fontLigatures: Bool
     var uiFontName: String
     var uiFontSize: Double
     var themeID: String
@@ -913,6 +923,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     init(
         fontSize: Double,
         fontName: String = IDEEditorFonts.defaultFamilyName,
+        fontLigatures: Bool = false,
         uiFontName: String = IDEUIFonts.defaultFamilyName,
         uiFontSize: Double = IDEUIFonts.defaultFontSize,
         themeID: String = ThemeCatalog.defaultDarkID,
@@ -945,6 +956,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
+        self.fontLigatures = fontLigatures
         self.uiFontName = uiFontName
         self.uiFontSize = uiFontSize
         self.themeID = themeID
@@ -981,6 +993,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         fontSize = try container.decode(Double.self, forKey: .fontSize)
         fontName = try container.decodeIfPresent(String.self, forKey: .fontName)
             ?? IDEEditorFonts.defaultFamilyName
+        fontLigatures = try container.decodeIfPresent(Bool.self, forKey: .fontLigatures) ?? false
         uiFontName = try container.decodeIfPresent(String.self, forKey: .uiFontName)
             ?? IDEUIFonts.defaultFamilyName
         uiFontSize = try container.decodeIfPresent(Double.self, forKey: .uiFontSize)
