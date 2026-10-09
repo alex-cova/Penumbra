@@ -5,11 +5,14 @@ import Observation
 
 /// Owns Java code intelligence for the workspace: the shared `JavaIndex` (JDK + open project's
 /// source tree + Gradle-resolved dependencies), the `JavaOverlayService` keeping it in sync with
-/// open/edited documents, the background indexing that populates it, and -- when the opened folder
-/// is a Gradle project -- syncing the module/dependency model via `GradleCommandRunner`.
+/// open/edited documents, and the background indexing that populates it.
 /// `IDEIntelligenceServices` holds one instance and feeds its index into `JavaCompletionProvider`;
-/// `IDEWorkspace` drives it (connect on bootstrap, retarget on `applyProjectRoot`, wire
-/// `requestTrust` to a trust sheet).
+/// `IDEWorkspace` drives it (connect on bootstrap, retarget through the language registry's
+/// `projectDidChange`).
+///
+/// The Gradle project model is not here: `IDEGradleProjectSystem` syncs it and hands every model it
+/// produces to this class (`IDEGradleModelConsumer`), which indexes it. The JDK choice is
+/// `IDEJDKSelection`, shared with the Gradle system.
 ///
 /// Indexing runs in three independent, recombined pieces so opening/closing a project folder never
 /// has to touch the (potentially large, slow-to-rebuild) JDK shard: the JDK is indexed once at
@@ -22,31 +25,6 @@ import Observation
 @MainActor
 @Observable
 final class IDEJavaSupport {
-    /// The state of Gradle project-model sync for the current project root, surfaced in the status
-    /// bar and used to gate the "Reload"/"Show Output" commands.
-    enum GradleSyncState: Equatable {
-        /// No project open, or the open folder isn't a Gradle project.
-        case notGradle
-        /// A Gradle project was detected but hasn't synced yet (auto-sync is off, or the user
-        /// hasn't answered the trust prompt).
-        case awaitingTrust
-        /// The user declined to trust this project's build scripts.
-        case untrusted
-        case syncing
-        case synced(subprojects: Int, jars: Int)
-        case failed(summary: String)
-
-        var isSyncing: Bool {
-            if case .syncing = self { return true }
-            return false
-        }
-
-        var isFailed: Bool {
-            if case .failed = self { return true }
-            return false
-        }
-    }
-
     let javaIndex = JavaIndex()
     let overlayService: JavaOverlayService
     let completionProvider: JavaCompletionProvider
@@ -89,7 +67,10 @@ final class IDEJavaSupport {
     /// Which JDK the project uses (its own choice, the default, or Automatic) and the list to choose
     /// from. Everything that needs a JDK asks it.
     let jdk: IDEJDKSelection
+    /// The Gradle project whose model this indexes.
+    let gradle: IDEGradleProjectSystem
 
+    private let status: IDEProjectStatus
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
     /// One indexing run and one parsed shard per JDK for the whole app; see `JavaSharedShardHub`.
@@ -110,10 +91,9 @@ final class IDEJavaSupport {
     @ObservationIgnored private var nameIndexRoots: [URL] = []
     @ObservationIgnored private var pendingStubRefresh: Set<URL> = []
     @ObservationIgnored private var stubRefreshTask: Task<Void, Never>?
-    @ObservationIgnored private var gradleSyncTask: Task<Void, Never>?
-    /// Bumped on every `setProjectRoot` so an in-flight index or sync for the previous folder
-    /// cannot publish over the new one. Distinct from `Task.isCancelled`: a reload of the *same*
-    /// root cancels the previous task without changing the generation.
+    /// Bumped on every `projectDidChange` so an in-flight index for the previous folder cannot
+    /// publish over the new one. Distinct from `Task.isCancelled`: a reload of the *same* root
+    /// cancels the previous task without changing the generation.
     @ObservationIgnored private var projectGeneration = 0
     /// Home of the JDK currently being indexed, if a select has already happened and the shard
     /// write hasn't finished. Compared so a repeat sync doesn't cancel an in-flight index of the
@@ -121,43 +101,8 @@ final class IDEJavaSupport {
     @ObservationIgnored private var pendingJDKHomePath: String?
     /// Home of the JDK whose reader is installed.
     @ObservationIgnored private var indexedJDKHomePath: String?
-    /// Home of the JDK the last Gradle sync launched on, so a JDK change only re-syncs when Gradle
-    /// would launch on a different one.
-    @ObservationIgnored private var gradleJavaHomePath: String?
     @ObservationIgnored private var projectRootURL: URL?
-    /// True from the moment a sync task is scheduled until it finishes, including the trust prompt.
-    /// Build-file events in that window are dropped so the save that triggered a reload doesn't
-    /// immediately raise the banner again.
-    @ObservationIgnored private var gradleSyncInFlight = false
 
-    @ObservationIgnored private let gradleTrustStore: GradleTrustStore
-    @ObservationIgnored private let gradleModelCache: GradleProjectModelCache
-    @ObservationIgnored private let gradleRunner: GradleCommandRunner
-    @ObservationIgnored private let gradleExtractor: GradleProjectModelExtractor
-    @ObservationIgnored private var gradleRunTask: Task<Void, Never>?
-
-    @ObservationIgnored private var buildFileWatcher: FSEventsFileSystemWatcher?
-    @ObservationIgnored private var buildFileWatchTask: Task<Void, Never>?
-
-    /// A short, human-readable status for the status bar ("Indexing JDK 24…", "Resolving Gradle
-    /// project…", "Indexing N dependencies…", or nil once idle).
-    private(set) var statusMessage: String?
-    private(set) var gradleSync: GradleSyncState = .notGradle
-    /// Last successful project model. Used to pick `:app:run` versus `run` for the play button.
-    private(set) var gradleModel: JavaGradleProjectModel? {
-        didSet {
-            if oldValue == nil, gradleModel == nil { return }
-            onGradleModelChanged?(gradleModel)
-            let model = gradleModel
-            Task { [renameProvider, refactoringProvider] in
-                await renameProvider.setGradleModel(model)
-                await refactoringProvider.setGradleModel(model)
-            }
-        }
-    }
-    /// Called whenever a sync sets or clears ``gradleModel`` (the Go to File index labels files
-    /// with their module).
-    @ObservationIgnored var onGradleModelChanged: (@MainActor (JavaGradleProjectModel?) -> Void)?
     /// Called with each finished compile's diagnostics for one file (empty when it is clean).
     @ObservationIgnored var onCompilerDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
     @ObservationIgnored var onInspectionDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
@@ -178,48 +123,18 @@ final class IDEJavaSupport {
         let projectOptions: JavaProjectInspectionOptions
     }
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
-    /// Live output of the most recent (or in-progress) Gradle sync -- backs the "Gradle" console
-    /// tab in the bottom panel. Reset at the start of every sync.
-    private(set) var gradleConsole = IDEGradleConsoleLog()
-    /// Set when a watched Gradle build file changes outside of a sync. Bursts collapse to one
-    /// banner; cleared by Reload or Dismiss.
-    private(set) var gradleBuildFilesChanged = false
-    /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
-    private(set) var isRunningGradleTasks = false
-    private(set) var runningGradleTaskPaths: [String] = []
 
-    var isGradleBusy: Bool { gradleSync.isSyncing || isRunningGradleTasks }
-
-    /// Asks the user whether to trust `url` to run Gradle build scripts; set by `IDEWorkspace` to a
-    /// sheet-presenting closure. `nil` means never prompt automatically -- a sync for an
-    /// undecided root just settles on `.awaitingTrust` instead of running anything.
-    var requestTrust: (@MainActor (URL) async -> Bool)?
-    /// Called when a sync ends in `.failed` (not on a user-initiated cancel) so `IDEWorkspace` can
-    /// surface the Gradle console automatically.
-    var onGradleSyncFailed: (@MainActor () -> Void)?
-    /// How a user-visible (non-silent) Gradle sync ended, so the host can post a notification.
-    enum GradleSyncOutcome: Equatable {
-        case synced(subprojects: Int, jars: Int)
-        case failed(summary: String)
-        case cancelled
-    }
-    @ObservationIgnored var onGradleSyncFinished: (@MainActor (GradleSyncOutcome) -> Void)?
-    /// A Gradle task run ended (finished, timed out or cancelled), with whatever output it
-    /// produced, so the host can pull compiler errors out of it.
-    @ObservationIgnored var onGradleTasksFinished: (@MainActor (_ tasks: [String], _ projectRoot: URL, _ result: GradleCommandResult) -> Void)?
-    /// When set, the finished Gradle run's XML reports are parsed into test results.
-    private(set) var pendingTestRunRequest: JavaTestRunRequest?
-
-    /// The stores and the JDK shard hub are the app's shared ones by default, so every window sees
-    /// the same Gradle trust decisions and JDK choices and indexes the JDK once.
+    /// The JDK shard hub is the app's shared one by default, so every window indexes the JDK once.
     init(
-        gradleTrustStore: GradleTrustStore = IDESharedServices.shared.gradleTrust,
-        gradleModelCacheRoot: URL = IDEJavaSupport.defaultGradleModelCacheRoot,
-        jdkSelectionStore: JDKSelectionStore = IDESharedServices.shared.jdkSelection,
+        jdk: IDEJDKSelection,
+        gradle: IDEGradleProjectSystem,
+        status: IDEProjectStatus,
         shardHub: JavaSharedShardHub = IDESharedServices.shared.shards
     ) {
         self.shardHub = shardHub
-        jdk = IDEJDKSelection(store: jdkSelectionStore)
+        self.jdk = jdk
+        self.gradle = gradle
+        self.status = status
         let sharedParseCache = JavaDocumentParseCache()
         overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
         completionProvider = JavaCompletionProvider(index: javaIndex)
@@ -241,12 +156,8 @@ final class IDEJavaSupport {
         let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
-        self.gradleTrustStore = gradleTrustStore
-        gradleModelCache = GradleProjectModelCache(cacheRoot: gradleModelCacheRoot)
-        let runner = GradleCommandRunner(trustStore: gradleTrustStore)
-        gradleRunner = runner
-        gradleExtractor = GradleProjectModelExtractor(runner: runner)
-        jdk.languageLevel = { [weak self] in self?.gradleModel?.maxLanguageLevel }
+        gradle.consumer = self
+        jdk.languageLevel = { [weak gradle] in gradle?.model?.maxLanguageLevel }
         jdk.onSelectionChanged = { [weak self] in self?.jdkSelectionChanged() }
         Task { [weak self] in await self?.installCompilerResultHandler() }
         Task { [weak self] in await self?.installInspectionResultHandler() }
@@ -258,27 +169,31 @@ final class IDEJavaSupport {
     }
 
     /// Java as one language service for the router (`LanguageServiceRegistry`): these providers, in
-    /// the order each engine asks them, and Java's opt-outs from the generic name-based features.
-    var languageService: JavaLanguageService {
-        JavaLanguageService(
-            completion: completionProvider,
-            hover: hoverProvider,
-            compilerDiagnostics: compilerDiagnostics,
-            inspections: inspectionService,
-            navigation: navigationProvider,
-            findUsages: findUsagesProvider,
-            formatting: formattingProvider,
-            codeActions: codeActionProvider,
-            rename: renameProvider,
-            refactoring: refactoringProvider,
-            breadcrumbs: breadcrumbProvider,
-            inlayHints: inlayHintProvider,
-            codeVision: codeVisionProvider,
-            semanticTokens: semanticTokenProvider,
-            lineMarkers: lineMarkerProvider,
-            structure: structureProvider,
-            typeHierarchy: hierarchyProvider,
-            callHierarchy: callHierarchyProvider
+    /// the order each engine asks them, and Java's opt-outs from the generic name-based features. It
+    /// also receives the window's project and file changes (`IDEJavaLanguageService`).
+    var languageService: IDEJavaLanguageService {
+        IDEJavaLanguageService(
+            base: JavaLanguageService(
+                completion: completionProvider,
+                hover: hoverProvider,
+                compilerDiagnostics: compilerDiagnostics,
+                inspections: inspectionService,
+                navigation: navigationProvider,
+                findUsages: findUsagesProvider,
+                formatting: formattingProvider,
+                codeActions: codeActionProvider,
+                rename: renameProvider,
+                refactoring: refactoringProvider,
+                breadcrumbs: breadcrumbProvider,
+                inlayHints: inlayHintProvider,
+                codeVision: codeVisionProvider,
+                semanticTokens: semanticTokenProvider,
+                lineMarkers: lineMarkerProvider,
+                structure: structureProvider,
+                typeHierarchy: hierarchyProvider,
+                callHierarchy: callHierarchyProvider
+            ),
+            support: self
         )
     }
 
@@ -293,23 +208,6 @@ final class IDEJavaSupport {
     func isTestSource(file: URL) async -> Bool {
         await testIndex.isTestSource(file: file)
     }
-
-    /// Runs tests through Gradle. With `debug` the test JVM waits for a debugger on the JDWP port
-    /// (`--debug-jvm`), and Gradle's run is not timed out.
-    func runTests(scope: JavaTestRunScope, debug: Bool = false) {
-        guard let url = projectRootURL else { return }
-        guard let request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradleModel) else { return }
-        pendingTestRunRequest = request
-        let args = JavaTestRunner.gradleArguments(for: request, debug: debug)
-        runGradleTasks(JavaTestRunner.taskPaths(for: request, debug: debug), extraArguments: args, runsApplication: debug)
-    }
-
-    func takePendingTestRunRequest() -> JavaTestRunRequest? {
-        defer { pendingTestRunRequest = nil }
-        return pendingTestRunRequest
-    }
-
-    var hasPendingTestRun: Bool { pendingTestRunRequest != nil }
 
     private func reindexTests(model: JavaGradleProjectModel) {
         Task {
@@ -388,8 +286,8 @@ final class IDEJavaSupport {
         compilerConfigurationTask?.cancel()
         let generation = projectGeneration
         let root = projectRootURL
-        let model = gradleModel
-        let waitingOnGradle = isGradleProject && model == nil
+        let model = gradle.model
+        let waitingOnGradle = gradle.isActive && model == nil
         let enabled = IDEPreferences.shared.javaCompilerDiagnostics
         compilerConfigurationTask = Task { [compilerDiagnostics] in
             guard enabled, !waitingOnGradle else {
@@ -427,40 +325,6 @@ final class IDEJavaSupport {
         }
     }
 
-    /// `~/Library/Application Support/com.umbra.editor/gradle-trust.json`, alongside
-    /// `IDESessionStore`'s `session.json`. Deliberately not under `JavaIndexPaths.default().root`
-    /// (Caches, versioned by shard format) -- trust decisions shouldn't reset on a format bump.
-    static var defaultGradleTrustStoreURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base
-            .appendingPathComponent("com.umbra.editor", isDirectory: true)
-            .appendingPathComponent("gradle-trust.json")
-    }
-
-    static var defaultGradleModelCacheRoot: URL {
-        GradleProjectModelCache.defaultCacheRoot(bundleIdentifier: "com.umbra.editor")
-    }
-
-    /// Standardized paths of every Gradle source directory from the last successful sync. Empty
-    /// before a sync; the Explorer also recognizes the `src/<set>/java` convention on its own.
-    var javaSourceRootPaths: Set<String> {
-        guard let gradleModel else { return [] }
-        var paths: Set<String> = []
-        for subproject in gradleModel.subprojects {
-            for sourceSet in subproject.sourceSets {
-                for directory in sourceSet.sourceDirs {
-                    paths.insert(directory.standardizedFileURL.path)
-                }
-            }
-        }
-        return paths
-    }
-
-    var isGradleProject: Bool {
-        if case .notGradle = gradleSync { return false }
-        return projectRootURL != nil
-    }
-
     /// Connects the overlay service to the shared workspace (mirrors
     /// `IndexingService.connect(to:)`) and kicks off JDK indexing in the background, unless a
     /// Gradle sync has already selected one. Call once, from `IDEWorkspace.bootstrap()`.
@@ -479,14 +343,13 @@ final class IDEJavaSupport {
 
     /// Re-targets project-source indexing at a new folder (or clears it when `url` is `nil`, e.g.
     /// the user closes the folder). Safe to call repeatedly; a new call cancels any indexing still
-    /// in flight for the previous root. If `url` looks like a Gradle project, also kicks off a
-    /// Gradle sync (gated by trust and `javaGradleAutoSync`) that -- once it succeeds -- replaces
-    /// the whole-tree fallback below with per-module sources and resolved dependency JARs.
-    func setProjectRoot(_ url: URL?) {
+    /// in flight for the previous root. Runs after the project systems have seen the folder: in a
+    /// Gradle project the whole-tree index below is only the stand-in until its sync has produced
+    /// per-module sources (and is skipped when a cached model is applied straight away).
+    func projectDidChange(root url: URL?) {
         projectGeneration += 1
         let generation = projectGeneration
         jdk.setProjectRoot(url)
-        gradleJavaHomePath = nil
         Task {
             await jdk.refreshCurrent()
             guard isCurrent(generation) else { return }
@@ -496,32 +359,22 @@ final class IDEJavaSupport {
         stubRefreshTask?.cancel()
         stubRefreshTask = nil
         pendingStubRefresh = []
-        gradleSyncTask?.cancel()
-        gradleRunTask?.cancel()
-        stopBuildFileWatcher()
-        gradleSyncInFlight = false
-        gradleBuildFilesChanged = false
         projectRootURL = url
-        dependencyGraphCache.removeAll()
-        gradleModel = nil
         clearTestIndex()
         let hadJars = !jarSources.isEmpty
         jarSources = []
-        gradleConsole = IDEGradleConsoleLog()
         clearSourceSetClasspath()
 
         guard let url else {
             buildNameIndex(roots: [], generation: generation)
             projectSources = []
-            gradleSync = .notGradle
             Task { await publishSources() }
             refreshCompilerDiagnostics()
             return
         }
 
-        guard GradleProjectModelExtractor.isGradleProject(url) else {
+        guard gradle.isActive else {
             indexWholeTree(at: url, generation: generation)
-            gradleSync = .notGradle
             if hadJars {
                 Task { await publishSources() }
             }
@@ -529,268 +382,20 @@ final class IDEJavaSupport {
             return
         }
 
-        gradleSync = .awaitingTrust
         // Off until a sync produces a model: a failed or declined sync must not flood files with
         // false "cannot find symbol" errors.
         refreshCompilerDiagnostics()
-        startBuildFileWatcher(root: url)
         if hadJars {
             Task { await publishSources() }
         }
-
-        let canUseCache = IDEPreferences.shared.javaGradleAutoSync && gradleTrustStore.isTrusted(url)
-        if canUseCache, let cachedModel = gradleModelCache.loadIfValid(projectRoot: url) {
-            syncGradleProject(
-                url,
-                forcePrompt: false,
-                generation: generation,
-                silent: true,
-                invalidateCacheBeforeSync: false,
-                bootstrapModel: cachedModel
-            )
-            return
+        if !gradle.isLoadingCachedModel {
+            indexWholeTree(at: url, generation: generation)
         }
-
-        indexWholeTree(at: url, generation: generation)
-        if IDEPreferences.shared.javaGradleAutoSync {
-            syncGradleProject(
-                url,
-                forcePrompt: false,
-                generation: generation,
-                silent: false,
-                invalidateCacheBeforeSync: false,
-                bootstrapModel: nil
-            )
-        }
-    }
-
-    /// Re-runs Gradle extraction for the current project root -- backs "Java: Reload Gradle
-    /// Project". Re-asks for trust even if the user previously declined.
-    /// Adds a line to the Gradle console, for messages from the host (why a launch did not start).
-    func appendGradleConsoleNote(_ text: String) {
-        gradleConsole.appendNote(text)
-    }
-
-    func reloadGradleProject() {
-        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
-        dependencyGraphCache.removeAll()
-        gradleModelCache.invalidate(projectRoot: url)
-        syncGradleProject(
-            url,
-            forcePrompt: true,
-            generation: projectGeneration,
-            silent: false,
-            invalidateCacheBeforeSync: false,
-            bootstrapModel: nil
-        )
-    }
-
-    /// Runs one or more Gradle tasks for the current project, streaming output into the Gradle
-    /// console tab. No-op while a sync or another task run is already in progress. Asks for trust
-    /// first when the project has not been trusted yet. `runsApplication` is for tasks that start the
-    /// program (`run`, `bootRun`): a server runs until it is stopped, so the sync timeout doesn't apply.
-    ///
-    /// `completion` is called exactly once, whichever way the call ends, so a caller can await it
-    /// (the agent does): refused to start, not trusted, finished, timed out, cancelled or failed.
-    func runGradleTasks(
-        _ taskPaths: [String],
-        extraArguments: [String] = [],
-        runsApplication: Bool = false,
-        timeout customTimeout: Duration? = nil,
-        completion: (@MainActor (IDEGradleRunOutcome) -> Void)? = nil
-    ) {
-        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else {
-            completion?(.notStarted("This project is not a Gradle project."))
-            return
-        }
-        guard !taskPaths.isEmpty else {
-            completion?(.notStarted("No Gradle task was given."))
-            return
-        }
-        guard !gradleSync.isSyncing, !isRunningGradleTasks else {
-            completion?(.notStarted("Gradle is already busy with a sync or another task in this window. Try again when it finishes."))
-            return
-        }
-
-        gradleRunTask?.cancel()
-        let arguments = extraArguments.isEmpty ? ["--no-configuration-cache"] : extraArguments
-        gradleRunTask = Task { [gradleRunner] in
-            isRunningGradleTasks = true
-            runningGradleTaskPaths = taskPaths
-            gradleConsole.reset()
-            gradleConsole.appendNote("Project: \(url.path)")
-            gradleConsole.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
-
-            let javaHome = await jdk.resolveForGradle()?.installation.home
-            if let javaHome {
-                gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
-            }
-
-            defer {
-                isRunningGradleTasks = false
-                runningGradleTaskPaths = []
-            }
-
-            // Build scripts run arbitrary code, so an untrusted project is asked first, as a sync
-            // would. On a "no" nothing runs, and it is asked again next time.
-            if !gradleTrustStore.isTrusted(url) {
-                guard let requestTrust, await requestTrust(url) else {
-                    gradleConsole.appendNote("Not run: the project is not trusted")
-                    gradleConsole.markFinished()
-                    completion?(.notStarted("The project is not trusted, so its Gradle build scripts were not run."))
-                    return
-                }
-                gradleTrustStore.setTrusted(true, for: url)
-            }
-
-            do {
-                let timeout = customTimeout ?? (runsApplication
-                    ? Self.applicationRunTimeout
-                    : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)))
-                let startedAt = Date()
-                let result = try await gradleRunner.run(
-                    projectDirectory: url,
-                    tasks: taskPaths,
-                    arguments: arguments,
-                    javaHome: javaHome,
-                    timeout: timeout,
-                    output: { line in
-                        Task { @MainActor in
-                            guard !Task.isCancelled else { return }
-                            self.gradleConsole.appendProcessLine(line)
-                        }
-                    }
-                )
-                let elapsed = Date().timeIntervalSince(startedAt)
-                gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
-                gradleConsole.markFinished()
-                if result.exitCode == 0 { reindexGeneratedSources() }
-                onGradleTasksFinished?(taskPaths, url, result)
-                completion?(.finished(result))
-            } catch is CancellationError {
-                gradleConsole.appendNote("Task run cancelled")
-                gradleConsole.markFinished()
-                completion?(.cancelled(partial: nil))
-            } catch {
-                gradleConsole.appendNote(Self.summarizeTaskRun(error))
-                gradleConsole.markFinished()
-                switch error {
-                case GradleCommandError.timedOut(let partial):
-                    onGradleTasksFinished?(taskPaths, url, partial)
-                    completion?(.timedOut(partial: partial))
-                case GradleCommandError.cancelled(let partial):
-                    onGradleTasksFinished?(taskPaths, url, partial)
-                    completion?(.cancelled(partial: partial))
-                default:
-                    completion?(.failed(Self.summarizeTaskRun(error)))
-                }
-                if case GradleCommandError.untrusted = error {
-                    gradleSync = .untrusted
-                }
-            }
-        }
-    }
-
-    // MARK: - Dependency diagrams
-
-    @ObservationIgnored private var dependencyGraphCache: [String: (fingerprint: GradleBuildFingerprint, graph: GradleDependencyGraph)] = [:]
-
-    /// The module graph of the synced model; no Gradle run.
-    var moduleDependencyGraph: GradleDependencyGraph? {
-        gradleModel.map { GradleDependencyGraph.moduleGraph(from: $0) }
-    }
-
-    func invalidateDependencyGraphs() {
-        dependencyGraphCache.removeAll()
-    }
-
-    /// The resolved libraries of one project's configuration, from a Gradle run unless the build files are
-    /// unchanged since the last one. Shares the busy flag and the trust prompt with the other Gradle actions.
-    func resolveDependencyGraph(projectPath: String, configuration: String) async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure> {
-        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else {
-            return .failure(.message("This project is not a Gradle project."))
-        }
-        let fingerprint = GradleBuildFingerprintCollector.collect(projectRoot: url)
-        let cacheKey = projectPath + "|" + configuration
-        if let cached = dependencyGraphCache[cacheKey], cached.fingerprint == fingerprint {
-            return .success(cached.graph)
-        }
-        guard !isGradleBusy else {
-            return .failure(.message("Gradle is busy with a sync or another task in this window. Reload the diagram when it finishes."))
-        }
-        if !gradleTrustStore.isTrusted(url) {
-            guard let requestTrust, await requestTrust(url) else {
-                return .failure(.message("The project is not trusted, so its Gradle build scripts were not run."))
-            }
-            gradleTrustStore.setTrusted(true, for: url)
-        }
-
-        let taskPath = projectPath == ":" || projectPath.isEmpty ? ":umbraDependencyGraph" : projectPath + ":umbraDependencyGraph"
-        isRunningGradleTasks = true
-        runningGradleTaskPaths = [taskPath]
-        defer {
-            isRunningGradleTasks = false
-            runningGradleTaskPaths = []
-        }
-        gradleConsole.reset()
-        gradleConsole.appendNote("Project: \(url.path)")
-        gradleConsole.appendNote("Dependency diagram: \(projectPath) (\(configuration))")
-        let javaHome = await jdk.resolveForGradle()?.installation.home
-        do {
-            let graph = try await GradleDependencyGraphExtractor(runner: gradleRunner).extract(
-                projectDirectory: url,
-                projectPath: projectPath,
-                configuration: configuration,
-                javaHome: javaHome,
-                timeout: .seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)),
-                output: { line in
-                    Task { @MainActor in
-                        guard !Task.isCancelled else { return }
-                        self.gradleConsole.appendProcessLine(line)
-                    }
-                }
-            )
-            gradleConsole.markFinished()
-            dependencyGraphCache[cacheKey] = (fingerprint, graph)
-            return .success(graph)
-        } catch {
-            gradleConsole.markFinished()
-            return .failure(.message(Self.summarizeDependencyGraph(error)))
-        }
-    }
-
-    private static func summarizeDependencyGraph(_ error: Error) -> String {
-        switch error {
-        case let GradleDependencyGraphError.failed(result):
-            return "Gradle exited with code \(result.exitCode) while resolving the dependencies. The Gradle console has the output."
-        case GradleDependencyGraphError.missingOutput:
-            return "Gradle finished without writing the dependency graph."
-        case let GradleDependencyGraphError.decodingFailed(underlying, _):
-            return "The dependency graph could not be read: \(underlying)"
-        case let GradleDependencyGraphError.unavailable(message):
-            return message
-        default:
-            return summarizeTaskRun(error)
-        }
-    }
-
-    /// Long enough to mean "until stopped" without overflowing the runner's `Task.sleep`.
-    private static let applicationRunTimeout = Duration.seconds(365 * 24 * 60 * 60)
-
-    func cancelGradleTasks() {
-        guard isRunningGradleTasks else { return }
-        gradleRunTask?.cancel()
-        gradleRunTask = nil
-        isRunningGradleTasks = false
-        runningGradleTaskPaths = []
-        gradleConsole.appendNote("Task run cancelled")
-        gradleConsole.markFinished()
     }
 
     /// The window is closing: stop everything this project started, so a closed project leaves no
-    /// indexing, Gradle sync or run, `javac` configuration or build-file watcher behind. Work still
-    /// in flight sees a newer generation and does not publish. The shared stores and the shared JDK
-    /// shard stay: other windows use them.
+    /// indexing or `javac` configuration behind. Work still in flight sees a newer generation and
+    /// does not publish. The shared stores and the shared JDK shard stay: other windows use them.
     func teardown() {
         projectGeneration += 1
         jdkIndexingTask?.cancel()
@@ -801,22 +406,9 @@ final class IDEJavaSupport {
         nameIndexTask = nil
         stubRefreshTask?.cancel()
         stubRefreshTask = nil
-        gradleSyncTask?.cancel()
-        gradleSyncTask = nil
-        gradleRunTask?.cancel()
-        gradleRunTask = nil
-        isRunningGradleTasks = false
-        runningGradleTaskPaths = []
-        gradleSyncInFlight = false
-        stopBuildFileWatcher()
         projectRootURL = nil
-        gradleModel = nil
         // Turns `javac` off for this window and drops its configuration.
         refreshCompilerDiagnostics()
-    }
-
-    func dismissGradleBuildFileChanges() {
-        gradleBuildFilesChanged = false
     }
 
     private func isCurrent(_ generation: Int) -> Bool {
@@ -848,12 +440,10 @@ final class IDEJavaSupport {
     /// `.java` files changed on disk (from `IDEProjectWatcher`): update the identifier index for
     /// them and rebuild the stub shard of every source root that changed, bypassing the
     /// directory-mtime stamp (which does not move when a file is merely edited).
-    func projectFilesChanged(_ changedPaths: Set<String>) {
+    func filesDidChange(_ changed: [URL]) {
         guard projectRootURL != nil, !nameIndexRoots.isEmpty else { return }
         // Extension-less paths may be directories that were added, removed or renamed.
-        let urls = changedPaths
-            .map { URL(fileURLWithPath: $0) }
-            .filter { $0.pathExtension == "java" || $0.pathExtension.isEmpty }
+        let urls = changed.filter { $0.pathExtension == "java" || $0.pathExtension.isEmpty }
         guard !urls.isEmpty else { return }
         let generation = projectGeneration
         Task { [nameIndex] in
@@ -878,7 +468,7 @@ final class IDEJavaSupport {
                 let refreshed = Set(targets.map(\.shardURL.path))
                 let wholeTreeShard = projectRootURL.map { paths.projectSourcesShard(for: $0).path }
                 var isSynced = false
-                if case .synced = gradleSync { isSynced = true }
+                if case .synced = gradle.syncState { isSynced = true }
                 projectSources = projectSources.map { source in
                     let shardPath = source.shardPath.isEmpty && !isSynced ? wholeTreeShard : source.shardPath
                     guard let shardPath, refreshed.contains(shardPath),
@@ -891,21 +481,21 @@ final class IDEJavaSupport {
         }
     }
 
+    private static let indexingSourcesMessage = "Indexing project sources…"
+
     private func indexWholeTree(at url: URL, generation: Int) {
         buildNameIndex(roots: [url], generation: generation)
         projectIndexingTask = Task { [paths, scheduler] in
             let root = SourceRoot(directory: url)
             let shardURL = paths.projectSourcesShard(for: url)
-            if isCurrent(generation), statusMessage == nil {
-                statusMessage = "Indexing project sources…"
+            if isCurrent(generation), status.message == nil {
+                status.set(Self.indexingSourcesMessage)
             }
             for await _ in await scheduler.index([(root: root, shardURL: shardURL)]) {}
             guard isCurrent(generation) else { return }
             // A finished Gradle sync has already replaced these readers with per-module sources.
-            if case .synced = gradleSync {
-                if statusMessage == "Indexing project sources…" {
-                    statusMessage = nil
-                }
+            if case .synced = gradle.syncState {
+                status.clear(Self.indexingSourcesMessage)
                 return
             }
             if let reader = try? JavaIndexShardReader(url: shardURL) {
@@ -913,181 +503,18 @@ final class IDEJavaSupport {
                 // unscoped. A finished sync replaces it with per-source-set readers.
                 projectSources = [.init(precedence: 1, reader: reader)]
             }
-            if statusMessage == "Indexing project sources…" {
-                statusMessage = nil
-            }
+            status.clear(Self.indexingSourcesMessage)
             await publishSources()
         }
     }
 
-    private func syncGradleProject(
-        _ url: URL,
-        forcePrompt: Bool,
-        generation: Int,
-        silent: Bool,
-        invalidateCacheBeforeSync: Bool,
-        bootstrapModel: JavaGradleProjectModel?
-    ) {
-        gradleSyncTask?.cancel()
-        if !silent {
-            gradleBuildFilesChanged = false
-        }
-        gradleSyncInFlight = true
-        gradleSyncTask = Task { [gradleTrustStore, gradleExtractor, gradleModelCache, paths, scheduler] in
-            defer {
-                if generation == projectGeneration && !Task.isCancelled {
-                    gradleSyncInFlight = false
-                }
-            }
-            if invalidateCacheBeforeSync {
-                gradleModelCache.invalidate(projectRoot: url)
-            }
-            if !gradleTrustStore.isTrusted(url) {
-                let previouslyDeclined = gradleTrustStore.decision(for: url) == false
-                if previouslyDeclined && !forcePrompt {
-                    guard isCurrent(generation) else { return }
-                    gradleSync = .untrusted
-                    return
-                }
-                guard let requestTrust else {
-                    guard isCurrent(generation) else { return }
-                    gradleSync = .awaitingTrust
-                    return
-                }
-                let trusted = await requestTrust(url)
-                gradleTrustStore.setTrusted(trusted, for: url)
-                guard isCurrent(generation) else { return }
-                guard trusted else {
-                    gradleSync = .untrusted
-                    return
-                }
-            }
-            guard isCurrent(generation) else { return }
-
-            if let bootstrapModel {
-                gradleModel = bootstrapModel
-                gradleSync = .synced(
-                    subprojects: bootstrapModel.subprojects.count,
-                    jars: bootstrapModel.classpathJars.count
-                )
-                await applyGradleModel(
-                    bootstrapModel,
-                    previousModel: nil,
-                    generation: generation,
-                    logToConsole: false,
-                    paths: paths,
-                    scheduler: scheduler
-                )
-                guard isCurrent(generation) else { return }
-            }
-
-            let previousModel = gradleModel
-            if !silent {
-                gradleSync = .syncing
-                statusMessage = "Resolving Gradle project…"
-            }
-            // Gradle itself (9.x) needs a modern JDK to launch, independent of the project's
-            // source level, so with no explicit choice this is the newest installation rather than
-            // the one selected for `maxLanguageLevel`.
-            let javaHome = await jdk.resolveForGradle()?.installation.home
-            guard isCurrent(generation) else { return }
-            gradleJavaHomePath = javaHome?.resolvingSymlinksInPath().path
-
-            if silent {
-                gradleConsole.appendNote("Refreshing Gradle project model in the background…")
-            } else {
-                gradleConsole.reset()
-            }
-            gradleConsole.appendNote("Project: \(url.path)")
-            gradleConsole.appendNote("Command: \(Self.projectModelCommandLine(project: url, javaHome: javaHome))")
-            if let javaHome {
-                gradleConsole.appendNote("JAVA_HOME: \(javaHome.path)")
-            }
-
-            do {
-                let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
-                let startedAt = Date()
-                let (model, result) = try await gradleExtractor.extract(
-                    projectDirectory: url,
-                    javaHome: javaHome,
-                    timeout: timeout,
-                    output: { line in
-                        Task { @MainActor in
-                            guard generation == self.projectGeneration else { return }
-                            self.gradleConsole.appendProcessLine(line)
-                        }
-                    }
-                )
-                guard isCurrent(generation) else { return }
-                let elapsed = Date().timeIntervalSince(startedAt)
-                gradleConsole.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
-                if !model.unresolved.isEmpty {
-                    gradleConsole.appendNote("Unresolved dependencies:")
-                    for dependency in model.unresolved {
-                        gradleConsole.appendNote("  \(dependency)")
-                    }
-                }
-
-                gradleModelCache.store(projectRoot: url, model: model)
-
-                if silent, let previousModel, Self.modelsAreEqual(previousModel, model) {
-                    gradleConsole.appendNote("Background refresh: project model unchanged")
-                    gradleConsole.markFinished()
-                    return
-                }
-
-                gradleModel = model
-                await applyGradleModel(
-                    model,
-                    previousModel: previousModel,
-                    generation: generation,
-                    logToConsole: !silent,
-                    paths: paths,
-                    scheduler: scheduler
-                )
-                guard isCurrent(generation) else { return }
-
-                gradleSync = .synced(subprojects: model.subprojects.count, jars: model.classpathJars.count)
-                if silent {
-                    gradleConsole.appendNote("Background refresh finished")
-                } else {
-                    gradleConsole.appendNote("Sync finished")
-                }
-                gradleConsole.markFinished()
-                if !silent {
-                    onGradleSyncFinished?(.synced(subprojects: model.subprojects.count, jars: model.classpathJars.count))
-                }
-            } catch {
-                guard isCurrent(generation) else { return }
-                if silent {
-                    gradleConsole.appendNote("Background refresh failed: \(Self.summarize(error))")
-                    gradleConsole.markFinished()
-                    return
-                }
-                clearSourceSetClasspath()
-                gradleModel = nil
-                // Only clear the message this task set. JDK indexing and the whole-tree fallback
-                // publish their own status and must not be blanked by a Gradle failure.
-                if statusMessage == "Resolving Gradle project…" {
-                    statusMessage = nil
-                }
-                let summary = Self.summarize(error)
-                gradleSync = .failed(summary: summary)
-                gradleConsole.appendNote(summary)
-                gradleConsole.markFinished()
-                onGradleSyncFailed?()
-                onGradleSyncFinished?(.failed(summary: summary))
-            }
-        }
-    }
+    // MARK: - The Gradle model
 
     private func applyGradleModel(
         _ model: JavaGradleProjectModel,
         previousModel: JavaGradleProjectModel?,
         generation: Int,
-        logToConsole: Bool,
-        paths: JavaIndexPaths,
-        scheduler: JavaIndexScheduler
+        logToConsole: Bool
     ) async {
         await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
         guard isCurrent(generation) else { return }
@@ -1100,7 +527,7 @@ final class IDEJavaSupport {
 
         if shouldFullRebuild {
             buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
-            await indexAllTargets(sourceTargets + jarTargets, model: model, generation: generation, logToConsole: logToConsole, paths: paths, scheduler: scheduler)
+            await indexAllTargets(sourceTargets + jarTargets, model: model, generation: generation, logToConsole: logToConsole)
         } else if !diff.isEmpty {
             buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
             for directory in diff.removedSourceDirectories {
@@ -1118,14 +545,14 @@ final class IDEJavaSupport {
                 (JarRoot(jarURL: jar, languageLevel: model.maxLanguageLevel ?? Int.max) as any JavaIndexableRoot, paths.jarShard(jar))
             }
             // `indexAllTargets` publishes readers for every model target, not just the reindexed ones.
-            await indexAllTargets(reindexSources + reindexJars, model: model, generation: generation, logToConsole: logToConsole, paths: paths, scheduler: scheduler)
+            await indexAllTargets(reindexSources + reindexJars, model: model, generation: generation, logToConsole: logToConsole)
         } else {
             buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
         }
 
         guard isCurrent(generation) else { return }
-        if statusMessage?.hasPrefix("Indexing dependencies…") == true {
-            statusMessage = nil
+        if status.message?.hasPrefix("Indexing dependencies…") == true {
+            status.message = nil
         }
         await publishSources()
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
@@ -1147,32 +574,24 @@ final class IDEJavaSupport {
         _ targets: [(root: any JavaIndexableRoot, shardURL: URL)],
         model: JavaGradleProjectModel,
         generation: Int,
-        logToConsole: Bool,
-        paths: JavaIndexPaths,
-        scheduler: JavaIndexScheduler
+        logToConsole: Bool
     ) async {
         let totalTargets = targets.count
         if logToConsole {
-            gradleConsole.appendNote("Indexing \(model.classpathJars.count) dependencies…")
+            gradle.appendConsoleNote("Indexing \(model.classpathJars.count) dependencies…")
         }
         var completedTargets = 0
         // A dependency-heavy project reports two events per JAR, sometimes hundreds a second.
-        // Every write to `gradleConsole` / `statusMessage` re-renders their views, so collect
+        // Every write to the Gradle console / status message re-renders their views, so collect
         // them and publish at most every 100 ms.
         var pendingNotes: [String] = []
         var pendingStatus: String?
         var lastFlush = ContinuousClock.now
         func flush() {
-            if !pendingNotes.isEmpty {
-                var console = gradleConsole
-                for note in pendingNotes {
-                    console.appendNote(note)
-                }
-                gradleConsole = console
-                pendingNotes.removeAll(keepingCapacity: true)
-            }
-            if let status = pendingStatus {
-                statusMessage = status
+            gradle.appendConsoleNotes(pendingNotes)
+            pendingNotes.removeAll(keepingCapacity: true)
+            if let message = pendingStatus {
+                status.message = message
                 pendingStatus = nil
             }
             lastFlush = .now
@@ -1229,6 +648,7 @@ final class IDEJavaSupport {
         // Opening a shard decodes its whole string table. Project shards are opened here, off the
         // main actor; jar readers come from the hub, which parses only the ones no window (or
         // earlier sync) already holds.
+        let paths = paths
         let modelJarTargets = model.jarIndexTargets(paths: paths)
         async let projectReaders = Task.detached(priority: .userInitiated) {
             model.sourceIndexTargets(paths: paths).compactMap { target -> JavaIndex.Source? in
@@ -1254,7 +674,7 @@ final class IDEJavaSupport {
     /// model's generated directories. A root's stamp is its directory's own mtime, which misses
     /// nested changes, so the generated shards are dropped and rebuilt.
     func reindexGeneratedSources() {
-        guard let model = gradleModel else { return }
+        guard let model = gradle.model else { return }
         let generation = projectGeneration
         Task { [paths, scheduler] in
             let all = model.sourceIndexTargets(paths: paths)
@@ -1272,32 +692,6 @@ final class IDEJavaSupport {
             projectSources = sources
             await publishSources()
         }
-    }
-
-    private static func modelsAreEqual(_ lhs: JavaGradleProjectModel, _ rhs: JavaGradleProjectModel) -> Bool {
-        guard let left = try? JSONEncoder().encode(lhs),
-              let right = try? JSONEncoder().encode(rhs) else {
-            return false
-        }
-        return left == right
-    }
-
-    /// Cancels an in-progress sync -- backs the Gradle console tab's Cancel button. A no-op unless
-    /// a sync is actually running: the task's own `catch` never sees a plain cancellation (it
-    /// returns early once `isCurrent` sees `Task.isCancelled`), so the state transition has to
-    /// happen here instead.
-    func cancelGradleSync() {
-        guard case .syncing = gradleSync else { return }
-        gradleSyncTask?.cancel()
-        gradleSyncTask = nil
-        gradleSyncInFlight = false
-        if statusMessage == "Resolving Gradle project…" {
-            statusMessage = nil
-        }
-        gradleSync = .failed(summary: "Gradle sync was cancelled")
-        gradleConsole.appendNote("Sync cancelled")
-        gradleConsole.markFinished()
-        onGradleSyncFinished?(.cancelled)
     }
 
     /// Re-indexes the JDK only when the JDK now in effect (the project's choice, or the one its
@@ -1319,67 +713,18 @@ final class IDEJavaSupport {
     }
 
     /// The user chose another JDK (or removed the one in use): re-index against it, re-check open
-    /// files with its `javac`, and re-sync a trusted Gradle project when Gradle would now launch on
-    /// a different JDK. A sync never asks for trust again.
+    /// files with its `javac`, and let the Gradle project re-sync when Gradle would launch on a
+    /// different JDK.
     private func jdkSelectionChanged() {
         let generation = projectGeneration
-        let level = gradleModel?.maxLanguageLevel
+        let level = gradle.model?.maxLanguageLevel
         Task {
             await jdk.refreshCurrent()
             guard isCurrent(generation) else { return }
             await adoptResolvedJDKIfNeeded(minimumFeatureVersion: level, generation: generation)
             guard isCurrent(generation) else { return }
             refreshCompilerDiagnostics()
-
-            guard let url = projectRootURL, isGradleProject, IDEPreferences.shared.javaGradleAutoSync,
-                  gradleTrustStore.isTrusted(url), !gradleSync.isSyncing, !isRunningGradleTasks else { return }
-            let gradleHome = await jdk.resolveForGradle()?.installation.home.resolvingSymlinksInPath().path
-            guard isCurrent(generation), gradleHome != gradleJavaHomePath else { return }
-            syncGradleProject(
-                url,
-                forcePrompt: false,
-                generation: generation,
-                silent: false,
-                invalidateCacheBeforeSync: true,
-                bootstrapModel: nil
-            )
-        }
-    }
-
-    private static func projectModelCommandLine(project: URL, javaHome: URL?) -> String {
-        let java = javaHome.map { "JAVA_HOME=\($0.path) " } ?? ""
-        return "\(java)cd \(project.path) && gradle --console=plain --init-script umbra-project-model.init.gradle --no-configuration-cache -PumbraModelOutput=model.json :umbraProjectModel"
-    }
-
-    private static func summarizeTaskRun(_ error: Error) -> String {
-        switch error {
-        case GradleCommandError.timedOut:
-            "Gradle task timed out"
-        case GradleCommandError.cancelled:
-            "Gradle task was cancelled"
-        default:
-            summarize(error)
-        }
-    }
-
-    private static func summarize(_ error: Error) -> String {
-        switch error {
-        case let GradleProjectModelExtractionError.syncFailed(result):
-            "Gradle exited \(result.exitCode)"
-        case GradleProjectModelExtractionError.missingOutput:
-            "Gradle produced no model"
-        case GradleProjectModelExtractionError.decodingFailed:
-            "Couldn't read Gradle's model"
-        case GradleCommandError.untrusted:
-            "Project isn't trusted"
-        case GradleCommandError.executableNotFound:
-            "No gradle found (checked ./gradlew and PATH)"
-        case GradleCommandError.timedOut:
-            "Gradle sync timed out"
-        case GradleCommandError.cancelled:
-            "Gradle sync was cancelled"
-        default:
-            String(describing: error)
+            await gradle.jdkSelectionChanged()
         }
     }
 
@@ -1389,7 +734,7 @@ final class IDEJavaSupport {
         // Only when JDK indexing is triggered mid-sync (a Gradle project's language level needing a
         // different installation than the one already indexed) is it meaningful to narrate into
         // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
-        let noteToConsole = gradleSync.isSyncing
+        let noteToConsole = gradle.syncState.isSyncing
         jdkIndexingTask = Task { [paths, shardHub] in
             // Resolving does synchronous filesystem/process work (java_home -X, walking
             // ~/Library/Java/JavaVirtualMachines); `IDEJDKSelection` hops it off the main actor so
@@ -1404,11 +749,11 @@ final class IDEJavaSupport {
             let root = JDKCtSymRoot(installation: installation)
             let shardURL = paths.jdkShard(installation, kind: "ctsym")
             let message = "Indexing JDK \(installation.featureVersion)…"
-            if statusMessage == nil {
-                statusMessage = message
+            if status.message == nil {
+                status.set(message)
             }
             if noteToConsole {
-                gradleConsole.appendNote(message)
+                gradle.appendConsoleNote(message)
             }
             // Shared with every other window: one indexing run and one parsed shard per JDK. Only
             // the window that starts the run hears its progress.
@@ -1416,11 +761,11 @@ final class IDEJavaSupport {
                 guard let self, noteToConsole, !Task.isCancelled else { return }
                 switch progress {
                 case .rootFinished(let id, let classCount):
-                    gradleConsole.appendNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
+                    gradle.appendConsoleNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
                 case .rootSkipped(let id, let reason):
-                    gradleConsole.appendNote("Skipped \(Self.shortRootName(id)) (\(reason))")
+                    gradle.appendConsoleNote("Skipped \(Self.shortRootName(id)) (\(reason))")
                 case .rootFailed(let id, let failureMessage):
-                    gradleConsole.appendNote("Failed to index \(Self.shortRootName(id)): \(failureMessage)")
+                    gradle.appendConsoleNote("Failed to index \(Self.shortRootName(id)): \(failureMessage)")
                 case .rootStarted, .allFinished:
                     break
                 }
@@ -1429,9 +774,7 @@ final class IDEJavaSupport {
             jdkReader = reader
             indexedJDKHomePath = homePath
             pendingJDKHomePath = nil
-            if statusMessage == message {
-                statusMessage = nil
-            }
+            status.clear(message)
             await publishSources()
         }
     }
@@ -1480,33 +823,28 @@ final class IDEJavaSupport {
             await inspectionService.setSourceSetClasspath(nil, indexPaths: paths)
         }
     }
+}
 
-    private func startBuildFileWatcher(root: URL) {
-        stopBuildFileWatcher()
-        let watcher = FSEventsFileSystemWatcher(root: root, latency: 0.4) { path in
-            GradleBuildFiles.matches(path: path)
-        }
-        buildFileWatcher = watcher
-        buildFileWatchTask = Task { [weak self] in
-            await watcher.start()
-            for await _ in watcher.events {
-                guard let self, !Task.isCancelled else { return }
-                guard self.buildFileWatcher === watcher else { return }
-                if self.gradleSyncInFlight { continue }
-                if case .syncing = self.gradleSync { continue }
-                self.gradleBuildFilesChanged = true
-            }
+// MARK: - Gradle model consumer
+
+extension IDEJavaSupport: IDEGradleModelConsumer {
+    func gradleModelDidChange(_ model: JavaGradleProjectModel?) {
+        Task { [renameProvider, refactoringProvider] in
+            await renameProvider.setGradleModel(model)
+            await refactoringProvider.setGradleModel(model)
         }
     }
 
-    private func stopBuildFileWatcher() {
-        buildFileWatchTask?.cancel()
-        buildFileWatchTask = nil
-        let watcher = buildFileWatcher
-        buildFileWatcher = nil
-        if let watcher {
-            Task { await watcher.stop() }
-        }
+    func gradleModelApplied(_ model: JavaGradleProjectModel, previous: JavaGradleProjectModel?, logToConsole: Bool) async {
+        await applyGradleModel(model, previousModel: previous, generation: projectGeneration, logToConsole: logToConsole)
+    }
+
+    func gradleModelRemoved() {
+        clearSourceSetClasspath()
+    }
+
+    func gradleTasksSucceeded() {
+        reindexGeneratedSources()
     }
 }
 
@@ -1517,15 +855,4 @@ private extension JavaIndexScheduler.Progress {
         }
         return false
     }
-}
-
-/// How a Gradle task run ended, for a caller that awaits it. Every path of
-/// `IDEJavaSupport.runGradleTasks` reports exactly one.
-enum IDEGradleRunOutcome: Sendable {
-    case finished(GradleCommandResult)
-    case timedOut(partial: GradleCommandResult)
-    case cancelled(partial: GradleCommandResult?)
-    /// Nothing ran: not a Gradle project, busy, or the user declined to trust it.
-    case notStarted(String)
-    case failed(String)
 }

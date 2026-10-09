@@ -53,6 +53,23 @@ public struct LanguageServiceRegistry: Sendable {
         }
     }
 
+    /// Tells every service the folder changed, one after the other in registration order, before this
+    /// returns (see ``LanguageService/projectDidChange(root:)``).
+    @MainActor
+    public func projectDidChange(root: URL?) {
+        for service in services {
+            service.projectDidChange(root: root)
+        }
+    }
+
+    /// Tells every service that files changed on disk, in registration order.
+    @MainActor
+    public func filesDidChange(_ urls: [URL]) {
+        for service in services {
+            service.filesDidChange(urls)
+        }
+    }
+
     /// Stops every service, in reverse registration order.
     public func stop() async {
         for service in services.reversed() {

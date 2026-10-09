@@ -402,39 +402,20 @@ extension IDEWorkspace {
         IDERunGutterMenu.popUp(menu, in: textView)
     }
 
-    /// Remembers a test run as a configuration, so Run Last and the picker can repeat it. The
-    /// configuration a run came from keeps its settings; any other run is a temporary one.
-    private func recordTestRun(scope: JavaTestRunScope, debug: Bool, from configuration: JavaRunConfiguration?) {
-        var recorded: JavaRunConfiguration
-        if let configuration {
-            recorded = configuration
-        } else {
-            let fresh = JavaRunConfiguration.makeTestLaunch(scope: scope)
-            let saved = runConfigurationStore.configurations(forProject: project.rootURL)
-            recorded = fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
-        }
-        recorded.launchMode = debug ? .debug : .run
-        runConfigurationStore.setLast(recorded, forProject: project.rootURL)
-        refreshLastRunConfiguration()
-    }
-
     func runTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
-        recordTestRun(scope: scope, debug: false, from: recording)
-        testResults.beginRun(label: "Running \(title)…", scope: scope)
-        showTestResults()
-        javaSupport.runTests(scope: scope)
+        javaRun.runTests(scope: scope, title: title, recording: recording)
     }
 
     /// Runs tests under the debugger: Gradle starts the test JVM with `--debug-jvm`, which waits on
     /// the JDWP port until the adapter attaches, then the breakpoints stop in the tests. The
     /// results still arrive in the Test Results tab.
     func debugTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
-        guard project.rootURL != nil, javaSupport.isGradleProject else {
+        guard project.rootURL != nil, gradle.isActive else {
             reportRunProblem("Debugging tests needs a Gradle project.")
             return
         }
-        recordTestRun(scope: scope, debug: true, from: recording)
-        guard !javaSupport.isGradleBusy else {
+        javaRun.recordTestRun(scope: scope, debug: true, from: recording)
+        guard !gradle.isBusy else {
             reportRunProblem("Gradle is busy. Stop the running task first, then debug ‘\(title)’ again.")
             return
         }
@@ -443,8 +424,8 @@ extension IDEWorkspace {
         case .testMethod(let method, _): method.sourceFile
         case .allInModule, .tests: nil
         }
-        let classpath = sourceFile.flatMap { javaSupport.gradleModel?.runtimeClasspath(forFile: $0) } ?? []
-        let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
+        let classpath = sourceFile.flatMap { javaRun.runtimeClasspath(forFile: $0) } ?? []
+        let maxLanguageLevel = javaRun.maxLanguageLevel
         Task { [self] in
             guard let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation else {
                 reportRunProblem("No JDK found for debugging.")
@@ -470,10 +451,10 @@ extension IDEWorkspace {
                     muted: muted,
                     sourceRoots: roots,
                     classpath: classpath,
-                    gradleIsRunning: { [weak self] in self?.javaSupport.isRunningGradleTasks ?? false }
+                    gradleIsRunning: { [weak self] in self?.gradle.isRunningTasks ?? false }
                 )
             }
-            javaSupport.runTests(scope: scope, debug: true)
+            javaRun.startGradleTests(scope: scope, debug: true)
         }
     }
 
@@ -818,5 +799,135 @@ extension IDEWorkspace {
         case .failure(let error):
             controller.showFailure(chain: chain, message: JavaDebugSession.message(for: error))
         }
+    }
+}
+
+// MARK: - Debug launches
+
+extension IDEWorkspace {
+    func debugLaunch(_ configuration: JavaRunConfiguration, skippingBeforeLaunch: Bool = false) {
+        guard configuration.supportsDebugLaunch else {
+            reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
+            return
+        }
+        // Gradle launches have no run session to carry the before-launch steps; do them here first.
+        if !skippingBeforeLaunch, configuration.kind == .gradle || configuration.kind == .junit,
+           !configuration.beforeLaunch.isEmpty {
+            javaRun.runBeforeLaunchSteps(for: configuration) { [self] in
+                debugLaunch(configuration, skippingBeforeLaunch: true)
+            }
+            return
+        }
+        let root = project.rootURL
+        switch configuration.target {
+        case .gradleRun(let projectPath, let taskName):
+            guard root != nil else {
+                reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+                return
+            }
+            guard !gradle.isBusy else {
+                reportRunProblem("Gradle is busy. Stop the running task first, then debug “\(configuration.displayName)” again.")
+                return
+            }
+            let maxLanguageLevel = javaRun.maxLanguageLevel
+            Task { [self] in
+                let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation
+                guard let jdk else {
+                    reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                runConfigurationStore.setLast(configuration, forProject: root)
+                refreshLastRunConfiguration()
+                let breakpoints = breakpointStore.breakpoints(forProject: root)
+                let muted = breakpointsMuted
+                selectDebugTab()
+                do {
+                    try await debugSession.prepareAdapter(javaHome: jdk.home)
+                } catch {
+                    reportRunProblem("Could not start the debug adapter: \(error.localizedDescription)")
+                    return
+                }
+                gradleDebugActive = true
+                configureDebugSession()
+                let roots = debugSourceRoots()
+                Task {
+                    await debugSession.attachForGradle(
+                        suspendOnStart: configuration.suspendOnStart,
+                        breakpoints: breakpoints,
+                        muted: muted,
+                        sourceRoots: roots,
+                        gradleIsRunning: { [weak self] in self?.gradle.isRunningTasks ?? false }
+                    )
+                }
+                showGradleOutput()
+                let task = JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName ?? "run")
+                gradle.runGradleTasks(
+                    [task],
+                    extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration, debug: true),
+                    runsApplication: true
+                )
+            }
+        case .classpathMain(_, let sourceFile):
+            if let problem = validationProblems(for: configuration).first {
+                reportRunProblem("“\(configuration.displayName)” can't be debugged: \(problem.message)")
+                runConfigurationDraft = configuration
+                return
+            }
+            let epoch = javaRun.launchEpoch
+            Task { [self] in
+                // Before-launch steps and the build come first, as for a run; Stop cancels them.
+                let progress = IDEJavaRunProvider.LaunchProgress(
+                    isActive: { [weak self] in self?.javaRun.launchEpoch == epoch },
+                    note: { _ in },
+                    fail: { [weak self] in self?.reportRunProblem("“\(configuration.displayName)”: \($0)") }
+                )
+                var chain: Set<UUID> = [configuration.id]
+                guard await javaRun.prepareLaunch(configuration, progress: progress, chain: &chain), javaRun.launchEpoch == epoch else { return }
+                guard let jdk = await javaRun.resolveRunJDK(for: configuration) else {
+                    reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                guard let classpath = javaRun.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
+                    reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project.")
+                    return
+                }
+                let newProtocol = javaRun.usesNewLaunchProtocol(configuration)
+                if newProtocol, jdk.featureVersion < JavaLaunchCommand.minimumJavaForNewLaunchProtocol {
+                    reportRunProblem("“\(configuration.displayName)”: its main method needs Java \(JavaLaunchCommand.minimumJavaForNewLaunchProtocol) or later.")
+                    return
+                }
+                let port = JavaDebugPortPicker.pickPort(preferred: configuration.jdwpPort)
+                guard let launch = JavaLaunchCommand.makeManagedLaunch(
+                    configuration: configuration,
+                    javaHome: jdk.home,
+                    runtimeClasspath: classpath,
+                    jdwpPort: port,
+                    projectRoot: root,
+                    extraVMArguments: JavaLaunchCommand.newLaunchProtocolArguments(
+                        usesNewLaunchProtocol: newProtocol, jdkFeatureVersion: jdk.featureVersion, sourceLaunch: false
+                    )
+                ) else {
+                    reportRunProblem("Could not build a debug launch for “\(configuration.displayName)”.")
+                    return
+                }
+                runConfigurationStore.setLast(configuration, forProject: root)
+                refreshLastRunConfiguration()
+                let breakpoints = breakpointStore.breakpoints(forProject: root)
+                selectDebugTab()
+                configureDebugSession()
+                await debugSession.start(launch: launch, breakpoints: breakpoints, muted: breakpointsMuted, sourceRoots: debugSourceRoots())
+            }
+        case .gradleTest:
+            guard let scope = configuration.testScope else { return }
+            debugTests(scope: scope, title: configuration.displayName, recording: configuration)
+        default:
+            reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
+        }
+    }
+
+    func debugLastConfiguration() {
+        guard var configuration = lastRunConfiguration ?? javaRun.activeRunConfiguration() else { return }
+        configuration.launchMode = .debug
+        debugLaunch(configuration)
     }
 }

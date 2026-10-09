@@ -75,7 +75,7 @@ public struct IDERootView: View {
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
                         }
 
-                        if workspace.javaSupport.gradleBuildFilesChanged {
+                        if workspace.projectSystems.active?.hasConfigurationChanges == true {
                             IDEGradleReloadBanner()
                                 .opacity(workspace.chromeOpacity)
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -150,10 +150,10 @@ public struct IDERootView: View {
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
 
-                if workspace.showsGradleSidebar {
+                if workspace.showsProjectSidebar, let projectSystem = workspace.projectSystems.active {
                     IDESidebarResizeHandle(width: $gradleSidebarWidth, edge: .trailing)
 
-                    IDEGradleSidebarPanel()
+                    projectSystem.makeSidebar()
                         .frame(width: gradleSidebarWidth)
                         .idePanel()
                         .opacity(workspace.chromeOpacity)

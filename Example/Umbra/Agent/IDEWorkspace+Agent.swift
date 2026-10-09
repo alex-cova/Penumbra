@@ -207,12 +207,12 @@ extension IDEWorkspace: IDEAgentHost {
 
     // MARK: - Commands and builds
 
-    var agentIsGradleProject: Bool { javaSupport.isGradleProject }
+    var agentIsGradleProject: Bool { gradle.isActive }
 
     /// Java tools are offered in a Gradle project or when a Java file is open: elsewhere they would
     /// only add to the tool list a small model has to read.
     func agentJavaNavigator() -> (any IDEAgentJavaNavigating)? {
-        let hasJava = javaSupport.isGradleProject
+        let hasJava = gradle.isActive
             || workbench.allDocuments().contains { $0.url?.pathExtension.lowercased() == "java" }
         guard hasJava else { return nil }
         return IDEJavaAgentNavigator(
@@ -246,7 +246,7 @@ extension IDEWorkspace: IDEAgentHost {
         defer { agent.isGradleRunActive = false }
         let arguments = options.contains("--no-configuration-cache") ? options : options + ["--no-configuration-cache"]
         return await withCheckedContinuation { continuation in
-            javaSupport.runGradleTasks(tasks, extraArguments: arguments, timeout: .seconds(timeout)) { outcome in
+            gradle.runGradleTasks(tasks, extraArguments: arguments, timeout: .seconds(timeout)) { outcome in
                 continuation.resume(returning: outcome)
             }
         }
@@ -255,7 +255,7 @@ extension IDEWorkspace: IDEAgentHost {
     func agentCancelGradle() {
         // Only a run the agent started: the user's own build is not Stop's to end.
         guard agent.isGradleRunActive else { return }
-        javaSupport.cancelGradleTasks()
+        gradle.cancelTasks()
     }
 
     func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {

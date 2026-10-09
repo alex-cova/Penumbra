@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The console of one run: its output as it arrives, errors in red, typed input in the accent
 /// colour, and the `at pkg.Class.method(File.java:12)` lines of a stack trace as links that open the
-/// source. Draws incrementally by chunk number, like `IDEGradleConsoleView`.
+/// source. Draws incrementally by chunk number, like `IDEProjectConsoleView`.
 struct IDERunConsoleView: NSViewRepresentable {
     let log: IDERunConsoleLog
     let fontName: String

@@ -5,7 +5,7 @@ import SwiftUI
 /// notification center announces and later keeps in the bell's list.
 struct IDEStatusToast: View {
     @Environment(IDEWorkspace.self) private var workspace
-    private var java: IDEJavaSupport { workspace.javaSupport }
+    private var projectSystems: IDEProjectSystems { workspace.projectSystems }
 
     private enum Content: Equatable {
         case syncing(message: String)
@@ -13,8 +13,8 @@ struct IDEStatusToast: View {
     }
 
     private var content: Content? {
-        guard let message = java.statusMessage else { return nil }
-        return java.gradleSync.isSyncing ? .syncing(message: message) : .working(message: message)
+        guard let message = workspace.projectStatus.message else { return nil }
+        return projectSystems.active?.syncState.isSyncing == true ? .syncing(message: message) : .working(message: message)
     }
 
     var body: some View {
@@ -40,7 +40,7 @@ struct IDEStatusToast: View {
                 Button(action: workspace.showGradleOutput) {
                     HStack(spacing: IDEAppearance.Spacing.sm) {
                         spinner
-                        TimelineView(.periodic(from: java.gradleConsole.startedAt ?? .now, by: 1)) { context in
+                        TimelineView(.periodic(from: projectSystems.active?.console.startedAt ?? .now, by: 1)) { context in
                             Text(syncingSummary(message, now: context.date))
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(1)
@@ -121,11 +121,11 @@ struct IDEStatusToast: View {
     /// message plus elapsed time plus the latest console line, all in the one truncating label.
     private func syncingSummary(_ message: String, now: Date) -> String {
         var parts = [message]
-        if let startedAt = java.gradleConsole.startedAt {
+        if let startedAt = projectSystems.active?.console.startedAt {
             let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
             parts.append(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
         }
-        if let latest = java.gradleConsole.latestLine {
+        if let latest = projectSystems.active?.console.latestLine {
             parts.append(latest)
         }
         return parts.joined(separator: "  ·  ")

@@ -21,6 +21,31 @@ final class FSEventsFileSystemWatcherTests: XCTestCase {
         return url
     }
 
+    /// A window that closes right after it opened a project stops a watcher that is still starting.
+    /// `FSEventStreamStart` on a stream `stop()` had already released crashed the process.
+    func testStoppingWhileStartingDoesNotCrash() async {
+        let root = tempProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<300 {
+                let watcher = FSEventsFileSystemWatcher(root: root, latency: 0.05)
+                group.addTask { await watcher.start() }
+                group.addTask { await watcher.stop() }
+            }
+        }
+    }
+
+    func testAStoppedWatcherDoesNotStartAgain() async {
+        let root = tempProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let watcher = FSEventsFileSystemWatcher(root: root, latency: 0.05)
+        await watcher.stop()
+        await watcher.start()
+        var iterator = watcher.events.makeAsyncIterator()
+        let next = await iterator.next()
+        XCTAssertNil(next, "stop() ended the event stream, and a late start() must not bring it back")
+    }
+
     func testDetectsNewJavaFile() async throws {
         let root = tempProject()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -46,6 +46,10 @@ protocol IDELanguageModule {
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu?
 
     var preferencePanes: [IDEPreferencesPane] { get }
+
+    /// What makes Run, Debug and Run in Context work on this language's files: one per window, made
+    /// once. The provider must hold `workspace` weakly.
+    func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)?
 }
 
 extension IDELanguageModule {
@@ -55,6 +59,7 @@ extension IDELanguageModule {
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? { nil }
     var preferencePanes: [IDEPreferencesPane] { [] }
     var sidebarTabs: [IDESidebarTabDescriptor] { [] }
+    func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? { nil }
 }
 
 /// The modules Umbra ships, in the order their pages and entries appear.
@@ -77,9 +82,11 @@ extension IDEWorkspace {
         IDELanguageModules.all.flatMap { $0.commands(for: self) }
     }
 
-    /// Every module's tool-window entries that are available now.
+    /// Every module's tool-window entries that are available now, and those of the project system
+    /// that recognized the folder (the Gradle sidebar and console).
     func languageModuleToolWindows() -> [IDEToolWindow] {
         IDELanguageModules.all.flatMap { $0.toolWindows(for: self) }
+            + projectSystems.systems.filter(\.isActive).flatMap { $0.toolWindows(for: self) }
     }
 
     /// The menu `module` shows now, or nil.

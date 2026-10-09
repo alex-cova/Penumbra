@@ -5,8 +5,8 @@ import SwiftUI
 /// Read-only live view of `IDEJavaSupport.gradleConsole`, hosted as the "Gradle" tab in the bottom
 /// panel (`IDETerminalPanel`). Renders incrementally as new lines arrive instead of replacing the
 /// whole text on every update, so a long sync doesn't repeatedly rebuild the text storage.
-struct IDEGradleConsoleView: NSViewRepresentable {
-    let log: IDEGradleConsoleLog
+struct IDEProjectConsoleView: NSViewRepresentable {
+    let log: IDEProjectConsoleLog
     let fontName: String
     let fontSize: Double
 
@@ -72,7 +72,7 @@ struct IDEGradleConsoleView: NSViewRepresentable {
         private var noticeLength = 0
         private var noticeCount = 0
 
-        func render(_ log: IDEGradleConsoleLog, fontName: String, fontSize: Double, fullReplace: Bool) {
+        func render(_ log: IDEProjectConsoleLog, fontName: String, fontSize: Double, fullReplace: Bool) {
             guard let textView, let textStorage = textView.textStorage else { return }
             let font = IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))
             let wasAtBottom = isScrolledToBottom(textView)
@@ -138,7 +138,7 @@ struct IDEGradleConsoleView: NSViewRepresentable {
             return documentHeight - visibleMaxY < 24
         }
 
-        private static func attributedString(for text: String, line: IDEGradleConsoleLog.Line, font: NSFont) -> NSAttributedString {
+        private static func attributedString(for text: String, line: IDEProjectConsoleLog.Line, font: NSFont) -> NSAttributedString {
             let color: NSColor
             switch line {
             case .process(let processLine):

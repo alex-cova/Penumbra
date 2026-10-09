@@ -20,7 +20,12 @@ public final class FSEventsFileSystemWatcher: FileSystemWatcher, @unchecked Send
     private let root: URL
     private let latency: CFTimeInterval
     private let pathFilter: @Sendable (String) -> Bool
+    /// Guards `streamRef` and `isStopped`: `start()` and `stop()` are async and run on different tasks
+    /// (a window that closes right after opening a project stops a watcher that is still starting),
+    /// and a stream released between its creation and `FSEventStreamStart` crashes.
+    private let lock = NSLock()
     private var streamRef: FSEventStreamRef?
+    private var isStopped = false
     private let continuation: AsyncStream<FileSystemEvent>.Continuation
     public let events: AsyncStream<FileSystemEvent>
 
@@ -48,7 +53,12 @@ public final class FSEventsFileSystemWatcher: FileSystemWatcher, @unchecked Send
     }
 
     public func start() async {
-        guard streamRef == nil else { return }
+        // Not `lock()`/`unlock()`: those are unavailable in async code, and nothing here suspends.
+        lock.withLock { startLocked() }
+    }
+
+    private func startLocked() {
+        guard streamRef == nil, !isStopped else { return }
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
@@ -74,11 +84,17 @@ public final class FSEventsFileSystemWatcher: FileSystemWatcher, @unchecked Send
     }
 
     public func stop() async {
-        guard let stream = streamRef else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-        streamRef = nil
+        let stream: FSEventStreamRef? = lock.withLock {
+            isStopped = true
+            defer { streamRef = nil }
+            return streamRef
+        }
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        // Also when no stream was ever attached: a stopped watcher has no more events to deliver.
         continuation.finish()
     }
 

@@ -1,5 +1,4 @@
 import Foundation
-import JavaIntelligence
 
 /// The sessions shown in the Run tool window, newest last. Owned by `IDEWorkspace`.
 @MainActor
@@ -32,6 +31,37 @@ final class IDERunSessions {
         }
         selectedID = session.id
         trimFinished()
+    }
+
+    /// Starts `request` in a new session: in the place of the session it replaces (a rerun keeps its
+    /// tab), else at the end, and selected. A rerun of a run that is still going stops it first,
+    /// unless the request allows several instances, and waits for it to end before the request's
+    /// `prepare` begins (a server that is going down still holds its port).
+    @discardableResult
+    func start(_ request: IDERunRequest, replacing explicit: IDERunSession? = nil) -> IDERunSession {
+        let previous = explicit ?? latest(forConfiguration: request.id)
+        let replaced: IDERunSession?
+        if explicit != nil {
+            replaced = explicit
+        } else if let previous, !request.allowsMultipleInstances || !previous.isActive {
+            replaced = previous
+        } else {
+            replaced = nil
+        }
+        let session = IDERunSession(
+            configurationID: request.id, title: request.title, providerID: request.providerID, payload: request.payload
+        )
+        add(session, replacing: replaced)
+
+        let toStop = replaced?.isActive == true ? replaced : nil
+        toStop?.stop()
+        let prepare = request.prepare
+        Task { @MainActor [weak session] in
+            if let toStop { await toStop.waitUntilFinished() }
+            guard let session, session.isActive else { return }
+            await prepare(session)
+        }
+        return session
     }
 
     func select(_ id: UUID) {

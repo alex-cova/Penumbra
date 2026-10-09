@@ -1,10 +1,10 @@
 import Foundation
-import JavaIntelligence
 import SubprocessKit
 
-/// One run of a configuration in the Run tool window: its console, its state, and the child process
-/// behind it. A session is started by `IDEWorkspace` (see `IDEWorkspace+Run.swift`), which also
-/// decides what rerunning it means.
+/// One run in the Run tool window: its console, its state, and the child process behind it. A session
+/// is started by a run provider (`IDERunSessions.start`), which also decides what rerunning it means:
+/// the session only remembers who started it (`providerID`) and what the provider told it to keep
+/// (`payload`, a run configuration for Java).
 @MainActor
 @Observable
 final class IDERunSession: Identifiable {
@@ -28,8 +28,12 @@ final class IDERunSession: Identifiable {
     }
 
     let id = UUID()
+    /// What is being run, across reruns: the newest session with this id is the one a rerun replaces.
     let configurationID: UUID
-    private(set) var configuration: JavaRunConfiguration
+    let providerID: String
+    private(set) var title: String
+    /// The provider's own description of the run, for the provider to run it again.
+    private(set) var payload: (any Sendable)?
     private(set) var state: State = .preparing
     private(set) var log = IDERunConsoleLog()
     private(set) var startedAt = Date()
@@ -43,13 +47,15 @@ final class IDERunSession: Identifiable {
     @ObservationIgnored var onFinished: ((IDERunSession) -> Void)?
 
     @ObservationIgnored private var handle: SubprocessHandle?
-    @ObservationIgnored private var launch: JavaProcessLaunch?
+    @ObservationIgnored private var launch: IDEProcessLaunch?
     @ObservationIgnored private var stopRequested = false
     @ObservationIgnored private let buffer = IDERunOutputBuffer()
 
-    init(configuration: JavaRunConfiguration) {
-        self.configuration = configuration
-        configurationID = configuration.id
+    init(configurationID: UUID, title: String, providerID: String, payload: (any Sendable)? = nil) {
+        self.configurationID = configurationID
+        self.title = title
+        self.providerID = providerID
+        self.payload = payload
         buffer.onFlush = { [weak self] chunks in
             MainActor.assumeIsolated {
                 for (text, stream) in chunks { self?.log.append(text, stream: stream) }
@@ -57,7 +63,6 @@ final class IDERunSession: Identifiable {
         }
     }
 
-    var title: String { configuration.displayName }
     var isActive: Bool { state.isActive }
     var isRunning: Bool { state == .running }
 
@@ -82,12 +87,13 @@ final class IDERunSession: Identifiable {
     }
 
     /// Takes the settings a rerun was started with, so the title follows an edit.
-    func update(configuration: JavaRunConfiguration) {
-        self.configuration = configuration
+    func update(title: String, payload: (any Sendable)?) {
+        self.title = title
+        self.payload = payload
     }
 
-    /// Starts the JVM. `launch` was built by `JavaLaunchCommand.makeProcessLaunch`.
-    func start(_ launch: JavaProcessLaunch) {
+    /// Starts the process. A provider builds `launch` once everything that comes before it succeeded.
+    func start(_ launch: IDEProcessLaunch) {
         guard state == .preparing else { return }
         self.launch = launch
         commandLine = launch.displayCommand
@@ -128,7 +134,7 @@ final class IDERunSession: Identifiable {
                 self?.finish(result)
             }
         } catch {
-            fail("Could not start java: \(error.localizedDescription)")
+            fail("Could not start \(launch.executable.lastPathComponent): \(error.localizedDescription)")
         }
     }
 

@@ -124,7 +124,7 @@ Add it to the `LanguageServiceRegistry(services:)` list in `Example/Umbra/IDEInt
 
 An actor test per provider, plus a "returns nothing for a foreign language" test. Add the mapping to `PerfHarness` if the language has an indexer.
 
-> Project root and file-change notifications are still `IDEJavaSupport`'s; they become service hooks with the project system (plan, phase 5).
+- The window's folder and the files that changed on disk reach a service through two synchronous `@MainActor` hooks, `projectDidChange(root:)` and `filesDidChange(_:)` (defaults do nothing). They are synchronous on purpose: the host reads the result straight after (the next service's decision, the status bar), so a service with slow work starts a task and returns. Umbra's project systems have already seen the folder when the hook runs, so a service can read what they decided.
 
 ---
 
@@ -142,8 +142,8 @@ Everything that is UI or project state. A language adds its chrome as an `IDELan
 | Left sidebar tab | `sidebarTabs`: an `IDESidebarTabDescriptor` (a new `IDESidebarTab(rawValue: "id")`; the raw value is saved in sessions, so never rename it), title, symbol, `order`, availability, badge, `onShow` and `content`; it appears in the tab bar, the `+` menu and the stripe |
 | Status bar item, toolbar button | `IDEStatusBarPanel.swift`, `IDEToolbarPanel.swift` (by hand) |
 | Gutter run buttons | `IDEWorkspace+Debugger.swift` (`applyJavaGutter`); the line-marker column is reserved by `reservedLineMarkerSlots` |
-| Run and console | `IDERunSession`, `IDERunSessions`, `IDEWorkspace+Run.swift` |
-| Project model (Gradle-like) | `IDEJavaSupport` is the only example; plan before copying it |
+| Run, Debug, Run in Context, Stop | an `IDERunProvider` (`Run/IDERunProvider.swift`) returned from your module's `makeRunProvider(for:)`: `canRun`, `runHelp`, `run`, `runInContext`, `rerun`, `stop`, `runnableLocations`. Start a program with `IDERunSessions.start(IDERunRequest(…))`: your `prepare` closure does the checks and the build, then calls `session.start(IDEProcessLaunch(…))` or `session.fail(…)`; the Run tab, the console, rerun-in-place and Stop come with it. Hold the window weakly, through a small host protocol of your own (`IDEJavaRunHost` is the example). Debugging stays Java's |
+| Project model (Gradle-like) | an `IDEProjectSystem` (`Projects/IDEProjectSystem.swift`), added to `IDEIntelligenceServices.projectSystems`: `isActive` once it recognizes the folder, `syncState` and `console`, `tasks`, `runTasks`/`build`, trust through `IDEProjectEnvironment.requestTrust`, and its tool window (`toolWindows`, `bottomTabs`, `makeSidebar`). `IDEGradleProjectSystem` is the example; it hands its model to Java through `IDEGradleModelConsumer`, so a system whose model a language indexes does the same |
 | Semantic highlighting, gutter markers, Structure outline, type and call hierarchy | return a `SemanticTokenProviding`, `LineMarkerProviding`, `StructureProviding`, `TypeHierarchyProviding` or `CallHierarchyProviding` in your `LanguageProviders`; the workspace asks the registry for the active language's provider (`IDEWorkspace.scheduleSemanticHighlighting`, `scheduleLineMarkers`, `refreshStructure`, `showTypeHierarchy`), so there is nothing to wire. A language with no provider gets no gutter column, tab content or outline |
 | Agent tools | `Example/Umbra/Agent/` (`IDEAgentNavigationTools.swift` for navigation) |
 

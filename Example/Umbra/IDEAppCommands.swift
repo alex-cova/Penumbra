@@ -440,8 +440,8 @@ private struct IDEViewCommands: View {
         Button("Toggle Breakpoints", systemImage: "circle.fill") {
             workspace?.toggleSidebarTab(.breakpoints)
         }
-        Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: { workspace?.toggleGradleSidebar() })
-            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+        Button("Toggle Gradle Sidebar", systemImage: "sidebar.trailing", action: { workspace?.toggleProjectSidebar() })
+            .disabled(!(workspace?.gradle.isActive ?? false))
         Button("Toggle Agent", systemImage: "sparkles", action: { workspace?.toggleAgentPanel() })
             .disabled(!(workspace?.hasOpenProject ?? false))
         Button("Show Local History", systemImage: "clock.arrow.circlepath", action: { workspace?.showLocalHistory() })

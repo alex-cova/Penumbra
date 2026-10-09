@@ -72,7 +72,7 @@ extension IDEWorkspace {
             return
         }
         let path = url.standardizedFileURL.path
-        let isSourceRoot = javaSupport.javaSourceRootPaths.contains { URL(fileURLWithPath: $0).standardizedFileURL.path == path }
+        let isSourceRoot = gradle.sourceRootPaths.contains { URL(fileURLWithPath: $0).standardizedFileURL.path == path }
         if isSourceRoot || project.rootURL?.standardizedFileURL.path == path {
             showClassDiagramForProject()
         } else {
@@ -85,7 +85,7 @@ extension IDEWorkspace {
     }
 
     func showGradleModuleDiagram() {
-        guard javaSupport.isGradleProject else {
+        guard gradle.isActive else {
             notifications.post("This is not a Gradle project.", category: .gradle)
             return
         }
@@ -94,7 +94,7 @@ extension IDEWorkspace {
 
     /// The libraries of a Gradle project: the one given, else the module of the active file, else the root.
     func showGradleDependencyDiagram(projectPath: String? = nil) {
-        guard javaSupport.isGradleProject else {
+        guard gradle.isActive else {
             notifications.post("This is not a Gradle project.", category: .gradle)
             return
         }
@@ -116,7 +116,7 @@ extension IDEWorkspace {
     // MARK: - Names
 
     func gradleProjectPath(containing url: URL?) -> String? {
-        guard let url, let model = javaSupport.gradleModel else { return nil }
+        guard let url, let model = gradle.model else { return nil }
         let path = url.standardizedFileURL.path
         return model.subprojects
             .filter { path == $0.directory.standardizedFileURL.path || path.hasPrefix($0.directory.standardizedFileURL.path + "/") }
@@ -135,7 +135,7 @@ extension IDEWorkspace {
 
     func javaPackageName(ofDirectory url: URL) -> String? {
         let path = url.standardizedFileURL.path
-        for root in javaSupport.javaSourceRootPaths {
+        for root in gradle.sourceRootPaths {
             let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
             guard path.hasPrefix(rootPath + "/") else { continue }
             let relative = path.dropFirst(rootPath.count + 1)
@@ -151,6 +151,7 @@ extension IDEWorkspace {
         settings.neighbourDepth = max(settings.neighbourDepth, minimumNeighbourDepth)
         let session = IDEDiagramSession(request: request, settings: settings)
         let java = javaSupport
+        let gradle = gradle
         let readBuffer: @MainActor @Sendable (URL) -> String? = { [weak self] url in self?.openBufferText(for: url) }
         session.loadClassGraph = { scope, options in
             let builder = JavaClassGraphBuilder(
@@ -161,9 +162,9 @@ extension IDEWorkspace {
         }
         session.loadModuleGraph = { [weak self] in
             guard self != nil else { return .failure(.message("The window was closed.")) }
-            guard let graph = java.moduleDependencyGraph else {
+            guard let graph = gradle.moduleDependencyGraph else {
                 return .failure(.message(
-                    java.isGradleBusy
+                    gradle.isBusy
                         ? "Gradle is still syncing the project. Reload the diagram when it finishes."
                         : "The Gradle project has not been synced yet. Reload the Gradle project, then try again."
                 ))
@@ -171,9 +172,9 @@ extension IDEWorkspace {
             return .success(graph)
         }
         session.loadLibraryGraph = { projectPath, configuration in
-            await java.resolveDependencyGraph(projectPath: projectPath, configuration: configuration)
+            await gradle.resolveDependencyGraph(projectPath: projectPath, configuration: configuration)
         }
-        session.invalidateCaches = { java.invalidateDependencyGraphs() }
+        session.invalidateCaches = { gradle.invalidateDependencyGraphs() }
         session.openSource = { [weak self] url in
             Task { @MainActor [weak self] in await self?.openDocument(from: url) }
         }

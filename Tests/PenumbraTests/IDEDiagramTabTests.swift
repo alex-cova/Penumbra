@@ -120,7 +120,7 @@ final class IDEDiagramTabTests: XCTestCase {
         }
         guard case let .failed(message) = session.state else { return XCTFail("expected a failure") }
         XCTAssertTrue(message.contains("not a Gradle project"), message)
-        XCTAssertFalse(workspace.javaSupport.isGradleBusy)
+        XCTAssertFalse(workspace.gradle.isBusy)
     }
 
     func testAClosedWorkspaceWithADiagramTabIsFreed() async throws {

@@ -53,8 +53,10 @@ extension IDEBottomPanelTab {
 }
 
 extension IDEWorkspace {
-    /// Every module's bottom tabs that are available now.
+    /// Every module's bottom tabs that are available now, and those of the active project system
+    /// (the Gradle console).
     func languageModuleBottomTabs() -> [IDEBottomTabContribution] {
         IDELanguageModules.all.flatMap { $0.bottomTabs(for: self) }
+            + projectSystems.systems.filter(\.isActive).flatMap { $0.bottomTabs(for: self) }
     }
 }

@@ -28,7 +28,7 @@ final class IDESharedServices {
     private let memoryPressure: DispatchSourceMemoryPressure
 
     private init() {
-        gradleTrust = GradleTrustStore(storeURL: IDEJavaSupport.defaultGradleTrustStoreURL)
+        gradleTrust = GradleTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
         runConfigurations = JavaRunConfigurationCatalog(
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)

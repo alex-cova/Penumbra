@@ -4,7 +4,7 @@ How a contributor adds a language to Umbra, from syntax colors up to a Java-clas
 
 ## Status
 
-**Phases 0 to 4 are implemented** (see their sections for what shipped and how it differs from the sketch; phase 4 lists what it left out). Phases 5 and 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
+**Phases 0 to 5 are implemented** (see their sections for what shipped and how it differs from the sketch; phase 4 lists what it left out). Phase 6 is a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
 
 ## Motivation
 
@@ -103,8 +103,8 @@ public protocol LanguageService: Sendable {
     var providers: LanguageProviders { get }
     var policy: LanguagePolicy { get }          // which generic fallbacks to switch off
     func start(environment: LanguageEnvironment) async
-    func projectDidChange(root: URL?) async
-    func filesDidChange(_ urls: [URL]) async
+    @MainActor func projectDidChange(root: URL?)      // synchronous, see phase 5
+    @MainActor func filesDidChange(_ urls: [URL])     // synchronous, see phase 5
     func stop() async
 }
 ```
@@ -162,9 +162,9 @@ Reuse what exists: `EditorCommand` (`Sources/Penumbra/Workbench/CommandPalette/E
 
 **Lifecycle.** App-shared state is made once (as `IDESharedServices` does for the JDK shard hub, trust, run configurations and breakpoints); one module instance per window (as `IDEIntelligenceServices` is today). `IDEWorkspace.teardown()` stops every module and nothing may retain the workspace (`IDERetentionGuardTests` pattern).
 
-**`IDEProjectSystem` (phase 5)**: detect(root), a generic sync state (generalized from `IDEJavaSupport.GradleSyncState`), trust through the environment, a console log, a task list. Gradle is the first implementation, and the Gradle sidebar becomes its tool window. SwiftPM, Cargo or npm would be others.
+**`IDEProjectSystem` (phase 5, implemented)**: detect(root), a generic sync state (generalized from `IDEJavaSupport.GradleSyncState`), trust through the environment, a console log, a task list. Gradle is the first implementation, and the Gradle sidebar becomes its tool window. SwiftPM, Cargo or npm would be others.
 
-**`IDERunProvider` (phase 5)**: runnable locations in a document and a process launch. `IDERunSession` (`Example/Umbra/Run/IDERunSession.swift`) is already generic in behavior (own process group, interactive stdin, coalesced output); it is generalized off `JavaRunConfiguration` and `JavaProcessLaunch`. The debugger stays Java-only.
+**`IDERunProvider` (phase 5, implemented)**: runnable locations in a document and a process launch. `IDERunSession` (`Example/Umbra/Run/IDERunSession.swift`) is already generic in behavior (own process group, interactive stdin, coalesced output); it is generalized off `JavaRunConfiguration` and `JavaProcessLaunch`. The debugger stays Java-only.
 
 **Agent.** `IDEAgentJavaNavigating` (`Example/Umbra/Agent/IDEAgentNavigationTools.swift`) is replaced by an implementation over `NavigationEngine`, so any language with navigation gets `go_to_definition` and `find_usages`.
 
@@ -222,7 +222,7 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
 - **Tests:** lifecycle order with recording fakes, the default environment, Java formatting taking its indent unit from the environment and going back to its own default after `stop`, and the decompiler topic and indent helper.
 - **Difference found on the way:** `JavaFormattingProvider` stored whatever unit its host last returned, so clearing the host's provider left that unit in place. It now uses a copy.
 - **Differences from the sketch:**
-  - `projectDidChange` and `filesDidChange` are not added yet. Java's project root and file-change handling are `IDEJavaSupport.setProjectRoot` and `projectFilesChanged`, called synchronously from `applyProjectRoot` and the project watcher; routing them through an `async` registry call would reorder them against code that reads the result straight after. They move with the project system in phase 5, where that is designed.
+  - `projectDidChange` and `filesDidChange` are not added yet. Java's project root and file-change handling are `IDEJavaSupport.setProjectRoot` and `projectFilesChanged`, called synchronously from `applyProjectRoot` and the project watcher; routing them through an `async` registry call would reorder them against code that reads the result straight after. They move with the project system in phase 5, where that is designed. *(Done in phase 5: synchronous `@MainActor` hooks.)*
   - No status, progress or logging closures: nothing uses them yet. `IDEJavaSupport` still owns its status message and Gradle trust prompt (`requestTrust`), which are project concerns for phase 5.
   - `hasConsent` is in the sketch's place of a single `requestConsent`, because the decompiler gate treats "already agreed" differently from "ask now": only a manual navigation may ask, but a hover may decompile once the user has agreed.
 
@@ -243,15 +243,43 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
 **Still not done:**
 - Status-bar items, toolbar buttons, gutter actions, palette sources and agent tools are not module contributions yet; each is wired by hand where it was.
 - Markdown, JSON and CSV (previews, text tools) are not modules; their per-language switches in `IDEAppCommands` and the toolbar remain.
-- Java's behavior (Gradle, run, debug, diagrams, the content of the Structure sidebar) still lives in `IDEWorkspace` extensions, called from the module's closures. Moving it is phase 5.
+- Java's behavior (Gradle, run, debug, diagrams, the content of the Structure sidebar) still lives in `IDEWorkspace` extensions, called from the module's closures. Moving it is phase 5. *(Gradle and Run moved in phase 5; the debugger and the diagrams are still the window's.)*
 - The per-tab `is…Selected` flags on `IDEWorkspace` (`isTypeHierarchySelected`, `isDebugSelected`, …) and the `select…Tab()` methods remain; they are views over `selectedBottomTab`. A new module's tab uses `selectedBottomTab = tab` and `toggleBottomToolWindow(tab)` directly.
 - No test registers a third module end to end: `IDELanguageModules.all` is a static list, so openness is shown by Java and HTTP using only the public contribution types.
 - **Differences:** the HTTP palette group is now registered with Java's rather than last, so with an empty query Find Action lists HTTP before Edit, Git, Run and View. `IDEToolWindow` has a stored `order`, so any new construction site must set it.
 
-### Phase 5: project systems, run and test
-- `IDEProjectSystem` and `IDERunProvider`; split `IDEJavaSupport` into the Java service, a Gradle project system and `IDEJDKSelection`.
-- **Done when:** `IDEWorkspace` asks a project system, not `javaSupport.gradleModel`, for run and test.
-- **Tests:** `IDERunSessionTests` (a fake `java`), Gradle sync state tests.
+### Phase 5: project systems, run and test (implemented)
+
+**Project systems.**
+- **`IDEProjectSystem`** (`Example/Umbra/Projects/IDEProjectSystem.swift`) and `IDEProjectSystems`, the window's list (`IDEIntelligenceServices.projectSystems`; the first system that recognizes the folder is `active`). The protocol covers detection (`isActive`), `syncState` (`IDEProjectSyncState`: `notDetected`, `awaitingTrust`, `untrusted`, `syncing`, `synced(modules:dependencies:)`, `failed(summary:)`), `console` (`IDEProjectConsoleLog`, the old `IDEGradleConsoleLog` with a generic output line), `tasks` (`IDEProjectTask`), `runTasks`, `build`, `reload`, cancel, `sourceRootPaths`, `hasConfigurationChanges` (the build-file banner) and the tool window (`toolWindows`, `bottomTabs`, `makeSidebar`).
+- **Trust and "tell the host"** go through `IDEProjectEnvironment`, a struct of closures the window sets in `bootstrap()` (`requestTrust`, `syncFailed`, `syncFinished`, `tasksFinished`), which replaced the seven `javaSupport.on…` assignments. `IDEProjectStatus` is the one shared status line, with clear-only-your-own-message semantics.
+- **`IDEGradleProjectSystem`** (`Projects/IDEGradleProjectSystem.swift`) holds what was `IDEJavaSupport`'s Gradle half: trust gate, sync with the cached-model fast path, `runGradleTasks`, dependency graphs, the build-file watcher. The Gradle sidebar and the console tab are its `makeSidebar()` and `bottomTabs`, merged by `languageModuleToolWindows()` / `languageModuleBottomTabs()`; `IDEJavaModule` no longer lists them.
+- **`IDEJavaSupport`** went from 1,531 to about 880 lines and is the Java index and provider container. It is the Gradle system's `IDEGradleModelConsumer` (held weakly): the system hands over every model it produces and the call that clears what came from it. `IDEJDKSelection` is created by `IDEIntelligenceServices` and shared by both.
+
+**Lifecycle hooks (the deferral from phase 3).** `LanguageService` gained `@MainActor projectDidChange(root:)` and `filesDidChange(_:)`, **synchronous** and defaulted to no-ops, with `LanguageServiceRegistry` running them in registration order. They are not `async` like `start` and `stop`, because the window calls them from code that reads the result straight after (`applyProjectRoot` continues into the file tree, git, the picker; the next service decides from what the project system settled), and an `async` registry call would let those reads run first. A service with slow work starts a task and returns, as `IDEJavaSupport` does. Umbra's Java service is `IDEJavaLanguageService`, a wrapper over the library `JavaLanguageService` that forwards both hooks to `IDEJavaSupport` (the library has no host to forward to).
+- `applyProjectRoot` calls `projectSystems.projectDidChange` first and `languages.projectDidChange` second. Java reads what Gradle settled: with a cached model it skips the whole-tree index (`isLoadingCachedModel`), and its compiler configuration waits on Gradle's model.
+
+**Run providers.**
+- **`IDERunProvider`** (`Run/IDERunProvider.swift`): `canRun`/`canDebug`/`runHelp`/`debugHelp` for the toolbar, `runnableLocations(in:)`, `run`, `runInContext`, `rerun`, `hasActiveWork`, `stop`, `projectTasksDidFinish`. A module returns one from `makeRunProvider(for:)`; `IDEWorkspace.runProviders` builds them once per window and `activeRunProvider` picks by the active document's language. The window's play, bug, Stop, Run in Context and "is something running" went generic (`runActiveFile`, `runInContext(debug:)`, `stopRunning`, `isRunActive`).
+- **The process side is generic.** `IDEProcessLaunch` (the program, arguments, directory, environment, input file) replaces `JavaProcessLaunch` in `IDERunSession`; `IDERunRequest` and `IDERunSessions.start(_:replacing:)` hold the rule that a rerun takes the tab, stops the old process and waits for it. `IDERunSession` keeps a title, a provider id and an opaque payload. Java adds convenience initializers so existing callers and tests read the same.
+- **`IDEJavaRunProvider`** (`Languages/IDEJavaRunProvider.swift`, `+Pipeline`, `+Tests`) is what was `IDEWorkspace+Run.swift` and the Run and Test parts of `IDEWorkspace`: derivation of the active file's launch, validation, before-launch steps, the build, the JDK, Gradle run and test tasks, Run in Context (`structureProvider.caretContext` is called here now), the ⌥↩ actions, and the compiler errors, test results and notification a finished task leaves. It reaches the window through `IDEJavaRunHost` only (weak). The debugger stays in the window and asks the provider for the launch, classpath, JDK and `launchEpoch`.
+- **Done when**: `IDEWorkspace` has no `gradle.model` or `javaSupport.gradleModel` in run or test code. What still names a project system or `javaSupport` there is the Java intelligence wiring (diagnostics callbacks, `compileNow`, the name index), the Go to File module labels (`gradle.onModelChanged`), the console note for a launch that did not start, and `showsGradleConsoleTab`.
+
+**Tests.**
+- `IDEGradleProjectSystemTests` (21): a fake `gradlew` in a temporary project drives detection, the trust prompt (granted, declined, absent, auto-sync off), sync and its console, a failed sync, cancel, reload, the cached-model start, a root change, source roots, the task list, task runs (output, exit code, trust, busy, cancel), the build-file banner and the module graph. They were written against `IDEJavaSupport` first and passed there; moving the code changed only `GradleHarness`, the file that adapts the type under test.
+- `IDEProjectAndRunProviderTests`: `IDEProjectSystems` and `IDERunProviders` with fakes (so a second language's system or provider is exercised through the public types), `IDERunSessions.start` (rerun takes the tab and waits, several instances, an explicit replacement), the generic launch, the Java provider's `canRun`, help strings and runnable places, the folder reaching Java through the registry, and that none of it retains the workspace (the same test fails with a strong `host`).
+- `LanguageServiceRegistryTests`: the hooks run in order and are synchronous, and a service without them ignores them. `IDERunSessionTests`, `IDERunWorkspaceTests` (a real JDK), `IDEDiagramTabTests` and the retention tests pass unchanged.
+
+**Differences from the sketch, and things found on the way.**
+- **A crash in `FSEventsFileSystemWatcher`.** The new tests open a project and tear it down at once; the process crashed in `FSEventStreamStart`. `start()` and `stop()` are async and ran on different tasks over an unguarded `streamRef`, so `stop()` could release a stream `start()` was about to start. Both now take a lock, and a `stop()` that wins the race also prevents the late start and ends the event stream. This is a library change outside the move, made because a window closed right after opening a Gradle project could crash. The regression test (`testStoppingWhileStartingDoesNotCrash`) did not reproduce the crash on the old code on demand; the diagnosis rests on the crash report.
+- **Trust is not a `ConsentTopic`.** Phase 3 said trust would go "through the environment". A consent topic is a string, and Gradle trust is per folder, so it travels through `IDEProjectEnvironment.requestTrust(url)` instead. The decompiler agreement stays a `ConsentTopic`.
+- **Task creation order on open.** Java's whole-tree index and Gradle's first sync are both tasks started from `applyProjectRoot`; they were created Java-first and are now Gradle-first (the project systems run before the languages, which need their answer). Both start on the next main-actor turn. The one visible difference is a status line: the sync used to overwrite "Indexing project sources…" with "Resolving Gradle project…" a moment after it was set, and now the index finds the message already taken and leaves it alone, so the line a user sees is the same.
+- **`IDEProjectSystem.tasks` is read by nothing yet.** The Gradle sidebar still builds its tree from the model. The property is tested and is what a palette "Run Project Task…" or another system's sidebar would use.
+- **The process launch is built inside the request, not returned by a provider method.** What comes before a process (validation, before-launch steps, the build, picking a JDK) can fail, wait, or be stopped, and all of it reports into the session's console, so a provider supplies `IDERunRequest.prepare`, which ends in `session.start(IDEProcessLaunch)` or `session.fail(…)`. A `launch(for:) -> IDEProcessLaunch?` method would have had to carry the session and the progress anyway.
+- **The gutter is still Java-typed.** `runnableLocations` is implemented and tested, but the gutter shares its column with breakpoints and `applyJavaGutter` reads `JavaMainMethodLocation` and `JavaTestClass`. Making the gutter generic needs the debugger's gutter split first.
+- **Names that still say Java or Gradle**: the toolbar's parameters and the workspace flags that feed them (`javaFileCanRun`, `runActiveJava`), `IDEGradleReloadBanner`, the notification category `.gradle`, and the persisted `isGradleSidebarVisible` / `gradleSidebarWidth` (renaming them changes the session file). The menu item reads "Toggle Gradle Sidebar".
+- **The configurations model is Java's.** `JavaRunConfiguration`, its picker and editor are unchanged; a second language gets its own, or the model generalizes when one needs it.
+- `IDEGradleRunOutcome` and `GradleCommandResult` stay Gradle's: the agent's `gradle` and `run_tests` tools and the Java provider consume them. The generic outcome is `IDEProjectTaskReport`.
 
 ### Phase 6: proof
 - (a) A grammar-only language that is not bundled yet (for example Ruby or PHP), added with its grammar target, a definition file and one registration line; the PR is the documentation.

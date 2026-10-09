@@ -14,7 +14,14 @@ final class IDEIntelligenceServices {
     /// of the generic `symbolIndex`/`indexingService` above. `JavaCompletionProvider` claims
     /// `.java` documents as the primary provider, so the engine only falls back to the generic
     /// Symbol/Word results when it has nothing (in comments and strings) and never after a `.`.
-    let javaSupport = IDEJavaSupport()
+    let javaSupport: IDEJavaSupport
+    /// The window's background status line ("Indexing JDK 24…", "Resolving Gradle project…"), written
+    /// by the project systems and Java's indexing.
+    let projectStatus = IDEProjectStatus()
+    /// Gradle as a project system: syncs the model Java indexes, runs tasks, keeps the console.
+    let gradle: IDEGradleProjectSystem
+    /// The window's project systems, in the order they claim a folder.
+    let projectSystems: IDEProjectSystems
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
     let markdownFileMentions = MarkdownFileMentionCompletionProvider()
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
@@ -27,6 +34,11 @@ final class IDEIntelligenceServices {
     let languages: LanguageServiceRegistry
 
     init() {
+        let jdk = IDEJDKSelection()
+        let gradle = IDEGradleProjectSystem(jdk: jdk, status: projectStatus)
+        self.gradle = gradle
+        javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, status: projectStatus)
+        projectSystems = IDEProjectSystems([gradle])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let languages = LanguageServiceRegistry(services: [

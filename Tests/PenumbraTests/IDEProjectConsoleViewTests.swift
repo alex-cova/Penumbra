@@ -3,24 +3,24 @@ import JavaIntelligence
 import XCTest
 @testable import Umbra
 
-/// `IDEGradleConsoleView` draws a log that drops its oldest lines once it holds `maxLines`. The
+/// `IDEProjectConsoleView` draws a log that drops its oldest lines once it holds `maxLines`. The
 /// view must follow line numbers, not positions in the log, or it stops drawing when the log is full.
 @MainActor
-final class IDEGradleConsoleViewTests: XCTestCase {
+final class IDEProjectConsoleViewTests: XCTestCase {
     private var textView: NSTextView!
-    private var coordinator: IDEGradleConsoleView.Coordinator!
+    private var coordinator: IDEProjectConsoleView.Coordinator!
 
     override func setUp() {
         textView = NSTextView()
-        coordinator = IDEGradleConsoleView.Coordinator()
+        coordinator = IDEProjectConsoleView.Coordinator()
         coordinator.textView = textView
     }
 
-    private func render(_ log: IDEGradleConsoleLog) {
+    private func render(_ log: IDEProjectConsoleLog) {
         coordinator.render(log, fontName: "Menlo", fontSize: 12, fullReplace: coordinator.lastRunID != log.runID)
     }
 
-    private func append(_ log: inout IDEGradleConsoleLog, _ range: Range<Int>) {
+    private func append(_ log: inout IDEProjectConsoleLog, _ range: Range<Int>) {
         for index in range { log.appendProcessLine(GradleOutputLine(stream: .stdout, text: "line \(index)")) }
     }
 
@@ -32,7 +32,7 @@ final class IDEGradleConsoleViewTests: XCTestCase {
     }
 
     func testRendersLinesInOrderAndAppendsOnlyTheNewOnes() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
         append(&log, 0..<3)
         render(log)
@@ -43,7 +43,7 @@ final class IDEGradleConsoleViewTests: XCTestCase {
     }
 
     func testNotesAndProcessLinesShareTheText() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
         log.appendNote("Project: /tmp/app")
         append(&log, 0..<1)
@@ -52,57 +52,57 @@ final class IDEGradleConsoleViewTests: XCTestCase {
     }
 
     func testLinesKeepAppearingAfterTheLogIsFull() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
-        append(&log, 0..<IDEGradleConsoleLog.maxLines)
+        append(&log, 0..<IDEProjectConsoleLog.maxLines)
         render(log)
-        XCTAssertEqual(shown.count, IDEGradleConsoleLog.maxLines)
+        XCTAssertEqual(shown.count, IDEProjectConsoleLog.maxLines)
 
-        append(&log, IDEGradleConsoleLog.maxLines..<(IDEGradleConsoleLog.maxLines + 5))
+        append(&log, IDEProjectConsoleLog.maxLines..<(IDEProjectConsoleLog.maxLines + 5))
         render(log)
 
         XCTAssertEqual(shown.first, "… 5 earlier lines not shown")
-        XCTAssertEqual(shown.last, "line \(IDEGradleConsoleLog.maxLines + 4)", "The newest line is drawn: a position-based view stopped here")
+        XCTAssertEqual(shown.last, "line \(IDEProjectConsoleLog.maxLines + 4)", "The newest line is drawn: a position-based view stopped here")
         XCTAssertEqual(shown[1], "line 5", "The five oldest lines are gone from the text too")
-        XCTAssertEqual(shown.count, IDEGradleConsoleLog.maxLines + 1, "The text stays bounded: the log's lines plus the notice")
+        XCTAssertEqual(shown.count, IDEProjectConsoleLog.maxLines + 1, "The text stays bounded: the log's lines plus the notice")
     }
 
     func testEveryUpdateWhileFullDrawsExactlyTheNewLine() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
-        append(&log, 0..<IDEGradleConsoleLog.maxLines)
+        append(&log, 0..<IDEProjectConsoleLog.maxLines)
         render(log)
-        for index in IDEGradleConsoleLog.maxLines..<(IDEGradleConsoleLog.maxLines + 30) {
+        for index in IDEProjectConsoleLog.maxLines..<(IDEProjectConsoleLog.maxLines + 30) {
             append(&log, index..<(index + 1))
             render(log)
             XCTAssertEqual(shown.last, "line \(index)")
         }
         XCTAssertEqual(shown.first, "… 30 earlier lines not shown")
-        XCTAssertEqual(shown.filter { $0 == "line \(IDEGradleConsoleLog.maxLines + 10)" }.count, 1, "Nothing is drawn twice")
+        XCTAssertEqual(shown.filter { $0 == "line \(IDEProjectConsoleLog.maxLines + 10)" }.count, 1, "Nothing is drawn twice")
     }
 
     func testAViewThatFellFarBehindSkipsWhatWasDroppedUnseen() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
         append(&log, 0..<100)
         render(log)
 
         // Far more than the log holds arrives before the next redraw.
-        let total = 100 + IDEGradleConsoleLog.maxLines + 2_500
+        let total = 100 + IDEProjectConsoleLog.maxLines + 2_500
         append(&log, 100..<total)
         render(log)
 
-        XCTAssertEqual(shown.first, "… \(total - IDEGradleConsoleLog.maxLines) earlier lines not shown")
-        XCTAssertEqual(shown[1], "line \(total - IDEGradleConsoleLog.maxLines)", "Continues from the log's oldest line: none repeated, none out of order")
+        XCTAssertEqual(shown.first, "… \(total - IDEProjectConsoleLog.maxLines) earlier lines not shown")
+        XCTAssertEqual(shown[1], "line \(total - IDEProjectConsoleLog.maxLines)", "Continues from the log's oldest line: none repeated, none out of order")
         XCTAssertEqual(shown.last, "line \(total - 1)")
-        XCTAssertEqual(shown.count, IDEGradleConsoleLog.maxLines + 1)
+        XCTAssertEqual(shown.count, IDEProjectConsoleLog.maxLines + 1)
         XCTAssertEqual(Set(shown).count, shown.count, "No line twice")
     }
 
     func testAResetStartsANewText() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
-        append(&log, 0..<(IDEGradleConsoleLog.maxLines + 10))
+        append(&log, 0..<(IDEProjectConsoleLog.maxLines + 10))
         render(log)
         log.reset()
         append(&log, 0..<2)
@@ -111,12 +111,12 @@ final class IDEGradleConsoleViewTests: XCTestCase {
     }
 
     func testAViewOpenedOnAnAlreadyLongRunShowsTheKeptLines() {
-        var log = IDEGradleConsoleLog()
+        var log = IDEProjectConsoleLog()
         log.reset()
-        append(&log, 0..<(IDEGradleConsoleLog.maxLines + 40))
+        append(&log, 0..<(IDEProjectConsoleLog.maxLines + 40))
         render(log)
         XCTAssertEqual(shown.first, "… 40 earlier lines not shown")
         XCTAssertEqual(shown[1], "line 40")
-        XCTAssertEqual(shown.last, "line \(IDEGradleConsoleLog.maxLines + 39)")
+        XCTAssertEqual(shown.last, "line \(IDEProjectConsoleLog.maxLines + 39)")
     }
 }

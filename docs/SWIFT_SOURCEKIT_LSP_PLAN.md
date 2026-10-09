@@ -36,7 +36,7 @@ Swift is a syntax-highlighting-level language in Umbra; Java is a near-full IDE 
 
 - Spawn the server with `Process` and stdio pipes, then wrap it in ChimeHQ's `InitializingServer` / `JSONRPCServerConnection`.
 - One server per window or project root; do not share across windows. This avoids the retention problems `IDEWorkspace.teardown()` already guards against.
-- State machine like Gradle's `GradleSyncState`: `.off`, `.starting`, `.ready`, `.failed`, shown as a status bar item.
+- State machine like Gradle's `IDEProjectSyncState`: `.off`, `.starting`, `.ready`, `.failed`, shown as a status bar item.
 - Crash handling: restart with backoff. Kill the server in `teardown()`.
 - Add a test that the workspace deallocates, like `IDERetentionGuardTests`.
 
@@ -62,7 +62,7 @@ Swift is a syntax-highlighting-level language in Umbra; Java is a near-full IDE 
 - **Detection:** `Package.swift` means SwiftPM; `.xcodeproj` / `.xcworkspace` means Xcode. `IDEProjectModel` already ignores `.build`, `DerivedData` and `.swiftpm` in the tree.
 - **SwiftPM:** works with SourceKit-LSP directly; it builds the index store under `.build` on `swift build`.
 - **Xcode projects:** SourceKit-LSP needs `xcode-build-server` or a BSP config. That is separate work; leave it out of the first release and say "SwiftPM only" in the UI.
-- **Build and run:** run `swift build`, `swift test` and `swift run` through the console path Gradle uses (`IDEGradleConsoleLog`). Parse stderr for `file:line:col: error:` into Problems (the equivalent of `JavacOutputParser`). This gives diagnostics that match the real build even when the server lags.
+- **Build and run:** run `swift build`, `swift test` and `swift run` through the console path Gradle uses (`IDEProjectConsoleLog`). Parse stderr for `file:line:col: error:` into Problems (the equivalent of `JavacOutputParser`). This gives diagnostics that match the real build even when the server lags.
 - **Run gutter:** `@main` and `XCTest` / Swift Testing `@Test` gutter buttons, like the Java `main` and test gutter.
 
 ### 6. Later (separate efforts)

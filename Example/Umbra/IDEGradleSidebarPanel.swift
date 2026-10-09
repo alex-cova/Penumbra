@@ -18,10 +18,10 @@ struct IDEGradleSidebarPanel: View {
     @State private var selectedID: String?
     @State private var didSeedExpansion = false
 
-    private var java: IDEJavaSupport { workspace.javaSupport }
+    private var gradle: IDEGradleProjectSystem { workspace.gradle }
 
     private var root: IDEGradleTreeNode? {
-        java.gradleModel.flatMap { IDEGradleTree.build(from: $0) }
+        gradle.model.flatMap { IDEGradleTree.build(from: $0) }
     }
 
     private var filterNeedle: String {
@@ -58,7 +58,7 @@ struct IDEGradleSidebarPanel: View {
                 .padding(.bottom, IDEAppearance.Spacing.sm)
             }
 
-            if java.gradleSync.isSyncing, java.gradleModel != nil {
+            if gradle.syncState.isSyncing, gradle.model != nil {
                 ProgressView()
                     .progressViewStyle(.linear)
                     .controlSize(.small)
@@ -97,7 +97,7 @@ struct IDEGradleSidebarPanel: View {
             IDEPanelTitle("Gradle")
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if java.isGradleBusy {
+            if gradle.isBusy {
                 IDEGradleToolbarButton(
                     systemImage: "stop.fill",
                     help: "Stop",
@@ -132,7 +132,7 @@ struct IDEGradleSidebarPanel: View {
                     systemImage: "play",
                     help: "Run Gradle Task…",
                     isActive: isRunFieldPresented,
-                    isDisabled: java.isGradleBusy,
+                    isDisabled: gradle.isBusy,
                     action: toggleRunField
                 )
                 IDEGradleToolbarButton(
@@ -163,7 +163,7 @@ struct IDEGradleSidebarPanel: View {
 
     @ViewBuilder
     private var content: some View {
-        switch java.gradleSync {
+        switch gradle.syncState {
         case .awaitingTrust:
             IDEGradleSidebarPlaceholder(
                 systemImage: "lock.shield",
@@ -190,7 +190,7 @@ struct IDEGradleSidebarPanel: View {
                 secondaryTitle: "Show Output",
                 secondaryAction: workspace.showGradleOutput
             )
-        case .notGradle:
+        case .notDetected:
             IDEGradleSidebarPlaceholder(
                 systemImage: "shippingbox",
                 title: "Not a Gradle Project",
@@ -204,15 +204,15 @@ struct IDEGradleSidebarPanel: View {
                     collapsedWhileFiltering: $collapsedWhileFiltering,
                     selectedID: $selectedID,
                     filter: filterNeedle,
-                    isBusy: java.isGradleBusy,
-                    runningTaskPaths: Set(java.runningGradleTaskPaths),
+                    isBusy: gradle.isBusy,
+                    runningTaskPaths: Set(gradle.runningTasks),
                     actions: treeActions
                 )
             } else {
                 IDEGradleSidebarPlaceholder(
                     systemImage: nil,
                     title: "Syncing…",
-                    message: java.statusMessage ?? "Resolving Gradle project model.",
+                    message: workspace.projectStatus.message ?? "Resolving Gradle project model.",
                     showsSpinner: true
                 )
             }
@@ -230,7 +230,7 @@ struct IDEGradleSidebarPanel: View {
             },
             reload: workspace.reloadGradleProject,
             module: { path in
-                java.gradleModel?.subprojects.first { $0.path == path }?.directory
+                gradle.model?.subprojects.first { $0.path == path }?.directory
             },
             prefillRun: { task in
                 runText = task
@@ -294,9 +294,9 @@ struct IDEGradleSidebarPanel: View {
 
     private func runTypedTasks() {
         let tasks = runText.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard !tasks.isEmpty, !java.isGradleBusy else { return }
+        guard !tasks.isEmpty, !gradle.isBusy else { return }
         workspace.showGradleOutput()
-        java.runGradleTasks(tasks)
+        gradle.runGradleTasks(tasks)
         dismissRunField()
     }
 }

@@ -5,7 +5,7 @@ import SwiftUI
 extension IDEWorkspace {
     /// The JDK picker shows for a Java file or a Gradle project.
     var showsJDKPicker: Bool {
-        !showsWelcome && (statusLanguage == "java" || javaSupport.isGradleProject)
+        !showsWelcome && (statusLanguage == "java" || gradle.isActive)
     }
 
     /// Asks for a JDK folder (a home, a `.jdk` bundle or a home's `bin`), adds it to the list and
@@ -122,7 +122,7 @@ struct IDEJDKStatusItem: View {
     private var jdk: IDEJDKSelection { workspace.javaSupport.jdk }
 
     var body: some View {
-        let level = workspace.javaSupport.gradleModel?.maxLanguageLevel
+        let level = workspace.gradle.model?.maxLanguageLevel
         let warning = jdk.warning(maxLanguageLevel: level)
         Menu {
             IDEJDKMenuContent()

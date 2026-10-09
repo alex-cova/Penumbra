@@ -517,14 +517,14 @@ private struct IDEGradleConsoleControls: View {
 
     @ViewBuilder
     private var elapsedTimeView: some View {
-        if let startedAt = workspace.javaSupport.gradleConsole.startedAt {
-            if workspace.javaSupport.isGradleBusy {
+        if let startedAt = workspace.gradle.console.startedAt {
+            if workspace.gradle.isBusy {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(Self.formattedElapsed(context.date.timeIntervalSince(startedAt)))
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
-            } else if let finishedAt = workspace.javaSupport.gradleConsole.finishedAt {
+            } else if let finishedAt = workspace.gradle.console.finishedAt {
                 Text(Self.formattedElapsed(finishedAt.timeIntervalSince(startedAt)))
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -534,7 +534,7 @@ private struct IDEGradleConsoleControls: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        if workspace.javaSupport.isGradleBusy {
+        if workspace.gradle.isBusy {
             Button("Cancel", action: workspace.cancelGradleOperation)
                 .buttonStyle(.borderless)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -550,7 +550,7 @@ private struct IDEGradleConsoleControls: View {
     }
 
     private func copyOutput() {
-        let text = workspace.javaSupport.gradleConsole.lines.map(\.text).joined(separator: "\n")
+        let text = workspace.gradle.console.lines.map(\.text).joined(separator: "\n")
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)

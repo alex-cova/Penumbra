@@ -112,6 +112,18 @@ public protocol LanguageService: Sendable {
     /// from `environment` (open buffers, the indent unit, consent). The default does nothing.
     func start(environment: LanguageEnvironment) async
 
+    /// The window's folder changed, or closed (`root` is nil). Retarget project-wide state at it.
+    ///
+    /// Synchronous and on the main actor, unlike `start` and `stop`: the host calls it from code that
+    /// reads the result straight away (the file tree, the status bar, the next service's decision),
+    /// and an `async` registry call would let a later read run before the change. A service that has
+    /// slow work to do starts a task here and returns. The default does nothing.
+    @MainActor func projectDidChange(root: URL?)
+
+    /// Files under the project changed on disk (a pull, a build, another program), already batched by
+    /// the host's watcher. Same rules as ``projectDidChange(root:)``. The default does nothing.
+    @MainActor func filesDidChange(_ urls: [URL])
+
     /// Called when the window closes: drop everything taken from the environment. The default does
     /// nothing.
     func stop() async
@@ -120,6 +132,8 @@ public protocol LanguageService: Sendable {
 public extension LanguageService {
     var policy: LanguagePolicy { .none }
     func start(environment: LanguageEnvironment) async {}
+    @MainActor func projectDidChange(root: URL?) {}
+    @MainActor func filesDidChange(_ urls: [URL]) {}
     func stop() async {}
 }
 

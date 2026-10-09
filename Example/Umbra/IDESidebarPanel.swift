@@ -85,7 +85,7 @@ struct IDESidebarPanel: View {
                     Task { await workspace.openDocument(from: url) }
                 },
                 flattenPackages: preferences.flattenJavaPackages,
-                javaSourceRootPaths: workspace.javaSupport.javaSourceRootPaths,
+                javaSourceRootPaths: workspace.gradle.sourceRootPaths,
                 sortOrder: preferences.explorerSortOrder,
                 foldersOnTop: preferences.explorerFoldersOnTop,
                 showExcludedFiles: preferences.explorerShowExcludedFiles,

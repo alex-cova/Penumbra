@@ -16,11 +16,11 @@ struct IDEToolbarPanel: View {
                     hasContent: workspace.hasOpenProject || workspace.hasOpenDocuments,
                     isLeftPanelOpen: workspace.showsSidebar,
                     isBottomPanelOpen: workspace.isTerminalVisible,
-                    hasRightPanel: workspace.javaSupport.isGradleProject,
-                    isRightPanelOpen: workspace.showsGradleSidebar,
+                    hasRightPanel: workspace.projectSystems.active != nil,
+                    isRightPanelOpen: workspace.showsProjectSidebar,
                     toggleLeftPanel: workspace.toggleSidebar,
                     toggleBottomPanel: workspace.toggleTerminal,
-                    toggleRightPanel: workspace.toggleGradleSidebar
+                    toggleRightPanel: workspace.toggleProjectSidebar
                 )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -41,7 +41,7 @@ struct IDEToolbarPanel: View {
                     isJSONDiagramVisible: workspace.isJSONDiagramVisible,
                     isCSVFile: workspace.statusLanguage == "csv" || workspace.statusLanguage == "tsv",
                     isCSVTableVisible: workspace.isCSVTableVisible,
-                    isGradleProject: workspace.javaSupport.isGradleProject,
+                    isGradleProject: workspace.gradle.isActive,
                     isJavaRunnable: workspace.javaFileCanRun,
                     isJavaDebuggable: workspace.javaFileCanDebug,
                     isRunActive: workspace.isRunActive,

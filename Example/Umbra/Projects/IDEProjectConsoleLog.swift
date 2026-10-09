@@ -1,14 +1,25 @@
 import Foundation
-import JavaIntelligence
 
-/// The accumulated output of the most recent Gradle sync, rendered live by `IDEGradleConsoleView`
-/// as it arrives. Owned by `IDEJavaSupport`; reset at the start of each sync so switching projects
-/// or reloading never mixes two runs' output together.
-struct IDEGradleConsoleLog {
+/// One line of a project system's process output, as it arrived.
+struct IDEProjectOutputLine: Equatable, Sendable {
+    enum Stream: Equatable, Sendable {
+        case stdout
+        case stderr
+    }
+
+    let stream: Stream
+    let text: String
+}
+
+/// The accumulated output of a project system's most recent sync or task run, rendered live by
+/// `IDEProjectConsoleView` as it arrives. Owned by the project system (`IDEProjectSystem.console`);
+/// reset at the start of each sync so switching projects or reloading never mixes two runs' output
+/// together.
+struct IDEProjectConsoleLog {
     /// One rendered line: either real process output (`process`) or a status line this app itself
-    /// wrote (`note`, e.g. "Sync finished") -- `IDEGradleConsoleView` colors them differently.
+    /// wrote (`note`, e.g. "Sync finished") -- `IDEProjectConsoleView` colors them differently.
     enum Line {
-        case process(GradleOutputLine)
+        case process(IDEProjectOutputLine)
         case note(String)
 
         var text: String {
@@ -28,7 +39,7 @@ struct IDEGradleConsoleLog {
     /// How many lines were dropped from the front because `maxLines` was exceeded, shown as a
     /// one-line notice at the top of the console instead of silently losing context.
     private(set) var droppedCount = 0
-    /// Changes every time `reset()` runs. `IDEGradleConsoleView` replaces its whole text buffer
+    /// Changes every time `reset()` runs. `IDEProjectConsoleView` replaces its whole text buffer
     /// when this changes and otherwise only appends, so a stale view never mixes two runs.
     private(set) var runID = UUID()
     private(set) var startedAt: Date?
@@ -55,7 +66,7 @@ struct IDEGradleConsoleLog {
         append(.note(text))
     }
 
-    mutating func appendProcessLine(_ line: GradleOutputLine) {
+    mutating func appendProcessLine(_ line: IDEProjectOutputLine) {
         append(.process(line))
     }
 

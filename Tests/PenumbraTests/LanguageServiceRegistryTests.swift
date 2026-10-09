@@ -302,6 +302,49 @@ final class LanguageServiceRegistryTests: XCTestCase {
         ])
     }
 
+    /// Records into a class, not an actor: the project hooks are synchronous, so what they did is
+    /// there the moment the registry call returns.
+    private final class ProjectLog: @unchecked Sendable {
+        var events: [String] = []
+    }
+
+    private struct ProjectObservingService: LanguageService {
+        let name: String
+        let log: ProjectLog
+        let languageIdentifiers: Set<String> = []
+        let providers = LanguageProviders()
+        @MainActor func projectDidChange(root: URL?) { log.events.append("\(name) root=\(root?.path ?? "nil")") }
+        @MainActor func filesDidChange(_ urls: [URL]) { log.events.append("\(name) files=\(urls.map(\.lastPathComponent).joined(separator: ","))") }
+    }
+
+    @MainActor
+    func testProjectHooksReachEveryServiceInOrderBeforeTheCallReturns() {
+        let log = ProjectLog()
+        let registry = LanguageServiceRegistry(services: [
+            ProjectObservingService(name: "a", log: log),
+            service("plain", ["x"], LanguageProviders()),
+            ProjectObservingService(name: "b", log: log)
+        ])
+        registry.projectDidChange(root: URL(fileURLWithPath: "/proj"))
+        XCTAssertEqual(log.events, ["a root=/proj", "b root=/proj"], "Synchronous: a read right after the call sees the effect")
+
+        registry.filesDidChange([URL(fileURLWithPath: "/proj/A.java"), URL(fileURLWithPath: "/proj/B.java")])
+        registry.projectDidChange(root: nil)
+        XCTAssertEqual(log.events, [
+            "a root=/proj", "b root=/proj",
+            "a files=A.java,B.java", "b files=A.java,B.java",
+            "a root=nil", "b root=nil"
+        ])
+    }
+
+    @MainActor
+    func testAServiceWithoutProjectHooksIgnoresThem() {
+        let registry = LanguageServiceRegistry(services: [service("plain", ["x"], LanguageProviders())])
+        registry.projectDidChange(root: URL(fileURLWithPath: "/proj"))
+        registry.filesDidChange([URL(fileURLWithPath: "/proj/A.java")])
+        registry.projectDidChange(root: nil)
+    }
+
     func testAServiceThatDoesNotCareAboutTheLifecycleNeedsNothing() async {
         let registry = LanguageServiceRegistry(services: [service("plain", ["x"], LanguageProviders())])
         await registry.start(environment: LanguageEnvironment())

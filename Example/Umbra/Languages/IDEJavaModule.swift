@@ -3,9 +3,10 @@ import Penumbra
 import SwiftUI
 
 /// Java in Umbra's chrome: the Java palette commands, the Java menu, the Java and Inspections settings
-/// pages, and the Debug, Test Results, Hierarchy, Call Hierarchy and Gradle tool windows. The
-/// intelligence is `JavaLanguageService`; the project, run and debug machinery is still the workspace's
-/// and `IDEJavaSupport` (plan, phase 5).
+/// pages, the Debug, Test Results, Hierarchy and Call Hierarchy tool windows, the Run tab and the
+/// Breakpoints sidebar tab. The intelligence is `JavaLanguageService`; Run and Test are
+/// `IDEJavaRunProvider` (made by `makeRunProvider`), and the Gradle project, its sidebar and its console
+/// are `IDEGradleProjectSystem`'s. The debugger is the workspace's (Java-only).
 struct IDEJavaModule: IDELanguageModule {
     static let id = "java"
     var id: String { Self.id }
@@ -37,6 +38,10 @@ struct IDEJavaModule: IDELanguageModule {
         ]
     }
 
+    func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? {
+        IDEJavaRunProvider(host: workspace, java: workspace.javaSupport)
+    }
+
     func toolWindows(for workspace: IDEWorkspace) -> [IDEToolWindow] {
         var windows: [IDEToolWindow] = []
         if workspace.showsLeadingToolWindows {
@@ -63,20 +68,6 @@ struct IDEJavaModule: IDELanguageModule {
                 ))
             }
         }
-        if workspace.javaSupport.isGradleProject {
-            windows.append(IDEToolWindow(
-                id: "gradle", systemImage: "square.stack.3d.up", title: "Gradle", shortcut: nil, tint: .purple,
-                placement: .trailingTop, isOpen: workspace.showsGradleSidebar,
-                toggle: { [weak workspace] in workspace?.toggleGradleSidebar() },
-                order: IDEToolWindow.Order.gradleSidebar
-            ))
-        }
-        if workspace.showsGradleConsoleTab {
-            windows.append(workspace.bottomToolWindow(
-                .gradle, "text.alignleft", "Gradle Console", nil, .purple, .trailingBottom,
-                order: IDEToolWindow.Order.gradleConsole
-            ))
-        }
         return windows
     }
 
@@ -94,26 +85,6 @@ struct IDEJavaModule: IDELanguageModule {
                     ))
                 },
                 content: { _ in AnyView(IDERunPanel()) }
-            ))
-        }
-        if workspace.showsGradleConsoleTab {
-            tabs.append(IDEBottomTabContribution(
-                tab: .gradle, order: Order.gradle,
-                item: { workspace in
-                    AnyView(IDEGradleTabItem(
-                        isSelected: workspace.isGradleConsoleSelected,
-                        isSyncing: workspace.javaSupport.isGradleBusy,
-                        isFailed: workspace.javaSupport.gradleSync.isFailed,
-                        onSelect: { [weak workspace] in workspace?.selectGradleConsoleTab() }
-                    ))
-                },
-                content: { workspace in
-                    AnyView(IDEGradleConsoleView(
-                        log: workspace.javaSupport.gradleConsole,
-                        fontName: workspace.preferences.fontName,
-                        fontSize: workspace.preferences.fontSize
-                    ))
-                }
             ))
         }
         if workspace.showsTypeHierarchyTab {
@@ -250,9 +221,9 @@ private struct IDEJavaCommands: View {
                 .disabled(!(workspace?.canShowClassDiagram ?? false))
             Divider()
             Button("Show Gradle Module Diagram") { workspace?.showGradleModuleDiagram() }
-                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+                .disabled(!(workspace?.gradle.isActive ?? false))
             Button("Show Gradle Dependency Diagram") { workspace?.showGradleDependencyDiagram() }
-                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+                .disabled(!(workspace?.gradle.isActive ?? false))
         }
         Divider()
         Button("Optimize Imports", action: { workspace?.optimizeImports() })
@@ -261,11 +232,11 @@ private struct IDEJavaCommands: View {
             IDEJDKMenuFromRef(ref: ref)
         }
         Button("Build Project", systemImage: "hammer", action: { workspace?.buildGradleProject() })
-            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+            .disabled(!(workspace?.gradle.isActive ?? false))
         Button("Reload Gradle Project", action: { workspace?.reloadGradleProject() })
-            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
+            .disabled(!(workspace?.gradle.isActive ?? false))
         Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
-            .disabled(workspace?.javaSupport.gradleConsole.lines.isEmpty ?? true)
+            .disabled(workspace?.gradle.console.lines.isEmpty ?? true)
     }
 }
 
@@ -276,7 +247,6 @@ extension IDESidebarTab {
 extension IDEBottomPanelTab {
     /// The consoles of programs started with Run.
     static let run = IDEBottomPanelTab("run")
-    static let gradle = IDEBottomPanelTab("gradle")
     /// The supertype/subtype tree of the type last asked for with ⌃H.
     static let typeHierarchy = IDEBottomPanelTab("typeHierarchy")
     /// The results of the last test run.
