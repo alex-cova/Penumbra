@@ -133,6 +133,9 @@ public final class EditorIntelligenceController {
     /// Called when a lens label is clicked and the controller has no action of its own for it.
     /// Usage counts open Find Usages and implementation counts go to the implementations.
     public var onCodeVisionClick: ((CodeVisionEntry, Int) -> Void)?
+    /// Called when a code action that carries a ``CodeActionCommand`` is chosen, after its edits (if
+    /// any) were applied: the host does what the command names (Run, Debug…).
+    public var onCodeActionCommand: ((CodeActionCommand) -> Void)?
     /// Vertical range of content the last inlay hint request covered.
     private var inlayHintRequestedYRange: ClosedRange<CGFloat>?
     /// Whether hints are shown. Off clears them; hosts flip it from a preference.
@@ -1182,8 +1185,13 @@ public final class EditorIntelligenceController {
         guard let textView else {
             return
         }
-        TextEditApplicator.apply(action.edits, in: textView)
+        if !action.edits.isEmpty {
+            TextEditApplicator.apply(action.edits, in: textView)
+        }
         hideCodeActions()
+        if let command = action.command {
+            onCodeActionCommand?(command)
+        }
     }
 
     /// Refresh the outline sidebar from the symbol index.

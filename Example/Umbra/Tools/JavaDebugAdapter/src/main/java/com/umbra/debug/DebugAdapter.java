@@ -293,14 +293,18 @@ public final class DebugAdapter {
 
         List<String> cmd = new ArrayList<>();
         cmd.add(java);
-        for (String token : splitArgs(vmArgs)) cmd.add(token);
+        for (String token : argumentList(request, "vmArgsList", vmArgs)) cmd.add(token);
         cmd.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=" + (suspend ? "y" : "n") + ",address=*:" + port);
         cmd.add("-cp");
         cmd.add(classpath);
         cmd.add(mainClass);
-        for (String token : splitArgs(programArgs)) cmd.add(token);
+        for (String token : argumentList(request, "programArgsList", programArgs)) cmd.add(token);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
+        String workingDirectory = stringValue(request.get("workingDirectory"));
+        if (!workingDirectory.isEmpty()) pb.directory(new java.io.File(workingDirectory));
+        String inputFile = stringValue(request.get("inputFile"));
+        if (!inputFile.isEmpty()) pb.redirectInput(new java.io.File(inputFile));
         Map<String, String> env = pb.environment();
         Object envObj = request.get("environment");
         if (envObj instanceof Map<?, ?> map) {
@@ -1555,6 +1559,19 @@ public final class DebugAdapter {
         } catch (AbsentInformationException e) {
             return "";
         }
+    }
+
+    /**
+     * The arguments of a launch: the JSON array under {@code listKey} when the host sent one (each
+     * entry is exactly one argument, so quoting survives), else {@code text} split on whitespace.
+     */
+    private static List<String> argumentList(Map<String, Object> request, String listKey, String text) {
+        if (request.get(listKey) instanceof List<?> given) {
+            List<String> list = new ArrayList<>();
+            for (Object entry : given) list.add(String.valueOf(entry));
+            return list;
+        }
+        return splitArgs(text);
     }
 
     private static List<String> splitArgs(String text) {

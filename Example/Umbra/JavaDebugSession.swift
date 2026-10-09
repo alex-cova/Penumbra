@@ -196,8 +196,9 @@ final class JavaDebugSession {
                 "java": launch.javaExecutable.path,
                 "classpath": classpath,
                 "mainClass": launch.mainClass,
-                "programArgs": launch.programArguments.joined(separator: " "),
-                "vmArgs": launch.vmArguments.filter { !$0.contains("jdwp") }.joined(separator: " "),
+                // One entry per argument, so an argument with spaces stays one.
+                "programArgsList": launch.programArguments,
+                "vmArgsList": launch.vmArguments.filter { !$0.contains("jdwp") },
                 "port": launch.jdwpPort,
                 "suspend": launch.suspendOnStart,
                 "sourceRoots": sourceRoots.map(\.path)
@@ -205,6 +206,8 @@ final class JavaDebugSession {
             if !launch.environment.isEmpty {
                 request["environment"] = launch.environment
             }
+            if let directory = launch.workingDirectory { request["workingDirectory"] = directory.path }
+            if let input = launch.inputFile { request["inputFile"] = input.path }
             _ = try await send(request)
             await sync(breakpoints, muted: muted)
             state = .running

@@ -213,27 +213,11 @@ final class IDETerminalHostView: NSView {
         }
     }
 
-    private var pendingCommands: [String] = []
-
-    func sendCommand(_ command: String) {
-        let line = command.hasSuffix("\n") ? command : command + "\n"
-        pendingCommands.append(line)
-        flushPendingCommands()
-        guard !pendingCommands.isEmpty else { return }
-        // The shell may not be running until the view is laid out.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.flushPendingCommands()
-        }
-    }
-
     func startProcessIfNeeded() {
         guard !mirrorsOutput else { return }
         guard isActive, !isShutDown else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
-        guard !terminalView.process.running else {
-            flushPendingCommands()
-            return
-        }
+        guard !terminalView.process.running else { return }
 
         let shell = IDETerminalShell.resolvedShell()
         let cwd = (workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser).path
@@ -244,15 +228,6 @@ final class IDETerminalHostView: NSView {
             execName: IDETerminalShell.loginExecName(for: shell),
             currentDirectory: cwd
         )
-        flushPendingCommands()
-    }
-
-    private func flushPendingCommands() {
-        guard terminalView.process.running, !pendingCommands.isEmpty else { return }
-        for command in pendingCommands {
-            terminalView.send(txt: command)
-        }
-        pendingCommands.removeAll()
     }
 
     func handleProcessTerminated() {
@@ -289,11 +264,6 @@ final class IDETerminalHostView: NSView {
     }
 }
 
-@MainActor
-private enum IDETerminalCommandDelivery {
-    static var lastTicket: UInt64 = 0
-}
-
 // MARK: - Representable
 
 private struct IDETerminalHostRepresentable: NSViewRepresentable {
@@ -306,8 +276,6 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let focusRequestID: UInt64
     let restartRequestID: UInt64
     let clearRequestID: UInt64
-    let commandTicket: UInt64
-    let command: String?
     let mirrorsOutput: Bool
     let agentFeedGeneration: UInt64
     let takeAgentFeed: () -> String
@@ -333,7 +301,6 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         if isActive, !mirrorsOutput {
             view.scheduleFocus()
         }
-        deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
         deliverAgentFeed(generation: agentFeedGeneration, to: view, coordinator: context.coordinator)
         return view
     }
@@ -376,7 +343,6 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
                 view.restartProcess()
             }
         }
-        deliver(command, ticket: commandTicket, to: view, coordinator: context.coordinator)
         deliverAgentFeed(generation: agentFeedGeneration, to: view, coordinator: context.coordinator)
     }
 
@@ -384,15 +350,6 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         guard mirrorsOutput, generation != coordinator.lastAgentFeedGeneration else { return }
         coordinator.lastAgentFeedGeneration = generation
         view.feedOutput(takeAgentFeed())
-    }
-
-    private func deliver(_ command: String?, ticket: UInt64, to view: IDETerminalHostView, coordinator: Coordinator) {
-        // One ticket is delivered once, by whichever host is selected when the view exists.
-        // Remembering it per view would replay the command when switching terminal tabs.
-        guard let command, ticket > IDETerminalCommandDelivery.lastTicket else { return }
-        IDETerminalCommandDelivery.lastTicket = ticket
-        coordinator.lastCommandTicket = ticket
-        view.sendCommand(command)
     }
 
     func dismantleNSView(_ nsView: IDETerminalHostView, coordinator: Coordinator) {
@@ -408,7 +365,6 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         var lastFocusRequestID: UInt64 = 0
         var lastRestartRequestID: UInt64 = 0
         var lastClearRequestID: UInt64 = 0
-        var lastCommandTicket: UInt64 = 0
         var lastAgentFeedGeneration: UInt64 = 0
         var lastUIColorSchemeID = ""
         var wasActive = false
@@ -438,6 +394,8 @@ struct IDETerminalPanel: View {
                     IDEProblemsControls()
                 } else if workspace.isSourceControlSelected {
                     IDESourceControlControls()
+                } else if workspace.isRunSelected {
+                    IDERunControls()
                 } else if workspace.isGradleConsoleSelected {
                     IDEGradleConsoleControls()
                 } else if workspace.isHTTPConsoleSelected {
@@ -485,8 +443,6 @@ struct IDETerminalPanel: View {
                         focusRequestID: workspace.terminalFocusRequestID,
                         restartRequestID: tab.restartRequestID,
                         clearRequestID: tab.clearRequestID,
-                        commandTicket: isSelected ? workspace.terminalCommandTicket : 0,
-                        command: isSelected ? workspace.pendingTerminalCommand : nil,
                         mirrorsOutput: tab.agentCommandID != nil,
                         agentFeedGeneration: tab.agentFeedGeneration,
                         takeAgentFeed: { [weak workspace = workspace] in workspace?.takeAgentCommandFeed(tabID: tab.id) ?? "" },
@@ -500,6 +456,13 @@ struct IDETerminalPanel: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(isSelected ? 1 : 0)
                     .allowsHitTesting(isSelected)
+                }
+
+                if workspace.showsRunTab {
+                    IDERunPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(workspace.isRunSelected ? 1 : 0)
+                        .allowsHitTesting(workspace.isRunSelected)
                 }
 
                 if workspace.showsGradleConsoleTab {

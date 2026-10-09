@@ -77,8 +77,15 @@ final class SubprocessJob: @unchecked Sendable {
                     onOutput?(data, .stderr)
                 }
             }
-            if let fd = spawned.stdinFD, case .data(let data) = request.standardInput {
-                if data.isEmpty { close(fd) } else { stdinWriter = PipeWriter(fd: fd, data: data, queue: queue) }
+            if let fd = spawned.stdinFD {
+                switch request.standardInput {
+                case .data(let data):
+                    if data.isEmpty { close(fd) } else { stdinWriter = PipeWriter(fd: fd, data: data, queue: queue) }
+                case .interactive:
+                    stdinWriter = PipeWriter(fd: fd, data: Data(), closeAfterWriting: false, queue: queue)
+                case .closed:
+                    close(fd)
+                }
             }
             if let timeout = request.timeout {
                 let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -95,6 +102,19 @@ final class SubprocessJob: @unchecked Sendable {
 
     /// Stops the child as a cancellation does. A no-op once it has exited.
     func cancel() { terminate(.cancelled) }
+
+    var processIdentifier: pid_t { pid }
+
+    /// Sends `data` to an interactive child's stdin. Nothing happens for other requests, or once the
+    /// child has exited or stopped reading.
+    func write(_ data: Data) {
+        queue.async { [self] in stdinWriter?.append(data) }
+    }
+
+    /// Closes an interactive child's stdin after what was written, so it sees end of input.
+    func closeInput() {
+        queue.async { [self] in stdinWriter?.closeInput() }
+    }
 
     // MARK: - Exit
 

@@ -172,7 +172,7 @@ extension IDEWorkspace {
         }
         if runItems.isEmpty, gutter.mains.contains(where: { $0.line == click.line }) {
             let text = textView.text
-            if let location = JavaMainMethod.locations(in: text).first(where: { $0.line == click.line }),
+            if let location = JavaMainMethod.locations(in: text, fileName: gutter.fileURL.lastPathComponent).first(where: { $0.line == click.line }),
                let configuration = mainRunConfiguration(for: location, file: gutter.fileURL, source: text) {
                 runItems = IDERunGutterMenu.items(
                     title: "\(location.simpleClassName).main()",
@@ -402,7 +402,24 @@ extension IDEWorkspace {
         IDERunGutterMenu.popUp(menu, in: textView)
     }
 
-    func runTests(scope: JavaTestRunScope, title: String) {
+    /// Remembers a test run as a configuration, so Run Last and the picker can repeat it. The
+    /// configuration a run came from keeps its settings; any other run is a temporary one.
+    private func recordTestRun(scope: JavaTestRunScope, debug: Bool, from configuration: JavaRunConfiguration?) {
+        var recorded: JavaRunConfiguration
+        if let configuration {
+            recorded = configuration
+        } else {
+            let fresh = JavaRunConfiguration.makeTestLaunch(scope: scope)
+            let saved = runConfigurationStore.configurations(forProject: project.rootURL)
+            recorded = fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
+        }
+        recorded.launchMode = debug ? .debug : .run
+        runConfigurationStore.setLast(recorded, forProject: project.rootURL)
+        refreshLastRunConfiguration()
+    }
+
+    func runTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
+        recordTestRun(scope: scope, debug: false, from: recording)
         testResults.beginRun(label: "Running \(title)…", scope: scope)
         showTestResults()
         javaSupport.runTests(scope: scope)
@@ -411,11 +428,12 @@ extension IDEWorkspace {
     /// Runs tests under the debugger: Gradle starts the test JVM with `--debug-jvm`, which waits on
     /// the JDWP port until the adapter attaches, then the breakpoints stop in the tests. The
     /// results still arrive in the Test Results tab.
-    func debugTests(scope: JavaTestRunScope, title: String) {
+    func debugTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
         guard project.rootURL != nil, javaSupport.isGradleProject else {
             reportRunProblem("Debugging tests needs a Gradle project.")
             return
         }
+        recordTestRun(scope: scope, debug: true, from: recording)
         guard !javaSupport.isGradleBusy else {
             reportRunProblem("Gradle is busy. Stop the running task first, then debug ‘\(title)’ again.")
             return

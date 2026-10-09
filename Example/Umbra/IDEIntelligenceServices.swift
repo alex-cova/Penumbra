@@ -65,7 +65,7 @@ final class IDEIntelligenceServices {
                 })
             ]),
             signatureHelpProvider: javaSupport.completionProvider,
-            codeActionProvider: javaSupport.codeActionProvider,
+            codeActionProvider: IDECompositeCodeActionProvider(providers: [javaSupport.codeActionProvider, IDERunCodeActionProvider()]),
             renameProvider: javaSupport.renameProvider,
             refactoringProvider: javaSupport.refactoringProvider,
             codeGenerationProvider: JavaCodeGenerationProvider(),

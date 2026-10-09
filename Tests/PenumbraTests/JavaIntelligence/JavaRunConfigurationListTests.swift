@@ -193,7 +193,7 @@ final class JavaRunConfigurationListTests: XCTestCase {
         let store = JavaRunConfigurationStore(storeURL: file)
         let named = JavaRunConfiguration(name: "Keep", target: .singleFile(path: "/tmp/Keep.java"))
         store.setLast(named, forProject: root)
-        let cap = JavaRunConfigurationStore.maxUnnamedConfigurations
+        let cap = JavaRunConfigurationStore.defaultTemporaryLimit
         for index in 0..<(cap + 5) {
             store.setLast(JavaRunConfiguration(target: .singleFile(path: "/tmp/F\(index).java")), forProject: root)
         }

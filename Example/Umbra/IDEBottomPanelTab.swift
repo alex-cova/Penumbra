@@ -16,4 +16,6 @@ enum IDEBottomPanelTab: Hashable {
     case debug
     /// Callers and callees of the method last asked for.
     case callHierarchy
+    /// The consoles of programs started with Run.
+    case run
 }

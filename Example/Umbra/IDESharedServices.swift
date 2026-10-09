@@ -18,7 +18,8 @@ final class IDESharedServices {
     /// in all of them immediately.
     let gradleTrust: GradleTrustStore
     let jdkSelection: JDKSelectionStore
-    let runConfigurations: JavaRunConfigurationStore
+    /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
+    let runConfigurations: JavaRunConfigurationCatalog
     let breakpoints: JavaBreakpointStore
     /// One indexing run and one parsed shard per JDK and per dependency jar, for all windows.
     let shards: JavaSharedShardHub
@@ -29,7 +30,9 @@ final class IDESharedServices {
     private init() {
         gradleTrust = GradleTrustStore(storeURL: IDEJavaSupport.defaultGradleTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
-        runConfigurations = JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
+        runConfigurations = JavaRunConfigurationCatalog(
+            store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
+        )
         breakpoints = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
         let hub = JavaSharedShardHub()
         shards = hub

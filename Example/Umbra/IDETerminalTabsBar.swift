@@ -15,6 +15,13 @@ struct IDETerminalTabsBar: View {
                         onClose: { workspace.closeTerminalTab(tab.id) }
                     )
                 }
+                if workspace.showsRunTab {
+                    IDERunTabItem(
+                        isSelected: workspace.isRunSelected,
+                        isRunning: workspace.runs.isAnyActive,
+                        onSelect: { workspace.selectRunTab() }
+                    )
+                }
                 if workspace.showsGradleConsoleTab {
                     IDEGradleTabItem(
                         isSelected: workspace.isGradleConsoleSelected,

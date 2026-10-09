@@ -57,7 +57,7 @@ enum IDEPreferencesDomain: String, CaseIterable, Identifiable {
         case .agent:
             ["agent", "ai", "model", "openai", "ollama", "mlx", "api key", "provider", "plan", "approve edits", "autonomy", "context", "compaction", "history", "conversations", "secrets", "protected files", "environment", "steps", "iterations"]
         case .java:
-            ["jdk", "gradle", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports"]
+            ["jdk", "gradle", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary"]
         }
     }
 

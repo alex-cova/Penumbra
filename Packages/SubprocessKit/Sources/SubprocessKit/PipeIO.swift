@@ -63,34 +63,60 @@ final class PipeReader: @unchecked Sendable {
     }
 }
 
-/// Writes data to a child's stdin without blocking, then closes the pipe. A child that exits or
-/// closes stdin before everything was written ends the write quietly.
+/// Writes to a child's stdin without blocking. Either everything is given up front and the pipe is
+/// closed once it is written, or the pipe stays open and more arrives through `append(_:)` until
+/// `closeInput()`. A child that exits or closes stdin before everything was written ends the write
+/// quietly. Every method must run on the `queue` it was given.
 final class PipeWriter: @unchecked Sendable {
     private let fd: Int32
     private let source: DispatchSourceWrite
-    private let data: Data
-    private var offset = 0
+    private var pending: Data
+    private var closeWhenDrained: Bool
     private var finished = false
+    /// A write source that is resumed fires whenever the pipe has room, which is always while
+    /// nothing is waiting to be written; it is only resumed while there is something to send.
+    private var isResumed = false
 
-    init(fd: Int32, data: Data, queue: DispatchQueue) {
+    init(fd: Int32, data: Data, closeAfterWriting: Bool = true, queue: DispatchQueue) {
         self.fd = fd
-        self.data = data
+        pending = data
+        closeWhenDrained = closeAfterWriting
         setNonBlocking(fd)
         // A write to a pipe nobody reads raises SIGPIPE, which would end the app; ask for EPIPE instead.
         _ = fcntl(fd, F_SETNOSIGPIPE, 1)
         source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [self] in pump() }
         source.setCancelHandler { close(fd) }
-        source.resume()
+        if !pending.isEmpty {
+            resumeSource()
+        } else if closeWhenDrained {
+            stop()
+        }
     }
 
+    /// Queues `data` behind what is waiting. Ignored once the pipe is closed or the child stopped reading.
+    func append(_ data: Data) {
+        guard !finished, !closeWhenDrained, !data.isEmpty else { return }
+        pending.append(data)
+        resumeSource()
+    }
+
+    /// Closes the pipe once everything queued is written, so the child sees end of input.
+    func closeInput() {
+        guard !finished else { return }
+        closeWhenDrained = true
+        if pending.isEmpty { stop() } else { resumeSource() }
+    }
+
+    func cancel() { stop() }
+
     private func pump() {
-        while !finished, offset < data.count {
-            let written = data.withUnsafeBytes { raw in
-                write(fd, raw.baseAddress! + offset, raw.count - offset)
+        while !finished, !pending.isEmpty {
+            let written = pending.withUnsafeBytes { raw in
+                write(fd, raw.baseAddress!, raw.count)
             }
             if written > 0 {
-                offset += written
+                pending.removeSubrange(pending.startIndex..<pending.startIndex + written)
             } else if written < 0, errno == EINTR {
                 continue
             } else if written < 0, errno == EAGAIN {
@@ -100,14 +126,31 @@ final class PipeWriter: @unchecked Sendable {
                 return
             }
         }
-        stop()
+        guard !finished else { return }
+        if closeWhenDrained {
+            stop()
+        } else if isResumed {
+            isResumed = false
+            source.suspend()
+        }
     }
 
-    func cancel() { stop() }
+    private func resumeSource() {
+        guard !isResumed, !finished else { return }
+        isResumed = true
+        source.resume()
+    }
 
     private func stop() {
         guard !finished else { return }
         finished = true
+        pending = Data()
         source.cancel()
+        // A source that was never resumed (or is suspended) delivers no cancel handler, and
+        // releasing it in that state is a libdispatch error.
+        if !isResumed {
+            isResumed = true
+            source.resume()
+        }
     }
 }

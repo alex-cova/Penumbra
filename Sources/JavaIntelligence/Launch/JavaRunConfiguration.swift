@@ -18,6 +18,44 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         /// A compiled class launched with the runtime classpath of the Gradle source set that
         /// holds `sourceFile`: `java -cp <classpath> pkg.Main`. The classes must have been built.
         case classpathMain(className: String, sourceFile: String)
+        /// Tests run through a Gradle test task: `taskPath` is `:app:test`, `filters` are `--tests`
+        /// patterns (none runs the whole task). `sourceFile` is the test file the run was made from,
+        /// when there is one.
+        case gradleTest(taskPath: String, filters: [String], sourceFile: String?)
+    }
+
+    /// The groups of the Edit Configurations list, and what a template is keyed by.
+    public enum Kind: String, Codable, CaseIterable, Sendable {
+        case application
+        case javaFile
+        case gradle
+        case junit
+
+        public var title: String {
+            switch self {
+            case .application: return "Application"
+            case .javaFile: return "Java File"
+            case .gradle: return "Gradle"
+            case .junit: return "JUnit"
+            }
+        }
+    }
+
+    /// Something that runs before the program starts. A failure stops the launch.
+    public enum BeforeLaunchTask: Codable, Equatable, Sendable {
+        /// Gradle tasks, by path or name, run in one Gradle invocation.
+        case gradleTasks([String])
+        /// Another configuration of the project, run to its end first.
+        case runConfiguration(UUID)
+    }
+
+    /// How a long classpath is kept off the command line.
+    public enum ShortenCommandLine: String, Codable, Equatable, Sendable {
+        /// An `@argfile` when the classpath is long and the JDK (9+) can read one.
+        case auto
+        case none
+        /// Always an `@argfile`.
+        case argFile
     }
 
     /// Identifies the configuration in a project's list, across renames and edits.
@@ -38,6 +76,30 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public var jdwpPort: Int?
     /// When debugging, wait at startup until the debugger attaches.
     public var suspendOnStart: Bool
+    /// Made by running something without saving it: the picker shows it faded, and only the newest
+    /// few are kept. Save Configuration clears it. An unnamed configuration is temporary unless said
+    /// otherwise, which is also what files saved before the flag existed decode to.
+    public var isTemporary: Bool
+    /// Kept in `<project>/.umbra/runConfigurations` instead of this Mac's store, so it can be
+    /// committed and shared.
+    public var storeAsProjectFile: Bool
+    /// A group in the Edit Configurations list.
+    public var folder: String?
+    /// Where the program runs; `nil` is the project folder.
+    public var workingDirectory: String?
+    /// The JDK to run on (its home); `nil` is the project's JDK. Never written to a project file,
+    /// since a path to a JDK means nothing on another machine.
+    public var jdkHome: String?
+    /// Build the module's classes before every launch. Off, a build only happens when class
+    /// directories are missing.
+    public var buildBeforeRun: Bool
+    /// Start another instance while one of this configuration is still running, instead of
+    /// stopping the first.
+    public var allowMultipleInstances: Bool
+    public var beforeLaunch: [BeforeLaunchTask]
+    public var shortenCommandLine: ShortenCommandLine
+    /// A text file whose contents become the program's standard input.
+    public var redirectInputPath: String?
 
     public init(
         id: UUID = UUID(),
@@ -48,7 +110,17 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         environment: [String: String] = [:],
         launchMode: JavaLaunchMode = .run,
         jdwpPort: Int? = nil,
-        suspendOnStart: Bool = true
+        suspendOnStart: Bool = true,
+        isTemporary: Bool? = nil,
+        storeAsProjectFile: Bool = false,
+        folder: String? = nil,
+        workingDirectory: String? = nil,
+        jdkHome: String? = nil,
+        buildBeforeRun: Bool = true,
+        allowMultipleInstances: Bool = false,
+        beforeLaunch: [BeforeLaunchTask] = [],
+        shortenCommandLine: ShortenCommandLine = .auto,
+        redirectInputPath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -59,11 +131,27 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         self.launchMode = launchMode
         self.jdwpPort = jdwpPort
         self.suspendOnStart = suspendOnStart
+        self.isTemporary = isTemporary ?? Self.isBlank(name)
+        self.storeAsProjectFile = storeAsProjectFile
+        self.folder = folder
+        self.workingDirectory = workingDirectory
+        self.jdkHome = jdkHome
+        self.buildBeforeRun = buildBeforeRun
+        self.allowMultipleInstances = allowMultipleInstances
+        self.beforeLaunch = beforeLaunch
+        self.shortenCommandLine = shortenCommandLine
+        self.redirectInputPath = redirectInputPath
+    }
+
+    private static func isBlank(_ name: String?) -> Bool {
+        name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, target, programArguments, vmArguments, environment
         case launchMode, jdwpPort, suspendOnStart
+        case isTemporary, storeAsProjectFile, folder, workingDirectory, jdkHome
+        case buildBeforeRun, allowMultipleInstances, beforeLaunch, shortenCommandLine, redirectInputPath
     }
 
     /// Reads a configuration saved before configurations had an `id` and a `name`.
@@ -78,12 +166,32 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         launchMode = try container.decodeIfPresent(JavaLaunchMode.self, forKey: .launchMode) ?? .run
         jdwpPort = try container.decodeIfPresent(Int.self, forKey: .jdwpPort)
         suspendOnStart = try container.decodeIfPresent(Bool.self, forKey: .suspendOnStart) ?? true
+        isTemporary = try container.decodeIfPresent(Bool.self, forKey: .isTemporary) ?? Self.isBlank(name)
+        storeAsProjectFile = try container.decodeIfPresent(Bool.self, forKey: .storeAsProjectFile) ?? false
+        folder = try container.decodeIfPresent(String.self, forKey: .folder)
+        workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+        jdkHome = try container.decodeIfPresent(String.self, forKey: .jdkHome)
+        buildBeforeRun = try container.decodeIfPresent(Bool.self, forKey: .buildBeforeRun) ?? true
+        allowMultipleInstances = try container.decodeIfPresent(Bool.self, forKey: .allowMultipleInstances) ?? false
+        beforeLaunch = try container.decodeIfPresent([BeforeLaunchTask].self, forKey: .beforeLaunch) ?? []
+        shortenCommandLine = try container.decodeIfPresent(ShortenCommandLine.self, forKey: .shortenCommandLine) ?? .auto
+        redirectInputPath = try container.decodeIfPresent(String.self, forKey: .redirectInputPath)
     }
 
     /// The name to list: the user's, else ``defaultName``.
     public var displayName: String {
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? defaultName : trimmed
+    }
+
+    /// Which group of the Edit Configurations list this belongs to.
+    public var kind: Kind {
+        switch target {
+        case .gradleRun: return .gradle
+        case .singleFile: return .javaFile
+        case .classpathMain: return .application
+        case .gradleTest: return .junit
+        }
     }
 
     /// A short description of the target: `Gradle run (:app)`, the file's name, or the class.
@@ -96,7 +204,66 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
             return URL(fileURLWithPath: path).lastPathComponent
         case .classpathMain(let className, _):
             return className.split(separator: ".").last.map(String.init) ?? className
+        case .gradleTest(let taskPath, let filters, _):
+            guard let filter = filters.first else {
+                let project = taskPath.split(separator: ":", omittingEmptySubsequences: false).dropLast().joined(separator: ":")
+                return "All tests (\(project.isEmpty ? ":" : project))"
+            }
+            // `app.FooTest` or `app.FooTest.testAdds`: the class, and the method when a filter names one.
+            let parts = filter.split(separator: ".").map(String.init)
+            let simple = filters.count == 1 ? Self.testFilterLabel(parts) : "\(Self.testFilterLabel(parts)) +\(filters.count - 1)"
+            return simple
         }
+    }
+
+    /// `FooTest` for `app.FooTest`, `FooTest.testAdds` for `app.FooTest.testAdds`: a method name
+    /// starts lowercase, a class name does not.
+    private static func testFilterLabel(_ parts: [String]) -> String {
+        guard let last = parts.last else { return "" }
+        if let first = last.first, first.isLowercase, parts.count >= 2 {
+            return "\(parts[parts.count - 2]).\(last)"
+        }
+        return last
+    }
+
+    /// The configuration that runs `scope`: a Gradle test task filtered to its class or method.
+    public static func makeTestLaunch(scope: JavaTestRunScope) -> JavaRunConfiguration {
+        switch scope {
+        case .allInModule(let taskPath):
+            return JavaRunConfiguration(target: .gradleTest(taskPath: taskPath, filters: [], sourceFile: nil))
+        case .testClass(let testClass):
+            return JavaRunConfiguration(target: .gradleTest(
+                taskPath: testClass.gradleTaskPath, filters: [testClass.qualifiedName], sourceFile: testClass.sourceFile.path
+            ))
+        case .testMethod(let method, let taskPath):
+            return JavaRunConfiguration(target: .gradleTest(
+                taskPath: taskPath, filters: [method.gradleTestFilter(includeMethod: true)], sourceFile: method.sourceFile.path
+            ))
+        case .tests(let taskPath, let filters):
+            return JavaRunConfiguration(target: .gradleTest(taskPath: taskPath, filters: filters, sourceFile: nil))
+        }
+    }
+
+    /// The scope a ``Target/gradleTest(taskPath:filters:sourceFile:)`` target runs; `nil` for the others.
+    public var testScope: JavaTestRunScope? {
+        guard case .gradleTest(let taskPath, let filters, _) = target else { return nil }
+        return filters.isEmpty ? .allInModule(gradleTaskPath: taskPath) : .tests(taskPath: taskPath, filters: filters)
+    }
+
+    /// `path` with `transform` applied to every file path the configuration holds.
+    public func mappingPaths(_ transform: (String) -> String) -> JavaRunConfiguration {
+        var result = self
+        switch target {
+        case .gradleRun: break
+        case .singleFile(let path): result.target = .singleFile(path: transform(path))
+        case .classpathMain(let className, let sourceFile):
+            result.target = .classpathMain(className: className, sourceFile: transform(sourceFile))
+        case .gradleTest(let taskPath, let filters, let sourceFile):
+            result.target = .gradleTest(taskPath: taskPath, filters: filters, sourceFile: sourceFile.map(transform))
+        }
+        result.workingDirectory = workingDirectory.map(transform)
+        result.redirectInputPath = redirectInputPath.map(transform)
+        return result
     }
 
     /// The Gradle task a ``Target/gradleRun(projectPath:taskName:)`` target runs, `run` by default;
@@ -108,16 +275,61 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
 
     /// Whether ``vmArguments`` can be passed to this target.
     public var supportsVMArguments: Bool {
-        if case .gradleRun = target { return false }
-        return true
+        switch target {
+        case .gradleRun, .gradleTest: return false
+        case .singleFile, .classpathMain: return true
+        }
+    }
+
+    /// Whether ``environment`` reaches the program: only the launches Umbra starts itself do, since
+    /// Gradle's tasks run in a daemon that has its own.
+    public var supportsEnvironment: Bool {
+        switch target {
+        case .singleFile, .classpathMain: return true
+        case .gradleRun, .gradleTest: return false
+        }
+    }
+
+    /// Whether ``workingDirectory`` and ``redirectInputPath`` apply (the same launches as ``supportsEnvironment``).
+    public var supportsWorkingDirectory: Bool { supportsEnvironment }
+
+    /// Whether ``buildBeforeRun`` means anything: only a compiled class has a build to skip.
+    public var supportsBuildBeforeRun: Bool {
+        if case .classpathMain = target { return true }
+        return false
     }
 
     /// Whether Umbra can launch this configuration under the debugger.
     public var supportsDebugLaunch: Bool {
         switch target {
-        case .classpathMain, .gradleRun: return true
-        default: return false
+        case .classpathMain, .gradleRun, .gradleTest: return true
+        case .singleFile: return false
         }
+    }
+
+    /// A new configuration for `target` that starts from this one's settings, as a template does:
+    /// a fresh identity and no name, everything else kept.
+    public func instantiating(target: Target, name: String? = nil) -> JavaRunConfiguration {
+        var result = self
+        result.id = UUID()
+        result.name = name
+        result.target = target
+        result.isTemporary = false
+        return result
+    }
+
+    /// The template a project starts from before the user edits it, for configurations of `kind`.
+    public static func defaultTemplate(for kind: Kind) -> JavaRunConfiguration {
+        let target: Target
+        switch kind {
+        case .application: target = .classpathMain(className: "", sourceFile: "")
+        case .javaFile: target = .singleFile(path: "")
+        case .gradle: target = .gradleRun(projectPath: ":")
+        case .junit: target = .gradleTest(taskPath: ":test", filters: [], sourceFile: nil)
+        }
+        // A fixed identity per kind, so two defaults compare equal and "unchanged" can be told from "edited".
+        let identity = UUID(uuidString: "00000000-0000-0000-0000-00000000000\(Kind.allCases.firstIndex(of: kind) ?? 0)") ?? UUID()
+        return JavaRunConfiguration(id: identity, target: target, isTemporary: false)
     }
 
     /// `NAME=value` lines, one variable each, for an editable text field. Blank lines and lines
@@ -250,26 +462,41 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         result.launchMode = previous.launchMode
         result.jdwpPort = previous.jdwpPort
         result.suspendOnStart = previous.suspendOnStart
+        result.isTemporary = previous.isTemporary
+        result.storeAsProjectFile = previous.storeAsProjectFile
+        result.folder = previous.folder
+        result.workingDirectory = previous.workingDirectory
+        result.jdkHome = previous.jdkHome
+        result.buildBeforeRun = previous.buildBeforeRun
+        result.allowMultipleInstances = previous.allowMultipleInstances
+        result.beforeLaunch = previous.beforeLaunch
+        result.shortenCommandLine = previous.shortenCommandLine
+        result.redirectInputPath = previous.redirectInputPath
         return result
     }
 }
 
 /// The run configurations of each project, kept in a small JSON file so they survive a restart:
-/// a list (named ones are kept; runs of unnamed ones are remembered too, up to
-/// ``maxUnnamedConfigurations``) and which one is selected, which is what Run Last
-/// Configuration runs. Keyed by the project root's path (`""` for no project).
+/// a list (saved ones are kept; temporary ones, made by running something, are remembered too, up
+/// to a limit) and which one is selected, which is what Run Last Configuration runs. Templates, one
+/// per ``JavaRunConfiguration/Kind``, are the settings a new configuration starts from.
+///
+/// This holds only what stays on this Mac; ``JavaRunConfigurationCatalog`` adds the configurations
+/// a project keeps in its own folder. Keyed by the project root's path (`""` for no project).
 ///
 /// Reads the earlier format, one configuration per project, as a one-entry list.
 ///
 /// Like ``GradleTrustStore`` it should live in a stable, non-cache location (Umbra uses
 /// `~/Library/Application Support/<bundle id>/run-configurations.json`).
 public final class JavaRunConfigurationStore: @unchecked Sendable {
-    /// How many unnamed (automatically remembered) configurations a project keeps; the oldest go.
-    public static let maxUnnamedConfigurations = 12
+    /// How many temporary configurations a project keeps unless told otherwise; the oldest go.
+    public static let defaultTemporaryLimit = 5
 
     private struct Entry: Codable {
         var configurations: [JavaRunConfiguration] = []
         var selected: UUID?
+        /// `JavaRunConfiguration.Kind.rawValue` to the template; absent in files saved before templates.
+        var templates: [String: JavaRunConfiguration]?
     }
 
     private struct File: Codable {
@@ -331,14 +558,18 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
 
     /// Records `configuration` as the one just used or saved: it replaces the entry with the same
     /// `id` (keeping its place), or is added, and becomes the selected one.
-    public func setLast(_ configuration: JavaRunConfiguration, forProject root: URL?) {
+    public func setLast(
+        _ configuration: JavaRunConfiguration,
+        forProject root: URL?,
+        temporaryLimit: Int = JavaRunConfigurationStore.defaultTemporaryLimit
+    ) {
         lock.lock()
         defer { lock.unlock() }
         reloadIfChangedOnDisk()
         var entry = projects[key(for: root)] ?? Entry()
         upsert(configuration, into: &entry)
         entry.selected = configuration.id
-        trimUnnamed(&entry)
+        trimTemporary(&entry, limit: temporaryLimit)
         projects[key(for: root)] = entry
         persist()
     }
@@ -396,6 +627,48 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
         return copy
     }
 
+    /// Selects `id` even when it is not in this store: a configuration the project keeps in its own
+    /// folder is selected the same way.
+    public func setSelected(_ id: UUID, forProject root: URL?) {
+        lock.lock()
+        defer { lock.unlock() }
+        reloadIfChangedOnDisk()
+        var entry = projects[key(for: root)] ?? Entry()
+        entry.selected = id
+        projects[key(for: root)] = entry
+        persist()
+    }
+
+    /// The id of the selected configuration, whether or not this store holds it.
+    public func selectedID(forProject root: URL?) -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        reloadIfChangedOnDisk()
+        return projects[key(for: root)]?.selected
+    }
+
+    /// The settings new configurations of `kind` start from: what the user saved, else the defaults.
+    public func template(for kind: JavaRunConfiguration.Kind, forProject root: URL?) -> JavaRunConfiguration {
+        lock.lock()
+        defer { lock.unlock() }
+        reloadIfChangedOnDisk()
+        return projects[key(for: root)]?.templates?[kind.rawValue] ?? JavaRunConfiguration.defaultTemplate(for: kind)
+    }
+
+    public func setTemplate(_ template: JavaRunConfiguration, forProject root: URL?) {
+        lock.lock()
+        defer { lock.unlock() }
+        reloadIfChangedOnDisk()
+        var entry = projects[key(for: root)] ?? Entry()
+        var templates = entry.templates ?? [:]
+        var stored = template
+        stored.isTemporary = false
+        templates[template.kind.rawValue] = stored
+        entry.templates = templates
+        projects[key(for: root)] = entry
+        persist()
+    }
+
     private func upsert(_ configuration: JavaRunConfiguration, into entry: inout Entry) {
         if let index = entry.configurations.firstIndex(where: { $0.id == configuration.id }) {
             entry.configurations[index] = configuration
@@ -404,16 +677,13 @@ public final class JavaRunConfigurationStore: @unchecked Sendable {
         }
     }
 
-    /// Drops the oldest unnamed configurations beyond the cap, never the selected one.
-    private func trimUnnamed(_ entry: inout Entry) {
-        func isUnnamed(_ configuration: JavaRunConfiguration) -> Bool {
-            configuration.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        }
-        var excess = entry.configurations.filter(isUnnamed).count - Self.maxUnnamedConfigurations
+    /// Drops the oldest temporary configurations beyond `limit`, never the selected one.
+    private func trimTemporary(_ entry: inout Entry, limit: Int) {
+        var excess = entry.configurations.filter(\.isTemporary).count - max(0, limit)
         guard excess > 0 else { return }
         let selected = entry.selected
         entry.configurations.removeAll { configuration in
-            guard excess > 0, isUnnamed(configuration), configuration.id != selected else { return false }
+            guard excess > 0, configuration.isTemporary, configuration.id != selected else { return false }
             excess -= 1
             return true
         }

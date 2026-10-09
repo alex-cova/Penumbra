@@ -25,6 +25,18 @@ struct IDEPreferencesJavaPane: View {
             )
         }
 
+        IDESettingsSection(
+            "Run",
+            footer: "Running a class or a test from its gutter button makes a temporary run configuration. Only the newest few are kept, shown faded in the run picker; Save Configuration keeps one for good."
+        ) {
+            IDEPreferencesIntStepper(
+                title: "Temporary Configurations",
+                value: $preferences.runTemporaryConfigurationLimit,
+                range: 1...50,
+                valueWidth: 32
+            )
+        }
+
         IDESettingsSection("Analysis") {
             IDESettingsToggle(
                 "Compiler Diagnostics",

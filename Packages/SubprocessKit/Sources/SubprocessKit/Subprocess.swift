@@ -30,7 +30,10 @@ enum Subprocess {
             let stdout = try makePipe()
             let stderr = request.output == .merged ? nil : try makePipe()
             var stdin: (read: Int32, write: Int32)?
-            if case .data = request.standardInput { stdin = try makePipe() }
+            switch request.standardInput {
+            case .data, .interactive: stdin = try makePipe()
+            case .closed: break
+            }
 
             var actions: posix_spawn_file_actions_t? = nil
             posix_spawn_file_actions_init(&actions)

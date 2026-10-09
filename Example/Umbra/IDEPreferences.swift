@@ -75,6 +75,7 @@ public final class IDEPreferences {
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
         static let showStickyLines = "com.umbra.editor.showStickyLines"
         static let maximumStickyLines = "com.umbra.editor.maximumStickyLines"
+        static let runTemporaryConfigurationLimit = "com.umbra.editor.runTemporaryConfigurationLimit"
         static let stickyLinesDisabledLanguages = "com.umbra.editor.stickyLinesDisabledLanguages"
         static let showsDocumentationOnHover = "com.umbra.editor.showsDocumentationOnHover"
         static let tooltipDelayMilliseconds = "com.umbra.editor.tooltipDelayMilliseconds"
@@ -291,6 +292,14 @@ public final class IDEPreferences {
     }
 
     /// The most lines sticky lines pin at once (1...10).
+    /// How many temporary run configurations a project keeps (Settings ▸ Java ▸ Run); kept on this Mac.
+    var runTemporaryConfigurationLimit: Int {
+        didSet {
+            UserDefaults.standard.set(runTemporaryConfigurationLimit, forKey: Keys.runTemporaryConfigurationLimit)
+            IDESharedServices.shared.runConfigurations.temporaryLimit = runTemporaryConfigurationLimit
+        }
+    }
+
     var maximumStickyLines: Int {
         didSet { UserDefaults.standard.set(maximumStickyLines, forKey: Keys.maximumStickyLines) }
     }
@@ -649,6 +658,12 @@ public final class IDEPreferences {
         highlightsCurrentScope = defaults.object(forKey: Keys.highlightsCurrentScope) as? Bool ?? true
         showStickyLines = defaults.object(forKey: Keys.showStickyLines) as? Bool ?? true
         maximumStickyLines = min(max(defaults.object(forKey: Keys.maximumStickyLines) as? Int ?? 5, 1), 10)
+        let temporaryLimit = min(max(
+            defaults.object(forKey: Keys.runTemporaryConfigurationLimit) as? Int ?? JavaRunConfigurationStore.defaultTemporaryLimit, 1
+        ), 50)
+        runTemporaryConfigurationLimit = temporaryLimit
+        // A property's observer does not run for its first value, so hand the saved one over here.
+        IDESharedServices.shared.runConfigurations.temporaryLimit = temporaryLimit
         stickyLinesDisabledLanguages = defaults.stringArray(forKey: Keys.stickyLinesDisabledLanguages) ?? []
         showsDocumentationOnHover = defaults.object(forKey: Keys.showsDocumentationOnHover) as? Bool ?? true
         let storedTooltipDelay = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500

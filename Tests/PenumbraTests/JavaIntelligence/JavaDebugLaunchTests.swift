@@ -80,7 +80,7 @@ final class JavaDebugLaunchTests: XCTestCase {
         ))
         XCTAssertEqual(launch.mainClass, "demo.Main")
         XCTAssertEqual(launch.classpath, classpath)
-        XCTAssertEqual(launch.programArguments, ["one", "\"two", "words\""])
+        XCTAssertEqual(launch.programArguments, ["one", "two words"])
         XCTAssertEqual(launch.environment, ["MODE": "dev"])
         XCTAssertEqual(launch.jdwpPort, 9000)
         XCTAssertFalse(launch.suspendOnStart)

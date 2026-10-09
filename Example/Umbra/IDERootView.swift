@@ -216,11 +216,11 @@ public struct IDERootView: View {
             }
         }
         .sheet(isPresented: Binding(
-            get: { workspace.runConfigurationDraft != nil },
+            get: { workspace.runConfigurationsEditor != nil },
             set: { if !$0 { workspace.dismissRunConfigurationSheet() } }
         )) {
-            if let configuration = workspace.runConfigurationDraft {
-                IDERunConfigurationSheet(configuration: configuration)
+            if let editor = workspace.runConfigurationsEditor {
+                IDERunConfigurationsWindow(editor: editor)
                     .environment(workspace)
                     .preferredColorScheme(IDEAppearance.preferredColorScheme)
             }

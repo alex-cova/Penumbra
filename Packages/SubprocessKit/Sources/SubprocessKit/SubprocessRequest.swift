@@ -16,6 +16,10 @@ public struct SubprocessRequest: Sendable {
         case closed
         /// Written to the child, then closed. A child that stops reading early is not an error.
         case data(Data)
+        /// A pipe that stays open: only `SubprocessRunner.start` can write to it (through the
+        /// handle it returns), and the child sees end of input at `closeInput()` or when it exits.
+        /// With `run` or `runBlocking` nothing writes, so the child waits for input that never comes.
+        case interactive
     }
     public var standardInput: StandardInput = .closed
 

@@ -79,7 +79,7 @@ struct IDEGradleTaskPickerSheet: View {
                 return .handled
             }
 
-            Text("Your choice is saved as a run configuration. Change it with Edit Run Configuration.")
+            Text("Your choice is saved as a run configuration. Change it with Edit Configurations.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
 

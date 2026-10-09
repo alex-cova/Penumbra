@@ -148,6 +148,10 @@ public final class IDEWorkspace {
     let usages = IDEUsagesStore()
     /// The Test Results tab's content; empty until a test run finishes.
     let testResults = IDETestResultsStore()
+    /// The programs Run started, shown in the Run tab of the bottom panel.
+    let runs = IDERunSessions()
+    /// Bumped by the Run tab's "Scroll to End" so the console jumps to the bottom.
+    var runScrollToEndRequest = 0
     private var nameIndexOverlayTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private let projectWatcher = IDEProjectWatcher()
     @ObservationIgnored
@@ -307,7 +311,7 @@ public final class IDEWorkspace {
     var javaFileCanRun = false
     /// True when the active editor is a Java test source file with discovered tests.
     var javaFileCanTest = false
-    private var javaRunFileURL: URL?
+    private(set) var javaRunFileURL: URL?
     var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -321,11 +325,20 @@ public final class IDEWorkspace {
     private(set) var lastRunConfiguration: JavaRunConfiguration?
     /// Every run configuration of the project, for the toolbar picker.
     private(set) var runConfigurations: [JavaRunConfiguration] = []
-    /// A classpath launch waiting for `classes` to finish building the outputs it runs from.
-    private var launchAfterClassesBuild: (configuration: JavaRunConfiguration, task: String)?
+    /// Bumped by Stop. A debug launch that is still building notices and gives up.
+    @ObservationIgnored var launchEpoch = 0
     var gradleDebugActive = false
-    /// The configuration being edited in the run configuration sheet; the sheet shows while set.
-    var runConfigurationDraft: JavaRunConfiguration?
+    /// The working copy behind the Edit Configurations dialog; the dialog shows while it is set.
+    var runConfigurationsEditor: IDERunConfigurationsEditor?
+    /// The configuration the Edit Configurations dialog is open on. Setting one opens the dialog
+    /// on it (a gutter's Modify Run Configuration…, a launch that needs fixing); `nil` closes it.
+    var runConfigurationDraft: JavaRunConfiguration? {
+        get {
+            guard let editor = runConfigurationsEditor, let id = editor.selectedConfigurationID else { return nil }
+            return editor.configurations.first { $0.id == id }
+        }
+        set { runConfigurationsEditor = newValue.map { makeRunConfigurationsEditor(highlighting: $0) } }
+    }
     /// Run or Debug was pressed in a Gradle module with neither `run` nor `bootRun`: the task
     /// picker shows while set.
     var gradleRunTaskPrompt: IDEGradleRunTaskPrompt?
@@ -343,7 +356,8 @@ public final class IDEWorkspace {
     @ObservationIgnored private let generatePrompt = IDEGeneratePrompt()
     /// The app's shared stores (see `IDESharedServices`): every window reads and writes the same
     /// instances, so one window's change is neither lost nor missed by another.
-    private let runConfigurationStore = IDESharedServices.shared.runConfigurations
+    /// Replaceable so a test does not write to the real store.
+    @ObservationIgnored var runConfigurationStore = IDESharedServices.shared.runConfigurations
     let breakpointStore = IDESharedServices.shared.breakpoints
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
@@ -363,9 +377,6 @@ public final class IDEWorkspace {
     }
     @ObservationIgnored private var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
-    /// Bumped when the play button should type a command into the selected terminal.
-    var terminalCommandTicket: UInt64 = 0
-    var pendingTerminalCommand: String?
     var isMarkdownPreviewVisible = false
     var isJSONDiagramVisible = false
     var isCSVTableVisible = false
@@ -439,6 +450,12 @@ public final class IDEWorkspace {
         get { selectedBottomTab == .debug }
         set { setBottomTab(.debug, selected: newValue) }
     }
+    var isRunSelected: Bool {
+        get { selectedBottomTab == .run }
+        set { setBottomTab(.run, selected: newValue) }
+    }
+    /// The Run tab appears with the first program Run starts, and stays while any console is kept.
+    var showsRunTab: Bool { runs.hasContent }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
     /// been requested, and goes when it is closed.
     var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent }
@@ -617,7 +634,6 @@ public final class IDEWorkspace {
             self?.applyGradleBuildOutput(result, projectRoot: root, tasks: tasks)
             self?.notifyGradleTasks(tasks, result: result)
             self?.applyGradleTestOutput(tasks: tasks, projectRoot: root, result: result)
-            self?.continueAfterClassesBuild(tasks: tasks, exitCode: result.exitCode)
         }
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
             self?.compilerDidReconfigure()
@@ -764,6 +780,7 @@ public final class IDEWorkspace {
         streamTraceWindow = nil
         stopProjectActivity()
         terminateTerminals()
+        runs.stopAll()
         projectWatcher.onBatch = []
         projectWatcher.stop()
         gitStatus.setRoot(nil)
@@ -1452,6 +1469,9 @@ public final class IDEWorkspace {
         if showsTestResultsTab {
             add("testResults", "Test Results") { [weak self] in self?.selectTestResultsTab() }
         }
+        if showsRunTab {
+            add("run", "Run Output") { [weak self] in self?.selectRunTab() }
+        }
         if showsGradleConsoleTab {
             add("gradleConsole", "Gradle Output") { [weak self] in self?.selectGradleConsoleTab() }
         }
@@ -1591,7 +1611,7 @@ public final class IDEWorkspace {
     /// Something Run or Debug started is still going: a Gradle task (the program itself, or the
     /// build ahead of a classpath launch) or a debug session. Stop ends it.
     var isRunActive: Bool {
-        javaSupport.isRunningGradleTasks || debugSession.isActive
+        javaSupport.isRunningGradleTasks || debugSession.isActive || runs.isAnyActive
     }
 
     /// Hammer for an open Gradle project. Runs `build` for the whole project, every subproject
@@ -1619,7 +1639,8 @@ public final class IDEWorkspace {
 
     /// Stop button: ends the debug session and the Gradle task behind a run.
     func stopRunning() {
-        launchAfterClassesBuild = nil
+        launchEpoch += 1
+        runs.stopAll()
         if debugSession.isActive || gradleDebugActive {
             stopDebugging()
         }
@@ -1675,30 +1696,17 @@ public final class IDEWorkspace {
     /// Opens the run configuration sheet for the active file's launch, or for the last one when
     /// the active file can't be launched.
     func editRunConfiguration() {
-        guard let configuration = activeRunConfiguration() ?? lastRunConfiguration else { return }
-        runConfigurationDraft = configuration
+        runConfigurationsEditor = makeRunConfigurationsEditor(
+            highlighting: activeRunConfiguration() ?? lastRunConfiguration
+        )
     }
 
     var canEditRunConfiguration: Bool {
-        javaFileCanRun || lastRunConfiguration != nil
+        project.rootURL != nil || javaFileCanRun || lastRunConfiguration != nil
     }
 
     func dismissRunConfigurationSheet() {
-        runConfigurationDraft = nil
-    }
-
-    func saveRunConfiguration(_ configuration: JavaRunConfiguration, run: Bool) {
-        runConfigurationDraft = nil
-        if run {
-            if configuration.launchMode == .debug {
-                debugLaunch(configuration)
-            } else {
-                launch(configuration)
-            }
-        } else {
-            runConfigurationStore.setLast(configuration, forProject: project.rootURL)
-            refreshLastRunConfiguration()
-        }
+        runConfigurationsEditor = nil
     }
 
     /// The active file's default launch, carrying over what was last typed for the same target.
@@ -1723,42 +1731,24 @@ public final class IDEWorkspace {
         return fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
     }
 
-    private func launch(_ configuration: JavaRunConfiguration) {
+    func launch(_ configuration: JavaRunConfiguration) {
         if configuration.launchMode == .debug {
             debugLaunch(configuration)
             return
         }
-        let root = project.rootURL
         if case .gradleRun(let projectPath, let taskName) = configuration.target {
-            launchGradleRun(configuration, projectPath: projectPath, taskName: taskName ?? "run")
+            runBeforeLaunchSteps(for: configuration) { [self] in
+                launchGradleRun(configuration, projectPath: projectPath, taskName: taskName ?? "run")
+            }
             return
         }
-        let wrapper = root.map {
-            FileManager.default.fileExists(atPath: $0.appendingPathComponent("gradlew").path)
-        } ?? false
-        var classpath: [URL]?
-        if case .classpathMain(_, let sourceFile) = configuration.target {
-            classpath = javaSupport.gradleModel?.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile))
-            guard let classpath else {
-                reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project that contains \((sourceFile as NSString).lastPathComponent).")
-                return
+        if let scope = configuration.testScope {
+            runBeforeLaunchSteps(for: configuration) { [self] in
+                runTests(scope: scope, title: configuration.displayName, recording: configuration)
             }
-            // A class that was never built can't run: build it first, then launch.
-            if !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty {
-                buildClassesThenLaunch(configuration, sourceFile: sourceFile)
-                return
-            }
-        }
-        guard let command = JavaLaunchCommand.make(
-            configuration: configuration, projectRoot: root, gradleWrapperExists: wrapper, runtimeClasspath: classpath,
-            javaHome: javaSupport.jdk.current?.installation.home
-        ) else {
-            reportRunProblem("“\(configuration.displayName)” can't be launched: check its target.")
             return
         }
-        runConfigurationStore.setLast(configuration, forProject: root)
-        refreshLastRunConfiguration()
-        runInTerminal(command.shellCommand)
+        startRunSession(configuration)
     }
 
     /// A Gradle run task goes through the Gradle runner, not the terminal, so Stop can end it
@@ -1782,9 +1772,17 @@ public final class IDEWorkspace {
         )
     }
 
-    func debugLaunch(_ configuration: JavaRunConfiguration) {
+    func debugLaunch(_ configuration: JavaRunConfiguration, skippingBeforeLaunch: Bool = false) {
         guard configuration.supportsDebugLaunch else {
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
+            return
+        }
+        // Gradle launches have no run session to carry the before-launch steps; do them here first.
+        if !skippingBeforeLaunch, configuration.kind == .gradle || configuration.kind == .junit,
+           !configuration.beforeLaunch.isEmpty {
+            runBeforeLaunchSteps(for: configuration) { [self] in
+                debugLaunch(configuration, skippingBeforeLaunch: true)
+            }
             return
         }
         let root = project.rootURL
@@ -1837,21 +1835,32 @@ public final class IDEWorkspace {
                 )
             }
         case .classpathMain(_, let sourceFile):
-            guard let classpath = javaSupport.gradleModel?.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
-                reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project.")
+            if let problem = validationProblems(for: configuration).first {
+                reportRunProblem("“\(configuration.displayName)” can't be debugged: \(problem.message)")
+                runConfigurationDraft = configuration
                 return
             }
-            if !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty {
-                var debugConfig = configuration
-                debugConfig.launchMode = .debug
-                buildClassesThenLaunch(debugConfig, sourceFile: sourceFile)
-                return
-            }
-            let maxLanguageLevel = javaSupport.gradleModel?.maxLanguageLevel
+            let epoch = launchEpoch
             Task { [self] in
-                let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation
-                guard let jdk else {
+                // Before-launch steps and the build come first, as for a run; Stop cancels them.
+                let progress = LaunchProgress(
+                    isActive: { [weak self] in self?.launchEpoch == epoch },
+                    note: { _ in },
+                    fail: { [weak self] in self?.reportRunProblem("“\(configuration.displayName)”: \($0)") }
+                )
+                var chain: Set<UUID> = [configuration.id]
+                guard await prepareLaunch(configuration, progress: progress, chain: &chain), launchEpoch == epoch else { return }
+                guard let jdk = await resolveRunJDK(for: configuration) else {
                     reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                guard let classpath = javaSupport.gradleModel?.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
+                    reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project.")
+                    return
+                }
+                let newProtocol = usesNewLaunchProtocol(configuration)
+                if newProtocol, jdk.featureVersion < JavaLaunchCommand.minimumJavaForNewLaunchProtocol {
+                    reportRunProblem("“\(configuration.displayName)”: its main method needs Java \(JavaLaunchCommand.minimumJavaForNewLaunchProtocol) or later.")
                     return
                 }
                 let port = JavaDebugPortPicker.pickPort(preferred: configuration.jdwpPort)
@@ -1859,7 +1868,11 @@ public final class IDEWorkspace {
                     configuration: configuration,
                     javaHome: jdk.home,
                     runtimeClasspath: classpath,
-                    jdwpPort: port
+                    jdwpPort: port,
+                    projectRoot: root,
+                    extraVMArguments: JavaLaunchCommand.newLaunchProtocolArguments(
+                        usesNewLaunchProtocol: newProtocol, jdkFeatureVersion: jdk.featureVersion, sourceLaunch: false
+                    )
                 ) else {
                     reportRunProblem("Could not build a debug launch for “\(configuration.displayName)”.")
                     return
@@ -1871,6 +1884,9 @@ public final class IDEWorkspace {
                 configureDebugSession()
                 await debugSession.start(launch: launch, breakpoints: breakpoints, muted: breakpointsMuted, sourceRoots: debugSourceRoots())
             }
+        case .gradleTest:
+            guard let scope = configuration.testScope else { return }
+            debugTests(scope: scope, title: configuration.displayName, recording: configuration)
         default:
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
         }
@@ -1948,7 +1964,7 @@ public final class IDEWorkspace {
     /// fresh at click time: the buttons may be one debounce behind an edit.
     func showMainRunMenu(atLine line: Int, file: URL, in textView: TextView) {
         let text = textView.text
-        guard let location = JavaMainMethod.locations(in: text).first(where: { $0.line == line }),
+        guard let location = JavaMainMethod.locations(in: text, fileName: file.lastPathComponent).first(where: { $0.line == line }),
               let configuration = mainRunConfiguration(for: location, file: file, source: text) else { return }
         let menu = IDERunGutterMenu.make(
             title: "\(location.simpleClassName).main()",
@@ -2159,38 +2175,12 @@ public final class IDEWorkspace {
         }
     }
 
-    /// Runs the Gradle `classes` task of the source set holding `sourceFile`, and launches
-    /// `configuration` once it succeeds. The Gradle console shows the build.
-    private func buildClassesThenLaunch(_ configuration: JavaRunConfiguration, sourceFile: String) {
-        guard let match = javaSupport.gradleModel?.sourceSet(containing: URL(fileURLWithPath: sourceFile)) else { return }
-        let taskName = match.sourceSet.name == "main" ? "classes" : "\(match.sourceSet.name)Classes"
-        let task = match.subproject.path == ":" ? taskName : "\(match.subproject.path):\(taskName)"
-        launchAfterClassesBuild = (configuration, task)
-        showGradleOutput()
-        // The run resets the console; the reason for it is added once it has.
-        javaSupport.runGradleTasks([task])
-    }
-
-    /// Called when a Gradle task run ends: launches the classpath configuration that was waiting
-    /// on the build, if the build succeeded.
-    private func continueAfterClassesBuild(tasks: [String], exitCode: Int32) {
-        // Only the run that was started for this launch counts; any other Gradle run just
-        // leaves the request waiting, and a new launch replaces it.
-        guard let pending = launchAfterClassesBuild, tasks == [pending.task] else { return }
-        launchAfterClassesBuild = nil
-        guard exitCode == 0 else {
-            reportRunProblem("Build failed, so “\(pending.configuration.displayName)” was not started. Errors are listed under Problems.")
-            return
-        }
-        launch(pending.configuration)
-    }
-
     func reportRunProblem(_ message: String) {
         javaSupport.appendGradleConsoleNote(message)
         showGradleOutput()
     }
 
-    private func refreshLastRunConfiguration() {
+    func refreshLastRunConfiguration() {
         lastRunConfiguration = runConfigurationStore.last(forProject: project.rootURL)
         runConfigurations = runConfigurationStore.configurations(forProject: project.rootURL)
     }
@@ -2214,7 +2204,7 @@ public final class IDEWorkspace {
         runConfigurationDraft = configuration
     }
 
-    /// Opens the sheet on a new configuration: a classpath launch of the active file inside a Gradle
+    /// Opens the dialog on a new configuration: a classpath launch of the active file inside a Gradle
     /// source set, else what Run would use for it, else a Gradle run of the root project.
     func newRunConfiguration() {
         var draft: JavaRunConfiguration?
@@ -2225,9 +2215,9 @@ public final class IDEWorkspace {
             file: javaRunFileURL, projectRoot: project.rootURL,
             isGradleProject: javaSupport.isGradleProject, model: javaSupport.gradleModel
         )
-        var configuration = draft ?? JavaRunConfiguration(target: .gradleRun(projectPath: ":"))
-        configuration.name = "New Configuration"
-        runConfigurationDraft = configuration
+        let editor = makeRunConfigurationsEditor(highlighting: nil)
+        editor.add(kind: draft?.kind ?? .gradle, target: draft?.target ?? .gradleRun(projectPath: ":"))
+        runConfigurationsEditor = editor
     }
 
     func duplicateRunConfiguration(_ id: UUID) {
@@ -2262,22 +2252,6 @@ public final class IDEWorkspace {
 
     func showHTTPResponse() {
         selectHTTPConsoleTab()
-    }
-
-    private func runInTerminal(_ command: String) {
-        // Build and run always need an actual shell, even if the Gradle console tab is what's
-        // currently showing.
-        isGradleConsoleSelected = false
-        isHTTPConsoleSelected = false
-        isSourceControlSelected = false
-        if terminalTabs.isEmpty {
-            addTerminalTab(saveSession: false)
-        } else if !isTerminalVisible {
-            isTerminalVisible = true
-            requestTerminalFocus()
-        }
-        pendingTerminalCommand = command
-        terminalCommandTicket += 1
     }
 
     func toggleBottomPanelExpanded() {
@@ -4192,6 +4166,9 @@ public final class IDEWorkspace {
         host.intelligenceController?.onRequestTypeHierarchy = { [weak self] in
             self?.showTypeHierarchy() ?? false
         }
+        host.intelligenceController?.onCodeActionCommand = { [weak self] command in
+            self?.performRunCodeAction(command)
+        }
         host.intelligenceController?.onRequestRename = { [weak self, weak host] target, completion in
             guard let self, let textView = host?.textView else { return completion(nil) }
             self.renamePrompt.present(target: target, in: textView, completion: completion)
@@ -5156,7 +5133,7 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.debugStepOut() }),
             EditorCommand(id: "app.debug.stop", title: "Debug: Stop", group: "Run",
                           action: { [weak self] in self?.stopDebugging() }),
-            EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Run Configuration…", group: "Java",
+            EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Configurations…", group: "Java",
                           action: { [weak self] in self?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
                           action: { [weak self] in self?.reloadGradleProject() }),
@@ -5205,6 +5182,10 @@ public final class IDEWorkspace {
             self.gitStatus.refresh()
             self.fileIndexer.handle(batch)
             self.intelligenceServices.javaSupport.projectFilesChanged(batch.paths)
+            // A teammate's change (a pull) or a hand edit of a shared run configuration.
+            if batch.paths.contains(where: { $0.contains("/\(JavaProjectRunConfigurationFolder.relativePath)/") }) {
+                self.refreshLastRunConfiguration()
+            }
         }]
         if let url {
             recordRecentProject(url)
@@ -5874,7 +5855,7 @@ public final class IDEWorkspace {
             textView.alwaysShowGutterDecorationColumn = false
             return
         }
-        let mains = await mainLocations(in: textView)
+        let mains = await mainLocations(in: textView, fileName: fileURL.lastPathComponent)
         var testClass: JavaTestClass?
         var classLine: Int?
         if await javaSupport.isTestSource(file: fileURL) {
@@ -5913,7 +5894,7 @@ public final class IDEWorkspace {
 
     /// The `main` methods in `textView`'s buffer, parsed off the main thread and reused until the
     /// buffer changes. `containsMain` screens out the common file without one before parsing.
-    func mainLocations(in textView: TextView) async -> [JavaMainMethodLocation] {
+    func mainLocations(in textView: TextView, fileName: String?) async -> [JavaMainMethodLocation] {
         let view = ObjectIdentifier(textView)
         let generation = textView.contentGeneration
         if let cached = javaMainLocations, cached.view == view, cached.generation == generation {
@@ -5921,7 +5902,7 @@ public final class IDEWorkspace {
         }
         let text = textView.text
         let locations = await Task.detached(priority: .utility) {
-            JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text) : []
+            JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text, fileName: fileName) : []
         }.value
         javaMainLocations = JavaMainLocations(view: view, generation: generation, locations: locations)
         return locations
