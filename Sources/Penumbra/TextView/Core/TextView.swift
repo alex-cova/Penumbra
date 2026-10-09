@@ -3176,7 +3176,8 @@ extension TextView: TextInputViewDelegate {
 
 extension TextView {
     /// UTF-8 write of the live buffer. File-backed documents stream piece UTF-8; they do not
-    /// materialize ``text``. Throws ``DocumentWriteError/unsupportedEncoding`` unless UTF-8.
+    /// materialize ``text``. Another encoding (or a byte-order mark) materializes the text to convert it,
+    /// and throws ``DocumentWriteError/unrepresentableCharacters`` if a character does not fit.
     ///
     /// On success, inspect ``DocumentWriteResult/generationMatched``: if the user typed during
     /// the write this is `false` and the live buffer is ahead of `url`.
@@ -3204,7 +3205,10 @@ extension TextView {
         } catch is CancellationError {
             throw DocumentWriteError.cancelled
         }
-        return finishWrite(source: source, generation: generation, identity: identity, footer: footer, url: url)
+        return finishWrite(
+            source: source, generation: generation, identity: identity, footer: footer, url: url,
+            canCompact: options.isPlainUTF8
+        )
     }
 
     private func captureWriteSource() -> (DocumentWriteSource, UInt64, ObjectIdentifier) {
@@ -3222,12 +3226,15 @@ extension TextView {
         generation: UInt64,
         identity: ObjectIdentifier,
         footer: DocumentWriteFooter,
-        url: URL
+        url: URL,
+        canCompact: Bool
     ) -> DocumentWriteResult {
         let live = textInputView.stringView
         let generationMatched = ObjectIdentifier(live) == identity && live.contentGeneration == generation
         var compacted = false
-        if generationMatched, case .pieceTree = source {
+        // The buffer is re-based on the written file, which only works when the file is the buffer's
+        // own UTF-8: another encoding or a byte-order mark moves every offset.
+        if generationMatched, canCompact, case .pieceTree = source {
             if let mapping = FileMapping.openPrivateClone(of: url) {
                 live.compactPieceTree(mapping: mapping, footer: footer)
                 compacted = true

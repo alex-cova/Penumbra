@@ -1,3 +1,4 @@
+import Penumbra
 import SwiftUI
 
 struct IDEStatusBarPanel: View {
@@ -39,6 +40,7 @@ struct IDEStatusBarPanel: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
+            encodingPicker
             Text(trailingSummary)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -77,6 +79,49 @@ struct IDEStatusBarPanel: View {
             label
                 .fixedSize()
         }
+    }
+
+    /// The file's encoding. Clicking it reads the file again in another encoding ("Reopen") or
+    /// converts the file as it is saved ("Save with Encoding").
+    @ViewBuilder
+    private var encodingPicker: some View {
+        let current = workspace.statusEncoding
+        let label = Text(current.shortName)
+            .font(IDEAppearance.Typography.monoSmall)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+        if workspace.canChangeActiveEncoding {
+            Menu {
+                Menu("Reopen with Encoding") {
+                    ForEach(TextFileEncoding.all) { encoding in
+                        Toggle(encoding.displayName, isOn: Binding(
+                            get: { encoding == current },
+                            set: { _ in workspace.reopenActiveDocument(with: encoding) }
+                        ))
+                    }
+                }
+                .disabled(!workspace.canReopenActiveWithEncoding)
+                Menu("Save with Encoding") {
+                    ForEach(TextFileEncoding.all) { encoding in
+                        Toggle(encoding.displayName, isOn: Binding(
+                            get: { encoding == current },
+                            set: { _ in Task { await workspace.saveActiveDocument(with: encoding) } }
+                        ))
+                    }
+                }
+            } label: {
+                label
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Change the file encoding")
+            .accessibilityLabel("File encoding \(current.displayName)")
+        } else {
+            label
+                .fixedSize()
+        }
+        Text("·")
+            .font(IDEAppearance.Typography.monoSmall)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
     }
 
     /// Error and warning totals; clicking opens the Problems tab. Hidden while there is nothing to
@@ -136,7 +181,7 @@ struct IDEStatusBarPanel: View {
     }
 
     private var trailingSummary: String {
-        var parts = ["UTF-8", "LF"]
+        var parts = ["LF"]
         if workspace.isTerminalVisible {
             parts.append("Terminal")
         }

@@ -113,12 +113,23 @@ final class DocumentLoaderTests: XCTestCase {
         }
     }
 
-    func testUnsupportedEncodingThrows() async throws {
-        let url = try writeTempFile("hello")
+    func testNonUTF8EncodingIsTranscoded() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("loader-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let sample = "caf\u{E9}\nna\u{EF}ve\r\nend"
+        try XCTUnwrap(sample.data(using: .isoLatin1)).write(to: url)
+        let loaded = try await TextViewState.load(contentsOf: url, encoding: .isoLatin1)
+        XCTAssertEqual(loaded.stringView.string as String, sample)
+    }
+
+    func testBytesInvalidForTheRequestedEncodingThrow() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("loader-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data([0x68, 0x00, 0x00, 0xD8]).write(to: url)  // a lone high surrogate: not UTF-16
         do {
-            _ = try await TextViewState.load(contentsOf: url, encoding: .utf16)
-            XCTFail("expected unsupportedEncoding")
-        } catch DocumentLoadError.unsupportedEncoding {
+            _ = try await TextViewState.load(contentsOf: url, encoding: .utf16LittleEndian)
+            XCTFail("expected invalidEncoding")
+        } catch DocumentLoadError.invalidEncoding {
             // expected
         }
     }

@@ -300,6 +300,8 @@ public final class IDEWorkspace {
     var statusLine = 1
     var statusColumn = 1
     var statusLanguage = ""
+    /// The active text document's file encoding, shown (and changed) from the status bar.
+    var statusEncoding = TextFileEncoding.utf8
     /// True when the active editor is a Java file with `public static void main` (either modifier
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
     var javaFileCanRun = false
@@ -366,6 +368,7 @@ public final class IDEWorkspace {
     var pendingTerminalCommand: String?
     var isMarkdownPreviewVisible = false
     var isJSONDiagramVisible = false
+    var isCSVTableVisible = false
     var statusSelectionLength = 0
     var tabsByPane: [UUID: [IDETabRow]] = [:]
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
@@ -493,6 +496,16 @@ public final class IDEWorkspace {
         guard let document = workbench.activePane.selectedDocument else { return false }
         return !IDELanguageSupport.isLanguageLocked(for: document)
     }
+    /// Whether the active tab is a text document, whose encoding the status bar can change.
+    var canChangeActiveEncoding: Bool {
+        guard let document = workbench.activePane.selectedDocument else { return false }
+        return document.contentKind == .text
+    }
+    /// Whether the active text document has a file to decode again (an untitled buffer has not).
+    var canReopenActiveWithEncoding: Bool {
+        guard let document = workbench.activePane.selectedDocument else { return false }
+        return document.contentKind == .text && document.url != nil
+    }
     /// What `IDERootView` should actually render: the user's sidebar toggle, once a folder or a
     /// document is open (the stripe offers no Explorer button before that).
     var showsSidebar: Bool { isSidebarVisible && (hasOpenProject || hasOpenDocuments) }
@@ -539,6 +552,10 @@ public final class IDEWorkspace {
         }
         if workbench.activePane.selectedDocument?.contentKind == .diagram || host.isJSONDiagramVisible {
             host.diagramViewer.focus()
+            return
+        }
+        if host.isCSVTableVisible {
+            host.csvTableView.focus()
             return
         }
         host.textView.focusTextInputWhenReady()
@@ -873,11 +890,13 @@ public final class IDEWorkspace {
         host.markdownPreviewController.documentBaseURL = url
         host.markdownPreviewController.closeIfNotMarkdown()
         host.closeJSONDiagramIfNotJSON()
+        host.closeCSVTableIfNotCSV()
 
         if pane.id == workbench.activePaneID {
             statusLanguage = identifier
             isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
             isJSONDiagramVisible = host.isJSONDiagramVisible
+            isCSVTableVisible = host.isCSVTableVisible
         }
         scheduleSemanticHighlighting(host: host, languageIdentifier: identifier, delay: 0)
         Task { await workspaceBridge.syncPane(pane) }
@@ -1124,21 +1143,24 @@ public final class IDEWorkspace {
         recentProjects
     }
 
-    public func saveActiveDocument() async {
+    /// Returns whether the document was written (false when there was nothing to save, the save
+    /// panel was cancelled, or the write failed).
+    @discardableResult
+    public func saveActiveDocument() async -> Bool {
         let pane = workbench.activePane
-        guard let document = pane.selectedDocument else { return }
+        guard let document = pane.selectedDocument else { return false }
         if document.contentKind == .diff {
             diffSessions[document.id]?.save()
-            return
+            return false
         }
-        if document.contentKind == .diagram { return }
+        if document.contentKind == .diagram { return false }
         let textView = host(for: pane.id).textView
         var destination = document.url
         if destination == nil {
             let panel = NSSavePanel()
             panel.canCreateDirectories = true
             panel.nameFieldStringValue = document.displayName
-            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard panel.runModal() == .OK, let url = panel.url else { return false }
             destination = url
         }
         if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
@@ -1151,8 +1173,25 @@ public final class IDEWorkspace {
             refreshBlame(in: pane, force: true)
             refreshPresentation()
             recheckJavaAfterSave(of: destination)
+            return true
         } catch {
             presentError(error)
+            return false
+        }
+    }
+
+    /// Converts the active document to `encoding` and saves it, asking for a file name first when
+    /// it has none. The document keeps its old encoding if the save does not happen, for example
+    /// when a character has no equivalent in `encoding`.
+    public func saveActiveDocument(with encoding: TextFileEncoding) async {
+        guard let document = workbench.activePane.selectedDocument, document.contentKind == .text else { return }
+        let previous = document.encoding
+        document.encoding = encoding
+        if await saveActiveDocument() {
+            statusEncoding = encoding
+        } else {
+            document.encoding = previous
+            statusEncoding = previous
         }
     }
 
@@ -1442,6 +1481,11 @@ public final class IDEWorkspace {
             let item = NSMenuItem()
             item.tag = NSTextFinder.Action.showFindInterface.rawValue
             log.performFindPanelAction(item)
+            return
+        }
+        // A table preview has no editor find bar; ⌘F goes to the table's own search field.
+        if let host = hostCache.peek(workbench.activePaneID), host.isCSVTableVisible {
+            host.csvTableView.focusSearch()
             return
         }
         adapter.textView?.perform(.toggleFindPanel)
@@ -2672,7 +2716,7 @@ public final class IDEWorkspace {
                 let showing = workbench.panes.filter { $0.selectedDocument === document }
                 if showing.isEmpty {
                     do {
-                        let loaded = try await loadDocument(from: url)
+                        let loaded = try await loadDocument(from: url, preferring: document.encoding)
                         installReloaded(loaded, onto: document)
                         document.contentGeneration &+= 1
                     } catch {
@@ -2682,7 +2726,7 @@ public final class IDEWorkspace {
                     var bumped = false
                     for pane in showing {
                         do {
-                            let loaded = try await loadDocument(from: url)
+                            let loaded = try await loadDocument(from: url, preferring: document.encoding)
                             installReloaded(loaded, onto: document)
                             if !bumped {
                                 document.contentGeneration &+= 1
@@ -2709,6 +2753,7 @@ public final class IDEWorkspace {
         document.isFileBacked = loaded.isFileBacked
         document.rangeReader = loaded.rangeReader
         document.text = loaded.text
+        document.encoding = loaded.encoding
         document.isDirty = false
     }
 
@@ -3591,8 +3636,11 @@ public final class IDEWorkspace {
         guard hostCache.peek(workbench.activePaneID) === host else { return }
         isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
         isJSONDiagramVisible = host.isJSONDiagramVisible
+        isCSVTableVisible = host.isCSVTableVisible
         if host.isJSONDiagramVisible {
             host.diagramViewer.focus()
+        } else if host.isCSVTableVisible {
+            host.csvTableView.focus()
         } else {
             focusActiveEditor()
         }
@@ -3855,35 +3903,48 @@ public final class IDEWorkspace {
 
     /// Replaces the tab's content with what is on disk. A tab with unsaved edits asks first,
     /// since they cannot be recovered. Every pane showing the document is refreshed.
-    func reloadTabFromDisk(_ id: UUID, in paneID: UUID) {
+    ///
+    /// With `encoding` the file is read again in that encoding instead of the one it was opened in.
+    func reloadTabFromDisk(_ id: UUID, in paneID: UUID, encoding: TextFileEncoding? = nil) {
         guard let pane = workbench.layout.findPane(id: paneID),
               let document = pane.documents.first(where: { $0.id == id }),
               document.contentKind == .text, let url = document.url else { return }
         if document.isDirty {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Reload \(document.displayName) from disk?"
+            alert.messageText = encoding.map { "Reopen \(document.displayName) as \($0.displayName)?" }
+                ?? "Reload \(document.displayName) from disk?"
             alert.informativeText = "This discards your unsaved changes to \(document.displayName). It cannot be undone."
             // Cancel first, so it is the default answer to Return.
             alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Reload")
+            alert.addButton(withTitle: encoding == nil ? "Reload" : "Reopen")
             alert.buttons[1].hasDestructiveAction = true
             guard alert.runModal() == .alertSecondButtonReturn else { return }
         }
         Task {
             do {
-                let loaded = try await loadDocument(from: url)
+                let loaded = try await loadDocument(from: url, encoding: encoding, preferring: document.encoding)
                 guard workbench.panes.contains(where: { $0.documents.contains { $0 === document } }) else { return }
                 installReloaded(loaded, onto: document)
                 document.contentGeneration &+= 1
                 for showing in workbench.panes where showing.selectedDocument === document {
                     showDocument(in: showing, host: host(for: showing.id))
                 }
+                if workbench.activePane.selectedDocument === document { statusEncoding = document.encoding }
                 refreshPresentation()
+            } catch DocumentLoadError.invalidEncoding where encoding != nil {
+                presentError(IDEEncodingError.cannotDecode(document.displayName, encoding?.displayName ?? ""))
             } catch {
                 presentError(error)
             }
         }
+    }
+
+    /// Reads the active file again in `encoding` ("Reopen with Encoding").
+    func reopenActiveDocument(with encoding: TextFileEncoding) {
+        let pane = workbench.activePane
+        guard let document = pane.selectedDocument else { return }
+        reloadTabFromDisk(document.id, in: pane.id, encoding: encoding)
     }
 
     /// Renames the tab's underlying file on disk (or, for an unsaved document, just its
@@ -4111,6 +4172,10 @@ public final class IDEWorkspace {
             guard let self, let host else { return }
             self.notePreviewVisibility(of: host)
         }
+        host.onCSVTableClosed = { [weak self, weak host] in
+            guard let self, let host else { return }
+            self.notePreviewVisibility(of: host)
+        }
         host.wireHTTPActions(sendRequest: { [weak self] in
             self?.sendActiveHTTPRequest()
         })
@@ -4200,20 +4265,44 @@ public final class IDEWorkspace {
     }
 
     /// Loads `url` as an image or text document, not yet attached to any pane.
-    private func loadDocument(from url: URL) async throws -> WorkbenchDocument {
+    ///
+    /// - Parameters:
+    ///   - encoding: Read the file in exactly this encoding; bytes that do not fit are an error.
+    ///   - preferredEncoding: The encoding the file was last read in. It is tried first, and a file
+    ///     that no longer fits it (changed on disk) is detected afresh.
+    private func loadDocument(
+        from url: URL,
+        encoding: TextFileEncoding? = nil,
+        preferring preferredEncoding: TextFileEncoding? = nil
+    ) async throws -> WorkbenchDocument {
         if ImageContentDetector.isImageFile(url) {
             return WorkbenchDocument.loadImage(from: url)
         }
         let identifier = LanguageIdentifier.identifier(for: url)
         let language = IDELanguageSupport.language(forIdentifier: identifier)
-        let document = try await WorkbenchDocument.load(
-            contentsOf: url,
-            theme: IDEEditorTheme.shared.current,
-            lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
-            language: language,
-            languageIdentifier: identifier,
-            languageProvider: Self.languageProvider
-        )
+        // A remembered non-UTF-8 encoding is tried first; if the file no longer fits it, detect afresh.
+        var attempts: [TextFileEncoding?] = [encoding]
+        if encoding == nil, let preferredEncoding, preferredEncoding != .utf8 {
+            attempts = [preferredEncoding, nil]
+        }
+        var loaded: WorkbenchDocument?
+        for (index, attempt) in attempts.enumerated() {
+            do {
+                loaded = try await WorkbenchDocument.load(
+                    contentsOf: url,
+                    theme: IDEEditorTheme.shared.current,
+                    lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
+                    language: language,
+                    languageIdentifier: identifier,
+                    languageProvider: Self.languageProvider,
+                    encoding: attempt
+                )
+                break
+            } catch DocumentLoadError.invalidEncoding where index < attempts.count - 1 {
+                continue
+            }
+        }
+        guard let document = loaded else { throw DocumentLoadError.invalidEncoding }
         document.language = language
         return document
     }
@@ -5185,6 +5274,10 @@ public final class IDEWorkspace {
         let activeHost = hostCache.peek(workbench.activePaneID)
         isMarkdownPreviewVisible = activeHost?.markdownPreviewController.isVisible ?? false
         isJSONDiagramVisible = activeHost?.isJSONDiagramVisible ?? false
+        isCSVTableVisible = activeHost?.isCSVTableVisible ?? false
+        if let document = workbench.activePane.selectedDocument, document.contentKind == .text {
+            statusEncoding = document.encoding
+        }
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · \(projectTitle)"
             let pathItems = pathBreadcrumbItems(for: document)
@@ -5686,6 +5779,7 @@ public final class IDEWorkspace {
             statusColumn = 1
         }
         statusLanguage = workbench.activePane.selectedDocument?.languageIdentifier ?? ""
+        statusEncoding = workbench.activePane.selectedDocument?.encoding ?? .utf8
         statusSelectionLength = range.length
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
@@ -5880,6 +5974,7 @@ public final class IDEWorkspace {
             if applied, sibling.host.textView.documentLength == textView.documentLength {
                 sibling.host.markdownPreviewController.refresh()
                 sibling.host.noteJSONDiagramEdited()
+                sibling.host.noteCSVTableEdited()
                 scheduleSemanticHighlighting(host: sibling.host, languageIdentifier: document.languageIdentifier)
             } else {
                 needsReload.append(sibling)
@@ -5950,10 +6045,14 @@ public final class IDEWorkspace {
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
         host.closeJSONDiagramIfNotJSON()
+        host.closeCSVTableIfNotCSV()
         if host.isJSONDiagramVisible {
             host.revealJSONDiagramIfVisible()
         } else {
             host.diagramViewer.hide()
+        }
+        if host.isCSVTableVisible {
+            host.revealCSVTableIfVisible()
         }
         adapter.bindNavigationHistory(to: host.textView, document: document)
         let isSameDocument = host.loadedDocumentID == document.id
@@ -6029,6 +6128,7 @@ public final class IDEWorkspace {
         }
         host.markdownPreviewController.closeIfNotMarkdown()
         host.hideJSONDiagram()
+        host.hideCSVTable()
         host.imageViewerController.hide()
         host.diffViewer.onJumpToSource = { [weak self] path, line in
             self?.openDiffSource(path: path, line: line)
@@ -6058,6 +6158,7 @@ public final class IDEWorkspace {
         }
         host.markdownPreviewController.closeIfNotMarkdown()
         host.hideJSONDiagram(hidingViewer: false)
+        host.hideCSVTable()
         host.imageViewerController.hide()
         host.diffViewer.hide()
         host.diagramViewer.show(session)
@@ -6108,6 +6209,7 @@ public final class IDEWorkspace {
         }
         host.markdownPreviewController.closeIfNotMarkdown()
         host.hideJSONDiagram()
+        host.hideCSVTable()
         changeMarkers.hide(on: host.textView)
         host.imageViewerController.show(url: url)
         host.loadedDocumentID = document.id
@@ -6158,6 +6260,7 @@ public final class IDEWorkspace {
         // until the next keystroke.
         host.markdownPreviewController.refresh()
         host.refreshJSONDiagram()
+        host.refreshCSVTable()
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
@@ -6168,6 +6271,8 @@ public final class IDEWorkspace {
             adapter.refreshCachedDocuments()
             if host.isJSONDiagramVisible {
                 host.diagramViewer.focus()
+            } else if host.isCSVTableVisible {
+                host.csvTableView.focus()
             } else {
                 host.textView.focusTextInputWhenReady()
             }
@@ -6342,6 +6447,7 @@ extension IDEWorkspace: TextViewDelegate {
         mirrorEdits(from: textView)
         if let pane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === textView }) {
             hostCache.peek(pane.id)?.noteJSONDiagramEdited()
+            hostCache.peek(pane.id)?.noteCSVTableEdited()
         }
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
@@ -6361,6 +6467,18 @@ extension IDEWorkspace: TextViewDelegate {
     ) {
         withAnimation(isVisible ? .spring(duration: transitionDuration, bounce: 0.1) : .easeOut(duration: transitionDuration)) {
             chromeOpacity = isVisible ? 1 : 0
+        }
+    }
+}
+
+/// Why a file could not be read in an encoding the user picked.
+enum IDEEncodingError: LocalizedError {
+    case cannotDecode(String, String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cannotDecode(let file, let encoding):
+            "\(file) can't be read as \(encoding). Some of its bytes are not valid in that encoding."
         }
     }
 }

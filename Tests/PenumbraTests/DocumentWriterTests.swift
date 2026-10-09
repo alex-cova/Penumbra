@@ -191,20 +191,50 @@ final class DocumentWriterTests: XCTestCase {
         assertNoWriterTemps(in: dest.deletingLastPathComponent())
     }
 
-    func testUnsupportedEncodingThrows() throws {
-        let dest = try uniqueDest(named: "utf16.txt")
+    func testNonUTF8EncodingIsWritten() throws {
+        let dest = try uniqueDest(named: "latin1.txt")
+        _ = try DocumentWriter.write(
+            .contiguous("caf\u{E9}\n"),
+            to: dest,
+            options: DocumentWriteOptions(encoding: .isoLatin1)
+        )
+        XCTAssertEqual(try Data(contentsOf: dest), Data([0x63, 0x61, 0x66, 0xE9, 0x0A]))
+        assertNoWriterTemps(in: dest.deletingLastPathComponent())
+    }
+
+    func testUnrepresentableCharactersThrowAndLeaveNoFile() throws {
+        let dest = try uniqueDest(named: "latin1.txt")
         do {
             _ = try DocumentWriter.write(
-                .contiguous("hello"),
+                .contiguous("snow \u{2603}"),
                 to: dest,
-                options: DocumentWriteOptions(encoding: .utf16)
+                options: DocumentWriteOptions(encoding: .isoLatin1)
             )
-            XCTFail("expected unsupportedEncoding")
-        } catch DocumentWriteError.unsupportedEncoding {
+            XCTFail("expected unrepresentableCharacters")
+        } catch DocumentWriteError.unrepresentableCharacters {
             // expected
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path))
         assertNoWriterTemps(in: dest.deletingLastPathComponent())
+    }
+
+    func testByteOrderMarkIsWrittenFirst() throws {
+        let utf8 = try uniqueDest(named: "bom8.txt")
+        _ = try DocumentWriter.write(.contiguous("hi"), to: utf8, options: DocumentWriteOptions(.utf8WithBOM))
+        XCTAssertEqual(try Data(contentsOf: utf8), Data([0xEF, 0xBB, 0xBF, 0x68, 0x69]))
+
+        let utf16 = try uniqueDest(named: "bom16.txt")
+        _ = try DocumentWriter.write(.contiguous("hi"), to: utf16, options: DocumentWriteOptions(.utf16LE))
+        XCTAssertEqual(try Data(contentsOf: utf16), Data([0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00]))
+    }
+
+    func testPieceTreeSourceIsTranscoded() async throws {
+        let source = try writeTempFile("na\u{EF}ve\n")
+        let loaded = try await TextViewState.load(contentsOf: source)
+        let snapshot = try XCTUnwrap(loaded.stringView.contentSnapshot())
+        let dest = try uniqueDest(named: "piece.txt")
+        _ = try DocumentWriter.write(.pieceTree(snapshot), to: dest, options: DocumentWriteOptions(.windows1252))
+        XCTAssertEqual(try Data(contentsOf: dest), Data([0x6E, 0x61, 0xEF, 0x76, 0x65, 0x0A]))
     }
 
     func testContentGenerationIncrementsOnReplaceAndStringSetter() {

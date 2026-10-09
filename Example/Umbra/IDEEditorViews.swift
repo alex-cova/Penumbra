@@ -20,6 +20,13 @@ final class IDEEditorPaneHost: NSView {
     private var jsonDiagramSession: IDEDiagramSession?
     private var jsonRefreshTask: Task<Void, Never>?
     private var editorWasSelectableBeforeJSONDiagram = true
+    /// Laid over the editor while a CSV or TSV file's table preview is showing.
+    let csvTableView = IDECSVTableView()
+    /// True while this pane's CSV/TSV file is covered by its table.
+    private(set) var isCSVTableVisible = false
+    private var csvRefreshTask: Task<Void, Never>?
+    private var csvParseTask: Task<Void, Never>?
+    private var editorWasSelectableBeforeCSVTable = true
     let applyGate = PenumbraStateBuilder.GenerationGate()
     var intelligenceController: EditorIntelligenceController?
     var loadedDocumentID: UUID?
@@ -40,6 +47,8 @@ final class IDEEditorPaneHost: NSView {
     /// range is selected and centered instead of restoring the document's last scroll position.
     var pendingReveal: (documentID: UUID, range: NSRange)?
     var onActivated: (() -> Void)?
+    /// The table was closed from inside (a row double-click), not by the play button.
+    var onCSVTableClosed: (() -> Void)?
 
     init(pane: EditorPane, preferences: IDEPreferences) {
         self.pane = pane
@@ -83,6 +92,16 @@ final class IDEEditorPaneHost: NSView {
             diagramViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
+        csvTableView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(csvTableView)
+        NSLayoutConstraint.activate([
+            csvTableView.topAnchor.constraint(equalTo: topAnchor),
+            csvTableView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            csvTableView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            csvTableView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        csvTableView.onRevealLine = { [weak self] line in self?.revealCSVSourceLine(line) }
+
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))
         click.delaysPrimaryMouseButtonEvents = false
         addGestureRecognizer(click)
@@ -104,9 +123,12 @@ final class IDEEditorPaneHost: NSView {
         textView.editorActionHandler = { [weak self] action in
             guard let self else { return previousHandler?(action) ?? false }
             if action == .toggleMarkdownPreview {
-                let handled = self.textView.languageIdentifier == "json"
-                    ? self.toggleJSONDiagram()
-                    : self.markdownPreviewController.toggle()
+                let handled: Bool
+                switch self.textView.languageIdentifier {
+                case "json": handled = self.toggleJSONDiagram()
+                case "csv", "tsv": handled = self.toggleCSVTable()
+                default: handled = self.markdownPreviewController.toggle()
+                }
                 if handled { onToggle() }
                 return handled
             }
@@ -200,6 +222,94 @@ final class IDEEditorPaneHost: NSView {
             if !name.isEmpty { return name }
         }
         return "JSON"
+    }
+
+    // MARK: - CSV table
+
+    static func isCSV(_ identifier: String?) -> Bool {
+        identifier == "csv" || identifier == "tsv"
+    }
+
+    /// Covers the editor with a table of the CSV/TSV buffer, or returns to the source.
+    /// Returns `false` when the buffer is not CSV or TSV.
+    @discardableResult
+    func toggleCSVTable() -> Bool {
+        guard Self.isCSV(textView.languageIdentifier) else { return false }
+        if isCSVTableVisible {
+            hideCSVTable()
+        } else {
+            editorWasSelectableBeforeCSVTable = textView.isSelectable
+            textView.isSelectable = false
+            isCSVTableVisible = true
+            csvTableView.show()
+            refreshCSVTable()
+        }
+        return true
+    }
+
+    /// Hides the table when this pane is no longer showing CSV or TSV.
+    func closeCSVTableIfNotCSV() {
+        guard !Self.isCSV(textView.languageIdentifier) else { return }
+        hideCSVTable()
+    }
+
+    func hideCSVTable() {
+        csvRefreshTask?.cancel()
+        csvRefreshTask = nil
+        csvParseTask?.cancel()
+        csvParseTask = nil
+        guard isCSVTableVisible else { return }
+        isCSVTableVisible = false
+        textView.isSelectable = editorWasSelectableBeforeCSVTable
+        csvTableView.hide()
+    }
+
+    /// Re-parses the live buffer. The text is read here and parsed off the main actor; a result
+    /// that a newer refresh has overtaken is dropped.
+    func refreshCSVTable() {
+        csvRefreshTask?.cancel()
+        csvRefreshTask = nil
+        csvParseTask?.cancel()
+        guard isCSVTableVisible, Self.isCSV(textView.languageIdentifier) else { return }
+        let text = textView.text
+        let identifier = textView.languageIdentifier
+        csvParseTask = Task { [weak self] in
+            let table = await Task.detached(priority: .userInitiated) {
+                let sample = String(text.prefix(4096))
+                let delimiter = IDECSVTable.delimiter(forIdentifier: identifier, sample: sample)
+                return IDECSVTable.parse(text, delimiter: delimiter)
+            }.value
+            guard !Task.isCancelled else { return }
+            self?.csvTableView.update(table)
+        }
+    }
+
+    /// Puts the table back on top without reading the buffer again.
+    func revealCSVTableIfVisible() {
+        guard isCSVTableVisible else { return }
+        csvTableView.show()
+    }
+
+    /// Schedules a re-parse. The buffer is read once the pause has elapsed, not on the keystroke.
+    func noteCSVTableEdited() {
+        guard isCSVTableVisible, Self.isCSV(textView.languageIdentifier) else { return }
+        csvRefreshTask?.cancel()
+        csvRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.refreshCSVTable()
+        }
+    }
+
+    /// Double-click on a table row: back to the source, with the caret on that row's line.
+    private func revealCSVSourceLine(_ line: Int) {
+        hideCSVTable()
+        textView.goToLine(line)
+        onCSVTableClosed?()
     }
 
     /// Routes F2 / ⇧F2 (next / previous problem) to the workspace, which owns the problem list.

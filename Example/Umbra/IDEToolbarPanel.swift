@@ -39,6 +39,8 @@ struct IDEToolbarPanel: View {
                     isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
                     isJSONFile: workspace.statusLanguage == "json",
                     isJSONDiagramVisible: workspace.isJSONDiagramVisible,
+                    isCSVFile: workspace.statusLanguage == "csv" || workspace.statusLanguage == "tsv",
+                    isCSVTableVisible: workspace.isCSVTableVisible,
                     isGradleProject: workspace.javaSupport.isGradleProject,
                     isJavaRunnable: workspace.javaFileCanRun,
                     isJavaDebuggable: workspace.javaFileCanDebug,
@@ -226,6 +228,8 @@ private struct IDEToolbarActionCluster: View {
     let isMarkdownPreviewVisible: Bool
     let isJSONFile: Bool
     let isJSONDiagramVisible: Bool
+    let isCSVFile: Bool
+    let isCSVTableVisible: Bool
     let isGradleProject: Bool
     let isJavaRunnable: Bool
     let isJavaDebuggable: Bool
@@ -327,12 +331,12 @@ private struct IDEToolbarActionCluster: View {
                     action: exportMarkdownPreviewToPDF
                 )
             }
-            if isMarkdownFile || isJSONFile {
-                let previewVisible = isJSONFile ? isJSONDiagramVisible : isMarkdownPreviewVisible
+            if isMarkdownFile || isJSONFile || isCSVFile {
+                let previewVisible = isCSVFile ? isCSVTableVisible : (isJSONFile ? isJSONDiagramVisible : isMarkdownPreviewVisible)
                 IDEToolbarIconButton(
                     systemName: previewVisible ? "stop.fill" : "play.fill",
                     isActive: previewVisible,
-                    help: isJSONFile ? "Toggle JSON Diagram" : "Toggle Markdown Preview",
+                    help: isCSVFile ? "Toggle CSV Table" : (isJSONFile ? "Toggle JSON Diagram" : "Toggle Markdown Preview"),
                     action: toggleMarkdownPreview
                 )
             }

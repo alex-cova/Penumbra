@@ -3,6 +3,7 @@
 Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour notes moved out of the root CLAUDE.md. Several bullets describe how Umbra (`Example/Umbra`) consumes these APIs.
 
 **Editing & input**
+- **File encodings** (`Library/TextFileEncoding.swift`, `DocumentLoader`, `DocumentWriter`): the buffer is always UTF-8; other encodings are converted at the file edge. `TextFileEncoding.all` lists the offered ones (UTF-8, UTF-8 with BOM, UTF-16 LE/BE with BOM, Latin-1/9, Windows 1250/1251/1252, Mac Roman, KOI8-R, Shift JIS, EUC-JP/KR, GBK, Big5). Loading a non-UTF-8 file decodes it, writes the UTF-8 to an unlinked temp file and maps that, so the piece tree is the same as for any file (`WorkbenchDocument.load(…encoding:)`: nil detects — BOM, UTF-8, then `TextFileEncoding.guess`; a given encoding is strict). Saving through `WorkbenchDocument.save` uses `WorkbenchDocument.encoding`; `DocumentWriteOptions(encoding:byteOrderMark:)` materializes the text, throws `unrepresentableCharacters` before touching the file, and `TextView.write` then skips re-basing the buffer on the written file (`canCompact`), because offsets in a non-UTF-8 or BOM file are not the buffer's.
 - Full `NSTextInputClient` compatibility for native macOS text input, IME, and accessibility.
 - Undo/redo with timed grouping (`TimedUndoManager`) so rapid typing coalesces into one undo step.
 - Character-pair auto-insertion and skip-over-trailing (`CharacterPair`, delegate hooks).

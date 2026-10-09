@@ -41,6 +41,9 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     /// from "same document, edited elsewhere."
     public var contentGeneration: UInt64 = 0
     public var contentKind: WorkbenchDocumentContentKind = .text
+    /// The encoding of the file on disk. The buffer is always UTF-8; ``save(from:to:options:progress:)``
+    /// converts to this on the way out.
+    public var encoding: TextFileEncoding = .utf8
 
     public init(
         id: UUID = UUID(),
@@ -80,17 +83,37 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         languageIdentifier: String? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
-        io: DocumentLoadIO = .memoryMapped
+        io: DocumentLoadIO = .memoryMapped,
+        encoding requested: TextFileEncoding? = nil
     ) async throws -> WorkbenchDocument {
-        let prepared = try await PenumbraStateBuilder.load(
-            contentsOf: url,
-            theme: theme,
-            lineHeightMultiplier: lineHeightMultiplier,
-            language: language,
-            languageProvider: languageProvider,
-            parsePolicy: parsePolicy,
-            io: io
-        )
+        func prepare(_ encoding: TextFileEncoding) async throws -> PenumbraStateBuilder.PreparedState {
+            try await PenumbraStateBuilder.load(
+                contentsOf: url,
+                theme: theme,
+                lineHeightMultiplier: lineHeightMultiplier,
+                language: language,
+                languageProvider: languageProvider,
+                parsePolicy: parsePolicy,
+                encoding: encoding.encoding,
+                io: io
+            )
+        }
+        let prepared: PenumbraStateBuilder.PreparedState
+        let resolved: TextFileEncoding
+        if let requested {
+            // The caller chose: bytes that do not decode are an error, not a reason to guess.
+            resolved = requested
+            prepared = try await prepare(requested)
+        } else {
+            let head = Self.readHead(of: url, byteCount: 4)
+            let first = TextFileEncoding.detect(byteOrderMarkIn: head) ?? .utf8
+            do {
+                prepared = try await prepare(first)
+                resolved = first
+            } catch DocumentLoadError.invalidEncoding where first == .utf8 {
+                (resolved, prepared) = try await prepareGuessing(url: url, prepare: prepare)
+            }
+        }
         let document = WorkbenchDocument(
             url: url,
             displayName: url.lastPathComponent,
@@ -98,6 +121,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             language: language,
             languageIdentifier: languageIdentifier
         )
+        document.encoding = resolved
         document.pendingState = prepared.state
         document.isFileBacked = prepared.state.stringView.isFileBacked
         if document.isFileBacked, let snapshot = prepared.state.stringView.contentSnapshot() {
@@ -106,6 +130,30 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             }
         }
         return document
+    }
+
+    /// A file that is not valid UTF-8 and has no byte-order mark: guess its encoding from its first
+    /// megabyte. Binary data is not guessed at; it stays an error. Windows-1252 leaves a few bytes
+    /// undefined, so ISO 8859-1, which accepts every byte, is the last resort.
+    private static func prepareGuessing(
+        url: URL,
+        prepare: (TextFileEncoding) async throws -> PenumbraStateBuilder.PreparedState
+    ) async throws -> (TextFileEncoding, PenumbraStateBuilder.PreparedState) {
+        guard let guess = TextFileEncoding.guess(from: readHead(of: url, byteCount: 1 << 20)), guess != .utf8 else {
+            throw DocumentLoadError.invalidEncoding
+        }
+        do {
+            return (guess, try await prepare(guess))
+        } catch DocumentLoadError.invalidEncoding where guess == .windows1252 {
+            let latin1 = TextFileEncoding.named("latin1") ?? guess
+            return (latin1, try await prepare(latin1))
+        }
+    }
+
+    private static func readHead(of url: URL, byteCount: Int) -> Data {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: byteCount)) ?? Data()
     }
 
     /// Creates a read-only image tab backed by a file URL.
@@ -167,6 +215,8 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         guard let dest = url ?? self.url else {
             throw DocumentWriteError.noDestination
         }
+        // Options left at their defaults write the file in the encoding it was opened in.
+        let options = options == DocumentWriteOptions() ? DocumentWriteOptions(encoding) : options
         let result: DocumentWriteResult
         if let textView {
             let identity = textView.stringViewObjectIdentifier

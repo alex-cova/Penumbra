@@ -39,6 +39,10 @@ public enum LanguageIdentifier {
             return "markdown"
         case "json", "jsonc":
             return "json"
+        case "csv":
+            return "csv"
+        case "tsv", "tab":
+            return "tsv"
         case "xml", "plist", "xsd", "xsl", "xslt":
             return "xml"
         case "yaml", "yml":

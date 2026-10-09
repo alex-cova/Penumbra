@@ -481,6 +481,22 @@ private struct IDEViewCommands: View {
 
     private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
+    private static func previewTitle(for language: String?) -> String {
+        switch language {
+        case "json": "JSON Diagram"
+        case "csv", "tsv": "CSV Table"
+        default: "Markdown Preview"
+        }
+    }
+
+    private static func previewIcon(for language: String?) -> String {
+        switch language {
+        case "json": "curlybraces"
+        case "csv", "tsv": "tablecells"
+        default: "doc.richtext"
+        }
+    }
+
     /// A binding that reaches the workspace when read or written, instead of capturing it. With the
     /// window gone it reads false and ignores writes.
     private func binding(_ keyPath: KeyPath<IDEWorkspace, Binding<Bool>>) -> Binding<Bool> {
@@ -539,8 +555,8 @@ private struct IDEViewCommands: View {
         Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace?.revealActiveFileInExplorer() })
             .menuShortcut(.revealActiveFile, in: preset)
         Button(
-            workspace?.statusLanguage == "json" ? "JSON Diagram" : "Markdown Preview",
-            systemImage: workspace?.statusLanguage == "json" ? "curlybraces" : "doc.richtext",
+            Self.previewTitle(for: workspace?.statusLanguage),
+            systemImage: Self.previewIcon(for: workspace?.statusLanguage),
             action: { workspace?.toggleMarkdownPreview() }
         )
             .menuShortcut(.markdownPreview, in: preset)

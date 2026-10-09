@@ -45,6 +45,8 @@ enum IDELanguageSupport {
     /// doesn't know about (e.g. a language a host app registered on its own).
     static func displayName(forIdentifier identifier: String?) -> String {
         selectableSyntaxes.first { $0.id == identifier }?.displayName
+            ?? (identifier == "csv" ? "CSV" : nil)
+            ?? (identifier == "tsv" ? "TSV" : nil)
             ?? identifier?.capitalized
             ?? "Plain Text"
     }

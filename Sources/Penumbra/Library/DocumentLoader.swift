@@ -5,7 +5,7 @@ import Foundation
 public enum DocumentLoadError: Error, Equatable {
     /// The load task was cancelled.
     case cancelled
-    /// Only UTF-8 is supported for chunked loading.
+    /// Retained for source compatibility; every encoding ``TextFileEncoding`` offers loads.
     case unsupportedEncoding
     /// A byte sequence was not valid in the requested encoding.
     case invalidEncoding
@@ -42,11 +42,16 @@ enum DocumentLoader {
         estimatedLineHeight: CGFloat,
         progress: (@Sendable (Int64, Int64) -> Void)?
     ) async throws -> Result {
-        guard encoding == .utf8 else {
-            throw DocumentLoadError.unsupportedEncoding
-        }
         if Task.isCancelled {
             throw DocumentLoadError.cancelled
+        }
+        if encoding != .utf8 {
+            return try await loadTranscoded(
+                from: url,
+                encoding: encoding,
+                estimatedLineHeight: estimatedLineHeight,
+                progress: progress
+            )
         }
         switch io {
         case .memoryMapped:
@@ -77,6 +82,33 @@ enum DocumentLoader {
     ) async throws -> Result {
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("penumbra-stream-\(UUID().uuidString)")
         try FileManager.default.copyItem(at: url, to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        guard let mapping = FileMapping(url: tempURL) else {
+            throw DocumentLoadError.fileChanged
+        }
+        try? FileManager.default.removeItem(at: tempURL)
+        return try await scan(mapping: mapping, estimatedLineHeight: estimatedLineHeight, progress: progress)
+    }
+
+    /// A file that is not UTF-8: decoded, rewritten as UTF-8 into an unlinked temp file, and
+    /// mapped from there, so the editor sees the same piece tree as for a UTF-8 file.
+    private static func loadTranscoded(
+        from url: URL,
+        encoding: String.Encoding,
+        estimatedLineHeight: CGFloat,
+        progress: (@Sendable (Int64, Int64) -> Void)?
+    ) async throws -> Result {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let body = TextFileEncoding.removingByteOrderMark(from: data, encoding: encoding)
+        guard let string = String(data: body, encoding: encoding) else {
+            throw DocumentLoadError.invalidEncoding
+        }
+        if Task.isCancelled {
+            throw DocumentLoadError.cancelled
+        }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("penumbra-transcode-\(UUID().uuidString)")
+        try Data(string.utf8).write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
         guard let mapping = FileMapping(url: tempURL) else {
             throw DocumentLoadError.fileChanged

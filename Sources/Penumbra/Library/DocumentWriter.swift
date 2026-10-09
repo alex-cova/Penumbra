@@ -5,8 +5,10 @@ import Foundation
 public enum DocumentWriteError: Error, Equatable {
     /// The write task was cancelled before `rename`.
     case cancelled
-    /// Only UTF-8 is supported.
+    /// Retained for source compatibility; every encoding ``TextFileEncoding`` offers can be written.
     case unsupportedEncoding
+    /// The text holds characters the chosen encoding cannot represent. Nothing was written.
+    case unrepresentableCharacters
     /// Save-as was required and no destination URL was provided.
     case noDestination
     /// A file-backed document had no live buffer to write.
@@ -17,13 +19,24 @@ public enum DocumentWriteError: Error, Equatable {
 
 public struct DocumentWriteOptions: Sendable, Equatable {
     public var encoding: String.Encoding = .utf8
+    /// Writes the encoding's byte-order mark first (UTF-8 with BOM, UTF-16).
+    public var byteOrderMark: Bool = false
     /// Reserved; v1 always writes atomically.
     public var atomic: Bool = true
 
-    public init(encoding: String.Encoding = .utf8, atomic: Bool = true) {
+    public init(encoding: String.Encoding = .utf8, byteOrderMark: Bool = false, atomic: Bool = true) {
         self.encoding = encoding
+        self.byteOrderMark = byteOrderMark
         self.atomic = atomic
     }
+
+    public init(_ encoding: TextFileEncoding, atomic: Bool = true) {
+        self.init(encoding: encoding.encoding, byteOrderMark: encoding.byteOrderMark, atomic: atomic)
+    }
+
+    /// True when the file's bytes are exactly the buffer's UTF-8, so offsets in the file equal
+    /// offsets in the buffer and the buffer can be re-based on the written file.
+    var isPlainUTF8: Bool { encoding == .utf8 && !byteOrderMark }
 }
 
 public struct DocumentWriteResult: Sendable, Equatable {
@@ -78,9 +91,9 @@ enum DocumentWriter {
         options: DocumentWriteOptions,
         progress: (@Sendable (Int64, Int64) -> Void)?
     ) throws -> DocumentWriteFooter {
-        guard options.encoding == .utf8 else {
-            throw DocumentWriteError.unsupportedEncoding
-        }
+        // Another encoding is produced up front, so a character it cannot hold fails before any
+        // file is touched.
+        let transcoded = options.encoding == .utf8 ? nil : try transcode(source, options: options)
         try checkInterrupted(written: 0)
 
         let directory = url.deletingLastPathComponent()
@@ -100,36 +113,21 @@ enum DocumentWriter {
 
         var written: Int64 = 0
         var footer = FooterAccumulator()
-        switch source {
-        case .contiguous(var string):
-            try string.withUTF8 { buffer in
+        if let transcoded {
+            try transcoded.withUnsafeBytes { buffer in
                 let total = Int64(buffer.count)
                 progress?(0, total)
-                try streamBytes(
-                    UnsafeRawBufferPointer(buffer),
-                    fd: fd,
-                    written: &written,
-                    total: total,
-                    footer: &footer,
-                    progress: progress
-                )
+                try streamBytes(buffer, fd: fd, written: &written, total: total, footer: &footer, progress: progress)
             }
-        case .pieceTree(let snapshot):
-            let total = Int64(snapshot.utf8Length)
-            progress?(0, total)
-            for piece in snapshot.pieces {
-                try checkInterrupted(written: written)
-                try snapshot.withUTF8(of: piece) { bytes in
+        } else {
+            if options.byteOrderMark, let mark = TextFileEncoding.byteOrderMark(for: options.encoding) {
+                try mark.withUnsafeBytes { buffer in
                     try streamBytes(
-                        bytes,
-                        fd: fd,
-                        written: &written,
-                        total: total,
-                        footer: &footer,
-                        progress: progress
+                        buffer, fd: fd, written: &written, total: Int64(buffer.count), footer: &footer, progress: nil
                     )
                 }
             }
+            try streamUTF8(source, fd: fd, written: &written, footer: &footer, progress: progress)
         }
 
         try applyMetadata(to: fd, tempPath: tempPath, destination: url)
@@ -162,6 +160,70 @@ enum DocumentWriter {
             progress?(0, 0)
         }
         return footer.finish()
+    }
+
+    /// Streams the buffer's own UTF-8 bytes.
+    private static func streamUTF8(
+        _ source: DocumentWriteSource,
+        fd: Int32,
+        written: inout Int64,
+        footer: inout FooterAccumulator,
+        progress: (@Sendable (Int64, Int64) -> Void)?
+    ) throws {
+        switch source {
+        case .contiguous(var string):
+            try string.withUTF8 { buffer in
+                let total = Int64(buffer.count)
+                progress?(0, total)
+                try streamBytes(
+                    UnsafeRawBufferPointer(buffer),
+                    fd: fd,
+                    written: &written,
+                    total: total,
+                    footer: &footer,
+                    progress: progress
+                )
+            }
+        case .pieceTree(let snapshot):
+            let total = Int64(snapshot.utf8Length)
+            progress?(0, total)
+            for piece in snapshot.pieces {
+                try checkInterrupted(written: written)
+                try snapshot.withUTF8(of: piece) { bytes in
+                    try streamBytes(
+                        bytes,
+                        fd: fd,
+                        written: &written,
+                        total: total,
+                        footer: &footer,
+                        progress: progress
+                    )
+                }
+            }
+        }
+    }
+
+    /// The whole output for a non-UTF-8 encoding, byte-order mark included.
+    private static func transcode(_ source: DocumentWriteSource, options: DocumentWriteOptions) throws -> Data {
+        let string: String
+        switch source {
+        case .contiguous(let text):
+            string = text
+        case .pieceTree(let snapshot):
+            var utf8 = Data(capacity: snapshot.utf8Length)
+            for piece in snapshot.pieces {
+                try checkInterrupted(written: Int64(utf8.count))
+                snapshot.withUTF8(of: piece) { utf8.append(contentsOf: $0) }
+            }
+            string = String(decoding: utf8, as: UTF8.self)
+        }
+        guard var data = string.data(using: options.encoding, allowLossyConversion: false) else {
+            throw DocumentWriteError.unrepresentableCharacters
+        }
+        if options.byteOrderMark, let mark = TextFileEncoding.byteOrderMark(for: options.encoding) {
+            data.insert(contentsOf: mark, at: 0)
+        }
+        return data
     }
 
     private static func streamBytes(
@@ -620,6 +682,19 @@ extension DocumentWriter {
             }
         } catch is CancellationError {
             throw DocumentWriteError.cancelled
+        }
+    }
+}
+
+extension DocumentWriteError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled: "The save was cancelled."
+        case .unsupportedEncoding: "That text encoding is not supported."
+        case .unrepresentableCharacters: "The text contains characters the chosen encoding cannot represent."
+        case .noDestination: "There is no file to save to."
+        case .bufferUnavailable: "The document's text is not available."
+        case .ioFailure: "The file could not be written."
         }
     }
 }
