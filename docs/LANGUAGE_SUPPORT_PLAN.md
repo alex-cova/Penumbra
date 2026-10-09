@@ -4,7 +4,7 @@ How a contributor adds a language to Umbra, from syntax colors up to a Java-clas
 
 ## Status
 
-**Phases 0 to 3 are implemented** (see their sections for what shipped and how it differs from the sketch). Phases 4 to 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
+**Phases 0 to 3 are implemented, and phase 4 in part** (see their sections for what shipped and how it differs from the sketch). The rest of phase 4 and phases 5 and 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
 
 ## Motivation
 
@@ -226,11 +226,22 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
   - No status, progress or logging closures: nothing uses them yet. `IDEJavaSupport` still owns its status message and Gradle trust prompt (`requestTrust`), which are project concerns for phase 5.
   - `hasConsent` is in the sketch's place of a single `requestConsent`, because the decompiler gate treats "already agreed" differently from "ask now": only a manual navigation may ask, but a hover may decompile once the user has agreed.
 
-### Phase 4: modules and open enums
-- `IDELanguageModule`, the open enums, a module registry in `IDEAppState` / `IDEIntelligenceServices`.
-- Port in this order, smallest first: **HTTP** (`IDEHTTPSupport`, 116 lines: completion, the HTTP Response bottom tab, send buttons in the line-marker column), then the Markdown, JSON and CSV helpers, then **Java feature by feature** (the 11 `app.java.*` commands, the Java preferences and Inspections panes, Structure, hierarchy, diagrams).
-- **Done when:** the `app.java.*` commands, `IDEPreferencesDomain.java` and the Java tool windows come from `JavaLanguageModule`.
-- **Tests:** `IDEDiagramDocumentTests`, `IDERunWorkspaceTests`, `IDERunSessionTests`, `IDERunCodeActionTests`; a session-decoding test with a saved `sidebarTab` from before the change; a retention test per module.
+### Phase 4: modules and open enums (partly implemented)
+
+**Implemented: the contribution points that are data or closures, with HTTP and Java as modules.**
+- **`IDELanguageModule`** (`Example/Umbra/Languages/IDELanguageModule.swift`): a stateless value with `commands(for:)`, `toolWindows(for:)`, `menu(for:)` and `preferencePanes`, all defaulted. It takes the workspace as an argument and never keeps it, so a module cannot keep a window alive; per-window state (`IDEJavaSupport`, `IDEHTTPSupport`) stays on the workspace. `IDELanguageModules.all` lists the shipped ones (`IDEJavaModule`, `IDEHTTPModule`).
+- **Palette commands:** the eleven `app.java.*` and two `app.http.*` entries left `IDEWorkspace`'s list; `configurePalette` registers `languageModuleCommands()` where Java's used to start, so the Java group keeps its place.
+- **Menu bar:** `IDEJavaCommands` and `IDEHTTPCommands` moved into their modules. `IDEAppCommands` has one line per built-in module showing `languageModuleMenu(for:)`, which is nil while the module does not apply (Java for a Java file or Gradle project and not on the welcome screen; HTTP for an `.http` file). `showsJavaMenu` and `showsHTTPMenu` are gone.
+- **Settings:** `IDEPreferencesDomain` is a value type with the built-in pages as static members, so `.editor` and `.agent` work as before. The Java and Inspections pages are the Java module's `IDEPreferencesPane`s and sit between Project and Agent (`IDEPreferencesDomain.ordered(with:)`); the Inspections search terms still include every rule title.
+- **Tool windows:** `IDEToolWindow` has an `order` (constants in `IDEToolWindow.Order`, spaced so a module can slot between two). The Debug, Test Results, Hierarchy, Call Hierarchy, Gradle and HTTP Response entries come from their modules and the list is merged by `order`, which reproduces the old sequence.
+- **Tests:** `IDELanguageModuleTests` (the module list, each module's command ids, titles and groups, each registered once, Java's group before Git, menu visibility rules, the settings order and search, the order constants).
+
+**Not done, and still the plan:**
+- `IDEBottomPanelTab` and `IDESidebarTab` are still closed enums. Opening them means the bottom panel's content switch (`IDETerminalPanel`), tab strip (`IDETerminalTabsBar`) and its per-tab `is…Selected` flags, and `IDESidebarTab`'s saved raw values, change together; the module stripe entries still toggle a built-in tab. This is the next piece.
+- Status-bar items, toolbar buttons, gutter actions, palette sources and agent tools are not module contributions yet.
+- Markdown, JSON and CSV (previews, text tools) are not modules; their per-language switches in `IDEAppCommands` and the toolbar remain.
+- Java's behavior (Gradle, run, debug, diagrams, structure sidebar content) still lives in `IDEWorkspace` extensions, called from the module's closures. Moving it is phase 5.
+- **Differences:** the HTTP palette group is now registered with Java's rather than last, so with an empty query Find Action lists HTTP before Edit, Git, Run and View. `IDEToolWindow` gained a stored `order`, so any new construction site must set it.
 
 ### Phase 5: project systems, run and test
 - `IDEProjectSystem` and `IDERunProvider`; split `IDEJavaSupport` into the Java service, a Gradle project system and `IDEJDKSelection`.

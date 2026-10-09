@@ -130,15 +130,17 @@ An actor test per provider, plus a "returns nothing for a foreign language" test
 
 ## 3. IDE features
 
-Everything that is UI or project state. Umbra has no extension point for these yet, so each is wired by hand. The smallest worked example is HTTP: `Example/Umbra/IDEHTTPSupport.swift` (116 lines), `Example/Umbra/HTTP/`, `IDEHTTPResponseView.swift`, the `.http` case of `IDEBottomPanelTab`, and `HTTPCompletionProvider` in `IDEIntelligenceServices`.
+Everything that is UI or project state. A language adds its chrome as an `IDELanguageModule` (`Example/Umbra/Languages/`), a stateless value; `IDEHTTPModule` is the small worked example (two palette commands, a menu, one tool window), `IDEJavaModule` the large one. Register it in `IDELanguageModules.all`.
 
-| Feature | Where it is wired today |
+| Feature | How |
 |---|---|
-| Palette commands and shortcuts | the `EditorCommand` list in `IDEWorkspace.swift` (search `app.java.`); menu items in `IDEAppCommands.swift`; a command is `id`, `title`, `group` and a main-actor closure |
-| Bottom panel tab | `IDEBottomPanelTab` (enum), `IDEToolWindows.swift` (`bottomToolWindow(...)`), the content switch in `IDETerminalPanel.swift`, and `IDEWorkspace.toggleBottomToolWindow(_:)` |
-| Left sidebar tab | `IDESidebarTab` (enum, `Codable`, **saved in sessions**: a new case must not change existing raw values) |
-| Settings pane | `IDEPreferencesDomain` (title, icon, `searchTerms`, view), `IDEPreferences` for the values; follow `IDEPreferencesJavaPane` |
-| Status bar item | `IDEStatusBarPanel.swift` |
+| Palette commands | `commands(for: workspace)`: `EditorCommand`s whose closures capture the workspace weakly (`[weak workspace]`) |
+| Menu-bar menu | `menu(for: workspace)` returns an `IDEModuleMenu` (title and SwiftUI content built from an `IDEWorkspaceRef`) while the language applies, nil otherwise. Add one line for it in `IDEAppCommands.swift`: SwiftUI cannot build a menu bar from a list |
+| Settings page | `preferencePanes`: an `IDEPreferencesPane` with an `IDEPreferencesDomain` (id, title, SF Symbol, search terms) and the page's view. It appears between Project and Agent |
+| Tool window (stripe entry) | `toolWindows(for: workspace)`: `workspace.bottomToolWindow(.tab, …, order:)` for a built-in bottom tab, or an `IDEToolWindow` of your own; `order` places it among the others (`IDEToolWindow.Order`) |
+| Bottom panel tab content | **not open yet**: `IDEBottomPanelTab` is an enum; content is switched in `IDETerminalPanel.swift` and tabs in `IDETerminalTabsBar.swift`. Needs a new case until plan phase 4 finishes |
+| Left sidebar tab | **not open yet**: `IDESidebarTab` (enum, `Codable`, saved in sessions: a new case must not change existing raw values) |
+| Status bar item, toolbar button | `IDEStatusBarPanel.swift`, `IDEToolbarPanel.swift` (by hand) |
 | Gutter run buttons | `IDEWorkspace+Debugger.swift` (`applyJavaGutter`); the line-marker column is reserved by `reservedLineMarkerSlots` |
 | Run and console | `IDERunSession`, `IDERunSessions`, `IDEWorkspace+Run.swift` |
 | Project model (Gradle-like) | `IDEJavaSupport` is the only example; plan before copying it |
@@ -146,13 +148,12 @@ Everything that is UI or project state. Umbra has no extension point for these y
 | Agent tools | `Example/Umbra/Agent/` (`IDEAgentNavigationTools.swift` for navigation) |
 
 Rules for this layer:
+- A module holds no workspace and no per-window state; take the workspace from the call, capture it weakly in closures, and keep per-window state on the workspace.
 - Every split in the app is a `SplitPanes`; do not add `HSplitView` or `NSSplitView`.
 - App-wide state (trust decisions, selections, stores) goes in `IDESharedServices`; do not construct a per-window copy.
-- Nothing may retain the workspace past `IDEWorkspace.teardown()` (menu closures, callbacks owned by long-lived views). Capture the workspace weakly.
+- Nothing may retain the workspace past `IDEWorkspace.teardown()` (menu closures, callbacks owned by long-lived views).
 - Tests that create a workspace set `IDEWorkspace.isSessionPersistenceEnabled = false`.
 - Document the feature in `Example/Umbra/CLAUDE.md`.
-
-> **After phase 4** these become members of an `IDELanguageModule`; the enums gain `.contributed(id)` cases. Prefer waiting for it over adding a `<Name>`-specific case to a closed enum.
 
 ---
 

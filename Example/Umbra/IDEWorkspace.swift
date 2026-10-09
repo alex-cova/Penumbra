@@ -4814,7 +4814,7 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
-    private func configurePalette(_ palette: CommandPaletteController) {
+    func configurePalette(_ palette: CommandPaletteController) {
         palette.recentFileEntriesProvider = { [weak self] in
             guard let self else { return [] }
             var seen = Set<URL>()
@@ -5044,13 +5044,11 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.nextTerminalTab", title: "Next Terminal Tab", group: "View",
                           action: { [weak self] in self?.selectNextTerminalTab() }),
             EditorCommand(id: "app.previousTerminalTab", title: "Previous Terminal Tab", group: "View",
-                          action: { [weak self] in self?.selectPreviousTerminalTab() }),
-            EditorCommand(id: "app.java.buildGradleProject", title: "Java: Build Project", group: "Java",
-                          action: { [weak self] in self?.buildGradleProject() }),
-            EditorCommand(id: "app.java.runTests", title: "Java: Run Tests", group: "Java",
-                          action: { [weak self] in self?.runActiveJavaTests() }),
-            EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
-                          action: { [weak self] in self?.runLastRunConfiguration() }),
+                          action: { [weak self] in self?.selectPreviousTerminalTab() })
+        ])
+        // Language modules add their own (Java, HTTP) where Java's used to be.
+        palette.commandRegistry.register(languageModuleCommands())
+        palette.commandRegistry.register([
             EditorCommand(id: "app.replaceInFiles", title: "Replace in Files…", group: "Edit",
                           action: { [weak self] in self?.showReplaceInFiles() }),
             EditorCommand(id: "app.git.pull", title: "Git: Update Project (Pull)", group: "Git",
@@ -5100,27 +5098,7 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.debug.stepOut", title: "Debug: Step Out", group: "Run",
                           action: { [weak self] in self?.debugStepOut() }),
             EditorCommand(id: "app.debug.stop", title: "Debug: Stop", group: "Run",
-                          action: { [weak self] in self?.stopDebugging() }),
-            EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Configurations…", group: "Java",
-                          action: { [weak self] in self?.editRunConfiguration() }),
-            EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
-                          action: { [weak self] in self?.reloadGradleProject() }),
-            EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
-                          action: { [weak self] in self?.showGradleOutput() }),
-            EditorCommand(id: "app.java.showClassDiagram", title: "Java: Show Class Diagram", group: "Java",
-                          action: { [weak self] in self?.showClassDiagramForActiveFile() }),
-            EditorCommand(id: "app.java.showPackageDiagram", title: "Java: Show Package Class Diagram", group: "Java",
-                          action: { [weak self] in self?.showClassDiagramForActivePackage() }),
-            EditorCommand(id: "app.java.showProjectDiagram", title: "Java: Show Project Class Diagram", group: "Java",
-                          action: { [weak self] in self?.showClassDiagramForProject() }),
-            EditorCommand(id: "app.java.showGradleModuleDiagram", title: "Gradle: Show Module Diagram", group: "Java",
-                          action: { [weak self] in self?.showGradleModuleDiagram() }),
-            EditorCommand(id: "app.java.showGradleDependencyDiagram", title: "Gradle: Show Dependency Diagram", group: "Java",
-                          action: { [weak self] in self?.showGradleDependencyDiagram() }),
-            EditorCommand(id: "app.http.sendRequest", title: "HTTP: Send Request", group: "HTTP",
-                          action: { [weak self] in self?.sendActiveHTTPRequest() }),
-            EditorCommand(id: "app.http.showResponse", title: "HTTP: Show Response", group: "HTTP",
-                          action: { [weak self] in self?.showHTTPResponse() })
+                          action: { [weak self] in self?.stopDebugging() })
         ])
     }
 

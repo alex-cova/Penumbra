@@ -21,7 +21,7 @@ public struct IDEPreferencesView: View {
     }
 
     private var visibleDomains: [IDEPreferencesDomain] {
-        IDEPreferencesDomain.allCases.filter { $0.matches(query) }
+        IDEPreferencesDomain.ordered(with: IDELanguageModules.preferencePanes.map(\.domain)).filter { $0.matches(query) }
     }
 
     /// The selected domain, or the first match when a search has filtered it out of the sidebar.
@@ -156,12 +156,13 @@ public struct IDEPreferencesView: View {
             IDEPreferencesFocusPane(preferences: preferences)
         case .project:
             IDEPreferencesProjectPane(preferences: preferences)
-        case .java:
-            IDEPreferencesJavaPane(preferences: preferences)
-        case .inspections:
-            IDEPreferencesInspectionsPane(preferences: preferences)
         case .agent:
             IDEPreferencesAgentPane(agent: workspace.agent)
+        default:
+            // A language module's page.
+            if let pane = IDELanguageModules.preferencePanes.first(where: { $0.domain == domain }) {
+                pane.content(preferences, workspace)
+            }
         }
     }
 }

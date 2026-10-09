@@ -82,18 +82,15 @@ struct IDEAppCommands: Commands {
             if let focused { IDEGitCommands(ref: focused) } else { IDENoWindowCommand() }
         }
 
-        // Language menus only exist while they apply: Java for a Java file or Gradle project, HTTP
-        // for a shown `.http` file. Both read the workspace through `focused`, so they follow focus.
-        if workspace?.showsJavaMenu == true, let focused {
-            CommandMenu("Java") {
-                IDEJavaCommands(ref: focused)
-            }
+        // Language modules' menus only exist while they apply (see `IDELanguageModule.menu`). SwiftUI
+        // cannot build a menu bar from a runtime list, so each built-in module has a line here. They
+        // read the workspace through `focused`, so they follow focus.
+        if let focused, let menu = workspace?.languageModuleMenu(for: IDEJavaModule.id) {
+            CommandMenu(menu.title) { menu.content(focused) }
         }
 
-        if workspace?.showsHTTPMenu == true, let focused {
-            CommandMenu("HTTP") {
-                IDEHTTPCommands(ref: focused)
-            }
+        if let focused, let menu = workspace?.languageModuleMenu(for: IDEHTTPModule.id) {
+            CommandMenu(menu.title) { menu.content(focused) }
         }
 
         CommandMenu("View") {
@@ -386,93 +383,6 @@ private struct IDEGitCommands: View {
     }
 }
 
-/// The Java menu: refactorings, Gradle and the project JDK.
-private struct IDEJavaCommands: View {
-    let ref: IDEWorkspaceRef
-
-    /// Resolved when read, never stored: menu actions run long after this view was built, and a
-    /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace? { ref.workspace }
-
-    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
-
-    var body: some View {
-        Button("Show Context Actions", action: { workspace?.showContextActions() })
-            .menuShortcut(.showContextActions, in: preset)
-        Button("Parameter Info", action: { workspace?.showParameterInfo() })
-            .menuShortcut(.parameterInfo, in: preset)
-        Button("Go to Super Method", action: { workspace?.goToSuperMethod() })
-        Button("Go to Type Declaration", action: { workspace?.goToTypeDefinition() })
-            .menuShortcut(.goToTypeDefinition, in: preset)
-        Button("Rename…", action: { workspace?.renameSymbol() })
-        Button("Extract Variable…", action: { workspace?.extractVariable() })
-            .menuShortcut(.extractVariable, in: preset)
-        Button("Extract Field…", action: { workspace?.extractField() })
-            .menuShortcut(.extractField, in: preset)
-        Button("Extract Constant…", action: { workspace?.extractConstant() })
-            .menuShortcut(.extractConstant, in: preset)
-        Button("Extract Method…", action: { workspace?.extractMethod() })
-            .menuShortcut(.extractMethod, in: preset)
-        Button("Inline Variable", action: { workspace?.inlineVariable() })
-            .menuShortcut(.inlineVariable, in: preset)
-        Button("Inline Method", action: { workspace?.inlineMethod() })
-        Button("Change Method Signature…", action: { workspace?.changeMethodSignature() })
-        Button("Encapsulate Field", action: { workspace?.encapsulateField() })
-            .menuShortcut(.encapsulateField, in: preset)
-        Button("Generate…", action: { workspace?.generate() })
-        Button("Generate Getter and Setter", action: { workspace?.generateAccessors() })
-        Button("Move Class…", action: { workspace?.moveClass() })
-        Button("Safe Delete", action: { workspace?.safeDelete() })
-        Button("Reformat Code", action: { workspace?.reformatCode() })
-        Button("Type Hierarchy") { workspace?.showTypeHierarchy() }
-        Button("Call Hierarchy") { workspace?.showCallHierarchy() }
-        Menu("Diagrams") {
-            Button("Show Class Diagram") { workspace?.showClassDiagramForActiveFile() }
-                .disabled(!(workspace?.canShowClassDiagram ?? false))
-            Button("Show Package Class Diagram") { workspace?.showClassDiagramForActivePackage() }
-                .disabled(workspace?.activeJavaFileURL == nil)
-            Button("Show Project Class Diagram") { workspace?.showClassDiagramForProject() }
-                .disabled(!(workspace?.canShowClassDiagram ?? false))
-            Divider()
-            Button("Show Gradle Module Diagram") { workspace?.showGradleModuleDiagram() }
-                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
-            Button("Show Gradle Dependency Diagram") { workspace?.showGradleDependencyDiagram() }
-                .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
-        }
-        Divider()
-        Button("Optimize Imports", action: { workspace?.optimizeImports() })
-        Divider()
-        Menu("Project JDK") {
-            IDEJDKMenuFromRef(ref: ref)
-        }
-        Button("Build Project", systemImage: "hammer", action: { workspace?.buildGradleProject() })
-            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
-        Button("Reload Gradle Project", action: { workspace?.reloadGradleProject() })
-            .disabled(!(workspace?.javaSupport.isGradleProject ?? false))
-        Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
-            .disabled(workspace?.javaSupport.gradleConsole.lines.isEmpty ?? true)
-    }
-}
-
-/// The HTTP menu.
-private struct IDEHTTPCommands: View {
-    let ref: IDEWorkspaceRef
-
-    /// Resolved when read, never stored: menu actions run long after this view was built, and a
-    /// stored workspace would stay alive with them after its window closed.
-    private var workspace: IDEWorkspace? { ref.workspace }
-
-    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
-
-    var body: some View {
-        Button("Send Request", systemImage: "paperplane.fill", action: { workspace?.sendActiveHTTPRequest() })
-            .menuShortcut(.sendHTTPRequest, in: preset)
-            .disabled(!(workspace?.httpFileCanSend ?? false))
-        Button("Show Response", action: { workspace?.showHTTPResponse() })
-            .disabled(workspace?.httpSupport.responseLog.lines.isEmpty ?? true)
-    }
-}
-
 /// The View menu: layout, tool windows, terminal, zoom and editor toggles.
 private struct IDEViewCommands: View {
     let ref: IDEWorkspaceRef
@@ -623,7 +533,7 @@ private struct IDEViewCommands: View {
 
 /// The Project JDK submenu. Built from the handle so the menu holds no workspace of its own; the
 /// content needs one in the environment while it is shown.
-private struct IDEJDKMenuFromRef: View {
+struct IDEJDKMenuFromRef: View {
     let ref: IDEWorkspaceRef
 
     var body: some View {
