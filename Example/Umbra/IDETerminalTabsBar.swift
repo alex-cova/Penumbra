@@ -38,23 +38,23 @@ struct IDETerminalTabsBar: View {
         var items: [StripItem] = []
         if workspace.showsProblemsTab {
             items.append(StripItem(id: "problems", order: Order.problems, view: AnyView(IDEProblemsTabItem(
-                isSelected: workspace.isProblemsSelected,
+                isSelected: workspace.isBottomTabSelected(.problems),
                 errorCount: workspace.problems.errorCount,
                 warningCount: workspace.problems.warningCount,
-                onSelect: { workspace.selectProblemsTab() }
+                onSelect: { workspace.showBottomTab(.problems) }
             ))))
         }
         if workspace.showsUsagesTab {
             items.append(StripItem(id: "usages", order: Order.usages, view: AnyView(IDEUsagesTabItem(
                 title: workspace.usages.isSearching ? "Usages · …" : "Usages · \(workspace.usages.count)",
-                isSelected: workspace.isUsagesSelected,
-                onSelect: { workspace.selectUsagesTab() }
+                isSelected: workspace.isBottomTabSelected(.usages),
+                onSelect: { workspace.showBottomTab(.usages) }
             ))))
         }
         if workspace.showsSourceControlTab {
             items.append(StripItem(id: "sourceControl", order: Order.sourceControl, view: AnyView(IDESourceControlTabItem(
-                isSelected: workspace.isSourceControlSelected,
-                onSelect: { workspace.selectSourceControlTab() }
+                isSelected: workspace.isBottomTabSelected(.sourceControl),
+                onSelect: { workspace.showBottomTab(.sourceControl) }
             ))))
         }
         for contribution in workspace.languageModuleBottomTabs() {

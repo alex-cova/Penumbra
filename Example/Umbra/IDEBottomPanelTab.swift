@@ -33,6 +33,12 @@ struct IDEBottomTabContribution {
     let item: @MainActor (IDEWorkspace) -> AnyView
     /// The panel.
     let content: @MainActor (IDEWorkspace) -> AnyView
+    /// The controls at the right end of the panel's header while this tab is selected (Cancel, Copy,
+    /// elapsed time). Without them the header shows the shell's Restart button.
+    var controls: (@MainActor (IDEWorkspace) -> AnyView)?
+    /// When the last shell is closed, the panel stays on this tab instead of hiding (a console the
+    /// user may still want to read).
+    var staysWhenLastShellCloses = false
 }
 
 extension IDEBottomPanelTab {

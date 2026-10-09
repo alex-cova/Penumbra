@@ -78,7 +78,7 @@ final class IDERunWorkspaceTests: XCTestCase {
 
         let session = try XCTUnwrap(workspace.startRunSession(configuration))
         XCTAssertTrue(workspace.showsRunTab)
-        XCTAssertTrue(workspace.isRunSelected)
+        XCTAssertTrue(workspace.isBottomTabSelected(.run))
         let prompted = await waitUntil { session.isRunning && session.log.plainText.contains("Name: ") }
         XCTAssertTrue(prompted, session.log.plainText)
         XCTAssertTrue(workspace.isRunActive)

@@ -388,18 +388,16 @@ struct IDETerminalPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .help("New Terminal Tab")
                 .accessibilityLabel("New Terminal Tab")
-                if workspace.isUsagesSelected {
+                if workspace.isBottomTabSelected(.usages) {
                     IDEUsagesControls()
-                } else if workspace.isProblemsSelected {
+                } else if workspace.isBottomTabSelected(.problems) {
                     IDEProblemsControls()
-                } else if workspace.isSourceControlSelected {
+                } else if workspace.isBottomTabSelected(.sourceControl) {
                     IDESourceControlControls()
-                } else if workspace.isRunSelected {
-                    IDERunControls()
-                } else if workspace.isGradleConsoleSelected {
-                    IDEGradleConsoleControls()
-                } else if workspace.isHTTPConsoleSelected {
-                    IDEHTTPConsoleControls()
+                } else if let controls = workspace.languageModuleBottomTabs()
+                    .first(where: { $0.tab == workspace.selectedBottomTab })?.controls {
+                    // A language module's tab brings its own header controls.
+                    controls(workspace)
                 } else {
                     Button(action: workspace.restartTerminal) {
                         Image(systemName: "arrow.clockwise")
@@ -461,22 +459,22 @@ struct IDETerminalPanel: View {
                 if workspace.showsProblemsTab {
                     IDEProblemsPanel()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isProblemsSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isProblemsSelected)
+                        .opacity(workspace.isBottomTabSelected(.problems) ? 1 : 0)
+                        .allowsHitTesting(workspace.isBottomTabSelected(.problems))
                 }
 
                 if workspace.showsUsagesTab {
                     IDEUsagesPanel()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isUsagesSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isUsagesSelected)
+                        .opacity(workspace.isBottomTabSelected(.usages) ? 1 : 0)
+                        .allowsHitTesting(workspace.isBottomTabSelected(.usages))
                 }
 
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isSourceControlSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isSourceControlSelected)
+                        .opacity(workspace.isBottomTabSelected(.sourceControl) ? 1 : 0)
+                        .allowsHitTesting(workspace.isBottomTabSelected(.sourceControl))
                 }
 
                 // The language modules' tabs (Run, Gradle, HTTP, hierarchies, tests, debugger).
@@ -498,7 +496,7 @@ struct IDETerminalPanel: View {
 
 /// Header controls shown in place of the shell's restart button while the Gradle console tab is
 /// selected: elapsed time, Cancel (syncing) or Reload (idle), and Copy.
-private struct IDEGradleConsoleControls: View {
+struct IDEGradleConsoleControls: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
@@ -562,7 +560,7 @@ private struct IDEGradleConsoleControls: View {
     }
 }
 
-private struct IDEHTTPConsoleControls: View {
+struct IDEHTTPConsoleControls: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {

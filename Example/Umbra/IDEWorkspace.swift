@@ -456,45 +456,6 @@ public final class IDEWorkspace {
     /// Which tab the bottom panel is showing. Not persisted in the session -- each launch starts on
     /// a shell (or no terminal at all).
     var selectedBottomTab: IDEBottomPanelTab = .terminal
-    /// True when the bottom panel's read-only "Gradle" console tab is showing instead of a shell.
-    /// The `is*Selected` flags are views over `selectedBottomTab`: setting one `true` selects that
-    /// tab, setting it `false` only matters when it is the selected tab (falling back to the shell).
-    var isGradleConsoleSelected: Bool {
-        get { selectedBottomTab == .gradle }
-        set { setBottomTab(.gradle, selected: newValue) }
-    }
-    /// True when the bottom panel's read-only "HTTP" response tab is showing instead of a shell.
-    var isHTTPConsoleSelected: Bool {
-        get { selectedBottomTab == .http }
-        set { setBottomTab(.http, selected: newValue) }
-    }
-    /// True when the bottom panel's Source Control tab is showing instead of a shell.
-    var isSourceControlSelected: Bool {
-        get { selectedBottomTab == .sourceControl }
-        set { setBottomTab(.sourceControl, selected: newValue) }
-    }
-    /// True when the bottom panel's Problems tab is showing instead of a shell.
-    var isProblemsSelected: Bool {
-        get { selectedBottomTab == .problems }
-        set { setBottomTab(.problems, selected: newValue) }
-    }
-    /// True when the bottom panel's Type Hierarchy tab is showing instead of a shell.
-    var isTypeHierarchySelected: Bool {
-        get { selectedBottomTab == .typeHierarchy }
-        set { setBottomTab(.typeHierarchy, selected: newValue) }
-    }
-    var isCallHierarchySelected: Bool {
-        get { selectedBottomTab == .callHierarchy }
-        set { setBottomTab(.callHierarchy, selected: newValue) }
-    }
-    var isDebugSelected: Bool {
-        get { selectedBottomTab == .debug }
-        set { setBottomTab(.debug, selected: newValue) }
-    }
-    var isRunSelected: Bool {
-        get { selectedBottomTab == .run }
-        set { setBottomTab(.run, selected: newValue) }
-    }
     /// The Run tab appears with the first program Run starts, and stays while any console is kept.
     var showsRunTab: Bool { runs.hasContent }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
@@ -507,24 +468,32 @@ public final class IDEWorkspace {
         default: return true
         }
     }
-    /// True when the bottom panel's Usages tab is showing instead of a shell.
-    var isUsagesSelected: Bool {
-        get { selectedBottomTab == .usages }
-        set { setBottomTab(.usages, selected: newValue) }
-    }
     var showsUsagesTab: Bool { usages.hasContent }
-    var isTestResultsSelected: Bool {
-        get { selectedBottomTab == .testResults }
-        set { setBottomTab(.testResults, selected: newValue) }
-    }
     var showsTestResultsTab: Bool { testResults.hasContent }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
 
-    private func setBottomTab(_ tab: IDEBottomPanelTab, selected: Bool) {
-        if selected {
-            selectedBottomTab = tab
-        } else if selectedBottomTab == tab {
+    /// Whether `tab` is the bottom panel's selected tab (the stripe and the strip read this).
+    func isBottomTabSelected(_ tab: IDEBottomPanelTab) -> Bool {
+        selectedBottomTab == tab
+    }
+
+    /// Selects `tab` and reveals the bottom panel. Every tab, built in or contributed by a language
+    /// module, is shown this way.
+    func showBottomTab(_ tab: IDEBottomPanelTab) {
+        selectedBottomTab = tab
+        if !isTerminalVisible {
+            isTerminalVisible = true
+            saveSession()
+        }
+        if tab == .sourceControl {
+            gitStatus.refresh()
+        }
+    }
+
+    /// Takes `tab` out of the selection (it closed): back to the shell if it was the selected one.
+    func deselectBottomTab(_ tab: IDEBottomPanelTab) {
+        if selectedBottomTab == tab {
             selectedBottomTab = .terminal
         }
     }
@@ -1253,10 +1222,11 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.reformatCode)
     }
 
-    /// "Format Document" in the editor's right-click menu, for the languages that have a formatter
-    /// (Java and JSON). It formats the whole file even when text is selected.
+    /// "Format Document" in the editor's right-click menu, for the languages whose service has a
+    /// formatter (Java and JSON). It formats the whole file even when text is selected.
     func formatDocumentContextMenuItems(textView: TextView, paneID: UUID) -> [NSMenuItem] {
-        guard textView.isEditable, ["java", "json"].contains(textView.languageIdentifier ?? "") else { return [] }
+        guard textView.isEditable, let language = textView.languageIdentifier,
+              languages.services(for: language).contains(where: { $0.providers.formatting != nil }) else { return [] }
         let item = IDEClosureMenuItem(title: "Format Document") { [weak self] in
             self?.host(for: paneID).intelligenceController?.formatDocument()
         }
@@ -1441,33 +1411,33 @@ public final class IDEWorkspace {
             guard let self, !self.isBottomToolWindowOpen(.terminal) else { return }
             self.toggleBottomToolWindow(.terminal)
         }
-        add("problems", "Problems") { [weak self] in self?.selectProblemsTab() }
+        add("problems", "Problems") { [weak self] in self?.showBottomTab(.problems) }
         if showsSourceControlTab {
-            add("sourceControl", "History") { [weak self] in self?.selectSourceControlTab() }
+            add("sourceControl", "History") { [weak self] in self?.showBottomTab(.sourceControl) }
         }
         if showsDebugTab {
-            add("debug", "Debug") { [weak self] in self?.selectDebugTab() }
+            add("debug", "Debug") { [weak self] in self?.showBottomTab(.debug) }
         }
         if showsUsagesTab {
-            add("usages", "Usages") { [weak self] in self?.selectUsagesTab() }
+            add("usages", "Usages") { [weak self] in self?.showBottomTab(.usages) }
         }
         if showsTypeHierarchyTab {
-            add("typeHierarchy", "Type Hierarchy") { [weak self] in self?.selectTypeHierarchyTab() }
+            add("typeHierarchy", "Type Hierarchy") { [weak self] in self?.showBottomTab(.typeHierarchy) }
         }
         if showsCallHierarchyTab {
-            add("callHierarchy", "Call Hierarchy") { [weak self] in self?.selectCallHierarchyTab() }
+            add("callHierarchy", "Call Hierarchy") { [weak self] in self?.showBottomTab(.callHierarchy) }
         }
         if showsTestResultsTab {
-            add("testResults", "Test Results") { [weak self] in self?.selectTestResultsTab() }
+            add("testResults", "Test Results") { [weak self] in self?.showBottomTab(.testResults) }
         }
         if showsRunTab {
-            add("run", "Run Output") { [weak self] in self?.selectRunTab() }
+            add("run", "Run Output") { [weak self] in self?.showBottomTab(.run) }
         }
         if showsGradleConsoleTab {
-            add("gradleConsole", "Gradle Output") { [weak self] in self?.selectGradleConsoleTab() }
+            add("gradleConsole", "Gradle Output") { [weak self] in self?.showBottomTab(.gradle) }
         }
         if showsHTTPTab {
-            add("http", "HTTP Response") { [weak self] in self?.selectHTTPConsoleTab() }
+            add("http", "HTTP Response") { [weak self] in self?.showBottomTab(.http) }
         }
         return entries
     }
@@ -1706,7 +1676,7 @@ public final class IDEWorkspace {
         let textView = host(for: workbench.activePaneID).textView
         let range = textView.selectedRange
         let selected = range.length > 0 ? (textView.text as NSString).substring(with: range) : nil
-        selectDebugTab()
+        showBottomTab(.debug)
         debugSession.requestEvaluationInput(prefilledWith: selected.flatMap { $0.contains("\n") ? nil : $0 })
     }
 
@@ -1842,22 +1812,6 @@ public final class IDEWorkspace {
         }
     }
 
-    func selectDebugTab() {
-        isDebugSelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
-    func selectCallHierarchyTab() {
-        isCallHierarchySelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
     func reportRunProblem(_ message: String) {
         gradle.appendConsoleNote(message)
         showGradleOutput()
@@ -1925,7 +1879,7 @@ public final class IDEWorkspace {
     }
 
     func showHTTPResponse() {
-        selectHTTPConsoleTab()
+        showBottomTab(.http)
     }
 
     func toggleBottomPanelExpanded() {
@@ -1971,9 +1925,7 @@ public final class IDEWorkspace {
     }
 
     func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
-        isGradleConsoleSelected = false
-        isHTTPConsoleSelected = false
-        isSourceControlSelected = false
+        selectedBottomTab = .terminal
         let tab = makeTerminalTab(cwd: cwd)
         terminalTabs.append(tab)
         selectedTerminalTabID = tab.id
@@ -2044,10 +1996,10 @@ public final class IDEWorkspace {
         if terminalTabs.count == 1 {
             terminalTabs.removeAll()
             selectedTerminalTabID = nil
-            if showsGradleConsoleTab {
-                isGradleConsoleSelected = true
+            if let tab = languageModuleBottomTabs().first(where: \.staysWhenLastShellCloses)?.tab {
+                showBottomTab(tab)
             } else if showsSourceControlTab {
-                isSourceControlSelected = true
+                showBottomTab(.sourceControl)
             } else {
                 hideTerminal()
             }
@@ -2073,47 +2025,10 @@ public final class IDEWorkspace {
 
     func selectTerminalTab(_ id: UUID) {
         guard terminalTabs.contains(where: { $0.id == id }) else { return }
-        isGradleConsoleSelected = false
-        isHTTPConsoleSelected = false
-        isSourceControlSelected = false
+        selectedBottomTab = .terminal
         selectedTerminalTabID = id
         requestTerminalFocus()
         saveSession()
-    }
-
-    /// Selects the read-only Gradle console tab -- backs both clicking it directly and
-    /// `showGradleOutput()`.
-    func selectGradleConsoleTab() {
-        isGradleConsoleSelected = true
-        isHTTPConsoleSelected = false
-        isSourceControlSelected = false
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
-    func selectHTTPConsoleTab() {
-        isHTTPConsoleSelected = true
-        isGradleConsoleSelected = false
-        isSourceControlSelected = false
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
-    /// Selects the bottom panel's History tab (the commit graph and a commit's diff). The working
-    /// tree's changes live in the sidebar's Changes tab.
-    func selectSourceControlTab() {
-        isSourceControlSelected = true
-        isGradleConsoleSelected = false
-        isHTTPConsoleSelected = false
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-        gitStatus.refresh()
     }
 
     /// Shows the Changes tab of the left sidebar (branch, commit and the changed files).
@@ -2144,7 +2059,7 @@ public final class IDEWorkspace {
             return
         }
         gitStatus.showFileHistory(path: url.path)
-        selectSourceControlTab()
+        showBottomTab(.sourceControl)
     }
 
     /// Whether the active file shows the blame column (drives the menu title).
@@ -2409,55 +2324,23 @@ public final class IDEWorkspace {
         toggleSidebarTab(.changes)
     }
 
-    func selectProblemsTab() {
-        isProblemsSelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
     func showProblems() {
-        selectProblemsTab()
+        showBottomTab(.problems)
     }
 
     // MARK: Usages
 
-    func selectUsagesTab() {
-        isUsagesSelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
     func closeUsages() {
         usages.clear()
-        isUsagesSelected = false
-    }
-
-    func selectTestResultsTab() {
-        isTestResultsSelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
+        deselectBottomTab(.usages)
     }
 
     func closeTestResults() {
         testResults.clear()
-        isTestResultsSelected = false
+        deselectBottomTab(.testResults)
     }
 
     // MARK: Type hierarchy
-
-    func selectTypeHierarchyTab() {
-        isTypeHierarchySelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
 
     /// Shows the hierarchy of the type at the active editor's caret (⌃H). Always handles the
     /// request: outside a Java type the tab says so instead of the key doing nothing.
@@ -2478,7 +2361,7 @@ public final class IDEWorkspace {
         let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
         guard let provider = languages.typeHierarchy(for: languageIdentifier) else {
             typeHierarchy.show(message: "Type Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
-            selectTypeHierarchyTab()
+            showBottomTab(.typeHierarchy)
             return true
         }
         hierarchyLanguageIdentifier = languageIdentifier
@@ -2492,7 +2375,7 @@ public final class IDEWorkspace {
             } else {
                 self.typeHierarchy.show(message: "No type at the caret")
             }
-            self.selectTypeHierarchyTab()
+            self.showBottomTab(.typeHierarchy)
         }
         return true
     }
@@ -2500,7 +2383,7 @@ public final class IDEWorkspace {
     /// Closes the Type Hierarchy tab, back to whichever shell was showing.
     func closeTypeHierarchy() {
         typeHierarchy.clear()
-        isTypeHierarchySelected = false
+        deselectBottomTab(.typeHierarchy)
     }
 
     /// Opens the declaration of a hierarchy node: in the project, or in an attached source. A type
@@ -2549,7 +2432,7 @@ public final class IDEWorkspace {
         let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
         guard let provider = languages.callHierarchy(for: languageIdentifier) else {
             callHierarchy.show(message: "Call Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
-            selectCallHierarchyTab()
+            showBottomTab(.callHierarchy)
             return true
         }
         hierarchyLanguageIdentifier = languageIdentifier
@@ -2563,14 +2446,14 @@ public final class IDEWorkspace {
             } else {
                 self.callHierarchy.show(message: "No method at the caret")
             }
-            self.selectCallHierarchyTab()
+            self.showBottomTab(.callHierarchy)
         }
         return true
     }
 
     func closeCallHierarchy() {
         callHierarchy.clear()
-        isCallHierarchySelected = false
+        deselectBottomTab(.callHierarchy)
     }
 
     func openCallHierarchyNode(_ node: HierarchyItem) {
@@ -2588,7 +2471,7 @@ public final class IDEWorkspace {
     }
 
     func toggleProblems() {
-        if isTerminalVisible && isProblemsSelected {
+        if isTerminalVisible && isBottomTabSelected(.problems) {
             hideTerminal()
         } else {
             showProblems()
@@ -2927,7 +2810,7 @@ public final class IDEWorkspace {
     func presentNavigationChoices(_ locations: [Location], kind: NavigationKind = .definition) {
         if kind == .references, locations.contains(where: { $0.usage != nil }) {
             usages.show(locations)
-            selectUsagesTab()
+            showBottomTab(.usages)
             return
         }
         guard let paletteController else {
@@ -3262,11 +3145,11 @@ public final class IDEWorkspace {
                 addTerminalTab()
             }
         case .sourceControl:
-            selectSourceControlTab()
+            showBottomTab(.sourceControl)
         case .gradle:
-            selectGradleConsoleTab()
+            showBottomTab(.gradle)
         case .http:
-            selectHTTPConsoleTab()
+            showBottomTab(.http)
         default:
             selectedBottomTab = tab
             if !isTerminalVisible {
@@ -3810,7 +3693,7 @@ public final class IDEWorkspace {
         host.intelligenceController?.onNavigationSearchStarted = { [weak self] kind, cancel in
             guard kind == .references, let self else { return }
             self.usages.beginSearch(cancel: cancel)
-            self.selectUsagesTab()
+            self.showBottomTab(.usages)
         }
         host.intelligenceController?.onNavigationSearchFinished = { [weak self] kind in
             guard kind == .references else { return }
@@ -4186,7 +4069,7 @@ public final class IDEWorkspace {
     }
 
     func showTestResults() {
-        isTestResultsSelected = true
+        showBottomTab(.testResults)
         isTerminalVisible = true
     }
 
@@ -4760,7 +4643,7 @@ public final class IDEWorkspace {
     }
 
     func showGradleOutput() {
-        selectGradleConsoleTab()
+        showBottomTab(.gradle)
     }
 
     func dismissGradleReloadBanner() {

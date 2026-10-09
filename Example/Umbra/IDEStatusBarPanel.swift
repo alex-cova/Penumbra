@@ -15,7 +15,7 @@ struct IDEStatusBarPanel: View {
             // Takes whatever the row has left, so the trailing items never truncate.
             .layoutPriority(-1)
             Spacer(minLength: IDEAppearance.Spacing.md)
-            httpStatus
+            moduleItems(.leading)
             problemsStatus
             if workspace.statusSelectionLength > 0 {
                 Text("\(workspace.statusSelectionLength) selected  ·")
@@ -28,12 +28,7 @@ struct IDEStatusBarPanel: View {
             Text("·")
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            if workspace.showsJDKPicker {
-                IDEJDKStatusItem()
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
+            moduleItems(.trailing)
             if !workspace.showsWelcome {
                 syntaxPicker
                 Text("·")
@@ -159,20 +154,15 @@ struct IDEStatusBarPanel: View {
         }
     }
 
+    /// What the language modules put in the bar (`IDELanguageModule.statusItems`), each followed by
+    /// the bar's separator.
     @ViewBuilder
-    private var httpStatus: some View {
-        if workspace.statusLanguage == "http" {
-            if workspace.httpSupport.isSending {
-                Button("Sending HTTP request…") {
-                    workspace.showHTTPResponse()
-                }
-                .buttonStyle(.borderless)
+    private func moduleItems(_ placement: IDEStatusItem.Placement) -> some View {
+        ForEach(workspace.statusItems(placement)) { item in
+            item.content
+            Text("·")
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Text("·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
         }
     }
 

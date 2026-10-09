@@ -789,16 +789,23 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         return windows
     }
 
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
+        [.button(
+            id: "gradle.build", order: IDEToolbarItem.Order.build, systemImage: "hammer", help: "Build Project",
+            action: { [weak workspace] in workspace?.buildGradleProject() }
+        )]
+    }
+
     func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution] {
         guard workspace.showsGradleConsoleTab else { return [] }
         return [IDEBottomTabContribution(
             tab: .gradle, order: IDEBottomPanelTab.Order.gradle,
             item: { workspace in
                 AnyView(IDEGradleTabItem(
-                    isSelected: workspace.isGradleConsoleSelected,
+                    isSelected: workspace.isBottomTabSelected(.gradle),
                     isSyncing: workspace.gradle.isBusy,
                     isFailed: workspace.gradle.syncState.isFailed,
-                    onSelect: { [weak workspace] in workspace?.selectGradleConsoleTab() }
+                    onSelect: { [weak workspace] in workspace?.showBottomTab(.gradle) }
                 ))
             },
             content: { workspace in
@@ -807,7 +814,9 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                     fontName: workspace.preferences.fontName,
                     fontSize: workspace.preferences.fontSize
                 ))
-            }
+            },
+            controls: { _ in AnyView(IDEGradleConsoleControls()) },
+            staysWhenLastShellCloses: true
         )]
     }
 

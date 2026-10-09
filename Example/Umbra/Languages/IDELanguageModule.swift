@@ -17,9 +17,79 @@ struct IDEPreferencesPane {
     let content: @MainActor (IDEPreferences, IDEWorkspace) -> AnyView
 }
 
+/// One button or control a module (or a project system) puts in the titlebar's action cluster.
+struct IDEToolbarItem: Identifiable {
+    struct Button {
+        let systemImage: String
+        let help: String
+        var tint: Color?
+        /// Drawn as the open one (a preview that is showing).
+        var isActive = false
+        var isEnabled = true
+        let action: @MainActor () -> Void
+    }
+
+    enum Content {
+        case button(Button)
+        /// Anything else (the run configuration picker).
+        case custom(AnyView)
+    }
+
+    let id: String
+    /// Where it sits in the cluster, lowest first (``Order``).
+    let order: Int
+    let content: Content
+
+    static func button(
+        id: String, order: Int, systemImage: String, help: String, tint: Color? = nil,
+        isActive: Bool = false, isEnabled: Bool = true, action: @escaping @MainActor () -> Void
+    ) -> IDEToolbarItem {
+        IDEToolbarItem(id: id, order: order, content: .button(Button(
+            systemImage: systemImage, help: help, tint: tint, isActive: isActive, isEnabled: isEnabled, action: action
+        )))
+    }
+
+    /// The positions of the items in the order they have always had, sparse so a module can add one
+    /// between two. The close-editor-group button comes first and is the window's.
+    enum Order {
+        static let build = 100
+        static let runConfigurations = 200
+        static let run = 210
+        static let debug = 220
+        static let stop = 230
+        static let tests = 240
+        static let send = 300
+        static let agentRun = 400
+        static let exportPreview = 410
+        static let preview = 500
+    }
+}
+
+/// An item a module puts in the status bar. Each is followed by the bar's `·` separator.
+struct IDEStatusItem: Identifiable {
+    enum Placement {
+        /// Before the problem counts (a request in flight).
+        case leading
+        /// After the line and column, before the syntax and encoding pickers (the JDK).
+        case trailing
+    }
+
+    let id: String
+    let placement: Placement
+    let order: Int
+    let content: AnyView
+}
+
+/// Items a module adds to the View menu. Built from the focused window's reference, never the
+/// workspace itself: menu items outlive their window.
+struct IDEViewMenuContribution: Identifiable {
+    let id: String
+    let content: @MainActor (IDEWorkspaceRef) -> AnyView
+}
+
 /// What a language adds to Umbra's chrome, beside the intelligence its `LanguageService` provides:
-/// palette commands, a menu-bar menu, Settings pages and tool-window stripe entries. See
-/// `docs/LANGUAGE_SUPPORT_PLAN.md`.
+/// palette commands, menus, Settings pages, tool-window stripe entries, bottom and sidebar tabs,
+/// toolbar buttons and status-bar items. See `docs/LANGUAGE_SUPPORT_PLAN.md`.
 ///
 /// Modules are stateless. A language's per-window state (its `IDEJavaSupport`, its `IDEHTTPSupport`)
 /// stays on the workspace, which is passed to each call, so a module never keeps a window alive.
@@ -47,6 +117,16 @@ protocol IDELanguageModule {
 
     var preferencePanes: [IDEPreferencesPane] { get }
 
+    /// Buttons in the titlebar's action cluster, available now. Evaluated while the toolbar draws, so
+    /// reading the workspace's state here keeps the buttons current.
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem]
+
+    /// Status-bar items, available now.
+    func statusItems(for workspace: IDEWorkspace) -> [IDEStatusItem]
+
+    /// Items for the View menu, available now.
+    func viewMenuItems(for workspace: IDEWorkspace) -> [IDEViewMenuContribution]
+
     /// What makes Run, Debug and Run in Context work on this language's files: one per window, made
     /// once. The provider must hold `workspace` weakly.
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)?
@@ -59,13 +139,33 @@ extension IDELanguageModule {
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? { nil }
     var preferencePanes: [IDEPreferencesPane] { [] }
     var sidebarTabs: [IDESidebarTabDescriptor] { [] }
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] { [] }
+    func statusItems(for workspace: IDEWorkspace) -> [IDEStatusItem] { [] }
+    func viewMenuItems(for workspace: IDEWorkspace) -> [IDEViewMenuContribution] { [] }
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? { nil }
 }
 
-/// The modules Umbra ships, in the order their pages and entries appear.
+/// The language modules of the app, in the order their pages and entries appear. The shipped ones are
+/// listed here; ``register(_:)`` adds another (a test, or a language compiled into the app) and
+/// ``unregister(id:)`` takes it out. Registration is compile-time and main-actor only: a window made
+/// after it sees the module, and a window already open does not rebuild what it built.
 @MainActor
 enum IDELanguageModules {
-    static let all: [any IDELanguageModule] = [IDEJavaModule(), IDEHTTPModule()]
+    static let shipped: [any IDELanguageModule] = [
+        IDEJavaModule(), IDEHTTPModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule()
+    ]
+
+    private(set) static var all: [any IDELanguageModule] = shipped
+
+    /// Adds `module` after the others. A module with the same id replaces the earlier one.
+    static func register(_ module: any IDELanguageModule) {
+        all.removeAll { $0.id == module.id }
+        all.append(module)
+    }
+
+    static func unregister(id: String) {
+        all.removeAll { $0.id == id }
+    }
 
     static func module(id: String) -> (any IDELanguageModule)? {
         all.first { $0.id == id }
@@ -87,6 +187,25 @@ extension IDEWorkspace {
     func languageModuleToolWindows() -> [IDEToolWindow] {
         IDELanguageModules.all.flatMap { $0.toolWindows(for: self) }
             + projectSystems.systems.filter(\.isActive).flatMap { $0.toolWindows(for: self) }
+    }
+
+    /// Every module's and the active project system's toolbar buttons, in their order.
+    func toolbarItems() -> [IDEToolbarItem] {
+        (IDELanguageModules.all.flatMap { $0.toolbarItems(for: self) }
+            + projectSystems.systems.filter(\.isActive).flatMap { $0.toolbarItems(for: self) })
+            .sorted { $0.order < $1.order }
+    }
+
+    /// Every module's status-bar items for `placement`, in their order.
+    func statusItems(_ placement: IDEStatusItem.Placement) -> [IDEStatusItem] {
+        IDELanguageModules.all.flatMap { $0.statusItems(for: self) }
+            .filter { $0.placement == placement }
+            .sorted { $0.order < $1.order }
+    }
+
+    /// Every module's View menu items.
+    func viewMenuContributions() -> [IDEViewMenuContribution] {
+        IDELanguageModules.all.flatMap { $0.viewMenuItems(for: self) }
     }
 
     /// The menu `module` shows now, or nil.

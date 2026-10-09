@@ -49,7 +49,7 @@ final class IDEAgentSurfaceTests: XCTestCase {
         workspace.agentRevealGradle()
 
         XCTAssertTrue(workspace.isGradleSidebarVisible)
-        XCTAssertTrue(workspace.isGradleConsoleSelected)
+        XCTAssertTrue(workspace.isBottomTabSelected(.gradle))
         XCTAssertTrue(workspace.isTerminalVisible)
     }
 

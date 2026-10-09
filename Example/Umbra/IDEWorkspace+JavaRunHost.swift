@@ -10,7 +10,7 @@ extension IDEWorkspace: IDEJavaRunHost {
     var runSessions: IDERunSessions { runs }
 
     func showRunTab() {
-        selectRunTab()
+        showBottomTab(.run)
     }
 
     func showGradleConsole() {

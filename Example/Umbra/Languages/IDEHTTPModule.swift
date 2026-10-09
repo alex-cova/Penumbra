@@ -17,6 +17,24 @@ struct IDEHTTPModule: IDELanguageModule {
         ]
     }
 
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
+        guard workspace.statusLanguage == "http", workspace.httpFileCanSend else { return [] }
+        return [.button(
+            id: "http.send", order: IDEToolbarItem.Order.send, systemImage: "paperplane.fill", help: "Send HTTP Request",
+            tint: IDEAppearance.ColorToken.accent, action: { [weak workspace] in workspace?.sendActiveHTTPRequest() }
+        )]
+    }
+
+    func statusItems(for workspace: IDEWorkspace) -> [IDEStatusItem] {
+        guard workspace.statusLanguage == "http", workspace.httpSupport.isSending else { return [] }
+        return [IDEStatusItem(id: "http.sending", placement: .leading, order: 100, content: AnyView(
+            Button("Sending HTTP request…") { [weak workspace] in workspace?.showHTTPResponse() }
+                .buttonStyle(.borderless)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        ))]
+    }
+
     func toolWindows(for workspace: IDEWorkspace) -> [IDEToolWindow] {
         guard workspace.showsHTTPTab else { return [] }
         return [workspace.bottomToolWindow(.http, "network", "HTTP Response", nil, .blue, .trailingBottom, order: IDEToolWindow.Order.httpResponse)]
@@ -28,9 +46,9 @@ struct IDEHTTPModule: IDELanguageModule {
             tab: .http, order: IDEBottomPanelTab.Order.http,
             item: { workspace in
                 AnyView(IDEHTTPTabItem(
-                    isSelected: workspace.isHTTPConsoleSelected,
+                    isSelected: workspace.isBottomTabSelected(.http),
                     isSending: workspace.httpSupport.isSending,
-                    onSelect: { [weak workspace] in workspace?.selectHTTPConsoleTab() }
+                    onSelect: { [weak workspace] in workspace?.showBottomTab(.http) }
                 ))
             },
             content: { workspace in
@@ -39,7 +57,8 @@ struct IDEHTTPModule: IDELanguageModule {
                     fontName: workspace.preferences.fontName,
                     fontSize: workspace.preferences.fontSize
                 ))
-            }
+            },
+            controls: { _ in AnyView(IDEHTTPConsoleControls()) }
         )]
     }
 

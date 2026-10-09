@@ -35,31 +35,7 @@ struct IDEToolbarPanel: View {
             HStack(spacing: 2) {
                 IDEToolbarActionCluster(
                     showsCloseGroup: workspace.tabsByPane.count > 1,
-                    isMarkdownFile: workspace.statusLanguage == "markdown",
-                    isMarkdownPreviewVisible: workspace.isMarkdownPreviewVisible,
-                    isJSONFile: workspace.statusLanguage == "json",
-                    isJSONDiagramVisible: workspace.isJSONDiagramVisible,
-                    isCSVFile: workspace.statusLanguage == "csv" || workspace.statusLanguage == "tsv",
-                    isCSVTableVisible: workspace.isCSVTableVisible,
-                    isGradleProject: workspace.gradle.isActive,
-                    isJavaRunnable: workspace.javaFileCanRun,
-                    isJavaDebuggable: workspace.javaFileCanDebug,
-                    isRunActive: workspace.isRunActive,
-                    isJavaTestable: workspace.javaFileCanTest,
-                    javaRunHelp: workspace.javaRunHelp,
-                    javaDebugHelp: workspace.javaDebugHelp,
-                    isHTTPFile: workspace.statusLanguage == "http",
-                    isHTTPSendable: workspace.httpFileCanSend,
-                    canRunMarkdownWithAgent: workspace.canRunMarkdownWithAgent,
-                    toggleMarkdownPreview: workspace.toggleMarkdownPreview,
-                    runMarkdownWithAgent: workspace.runActiveMarkdownWithAgent,
-                    buildGradle: workspace.buildGradleProject,
-                    runJava: workspace.runActiveJava,
-                    debugJava: workspace.debugActiveJava,
-                    stopRunning: workspace.stopRunning,
-                    runJavaTests: workspace.runActiveJavaTests,
-                    sendHTTPRequest: workspace.sendActiveHTTPRequest,
-                    exportMarkdownPreviewToPDF: workspace.exportMarkdownPreviewToPDF,
+                    items: workspace.toolbarItems(),
                     closeActivePane: workspace.closeActivePane
                 )
 
@@ -222,33 +198,11 @@ private struct IDETitlebarGlobalActions: View {
     }
 }
 
+/// Close Editor Group, then the buttons language modules and the project system contribute
+/// (`IDELanguageModule.toolbarItems`), in their order.
 private struct IDEToolbarActionCluster: View {
     let showsCloseGroup: Bool
-    let isMarkdownFile: Bool
-    let isMarkdownPreviewVisible: Bool
-    let isJSONFile: Bool
-    let isJSONDiagramVisible: Bool
-    let isCSVFile: Bool
-    let isCSVTableVisible: Bool
-    let isGradleProject: Bool
-    let isJavaRunnable: Bool
-    let isJavaDebuggable: Bool
-    let isRunActive: Bool
-    let isJavaTestable: Bool
-    let javaRunHelp: String
-    let javaDebugHelp: String
-    let isHTTPFile: Bool
-    let isHTTPSendable: Bool
-    let canRunMarkdownWithAgent: Bool
-    let toggleMarkdownPreview: () -> Void
-    let runMarkdownWithAgent: () -> Void
-    let buildGradle: () -> Void
-    let runJava: () -> Void
-    let debugJava: () -> Void
-    let stopRunning: () -> Void
-    let runJavaTests: () -> Void
-    let sendHTTPRequest: () -> Void
-    let exportMarkdownPreviewToPDF: () -> Void
+    let items: [IDEToolbarItem]
     let closeActivePane: () -> Void
 
     var body: some View {
@@ -261,84 +215,20 @@ private struct IDEToolbarActionCluster: View {
                 )
             }
 
-            if isGradleProject {
-                IDEToolbarIconButton(
-                    systemName: "hammer",
-                    help: "Build Project",
-                    action: buildGradle
-                )
-            }
-
-            IDERunConfigurationMenu()
-
-            if isJavaRunnable {
-                IDEToolbarIconButton(
-                    systemName: "play.fill",
-                    tint: IDEAppearance.ColorToken.run,
-                    help: javaRunHelp,
-                    action: runJava
-                )
-                IDEToolbarIconButton(
-                    systemName: "ladybug.fill",
-                    tint: isJavaDebuggable ? IDEAppearance.ColorToken.run : nil,
-                    help: javaDebugHelp,
-                    action: debugJava
-                )
-                .disabled(!isJavaDebuggable)
-            }
-
-            // Stays up while something runs, even after switching to a file that can't run.
-            if isJavaRunnable || isRunActive {
-                IDEToolbarIconButton(
-                    systemName: "stop.fill",
-                    tint: isRunActive ? IDEAppearance.ColorToken.error : nil,
-                    help: "Stop",
-                    action: stopRunning
-                )
-                .disabled(!isRunActive)
-            }
-
-            if isJavaTestable {
-                IDEToolbarIconButton(
-                    systemName: "flask",
-                    help: "Run Tests",
-                    action: runJavaTests
-                )
-            }
-
-            if isHTTPFile && isHTTPSendable {
-                IDEToolbarIconButton(
-                    systemName: "paperplane.fill",
-                    tint: IDEAppearance.ColorToken.accent,
-                    help: "Send HTTP Request",
-                    action: sendHTTPRequest
-                )
-            }
-
-            if isMarkdownFile && canRunMarkdownWithAgent {
-                IDEToolbarIconButton(
-                    systemName: "sparkles",
-                    tint: IDEAppearance.ColorToken.accent,
-                    help: "Run with Agent (selection or whole file)",
-                    action: runMarkdownWithAgent
-                )
-            }
-
-            if isMarkdownFile, isMarkdownPreviewVisible {
-                IDEToolbarIconButton(
-                    systemName: "square.and.arrow.down",
-                    help: "Export Markdown Preview to PDF",
-                    action: exportMarkdownPreviewToPDF
-                )
-            }
-            if isMarkdownFile || isJSONFile || isCSVFile {
-                let previewVisible = isCSVFile ? isCSVTableVisible : (isJSONFile ? isJSONDiagramVisible : isMarkdownPreviewVisible)
-                IDEToolbarIconButton(
-                    systemName: previewVisible ? "stop.fill" : "play.fill",
-                    isActive: previewVisible,
-                    help: isCSVFile ? "Toggle CSV Table" : (isJSONFile ? "Toggle JSON Diagram" : "Toggle Markdown Preview"),
-                    action: toggleMarkdownPreview
-                )
+            ForEach(items) { item in
+                switch item.content {
+                case .button(let button):
+                    IDEToolbarIconButton(
+                        systemName: button.systemImage,
+                        isActive: button.isActive,
+                        tint: button.tint,
+                        help: button.help,
+                        action: button.action
+                    )
+                    .disabled(!button.isEnabled)
+                case .custom(let view):
+                    view
+                }
             }
         }
     }

@@ -379,7 +379,7 @@ extension IDEWorkspace {
     /// Evaluate Expression (⌥F8) opened with `prefill` in the field.
     func showEvaluateExpression(prefill: String?) {
         guard isDebuggerStopped else { return }
-        selectDebugTab()
+        showBottomTab(.debug)
         debugSession.requestEvaluationInput(prefilledWith: prefill)
     }
 
@@ -433,7 +433,7 @@ extension IDEWorkspace {
             }
             let breakpoints = breakpointStore.breakpoints(forProject: project.rootURL)
             let muted = breakpointsMuted
-            selectDebugTab()
+            showBottomTab(.debug)
             do {
                 try await debugSession.prepareAdapter(javaHome: jdk.home)
             } catch {
@@ -737,7 +737,7 @@ extension IDEWorkspace {
         let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !watches.contains(trimmed) else { return }
         setWatches(watches + [trimmed])
-        selectDebugTab()
+        showBottomTab(.debug)
     }
 
     func replaceWatch(_ old: String, with new: String) {
@@ -840,7 +840,7 @@ extension IDEWorkspace {
                 refreshLastRunConfiguration()
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
                 let muted = breakpointsMuted
-                selectDebugTab()
+                showBottomTab(.debug)
                 do {
                     try await debugSession.prepareAdapter(javaHome: jdk.home)
                 } catch {
@@ -913,7 +913,7 @@ extension IDEWorkspace {
                 runConfigurationStore.setLast(configuration, forProject: root)
                 refreshLastRunConfiguration()
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
-                selectDebugTab()
+                showBottomTab(.debug)
                 configureDebugSession()
                 await debugSession.start(launch: launch, breakpoints: breakpoints, muted: breakpointsMuted, sourceRoots: debugSourceRoots())
             }

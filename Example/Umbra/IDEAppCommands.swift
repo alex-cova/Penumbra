@@ -393,22 +393,6 @@ private struct IDEViewCommands: View {
 
     private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
-    private static func previewTitle(for language: String?) -> String {
-        switch language {
-        case "json": "JSON Diagram"
-        case "csv", "tsv": "CSV Table"
-        default: "Markdown Preview"
-        }
-    }
-
-    private static func previewIcon(for language: String?) -> String {
-        switch language {
-        case "json": "curlybraces"
-        case "csv", "tsv": "tablecells"
-        default: "doc.richtext"
-        }
-    }
-
     /// A binding that reaches the workspace when read or written, instead of capturing it. With the
     /// window gone it reads false and ignores writes.
     private func binding(_ keyPath: KeyPath<IDEWorkspace, Binding<Bool>>) -> Binding<Bool> {
@@ -455,9 +439,6 @@ private struct IDEViewCommands: View {
         Button("New Agent Chat", systemImage: "plus.bubble", action: { workspace?.newAgentChat() })
             .keyboardShortcut("t", modifiers: [.command, .option])
             .disabled(!(workspace?.hasOpenProject ?? false))
-        Button("Run Markdown with Agent", systemImage: "sparkles", action: { workspace?.runActiveMarkdownWithAgent() })
-            .menuShortcut(.runMarkdownWithAgent, in: preset)
-            .disabled(!(workspace?.canRunMarkdownWithAgent ?? false))
         Button("Next Agent Chat", action: { workspace?.selectAgentChat(1) })
             .keyboardShortcut("]", modifiers: [.command, .option])
             .disabled(!(workspace?.hasOpenProject ?? false) || (workspace?.agent.conversations.count ?? 0) < 2)
@@ -466,12 +447,10 @@ private struct IDEViewCommands: View {
             .disabled(!(workspace?.hasOpenProject ?? false) || (workspace?.agent.conversations.count ?? 0) < 2)
         Button("Reveal Active File in Explorer", systemImage: "scope", action: { workspace?.revealActiveFileInExplorer() })
             .menuShortcut(.revealActiveFile, in: preset)
-        Button(
-            Self.previewTitle(for: workspace?.statusLanguage),
-            systemImage: Self.previewIcon(for: workspace?.statusLanguage),
-            action: { workspace?.toggleMarkdownPreview() }
-        )
-            .menuShortcut(.markdownPreview, in: preset)
+        // The language modules' items: the preview of a Markdown, JSON or CSV file, Run Markdown with Agent.
+        ForEach(workspace?.viewMenuContributions() ?? []) { contribution in
+            contribution.content(ref)
+        }
         Button("Toggle Terminal", systemImage: "terminal", action: { workspace?.toggleTerminal() })
             .menuShortcut(.toggleTerminal, in: preset)
         Button("Toggle Debug", systemImage: "ladybug", action: { workspace?.toggleDebugToolWindow() })

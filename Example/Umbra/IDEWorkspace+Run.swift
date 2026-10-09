@@ -12,17 +12,9 @@ extension IDEWorkspace {
 
     // MARK: - The Run tab
 
-    func selectRunTab() {
-        isRunSelected = true
-        if !isTerminalVisible {
-            isTerminalVisible = true
-            saveSession()
-        }
-    }
-
     func closeRunSession(_ id: UUID) {
         runs.close(id)
-        if !runs.hasContent, isRunSelected { isRunSelected = false }
+        if !runs.hasContent, isBottomTabSelected(.run) { deselectBottomTab(.run) }
     }
 
     /// Runs `session` again in the same tab, with the settings it has now.

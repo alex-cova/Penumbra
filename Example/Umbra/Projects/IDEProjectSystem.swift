@@ -140,8 +140,14 @@ protocol IDEProjectSystem: AnyObject {
     /// Contributions to the window's chrome, only while `isActive`.
     func toolWindows(for workspace: IDEWorkspace) -> [IDEToolWindow]
     func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution]
+    /// Buttons for the titlebar (Build Project).
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem]
     /// The right-hand tool window's content.
     func makeSidebar() -> AnyView
+}
+
+extension IDEProjectSystem {
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] { [] }
 }
 
 /// The project systems of one window, in the order they claim a folder.

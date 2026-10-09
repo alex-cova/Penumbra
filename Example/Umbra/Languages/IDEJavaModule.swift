@@ -38,6 +38,45 @@ struct IDEJavaModule: IDELanguageModule {
         ]
     }
 
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
+        typealias Order = IDEToolbarItem.Order
+        var items = [IDEToolbarItem(id: "java.runConfigurations", order: Order.runConfigurations, content: .custom(AnyView(IDERunConfigurationMenu())))]
+        let canRun = workspace.javaFileCanRun
+        let isRunActive = workspace.isRunActive
+        if canRun {
+            items.append(.button(
+                id: "java.run", order: Order.run, systemImage: "play.fill", help: workspace.javaRunHelp,
+                tint: IDEAppearance.ColorToken.run, action: { [weak workspace] in workspace?.runActiveJava() }
+            ))
+            let canDebug = workspace.javaFileCanDebug
+            items.append(.button(
+                id: "java.debug", order: Order.debug, systemImage: "ladybug.fill", help: workspace.javaDebugHelp,
+                tint: canDebug ? IDEAppearance.ColorToken.run : nil, isEnabled: canDebug,
+                action: { [weak workspace] in workspace?.debugActiveJava() }
+            ))
+        }
+        // Stays up while something runs, even after switching to a file that can't run.
+        if canRun || isRunActive {
+            items.append(.button(
+                id: "java.stop", order: Order.stop, systemImage: "stop.fill", help: "Stop",
+                tint: isRunActive ? IDEAppearance.ColorToken.error : nil, isEnabled: isRunActive,
+                action: { [weak workspace] in workspace?.stopRunning() }
+            ))
+        }
+        if workspace.javaFileCanTest {
+            items.append(.button(
+                id: "java.runTests", order: Order.tests, systemImage: "flask", help: "Run Tests",
+                action: { [weak workspace] in workspace?.runActiveJavaTests() }
+            ))
+        }
+        return items
+    }
+
+    func statusItems(for workspace: IDEWorkspace) -> [IDEStatusItem] {
+        guard workspace.showsJDKPicker else { return [] }
+        return [IDEStatusItem(id: "java.jdk", placement: .trailing, order: 100, content: AnyView(IDEJDKStatusItem()))]
+    }
+
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? {
         IDEJavaRunProvider(host: workspace, java: workspace.javaSupport)
     }
@@ -79,12 +118,13 @@ struct IDEJavaModule: IDELanguageModule {
                 tab: .run, order: Order.run,
                 item: { workspace in
                     AnyView(IDERunTabItem(
-                        isSelected: workspace.isRunSelected,
+                        isSelected: workspace.isBottomTabSelected(.run),
                         isRunning: workspace.runs.isAnyActive,
-                        onSelect: { [weak workspace] in workspace?.selectRunTab() }
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.run) }
                     ))
                 },
-                content: { _ in AnyView(IDERunPanel()) }
+                content: { _ in AnyView(IDERunPanel()) },
+                controls: { _ in AnyView(IDERunControls()) }
             ))
         }
         if workspace.showsTypeHierarchyTab {
@@ -93,8 +133,8 @@ struct IDEJavaModule: IDELanguageModule {
                 item: { workspace in
                     AnyView(IDETypeHierarchyTabItem(
                         title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.name)" } ?? "Hierarchy",
-                        isSelected: workspace.isTypeHierarchySelected,
-                        onSelect: { [weak workspace] in workspace?.selectTypeHierarchyTab() }
+                        isSelected: workspace.isBottomTabSelected(.typeHierarchy),
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.typeHierarchy) }
                     ))
                 },
                 content: { _ in AnyView(IDETypeHierarchyPanel()) }
@@ -108,8 +148,8 @@ struct IDEJavaModule: IDELanguageModule {
                     let total = results.passedCount + results.failedCount + results.skippedCount
                     return AnyView(IDETestResultsTabItem(
                         title: results.isRunning ? "Tests · …" : "Tests · \(results.passedCount)/\(total)",
-                        isSelected: workspace.isTestResultsSelected,
-                        onSelect: { [weak workspace] in workspace?.selectTestResultsTab() }
+                        isSelected: workspace.isBottomTabSelected(.testResults),
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.testResults) }
                     ))
                 },
                 content: { _ in AnyView(IDETestResultsPanel()) }
@@ -120,8 +160,8 @@ struct IDEJavaModule: IDELanguageModule {
                 tab: .debug, order: Order.debug,
                 item: { workspace in
                     AnyView(IDEDebugTabItem(
-                        isSelected: workspace.isDebugSelected,
-                        onSelect: { [weak workspace] in workspace?.selectDebugTab() }
+                        isSelected: workspace.isBottomTabSelected(.debug),
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.debug) }
                     ))
                 },
                 content: { _ in AnyView(IDEDebugPanel()) }
@@ -133,8 +173,8 @@ struct IDEJavaModule: IDELanguageModule {
                 item: { workspace in
                     AnyView(IDECallHierarchyTabItem(
                         title: workspace.callHierarchy.root.map { "Calls · \($0.name)" } ?? "Calls",
-                        isSelected: workspace.isCallHierarchySelected,
-                        onSelect: { [weak workspace] in workspace?.selectCallHierarchyTab() }
+                        isSelected: workspace.isBottomTabSelected(.callHierarchy),
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.callHierarchy) }
                     ))
                 },
                 content: { _ in AnyView(IDECallHierarchyPanel()) }
