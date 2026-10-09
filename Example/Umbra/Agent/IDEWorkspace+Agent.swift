@@ -263,7 +263,7 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     func agentRevealGradle() {
-        isGradleSidebarVisible = true
+        isProjectSidebarVisible = true
         showGradleOutput()
     }
 

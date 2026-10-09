@@ -42,13 +42,13 @@ final class IDEAgentSurfaceTests: XCTestCase {
     }
 
     func testRevealGradleShowsTheSidebarAndTheConsole() {
-        workspace.isGradleSidebarVisible = false
+        workspace.isProjectSidebarVisible = false
         workspace.isTerminalVisible = false
         workspace.selectedBottomTab = .problems
 
         workspace.agentRevealGradle()
 
-        XCTAssertTrue(workspace.isGradleSidebarVisible)
+        XCTAssertTrue(workspace.isProjectSidebarVisible)
         XCTAssertTrue(workspace.isBottomTabSelected(.gradle))
         XCTAssertTrue(workspace.isTerminalVisible)
     }

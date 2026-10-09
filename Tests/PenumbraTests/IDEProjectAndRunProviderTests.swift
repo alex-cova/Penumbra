@@ -343,8 +343,8 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         let workspace = IDEWorkspace()
         defer { workspace.teardown() }
         XCTAssertNil(workspace.activeRunProvider)
-        workspace.runActiveJava()
-        workspace.debugActiveJava()
+        workspace.runActiveFile()
+        workspace.debugActiveFile()
         workspace.stopRunning()
         XCTAssertFalse(workspace.isRunActive)
     }

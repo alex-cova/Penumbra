@@ -6,7 +6,7 @@ public struct IDERootView: View {
     @State private var agentPanelWidth: Double
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth: Double
-    @State private var gradleSidebarWidth: Double
+    @State private var projectSidebarWidth: Double
     @State private var didRecordPanelSizes = false
     @State private var didBootstrap = false
     /// The window's top safe-area inset: the system titlebar, plus the native tab bar while it
@@ -25,7 +25,7 @@ public struct IDERootView: View {
     public init() {
         let session = IDEWindowSessionStore.load()
         _sidebarWidth = State(initialValue: session.sidebarWidth)
-        _gradleSidebarWidth = State(initialValue: session.gradleSidebarWidth)
+        _projectSidebarWidth = State(initialValue: session.projectSidebarWidth)
         _agentPanelWidth = State(initialValue: session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth)
     }
 
@@ -76,7 +76,7 @@ public struct IDERootView: View {
                         }
 
                         if workspace.projectSystems.active?.hasConfigurationChanges == true {
-                            IDEGradleReloadBanner()
+                            IDEProjectReloadBanner()
                                 .opacity(workspace.chromeOpacity)
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
                         }
@@ -151,10 +151,10 @@ public struct IDERootView: View {
                 }
 
                 if workspace.showsProjectSidebar, let projectSystem = workspace.projectSystems.active {
-                    IDESidebarResizeHandle(width: $gradleSidebarWidth, edge: .trailing)
+                    IDESidebarResizeHandle(width: $projectSidebarWidth, edge: .trailing)
 
                     projectSystem.makeSidebar()
-                        .frame(width: gradleSidebarWidth)
+                        .frame(width: projectSidebarWidth)
                         .idePanel()
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -265,15 +265,15 @@ public struct IDERootView: View {
         .onChange(of: sidebarWidth) { _, newWidth in
             workspace.sidebarWidth = newWidth
         }
-        .onChange(of: gradleSidebarWidth) { _, newWidth in
-            workspace.gradleSidebarWidth = newWidth
+        .onChange(of: projectSidebarWidth) { _, newWidth in
+            workspace.projectSidebarWidth = newWidth
         }
         .onChange(of: agentPanelWidth) { _, newWidth in
             workspace.agentPanelWidth = newWidth
         }
         // Building and writing the session is far too heavy to do on every tick of a resize drag,
         // so it waits for the sizes to settle. `task(id:)` cancels the pending save on each change.
-        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: gradleSidebarWidth, terminal: workspace.terminalHeight, agent: agentPanelWidth)) {
+        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: projectSidebarWidth, terminal: workspace.terminalHeight, agent: agentPanelWidth)) {
             // The first run is the launch state, not a change: record it and save nothing.
             guard didRecordPanelSizes else {
                 didRecordPanelSizes = true
@@ -283,7 +283,7 @@ public struct IDERootView: View {
             guard !Task.isCancelled else { return }
             workspace.saveSession(
                 sidebarWidth: sidebarWidth,
-                gradleSidebarWidth: gradleSidebarWidth,
+                projectSidebarWidth: projectSidebarWidth,
                 terminalHeight: workspace.terminalHeight
             )
         }
@@ -310,23 +310,23 @@ public struct IDERootView: View {
         .frame(width: 1100, height: 700)
 }
 
-struct IDEGradleReloadBanner: View {
+struct IDEProjectReloadBanner: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            Text("Build files changed — reload Gradle project?")
+            Text("Build files changed — reload \(workspace.projectSystems.active?.displayName ?? "the") project?")
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
             Spacer(minLength: IDEAppearance.Spacing.sm)
             Button("Reload") {
-                workspace.reloadGradleProject()
+                workspace.reloadProject()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             Button("Dismiss") {
-                workspace.dismissGradleReloadBanner()
+                workspace.dismissProjectReloadBanner()
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

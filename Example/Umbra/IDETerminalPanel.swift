@@ -537,7 +537,7 @@ struct IDEGradleConsoleControls: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } else {
-            Button(action: workspace.reloadGradleProject) {
+            Button(action: workspace.reloadProject) {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)

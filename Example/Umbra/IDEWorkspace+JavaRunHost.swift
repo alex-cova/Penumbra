@@ -6,7 +6,6 @@ import JavaIntelligence
 /// must not know how the window is built.
 extension IDEWorkspace: IDEJavaRunHost {
     var projectRootURL: URL? { project.rootURL }
-    var runFileURL: URL? { javaRunFileURL }
     var runSessions: IDERunSessions { runs }
 
     func showRunTab() {

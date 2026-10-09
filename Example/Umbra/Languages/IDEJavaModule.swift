@@ -22,7 +22,7 @@ struct IDEJavaModule: IDELanguageModule {
             EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Configurations…", group: "Java",
                           action: { [weak workspace] in workspace?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
-                          action: { [weak workspace] in workspace?.reloadGradleProject() }),
+                          action: { [weak workspace] in workspace?.reloadProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
                           action: { [weak workspace] in workspace?.showGradleOutput() }),
             EditorCommand(id: "app.java.showClassDiagram", title: "Java: Show Class Diagram", group: "Java",
@@ -41,18 +41,18 @@ struct IDEJavaModule: IDELanguageModule {
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
         typealias Order = IDEToolbarItem.Order
         var items = [IDEToolbarItem(id: "java.runConfigurations", order: Order.runConfigurations, content: .custom(AnyView(IDERunConfigurationMenu())))]
-        let canRun = workspace.javaFileCanRun
+        let canRun = workspace.runFileCanRun
         let isRunActive = workspace.isRunActive
         if canRun {
             items.append(.button(
-                id: "java.run", order: Order.run, systemImage: "play.fill", help: workspace.javaRunHelp,
-                tint: IDEAppearance.ColorToken.run, action: { [weak workspace] in workspace?.runActiveJava() }
+                id: "java.run", order: Order.run, systemImage: "play.fill", help: workspace.runHelp,
+                tint: IDEAppearance.ColorToken.run, action: { [weak workspace] in workspace?.runActiveFile() }
             ))
-            let canDebug = workspace.javaFileCanDebug
+            let canDebug = workspace.runFileCanDebug
             items.append(.button(
-                id: "java.debug", order: Order.debug, systemImage: "ladybug.fill", help: workspace.javaDebugHelp,
+                id: "java.debug", order: Order.debug, systemImage: "ladybug.fill", help: workspace.debugHelp,
                 tint: canDebug ? IDEAppearance.ColorToken.run : nil, isEnabled: canDebug,
-                action: { [weak workspace] in workspace?.debugActiveJava() }
+                action: { [weak workspace] in workspace?.debugActiveFile() }
             ))
         }
         // Stays up while something runs, even after switching to a file that can't run.
@@ -273,7 +273,7 @@ private struct IDEJavaCommands: View {
         }
         Button("Build Project", systemImage: "hammer", action: { workspace?.buildGradleProject() })
             .disabled(!(workspace?.gradle.isActive ?? false))
-        Button("Reload Gradle Project", action: { workspace?.reloadGradleProject() })
+        Button("Reload Gradle Project", action: { workspace?.reloadProject() })
             .disabled(!(workspace?.gradle.isActive ?? false))
         Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
             .disabled(workspace?.gradle.console.lines.isEmpty ?? true)

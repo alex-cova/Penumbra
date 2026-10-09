@@ -108,7 +108,7 @@ struct IDEGradleSidebarPanel: View {
                 IDEGradleToolbarButton(
                     systemImage: "arrow.clockwise",
                     help: "Reload All Gradle Projects",
-                    action: workspace.reloadGradleProject
+                    action: workspace.reloadProject
                 )
             }
 
@@ -170,7 +170,7 @@ struct IDEGradleSidebarPanel: View {
                 title: "Trust Required",
                 message: "Trust this project to resolve Gradle modules and dependencies.",
                 actionTitle: "Trust & Sync…",
-                action: workspace.reloadGradleProject
+                action: workspace.reloadProject
             )
         case .untrusted:
             IDEGradleSidebarPlaceholder(
@@ -178,7 +178,7 @@ struct IDEGradleSidebarPanel: View {
                 title: "Project Untrusted",
                 message: "Gradle build scripts were not approved for this project.",
                 actionTitle: "Reload…",
-                action: workspace.reloadGradleProject
+                action: workspace.reloadProject
             )
         case .failed(let summary):
             IDEGradleSidebarPlaceholder(
@@ -186,7 +186,7 @@ struct IDEGradleSidebarPanel: View {
                 title: "Sync Failed",
                 message: summary,
                 actionTitle: "Retry",
-                action: workspace.reloadGradleProject,
+                action: workspace.reloadProject,
                 secondaryTitle: "Show Output",
                 secondaryAction: workspace.showGradleOutput
             )
@@ -228,7 +228,7 @@ struct IDEGradleSidebarPanel: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(string, forType: .string)
             },
-            reload: workspace.reloadGradleProject,
+            reload: workspace.reloadProject,
             module: { path in
                 gradle.model?.subprojects.first { $0.path == path }?.directory
             },

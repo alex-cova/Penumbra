@@ -19,13 +19,13 @@ final class IDEWorkspacePanelWidthTests: XCTestCase {
     func testASessionMadeWithNoArgumentsCarriesTheWorkspacesOwnSizes() {
         let workspace = IDEWorkspace()
         workspace.sidebarWidth = 333
-        workspace.gradleSidebarWidth = 277
+        workspace.projectSidebarWidth = 277
         workspace.terminalHeight = 410
 
         let session = workspace.makeSession()
 
         XCTAssertEqual(session.sidebarWidth, 333)
-        XCTAssertEqual(session.gradleSidebarWidth, 277)
+        XCTAssertEqual(session.projectSidebarWidth, 277)
         XCTAssertEqual(session.terminalHeight, 410)
     }
 
@@ -40,21 +40,21 @@ final class IDEWorkspacePanelWidthTests: XCTestCase {
 
     func testSeedingTakesBothWidthsFromTheSavedSession() {
         let workspace = IDEWorkspace()
-        let saved = IDEWindowSession(sidebarWidth: 301, gradleSidebarWidth: 288)
+        let saved = IDEWindowSession(sidebarWidth: 301, projectSidebarWidth: 288)
 
         workspace.seedPanelWidths(from: saved)
 
         XCTAssertEqual(workspace.sidebarWidth, 301)
-        XCTAssertEqual(workspace.gradleSidebarWidth, 288)
+        XCTAssertEqual(workspace.projectSidebarWidth, 288)
         // What gets written next is what was seeded, not the default.
         XCTAssertEqual(workspace.makeSession().sidebarWidth, 301)
-        XCTAssertEqual(workspace.makeSession().gradleSidebarWidth, 288)
+        XCTAssertEqual(workspace.makeSession().projectSidebarWidth, 288)
     }
 
     func testAnUntouchedWorkspaceStartsAtTheDefaultWidths() {
         let workspace = IDEWorkspace()
 
         XCTAssertEqual(workspace.sidebarWidth, IDEAppearance.Spacing.sidebarWidth)
-        XCTAssertEqual(workspace.gradleSidebarWidth, IDEAppearance.Spacing.sidebarWidth)
+        XCTAssertEqual(workspace.projectSidebarWidth, IDEAppearance.Spacing.sidebarWidth)
     }
 }

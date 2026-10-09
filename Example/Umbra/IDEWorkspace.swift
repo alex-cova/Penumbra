@@ -296,11 +296,11 @@ public final class IDEWorkspace {
     var hideLibraryFrames = false
     @ObservationIgnored let breakpointPopover = IDEBreakpointPopover()
     @ObservationIgnored var streamTraceWindow: IDEStreamTraceWindowController?
-    var isGradleSidebarVisible = true
+    var isProjectSidebarVisible = true
     /// The explorer sidebar's width. `IDERootView` owns the drag and mirrors it here so a save made
     /// from anywhere (`saveSession()`) writes the width on screen, not the default.
     var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
-    var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
+    var projectSidebarWidth = IDEAppearance.Spacing.sidebarWidth
     /// The docked agent panel's width, kept with the window session.
     var agentPanelWidth = IDEAppearance.Spacing.agentPanelWidth
     var chromeOpacity = 1.0
@@ -347,10 +347,10 @@ public final class IDEWorkspace {
     var statusEncoding = TextFileEncoding.utf8
     /// True when the active editor is a Java file with `public static void main` (either modifier
     /// order) and there is something to launch: the file itself, or a Gradle `run` task.
-    var javaFileCanRun = false
+    var runFileCanRun = false
     /// True when the active editor is a Java test source file with discovered tests.
     var javaFileCanTest = false
-    private(set) var javaRunFileURL: URL?
+    private(set) var runFileURL: URL?
     var activeJavaTestClass: JavaTestClass?
     @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -562,7 +562,7 @@ public final class IDEWorkspace {
     /// Left-hand Structure tab — members of the Java type at the caret.
     var showsStructureSidebar: Bool { showsSidebar && activeSidebarTab == .structure }
     /// Right-hand Gradle panel — modules and dependencies — only for Gradle project folders.
-    var showsProjectSidebar: Bool { isGradleSidebarVisible && projectSystems.active != nil }
+    var showsProjectSidebar: Bool { isProjectSidebarVisible && projectSystems.active != nil }
 
     func host(for paneID: UUID) -> IDEEditorPaneHost {
         hostedPaneIDs.insert(paneID)
@@ -1403,7 +1403,7 @@ public final class IDEWorkspace {
         add("breakpoints", "Breakpoints") { [weak self] in self?.showSidebarTab(.breakpoints) }
         if let system = projectSystems.active {
             add(system.id, system.displayName) { [weak self] in
-                guard let self, !self.isGradleSidebarVisible else { return }
+                guard let self, !self.isProjectSidebarVisible else { return }
                 self.toggleProjectSidebar()
             }
         }
@@ -1542,16 +1542,16 @@ public final class IDEWorkspace {
         focusActiveEditor()
     }
 
-    var javaRunHelp: String {
-        activeRunProvider?.runHelp(fileURL: javaRunFileURL) ?? javaRun.runHelp(fileURL: javaRunFileURL)
+    var runHelp: String {
+        activeRunProvider?.runHelp(fileURL: runFileURL) ?? javaRun.runHelp(fileURL: runFileURL)
     }
 
-    var javaDebugHelp: String {
-        (activeRunProvider ?? javaRun).debugHelp(fileURL: javaRunFileURL, canRun: javaFileCanRun)
+    var debugHelp: String {
+        (activeRunProvider ?? javaRun).debugHelp(fileURL: runFileURL, canRun: runFileCanRun)
     }
 
-    var javaFileCanDebug: Bool {
-        javaFileCanRun && (activeRunProvider ?? javaRun).canDebug(fileURL: javaRunFileURL)
+    var runFileCanDebug: Bool {
+        runFileCanRun && (activeRunProvider ?? javaRun).canDebug(fileURL: runFileURL)
     }
 
     var isRunActive: Bool {
@@ -1564,18 +1564,18 @@ public final class IDEWorkspace {
         system.build()
     }
 
-    public func runActiveJava() {
-        runActiveFile(mode: .run)
+    public func runActiveFile() {
+        startActiveFile(mode: .run)
     }
 
-    public func debugActiveJava() {
-        guard javaFileCanDebug else { return }
-        runActiveFile(mode: .debug)
+    public func debugActiveFile() {
+        guard runFileCanDebug else { return }
+        startActiveFile(mode: .debug)
     }
 
     /// The play and bug buttons: what the active file's run provider starts by default.
-    private func runActiveFile(mode: IDERunMode) {
-        guard javaFileCanRun, let provider = activeRunProvider, let document = activeRunDocument() else { return }
+    private func startActiveFile(mode: IDERunMode) {
+        guard runFileCanRun, let provider = activeRunProvider, let document = activeRunDocument() else { return }
         provider.run(document, mode: mode)
     }
 
@@ -1612,7 +1612,7 @@ public final class IDEWorkspace {
     }
 
     var canEditRunConfiguration: Bool {
-        project.rootURL != nil || javaFileCanRun || lastRunConfiguration != nil
+        project.rootURL != nil || runFileCanRun || lastRunConfiguration != nil
     }
 
     func dismissRunConfigurationSheet() {
@@ -3019,7 +3019,7 @@ public final class IDEWorkspace {
     func toggleAllToolWindows() {
         if let saved = hiddenToolWindows {
             isSidebarVisible = saved.sidebar
-            isGradleSidebarVisible = saved.gradle
+            isProjectSidebarVisible = saved.gradle
             isTerminalVisible = saved.bottomPanel
             hiddenToolWindows = nil
             saveSession()
@@ -3027,13 +3027,13 @@ public final class IDEWorkspace {
         }
         let saved = HiddenToolWindows(
             sidebar: isSidebarVisible,
-            gradle: isGradleSidebarVisible,
+            gradle: isProjectSidebarVisible,
             bottomPanel: isTerminalVisible
         )
         guard saved.sidebar || saved.gradle || saved.bottomPanel else { return }
         hiddenToolWindows = saved
         isSidebarVisible = false
-        isGradleSidebarVisible = false
+        isProjectSidebarVisible = false
         isTerminalVisible = false
         isBottomPanelExpanded = false
         focusActiveEditor()
@@ -3105,7 +3105,7 @@ public final class IDEWorkspace {
     }
 
     public func toggleProjectSidebar() {
-        isGradleSidebarVisible.toggle()
+        isProjectSidebarVisible.toggle()
         focusActiveEditor()
         saveSession()
     }
@@ -3525,7 +3525,7 @@ public final class IDEWorkspace {
 
     func makeSession(
         sidebarWidth: Double? = nil,
-        gradleSidebarWidth: Double? = nil,
+        projectSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> IDEWindowSession {
         let shells = terminalTabs.filter { $0.agentCommandID == nil }
@@ -3536,8 +3536,8 @@ public final class IDEWorkspace {
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
-            gradleSidebarWidth: gradleSidebarWidth ?? self.gradleSidebarWidth,
-            isGradleSidebarVisible: isGradleSidebarVisible,
+            projectSidebarWidth: projectSidebarWidth ?? self.projectSidebarWidth,
+            isProjectSidebarVisible: isProjectSidebarVisible,
             isTerminalVisible: isTerminalVisible,
             terminalHeight: terminalHeight ?? self.terminalHeight,
             terminalTabs: shells.isEmpty ? nil : shells,
@@ -3571,7 +3571,7 @@ public final class IDEWorkspace {
 
     func saveSession(
         sidebarWidth: Double? = nil,
-        gradleSidebarWidth: Double? = nil,
+        projectSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
         // Recents and preferences are shared, so any window may write them; the window layout
@@ -3582,7 +3582,7 @@ public final class IDEWorkspace {
         guard IDEWindowRegistry.shared.isSessionWindow(self) else { return }
         IDEWindowSessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
-            gradleSidebarWidth: gradleSidebarWidth,
+            projectSidebarWidth: projectSidebarWidth,
             terminalHeight: terminalHeight
         ))
     }
@@ -3604,7 +3604,7 @@ public final class IDEWorkspace {
 
     func seedPanelWidths(from session: IDEWindowSession) {
         sidebarWidth = session.sidebarWidth
-        gradleSidebarWidth = session.gradleSidebarWidth
+        projectSidebarWidth = session.projectSidebarWidth
     }
 
     private func loadSession(_ session: IDEWindowSession) {
@@ -3612,7 +3612,7 @@ public final class IDEWorkspace {
         selectedSidebarTab = session.sidebarTab ?? .explorer
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
         seedPanelWidths(from: session)
-        isGradleSidebarVisible = session.isGradleSidebarVisible
+        isProjectSidebarVisible = session.isProjectSidebarVisible
         isTerminalVisible = session.isTerminalVisible
         terminalHeight = session.terminalHeight
         terminalTabs = session.terminalTabs ?? []
@@ -4638,7 +4638,7 @@ public final class IDEWorkspace {
         ])
     }
 
-    func reloadGradleProject() {
+    func reloadProject() {
         projectSystems.active?.reload()
     }
 
@@ -4646,7 +4646,7 @@ public final class IDEWorkspace {
         showBottomTab(.gradle)
     }
 
-    func dismissGradleReloadBanner() {
+    func dismissProjectReloadBanner() {
         projectSystems.active?.dismissConfigurationChanges()
     }
 
@@ -5222,8 +5222,8 @@ public final class IDEWorkspace {
             statusColumn = 1
             statusLanguage = kind == .image ? "Image" : (kind == .diagram ? "Diagram" : "Diff")
             statusSelectionLength = 0
-            javaFileCanRun = false
-            javaRunFileURL = nil
+            runFileCanRun = false
+            runFileURL = nil
             return
         }
         let range = textView.selectedRange
@@ -5301,13 +5301,13 @@ public final class IDEWorkspace {
         let isJava = document?.languageIdentifier == "java"
         let fileURL = document?.url
         if let provider = activeRunProvider {
-            javaFileCanRun = provider.canRun(IDERunDocument(
+            runFileCanRun = provider.canRun(IDERunDocument(
                 url: fileURL, languageIdentifier: document?.languageIdentifier, text: textView.text
             ))
         } else {
-            javaFileCanRun = false
+            runFileCanRun = false
         }
-        javaRunFileURL = fileURL
+        runFileURL = fileURL
         // One owner per editor for the gutter icons: HTTP files get send buttons, everything else
         // goes through the Java path, which also clears the gutter for non-Java files.
         if document?.languageIdentifier == "http" {

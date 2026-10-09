@@ -117,9 +117,31 @@ final class IDESessionFilesTests: XCTestCase {
 
         let window = try XCTUnwrap(files.loadWindow())
         XCTAssertNil(window.terminalTabs)
-        XCTAssertEqual(window.gradleSidebarWidth, IDEWindowSession.empty.gradleSidebarWidth)
-        XCTAssertTrue(window.isGradleSidebarVisible)
+        XCTAssertEqual(window.projectSidebarWidth, IDEWindowSession.empty.projectSidebarWidth)
+        XCTAssertTrue(window.isProjectSidebarVisible)
         XCTAssertEqual(files.loadApp()?.recentProjects, [])
+    }
+
+    /// The right-hand tool window's width and visibility were saved as `gradleSidebarWidth` and
+    /// `isGradleSidebarVisible`, when it was always Gradle's. An older `last-window.json` still restores them.
+    func testAWindowFileWithTheOldGradleSidebarKeysStillRestores() throws {
+        let json = #"{"sidebarWidth": 250, "isSidebarVisible": true, "gradleSidebarWidth": 312, "isGradleSidebarVisible": false}"#
+        let window = try JSONDecoder().decode(IDEWindowSession.self, from: Data(json.utf8))
+        XCTAssertEqual(window.projectSidebarWidth, 312)
+        XCTAssertFalse(window.isProjectSidebarVisible)
+        XCTAssertEqual(window.sidebarWidth, 250)
+    }
+
+    func testTheNewKeysWinAndAreWhatGetsWritten() throws {
+        let json = #"{"projectSidebarWidth": 290, "gradleSidebarWidth": 312, "isProjectSidebarVisible": true, "isGradleSidebarVisible": false}"#
+        let window = try JSONDecoder().decode(IDEWindowSession.self, from: Data(json.utf8))
+        XCTAssertEqual(window.projectSidebarWidth, 290)
+        XCTAssertTrue(window.isProjectSidebarVisible)
+
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(window)) as? [String: Any])
+        XCTAssertEqual(object["projectSidebarWidth"] as? Double, 290)
+        XCTAssertNil(object["gradleSidebarWidth"])
+        XCTAssertNil(object["isGradleSidebarVisible"])
     }
 
     // MARK: - Round trips and corrupt files
@@ -130,8 +152,8 @@ final class IDESessionFilesTests: XCTestCase {
             projectRootBookmark: Data([9, 9]),
             sidebarWidth: 280,
             isSidebarVisible: true,
-            gradleSidebarWidth: 301,
-            isGradleSidebarVisible: false,
+            projectSidebarWidth: 301,
+            isProjectSidebarVisible: false,
             isTerminalVisible: true,
             terminalHeight: 250,
             terminalTabs: [IDETerminalTab(id: tabID, title: "t", workingDirectory: URL(fileURLWithPath: "/tmp"))],
@@ -145,8 +167,8 @@ final class IDESessionFilesTests: XCTestCase {
 
         XCTAssertEqual(loaded.projectRootBookmark, Data([9, 9]))
         XCTAssertEqual(loaded.sidebarWidth, 280)
-        XCTAssertEqual(loaded.gradleSidebarWidth, 301)
-        XCTAssertFalse(loaded.isGradleSidebarVisible)
+        XCTAssertEqual(loaded.projectSidebarWidth, 301)
+        XCTAssertFalse(loaded.isProjectSidebarVisible)
         XCTAssertEqual(loaded.terminalTabs?.map(\.id), [tabID])
         XCTAssertEqual(loaded.selectedTerminalTabID, tabID)
         XCTAssertEqual(loaded.sidebarTab, .changes)

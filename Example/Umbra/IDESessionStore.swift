@@ -125,8 +125,8 @@ extension IDELegacySession {
                 projectRootBookmark: projectRootBookmark,
                 sidebarWidth: sidebarWidth,
                 isSidebarVisible: isSidebarVisible,
-                gradleSidebarWidth: gradleSidebarWidth,
-                isGradleSidebarVisible: isGradleSidebarVisible,
+                projectSidebarWidth: gradleSidebarWidth,
+                isProjectSidebarVisible: isGradleSidebarVisible,
                 isTerminalVisible: isTerminalVisible,
                 terminalHeight: terminalHeight,
                 terminalTabs: terminalTabs,
@@ -179,8 +179,8 @@ struct IDEWindowSession: Codable {
     /// The left sidebar's selected tab and the tabs closed with ×.
     var sidebarTab: IDESidebarTab?
     var closedSidebarTabs: [IDESidebarTab]?
-    var gradleSidebarWidth = IDEAppearance.Spacing.sidebarWidth
-    var isGradleSidebarVisible = true
+    var projectSidebarWidth = IDEAppearance.Spacing.sidebarWidth
+    var isProjectSidebarVisible = true
     var isTerminalVisible = false
     var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
     var terminalTabs: [IDETerminalTab]?
@@ -200,8 +200,8 @@ struct IDEWindowSession: Codable {
         projectRootBookmark: Data? = nil,
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: Bool = false,
-        gradleSidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
-        isGradleSidebarVisible: Bool = true,
+        projectSidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
+        isProjectSidebarVisible: Bool = true,
         isTerminalVisible: Bool = false,
         terminalHeight: Double = IDEAppearance.Spacing.terminalDefaultHeight,
         terminalTabs: [IDETerminalTab]? = nil,
@@ -219,8 +219,8 @@ struct IDEWindowSession: Codable {
         self.isSidebarVisible = isSidebarVisible
         self.sidebarTab = sidebarTab
         self.closedSidebarTabs = closedSidebarTabs
-        self.gradleSidebarWidth = gradleSidebarWidth
-        self.isGradleSidebarVisible = isGradleSidebarVisible
+        self.projectSidebarWidth = projectSidebarWidth
+        self.isProjectSidebarVisible = isProjectSidebarVisible
         self.isTerminalVisible = isTerminalVisible
         self.terminalHeight = terminalHeight
         self.terminalTabs = terminalTabs
@@ -229,6 +229,11 @@ struct IDEWindowSession: Codable {
         self.agentPanelWidth = agentPanelWidth
         self.agentChats = agentChats
         self.agentSelectedChat = agentSelectedChat
+    }
+
+    private enum LegacyKeys: String, CodingKey {
+        case gradleSidebarWidth
+        case isGradleSidebarVisible
     }
 
     init(from decoder: Decoder) throws {
@@ -240,9 +245,16 @@ struct IDEWindowSession: Codable {
         isSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isSidebarVisible) ?? false
         sidebarTab = try? container.decodeIfPresent(IDESidebarTab.self, forKey: .sidebarTab)
         closedSidebarTabs = try? container.decodeIfPresent([IDESidebarTab].self, forKey: .closedSidebarTabs)
-        gradleSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .gradleSidebarWidth)
+        // These two were saved as `gradleSidebarWidth` / `isGradleSidebarVisible` before the right-hand
+        // tool window belonged to whichever project system recognized the folder. A file written by
+        // an older Umbra still restores; the new name wins when both are there.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        projectSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .projectSidebarWidth)
+            ?? legacy.decodeIfPresent(Double.self, forKey: .gradleSidebarWidth)
             ?? IDEAppearance.Spacing.sidebarWidth
-        isGradleSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isGradleSidebarVisible) ?? true
+        isProjectSidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .isProjectSidebarVisible)
+            ?? legacy.decodeIfPresent(Bool.self, forKey: .isGradleSidebarVisible)
+            ?? true
         isTerminalVisible = try container.decodeIfPresent(Bool.self, forKey: .isTerminalVisible) ?? false
         terminalHeight = try container.decodeIfPresent(Double.self, forKey: .terminalHeight)
             ?? IDEAppearance.Spacing.terminalDefaultHeight

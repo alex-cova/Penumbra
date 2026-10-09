@@ -11,7 +11,7 @@ struct IDERunConfigurationMenu: View {
         let configurations = workspace.runConfigurations
         let selected = workspace.lastRunConfiguration
         // Shown once a project has something to pick from, or a Java file could start one.
-        if !configurations.isEmpty || workspace.javaFileCanRun {
+        if !configurations.isEmpty || workspace.runFileCanRun {
             Menu {
                 if configurations.isEmpty {
                     Text("No saved configurations")

@@ -74,7 +74,7 @@ final class IDEModuleContributionTests: XCTestCase {
         let workspace = IDEWorkspace()
         defer { workspace.teardown() }
         workspace.statusLanguage = "java"
-        workspace.javaFileCanRun = true
+        workspace.runFileCanRun = true
         workspace.javaFileCanTest = true
         let items = workspace.toolbarItems()
         XCTAssertEqual(ids(items), ["java.runConfigurations", "java.run", "java.debug", "java.stop", "java.runTests"])
@@ -113,7 +113,7 @@ final class IDEModuleContributionTests: XCTestCase {
         defer { workspace.teardown() }
         workspace.statusLanguage = "markdown"
         workspace.isMarkdownPreviewVisible = true
-        workspace.javaFileCanRun = true
+        workspace.runFileCanRun = true
         let orders = workspace.toolbarItems().map(\.order)
         XCTAssertEqual(orders, orders.sorted())
     }
