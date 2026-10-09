@@ -21,11 +21,14 @@ public actor JavaFormattingProvider: FormattingProviding {
     }
 
     private func currentOptions() async -> JavaFormattingOptions {
+        // A copy, so clearing the provider returns to the unit set with `setIndentUnit` (or the
+        // default) instead of keeping whatever the host answered last.
+        var current = options
         if let indentUnitProvider {
             let unit = await indentUnitProvider()
-            options.indentUnit = unit.isEmpty ? "    " : unit
+            current.indentUnit = unit.isEmpty ? "    " : unit
         }
-        return options
+        return current
     }
 
     public nonisolated func supportsFormatting(_ document: Document) -> Bool {

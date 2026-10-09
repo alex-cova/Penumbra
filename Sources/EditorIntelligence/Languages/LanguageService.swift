@@ -107,10 +107,20 @@ public protocol LanguageService: Sendable {
     var providers: LanguageProviders { get }
     /// The generic features switched off for ``languageIdentifiers``.
     var policy: LanguagePolicy { get }
+
+    /// Called once when the editor window starts, before any request. Take what the service needs
+    /// from `environment` (open buffers, the indent unit, consent). The default does nothing.
+    func start(environment: LanguageEnvironment) async
+
+    /// Called when the window closes: drop everything taken from the environment. The default does
+    /// nothing.
+    func stop() async
 }
 
 public extension LanguageService {
     var policy: LanguagePolicy { .none }
+    func start(environment: LanguageEnvironment) async {}
+    func stop() async {}
 }
 
 /// A ``LanguageService`` that is just its values: for a service whose providers already exist (an app

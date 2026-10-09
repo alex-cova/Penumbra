@@ -46,12 +46,7 @@ final class IDEIntelligenceServices {
             ),
             BasicLanguageService(
                 name: "umbra.json", languageIdentifiers: ["json"],
-                providers: LanguageProviders(formatting: IDEJSONFormattingProvider(indentUnit: {
-                    await MainActor.run {
-                        let preferences = IDEPreferences.shared
-                        return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
-                    }
-                }))
+                providers: LanguageProviders(formatting: IDEJSONFormattingProvider(indentUnit: { await IDEPreferences.currentIndentUnit() }))
             )
         ])
         self.languages = languages

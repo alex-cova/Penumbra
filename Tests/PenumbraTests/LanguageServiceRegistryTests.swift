@@ -74,11 +74,11 @@ final class LanguageServiceRegistryTests: XCTestCase {
         return TextEdit(range: EditorIntelligence.TextRange(start: position, end: position), replacement: text)
     }
 
-    private func document(_ language: String?) -> Document {
+    private func document(_ language: String?, text: String = "") -> Document {
         let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
         return Document(
             id: DocumentID(), url: nil, displayName: "x",
-            contentSnapshot: TextSnapshot(version: 0, text: ""),
+            contentSnapshot: TextSnapshot(version: 0, text: text),
             selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
             cursor: Cursor(position: position),
             viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
@@ -269,6 +269,58 @@ final class LanguageServiceRegistryTests: XCTestCase {
         XCTAssertNotEqual(a, HierarchyItem(id: "x", name: "X", kind: .classType, origin: .library, badge: "jar"))
     }
 
+    // MARK: Lifecycle
+
+    private actor EventLog {
+        private(set) var events: [String] = []
+        func record(_ event: String) { events.append(event) }
+    }
+
+    private struct RecordingService: LanguageService {
+        let name: String
+        let log: EventLog
+        let languageIdentifiers: Set<String> = []
+        let providers = LanguageProviders()
+        func start(environment: LanguageEnvironment) async {
+            let unit = await environment.indentUnit()
+            await log.record("start \(name) indent=\(unit.debugDescription)")
+        }
+        func stop() async { await log.record("stop \(name)") }
+    }
+
+    func testStartRunsInRegistrationOrderAndStopInReverse() async {
+        let log = EventLog()
+        let registry = LanguageServiceRegistry(services: [
+            RecordingService(name: "a", log: log), RecordingService(name: "b", log: log), RecordingService(name: "c", log: log)
+        ])
+        await registry.start(environment: LanguageEnvironment(indentUnit: { "\t" }))
+        await registry.stop()
+        let events = await log.events
+        XCTAssertEqual(events, [
+            "start a indent=\"\\t\"", "start b indent=\"\\t\"", "start c indent=\"\\t\"",
+            "stop c", "stop b", "stop a"
+        ])
+    }
+
+    func testAServiceThatDoesNotCareAboutTheLifecycleNeedsNothing() async {
+        let registry = LanguageServiceRegistry(services: [service("plain", ["x"], LanguageProviders())])
+        await registry.start(environment: LanguageEnvironment())
+        await registry.stop()
+    }
+
+    func testTheDefaultEnvironmentKnowsNothingAndAgreesToNothing() async {
+        let environment = LanguageEnvironment()
+        let text = await environment.openBufferText(URL(fileURLWithPath: "/x"))
+        XCTAssertNil(text)
+        let unit = await environment.indentUnit()
+        XCTAssertEqual(unit, "    ")
+        let has = await environment.hasConsent("anything")
+        let asked = await environment.requestConsent("anything")
+        XCTAssertFalse(has)
+        XCTAssertFalse(asked)
+        XCTAssertEqual(ConsentTopic("a"), "a")
+    }
+
     // MARK: Umbra's wiring reproduces what the hand-written lists said
 
     @MainActor
@@ -307,6 +359,39 @@ final class LanguageServiceRegistryTests: XCTestCase {
             XCTAssertNil(languages.typeHierarchy(for: language), language ?? "nil")
             XCTAssertNil(languages.callHierarchy(for: language), language ?? "nil")
         }
+    }
+
+    @MainActor
+    func testStartingTheRegistryGivesJavaTheHostsIndentUnitAndStopTakesItBack() async {
+        let languages = IDEIntelligenceServices().languages
+        let text = "class A {\nint x;\n}\n"
+        let doc = document("java", text: text)
+
+        func formatted() async -> String {
+            let edits = await languages.formatting.formatDocument(doc)
+            var result = text as NSString
+            for edit in edits.sorted(by: { $0.range.start.utf16Offset > $1.range.start.utf16Offset }) {
+                result = result.replacingCharacters(
+                    in: NSRange(location: edit.range.start.utf16Offset, length: edit.range.end.utf16Offset - edit.range.start.utf16Offset),
+                    with: edit.replacement
+                ) as NSString
+            }
+            return result as String
+        }
+
+        await languages.start(environment: LanguageEnvironment(indentUnit: { "\t" }))
+        let withTabs = await formatted()
+        XCTAssertEqual(withTabs, "class A {\n\tint x;\n}\n")
+        await languages.stop()
+        let afterStop = await formatted()
+        XCTAssertEqual(afterStop, "class A {\n    int x;\n}\n", "Java falls back to its own default once the host's is gone")
+    }
+
+    @MainActor
+    func testTheWorkspacesEnvironmentReadsTheTabSettingsAndKnowsTheDecompilerTopic() async {
+        XCTAssertEqual(ConsentTopic.javaDecompiler.id, "java.decompiler")
+        let unit = await IDEPreferences.currentIndentUnit()
+        XCTAssertTrue(unit == "\t" || unit.allSatisfy { $0 == " " })
     }
 
     @MainActor

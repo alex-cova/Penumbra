@@ -4,7 +4,7 @@ How a contributor adds a language to Umbra, from syntax colors up to a Java-clas
 
 ## Status
 
-**Phases 0, 1 and 2 are implemented** (see their sections for what shipped and how it differs from the sketch). Phases 3 to 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
+**Phases 0 to 3 are implemented** (see their sections for what shipped and how it differs from the sketch). Phases 4 to 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
 
 ## Motivation
 
@@ -214,10 +214,17 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
   - Wording: the hierarchy tabs say "Type Hierarchy is not available for <Language> files" and "No type at the caret" (they said "works in Java files" and "No Java type at the caret"); the Structure sidebar says "No outline for this file" for a language without one.
   - `HierarchyItem` has a `badge` (`"jar"`, `"JDK"`) chosen by the provider, so the panel no longer hardcodes Java's origin words.
 
-### Phase 3: `LanguageEnvironment`
-- The environment type; Java's actors read open buffers and the indent unit from it.
-- **Done when:** `bootstrap()` has no `setOpenBufferLookup` call.
-- **Tests:** a service started with a fake environment sees open-buffer text (formerly untestable without a workspace).
+### Phase 3: `LanguageEnvironment` (implemented)
+
+- **`LanguageEnvironment`** (`EditorIntelligence/Languages/LanguageEnvironment.swift`): four closures a service reads from the host: `openBufferText(url)`, `indentUnit()`, `hasConsent(topic)` and `requestConsent(topic)`. A `ConsentTopic` is a string id (`ConsentTopic.javaDecompiler` is declared by `JavaIntelligence`); the host decides how to ask and remembers a yes. The defaults know nothing and agree to nothing.
+- **Lifecycle:** `LanguageService` gained `start(environment:)` and `stop()` (default no-ops); `LanguageServiceRegistry.start(environment:)` runs services in registration order and `stop()` in reverse.
+- **Java:** `JavaLanguageService.start` points the nine open-buffer lookups, the formatter's indent unit and the decompiler consent at the environment; `stop` clears them. `IDEWorkspace.bootstrap()` builds one environment (`languageEnvironment()`, closures over a weak bridge, so nothing retains the workspace) and starts the registry; `teardown()` stops it. The nine hand-written setter blocks are gone, and nothing in `Example/` calls `setOpenBufferLookup`, `setIndentUnitProvider` or `setDecompilerConsent` any more. The JSON formatter and the environment share `IDEPreferences.currentIndentUnit()`.
+- **Tests:** lifecycle order with recording fakes, the default environment, Java formatting taking its indent unit from the environment and going back to its own default after `stop`, and the decompiler topic and indent helper.
+- **Difference found on the way:** `JavaFormattingProvider` stored whatever unit its host last returned, so clearing the host's provider left that unit in place. It now uses a copy.
+- **Differences from the sketch:**
+  - `projectDidChange` and `filesDidChange` are not added yet. Java's project root and file-change handling are `IDEJavaSupport.setProjectRoot` and `projectFilesChanged`, called synchronously from `applyProjectRoot` and the project watcher; routing them through an `async` registry call would reorder them against code that reads the result straight after. They move with the project system in phase 5, where that is designed.
+  - No status, progress or logging closures: nothing uses them yet. `IDEJavaSupport` still owns its status message and Gradle trust prompt (`requestTrust`), which are project concerns for phase 5.
+  - `hasConsent` is in the sketch's place of a single `requestConsent`, because the decompiler gate treats "already agreed" differently from "ask now": only a manual navigation may ask, but a hover may decompile once the user has agreed.
 
 ### Phase 4: modules and open enums
 - `IDELanguageModule`, the open enums, a module registry in `IDEAppState` / `IDEIntelligenceServices`.

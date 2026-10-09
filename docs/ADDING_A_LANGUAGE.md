@@ -118,13 +118,13 @@ Add it to the `LanguageServiceRegistry(services:)` list in `Example/Umbra/IDEInt
 - `formatting`, `signatureHelp`, `codeActions`, `rename`, `refactoring`, `codeGeneration`, `breadcrumbs`, `inlayHints` and `codeVision` are routed by `document.languageIdentifier`, so they only see your language's documents. No dispatcher to write. Two services may claim one language (Java's providers and the app's Run actions); `LanguageServiceRegistry` documents how each feature combines them. Features that keep state between calls (rename, refactoring, code generation, breadcrumbs, inlay hints, code vision) take the first service that has one.
 - `policy` replaces the old hand-kept `skippingLanguages` lists: name the generic features (`snippets`, `duplicateSymbolDiagnostics`, `symbolHover`, `symbolNavigation`) your language does better itself. Symbol and word completion stay as fallbacks through `isPrimary`.
 - Order matters only within an engine: services are asked in the order registered.
-- For anything that needs workspace state (open buffers, indent unit), do the setup in `IDEWorkspace.bootstrap()` next to the Java lines.
+- Anything that needs the host (open buffers, the indent unit, the user's agreement to something) comes from the `LanguageEnvironment` handed to `start(environment:)`: read it there, and drop what you took in `stop()`. Declare a `ConsentTopic` for each thing the user must agree to and handle it in `IDEWorkspace.requestConsent(to:)` / `hasConsent(to:)`. Do not add setter calls to `bootstrap()`.
 
 ### 2.4 Tests
 
 An actor test per provider, plus a "returns nothing for a foreign language" test. Add the mapping to `PerfHarness` if the language has an indexer.
 
-> **After phase 3** the workspace setup (open buffers, indent unit) also becomes a `LanguageEnvironment` your service reads.
+> Project root and file-change notifications are still `IDEJavaSupport`'s; they become service hooks with the project system (plan, phase 5).
 
 ---
 

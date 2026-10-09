@@ -44,6 +44,22 @@ public struct LanguageServiceRegistry: Sendable {
         return result
     }
 
+    // MARK: Lifecycle
+
+    /// Starts every service, one after the other in registration order.
+    public func start(environment: LanguageEnvironment) async {
+        for service in services {
+            await service.start(environment: environment)
+        }
+    }
+
+    /// Stops every service, in reverse registration order.
+    public func stop() async {
+        for service in services.reversed() {
+            await service.stop()
+        }
+    }
+
     // MARK: Engine inputs
 
     public var completionProviders: [any CompletionProvider] { services.flatMap(\.providers.completion) }

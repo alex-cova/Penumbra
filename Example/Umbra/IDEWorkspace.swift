@@ -675,64 +675,10 @@ public final class IDEWorkspace {
         }
 
         navigationBuffers.workspace = self
+        let languages = self.languages
+        let environment = languageEnvironment()
         Task {
-            await intelligenceServices.javaSupport.navigationProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.formattingProvider.setIndentUnitProvider {
-                await MainActor.run {
-                    let preferences = IDEPreferences.shared
-                    return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
-                }
-            }
-            await intelligenceServices.javaSupport.hierarchyProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.callHierarchyProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.inlayHintProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.lineMarkerProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.findUsagesProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.hoverProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.renameProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.refactoringProvider.setOpenBufferLookup { [navigationBuffers] url in
-                await MainActor.run {
-                    navigationBuffers.workspace?.openBufferText(for: url)
-                }
-            }
-            await intelligenceServices.javaSupport.navigationProvider.setDecompilerConsent(
-                accepted: preferences.javaDecompilerAgreementAccepted,
-                request: { [navigationBuffers] in
-                    await navigationBuffers.workspace?.requestDecompilerConsent() ?? false
-                }
-            )
+            await languages.start(environment: environment)
             await workspaceBridge.syncWorkbench(workbench)
             await workspaceBridge.workspace.connect(to: adapter)
             await intelligenceServices.indexingService.connect(to: workspaceBridge.workspace)
@@ -779,6 +725,8 @@ public final class IDEWorkspace {
     func teardown() {
         guard !isTornDown else { return }
         isTornDown = true
+        // The services drop what they took from the environment (open-buffer lookups, consent).
+        Task { [languages] in await languages.stop() }
         breakpointPopover.dismiss()
         streamTraceWindow?.close()
         streamTraceWindow = nil
@@ -6310,6 +6258,39 @@ public final class IDEWorkspace {
             } else {
                 finish(alert.runModal())
             }
+        }
+    }
+
+    /// What every language service reads from this window: the buffers the user has open, the editor's
+    /// indentation, and the user's agreements. The closures hold the workspace weakly.
+    private func languageEnvironment() -> LanguageEnvironment {
+        LanguageEnvironment(
+            openBufferText: { [navigationBuffers] url in
+                await MainActor.run { navigationBuffers.workspace?.openBufferText(for: url) }
+            },
+            indentUnit: { await IDEPreferences.currentIndentUnit() },
+            hasConsent: { [navigationBuffers] topic in
+                await MainActor.run { navigationBuffers.workspace?.hasConsent(to: topic) ?? false }
+            },
+            requestConsent: { [navigationBuffers] topic in
+                await navigationBuffers.workspace?.requestConsent(to: topic) ?? false
+            }
+        )
+    }
+
+    /// Whether the user already agreed to `topic`; never prompts.
+    fileprivate func hasConsent(to topic: ConsentTopic) -> Bool {
+        switch topic {
+        case .javaDecompiler: preferences.javaDecompilerAgreementAccepted
+        default: false
+        }
+    }
+
+    /// Asks for `topic`, showing the agreement when the host has one; a topic it does not know is refused.
+    fileprivate func requestConsent(to topic: ConsentTopic) async -> Bool {
+        switch topic {
+        case .javaDecompiler: await requestDecompilerConsent()
+        default: false
         }
     }
 

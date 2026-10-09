@@ -443,6 +443,15 @@ public final class IDEPreferences {
         javaInlayHints || javaInlayVariableTypes || javaInlayLambdaTypes
     }
 
+    /// One level of indentation as the editor is set up (`tabWidth` spaces, or a tab), for the language
+    /// services (`LanguageEnvironment.indentUnit`), which run off the main actor.
+    nonisolated static func currentIndentUnit() async -> String {
+        await MainActor.run {
+            let preferences = IDEPreferences.shared
+            return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
+        }
+    }
+
     /// The hint kinds the Java provider produces, read from the defaults at call time so the provider
     /// (an actor, off the main thread) always sees the current settings.
     nonisolated static func currentJavaInlayHintOptions() -> JavaInlayHintOptions {
