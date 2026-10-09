@@ -533,7 +533,7 @@ extension IDEWorkspace {
     }
 
     /// The test a Structure node stands for in the active test class: the class, or one method.
-    func structureTestTarget(for node: JavaStructureNode) -> (scope: JavaTestRunScope, title: String)? {
+    func structureTestTarget(for node: StructureNode) -> (scope: JavaTestRunScope, title: String)? {
         guard let testClass = activeJavaTestClass, !testClass.methods.isEmpty else { return nil }
         let name = String(node.title.prefix { $0 != "(" && $0 != "<" && $0 != " " && $0 != ":" })
         switch node.kind {

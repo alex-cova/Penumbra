@@ -1,23 +1,6 @@
 import Foundation
 
 public extension LanguageConfiguration {
-    /// Built-in configuration for a bundled ``LanguageIdentifier`` string, or `nil` if there is no
-    /// dedicated table (callers fall back to ``generic``).
-    static func builtIn(forIdentifier identifier: String) -> LanguageConfiguration? {
-        switch identifier {
-        case "javascript", "jsx":
-            return .javaScript
-        case "typescript", "tsx":
-            return .typeScript
-        case "java":
-            return .java
-        case "swift":
-            return .swift
-        default:
-            return nil
-        }
-    }
-
     /// JavaScript / JSX. Node type names follow tree-sitter-javascript.
     ///
     /// Only *named* function forms are included: `function_expression` / `arrow_function` are

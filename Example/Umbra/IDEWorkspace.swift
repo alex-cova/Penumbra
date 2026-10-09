@@ -140,8 +140,8 @@ public final class IDEWorkspace {
         commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent() : nil)
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
-    /// The Structure tool window's member tree for the Java type at the caret.
-    let javaStructure = IDEJavaStructureStore()
+    /// The Structure tool window's member tree for the type at the caret.
+    let structureStore = IDEStructureStore()
     let callHierarchy = IDECallHierarchyStore()
     let debugSession = JavaDebugSession()
     /// The Usages tab's content (Find Usages results); empty until a search runs.
@@ -162,6 +162,8 @@ public final class IDEWorkspace {
     var paletteFileIndex: PaletteFileIndex { fileIndexer.index }
 
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
+    /// Every language's intelligence, routed by the active document's language.
+    var languages: LanguageServiceRegistry { intelligenceServices.languages }
 
     /// The window this workspace is shown in, set by `IDEWindowConfiguratorView`. Sheets, alerts and
     /// first-responder changes target this window, not whichever one happens to be key.
@@ -317,9 +319,11 @@ public final class IDEWorkspace {
     @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     /// The Java markers shown in each text view, with the buffer generation they were computed
     /// for; a click maps the engine marker's `id` back to its index here.
-    @ObservationIgnored private var javaLineMarkers: [ObjectIdentifier: (generation: UInt64, markers: [JavaLineMarker])] = [:]
+    @ObservationIgnored private var lineMarkersByEditor: [ObjectIdentifier: (generation: UInt64, markers: [LineMarker])] = [:]
+    /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
+    @ObservationIgnored private var hierarchyLanguageIdentifier: String?
     @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
-    @ObservationIgnored private var javaStructureRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     private(set) var lastRunConfiguration: JavaRunConfiguration?
@@ -794,8 +798,8 @@ public final class IDEWorkspace {
         lineMarkerTasks.removeAll()
         javaRunAvailabilityTask?.cancel()
         javaRunAvailabilityTask = nil
-        javaStructureRefreshTask?.cancel()
-        javaStructureRefreshTask = nil
+        structureRefreshTask?.cancel()
+        structureRefreshTask = nil
         blame.cancelAll()
         changeMarkers.cancelAll()
         agent.teardown()
@@ -2790,31 +2794,33 @@ public final class IDEWorkspace {
     @discardableResult
     func showTypeHierarchy() -> Bool {
         if typeHierarchy.loader == nil {
-            typeHierarchy.loader = { [javaSupport] node, direction, file in
+            typeHierarchy.loader = { [weak self] node, direction, file in
+                guard let provider = self?.activeTypeHierarchyProvider else { return [] }
                 switch direction {
-                case .supertypes: return await javaSupport.hierarchyProvider.supertypes(of: node, file: file)
-                case .subtypes: return await javaSupport.hierarchyProvider.subtypes(of: node, file: file)
+                case .supertypes: return await provider.supertypes(of: node, file: file)
+                case .subtypes: return await provider.subtypes(of: node, file: file)
                 }
             }
         }
         let host = host(for: workbench.activePane.id)
         let textView = host.textView
         let url = textView.documentURL
-        guard workbench.activePane.selectedDocument?.languageIdentifier == "java" else {
-            typeHierarchy.show(message: "Type Hierarchy works in Java files")
+        let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
+        guard let provider = languages.typeHierarchy(for: languageIdentifier) else {
+            typeHierarchy.show(message: "Type Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
             selectTypeHierarchyTab()
             return true
         }
+        hierarchyLanguageIdentifier = languageIdentifier
         let source = textView.text
         let offset = textView.selectedRange.location
-        let provider = javaSupport.hierarchyProvider
         Task { [weak self] in
-            let root = await provider.rootType(source: source, fileURL: url, utf16Offset: offset)
+            let root = await provider.rootItem(source: source, fileURL: url, utf16Offset: offset)
             guard let self else { return }
             if let root {
                 self.typeHierarchy.show(root: root, file: url)
             } else {
-                self.typeHierarchy.show(message: "No Java type at the caret")
+                self.typeHierarchy.show(message: "No type at the caret")
             }
             self.selectTypeHierarchyTab()
         }
@@ -2829,8 +2835,8 @@ public final class IDEWorkspace {
 
     /// Opens the declaration of a hierarchy node: in the project, or in an attached source. A type
     /// with no source (a class file) has nowhere to go, so the system beeps.
-    func openTypeHierarchyNode(_ node: JavaTypeHierarchyNode) {
-        let provider = javaSupport.hierarchyProvider
+    func openTypeHierarchyNode(_ node: HierarchyItem) {
+        guard let provider = activeTypeHierarchyProvider else { return }
         let file = typeHierarchy.file
         Task { [weak self] in
             guard let location = await provider.location(of: node, file: file), let url = location.url else {
@@ -2838,9 +2844,20 @@ public final class IDEWorkspace {
                 return
             }
             _ = self?.openNavigationLocation(Location(
-                documentID: DocumentID(), url: url, range: location.range, displayName: node.displayName
+                documentID: DocumentID(), url: url, range: location.range, displayName: node.name
             ))
         }
+    }
+
+    /// The language the open hierarchy tabs were asked for. Their nodes carry that language's own
+    /// records, so expanding or opening one goes back to the provider that made it, even if the
+    /// active editor has since switched to another language.
+    private var activeTypeHierarchyProvider: (any TypeHierarchyProviding)? {
+        languages.typeHierarchy(for: hierarchyLanguageIdentifier)
+    }
+
+    private var activeCallHierarchyProvider: (any CallHierarchyProviding)? {
+        languages.callHierarchy(for: hierarchyLanguageIdentifier)
     }
 
     // MARK: Call hierarchy
@@ -2848,31 +2865,33 @@ public final class IDEWorkspace {
     @discardableResult
     func showCallHierarchy() -> Bool {
         if callHierarchy.loader == nil {
-            callHierarchy.loader = { [javaSupport] node, direction, file in
+            callHierarchy.loader = { [weak self] node, direction, file in
+                guard let provider = self?.activeCallHierarchyProvider else { return [] }
                 switch direction {
-                case .callers: return await javaSupport.callHierarchyProvider.callers(of: node, file: file)
-                case .callees: return await javaSupport.callHierarchyProvider.callees(of: node, file: file)
+                case .callers: return await provider.callers(of: node, file: file)
+                case .callees: return await provider.callees(of: node, file: file)
                 }
             }
         }
         let host = host(for: workbench.activePane.id)
         let textView = host.textView
         let url = textView.documentURL
-        guard workbench.activePane.selectedDocument?.languageIdentifier == "java" else {
-            callHierarchy.show(message: "Call Hierarchy works in Java files")
+        let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
+        guard let provider = languages.callHierarchy(for: languageIdentifier) else {
+            callHierarchy.show(message: "Call Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
             selectCallHierarchyTab()
             return true
         }
+        hierarchyLanguageIdentifier = languageIdentifier
         let source = textView.text
         let offset = textView.selectedRange.location
-        let provider = javaSupport.callHierarchyProvider
         Task { [weak self] in
-            let root = await provider.rootMethod(source: source, fileURL: url, utf16Offset: offset)
+            let root = await provider.rootItem(source: source, fileURL: url, utf16Offset: offset)
             guard let self else { return }
             if let root {
                 self.callHierarchy.show(root: root, file: url)
             } else {
-                self.callHierarchy.show(message: "No Java method at the caret")
+                self.callHierarchy.show(message: "No method at the caret")
             }
             self.selectCallHierarchyTab()
         }
@@ -2884,8 +2903,8 @@ public final class IDEWorkspace {
         isCallHierarchySelected = false
     }
 
-    func openCallHierarchyNode(_ node: JavaCallHierarchyNode) {
-        let provider = javaSupport.callHierarchyProvider
+    func openCallHierarchyNode(_ node: HierarchyItem) {
+        guard let provider = activeCallHierarchyProvider else { return }
         let file = callHierarchy.file
         Task { [weak self] in
             guard let location = await provider.location(of: node, file: file), let url = location.url else {
@@ -2893,7 +2912,7 @@ public final class IDEWorkspace {
                 return
             }
             _ = self?.openNavigationLocation(Location(
-                documentID: DocumentID(), url: url, range: location.range, displayName: node.displayName
+                documentID: DocumentID(), url: url, range: location.range, displayName: node.name
             ))
         }
     }
@@ -3503,7 +3522,7 @@ public final class IDEWorkspace {
         selectedSidebarTab = tab
         isSidebarVisible = true
         switch tab {
-        case .structure: refreshJavaStructure()
+        case .structure: refreshStructure()
         case .changes: gitStatus.refresh()
         case .explorer, .breakpoints, .history: break
         }
@@ -4633,7 +4652,8 @@ public final class IDEWorkspace {
         }
     }
 
-    /// Recolours a pane's Java file once typing pauses. A newer request replaces the pending one,
+    /// Recolours a pane's file once typing pauses, for a language with a semantic token provider. A
+    /// newer request replaces the pending one,
     /// and the result is dropped if the text changed while it was computed, so it never paints
     /// stale offsets and never blocks typing (the pass runs off the main actor).
     /// `delay` debounces typing; opening a file or switching to one passes 0 so the semantic
@@ -4641,55 +4661,55 @@ public final class IDEWorkspace {
     private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 250_000_000) {
         let key = ObjectIdentifier(host.textView)
         semanticHighlightTasks[key]?.cancel()
-        guard preferences.semanticHighlighting, languageIdentifier == "java" else {
+        guard preferences.semanticHighlighting, let provider = languages.semanticTokens(for: languageIdentifier) else {
             semanticHighlightTasks[key] = nil
             host.textView.setSemanticHighlights([])
             return
         }
-        let provider = javaSupport.semanticTokenProvider
         semanticHighlightTasks[key] = Task { [weak host] in
             if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             guard !Task.isCancelled, let textView = host?.textView else { return }
             let generation = textView.contentGeneration
             let export = textView.exportDocumentText()
-            let tokens = await Task.detached(priority: .utility) {
-                await provider.tokens(for: export.materializeUTF16Text())
+            let highlights = await Task.detached(priority: .utility) {
+                await provider.semanticHighlights(forSource: export.materializeUTF16Text())
             }.value
-            guard !Task.isCancelled, let tokens, textView.contentGeneration == generation else { return }
-            textView.setSemanticHighlights(tokens.map {
+            guard !Task.isCancelled, let highlights, textView.contentGeneration == generation else { return }
+            textView.setSemanticHighlights(highlights.map {
                 SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
             })
         }
     }
 
-    // MARK: - Java gutter icons
+    // MARK: - Gutter line markers
 
     /// Recomputes every pane's markers: after a preference change, or when the index changed so
     /// other files' subtypes and overrides may have too.
     func javaGutterIconsPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleJavaLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
+            scheduleLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
         }
     }
 
-    /// Refreshes a pane's Java gutter icons once typing pauses, off the main actor. Like semantic
+    /// Refreshes a pane's gutter icons once typing pauses, off the main actor, for a language with a
+    /// line marker provider. Like semantic
     /// highlighting, a newer request replaces the pending one and a result for text that changed
     /// meanwhile is dropped; the engine keeps the shown markers on their lines in between.
-    private func scheduleJavaLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 400_000_000) {
+    private func scheduleLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 400_000_000) {
         let key = ObjectIdentifier(host.textView)
         lineMarkerTasks[key]?.cancel()
         let kinds = preferences.enabledJavaGutterIcons
         // The icons arrive later; their column exists from the first layout so the text stays put.
         // Run buttons share it, so it is kept even with every marker kind turned off.
-        host.textView.reservedLineMarkerSlots = languageIdentifier == "java" ? TextView.maximumLineMarkerSlots : 0
-        guard languageIdentifier == "java", !kinds.isEmpty else {
+        let provider = languages.lineMarkers(for: languageIdentifier)
+        host.textView.reservedLineMarkerSlots = provider == nil ? 0 : TextView.maximumLineMarkerSlots
+        guard let provider, !kinds.isEmpty else {
             lineMarkerTasks[key] = nil
-            javaLineMarkers[key] = nil
+            lineMarkersByEditor[key] = nil
             host.textView.setLineMarkers([])
             host.textView.lineMarkerHandler = nil
             return
         }
-        let provider = javaSupport.lineMarkerProvider
         lineMarkerTasks[key] = Task { [weak self, weak host] in
             if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             guard !Task.isCancelled, let textView = host?.textView else { return }
@@ -4697,17 +4717,17 @@ public final class IDEWorkspace {
             let url = textView.documentURL
             let export = textView.exportDocumentText()
             let work = Task.detached(priority: .utility) {
-                await provider.markers(source: export.materializeUTF16Text(), fileURL: url, kinds: kinds)
+                await provider.lineMarkers(source: export.materializeUTF16Text(), fileURL: url, kinds: kinds)
             }
             let markers = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
             guard !Task.isCancelled, let self, let markers, textView.contentGeneration == generation else { return }
-            self.javaLineMarkers[key] = (generation, markers)
+            self.lineMarkersByEditor[key] = (generation, markers)
             textView.setLineMarkers(markers.enumerated().map { index, marker in
                 GutterLineMarker(id: index, line: marker.line, icon: marker.kind.gutterIcon, tooltip: marker.tooltip)
             })
             textView.lineMarkerHandler = { [weak self, weak host] marker, _ in
                 guard let self, let host else { return }
-                self.javaLineMarkerClicked(marker, host: host)
+                self.lineMarkerClicked(marker, host: host)
             }
         }
     }
@@ -4715,22 +4735,22 @@ public final class IDEWorkspace {
     /// ↑ goes to the super method, ↓ lists the implementations, and a sibling marker lists the
     /// interface methods it implements. A click on markers older than the buffer is ignored: its
     /// anchor offsets are stale, and fresh markers are already on the way.
-    private func javaLineMarkerClicked(_ marker: GutterLineMarker, host: IDEEditorPaneHost) {
+    private func lineMarkerClicked(_ marker: GutterLineMarker, host: IDEEditorPaneHost) {
         let textView = host.textView
-        guard let entry = javaLineMarkers[ObjectIdentifier(textView)], entry.generation == textView.contentGeneration,
+        guard let entry = lineMarkersByEditor[ObjectIdentifier(textView)], entry.generation == textView.contentGeneration,
               entry.markers.indices.contains(marker.id) else { return }
-        let javaMarker = entry.markers[marker.id]
-        switch javaMarker.kind {
+        let lineMarker = entry.markers[marker.id]
+        switch lineMarker.kind {
         case .implementing, .overriding:
-            host.intelligenceController?.navigate(kind: .superMethod, atUTF16Offset: javaMarker.anchorUTF16Offset)
+            host.intelligenceController?.navigate(kind: .superMethod, atUTF16Offset: lineMarker.anchorUTF16Offset)
         case .implemented, .overridden:
-            host.intelligenceController?.navigate(kind: .implementation, atUTF16Offset: javaMarker.anchorUTF16Offset)
+            host.intelligenceController?.navigate(kind: .implementation, atUTF16Offset: lineMarker.anchorUTF16Offset)
         case .siblingInherited:
-            let provider = javaSupport.lineMarkerProvider
+            guard let provider = languages.lineMarkers(for: workbench.activePane.selectedDocument?.languageIdentifier) else { return }
             let source = textView.text
             let url = textView.documentURL
             Task { [weak self] in
-                let locations = await provider.siblingTargets(of: javaMarker, source: source, fileURL: url, documentID: DocumentID())
+                let locations = await provider.siblingTargets(of: lineMarker, source: source, fileURL: url, documentID: DocumentID())
                 guard let self else { return }
                 if locations.count == 1 {
                     _ = self.openNavigationLocation(locations[0])
@@ -4762,7 +4782,7 @@ public final class IDEWorkspace {
             let paneHost = host(for: pane.id)
             if paneHost.textView === textView {
                 scheduleSemanticHighlighting(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
-                scheduleJavaLineMarkers(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
+                scheduleLineMarkers(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
             }
         }
     }
@@ -4959,7 +4979,7 @@ public final class IDEWorkspace {
         palette.symbolsAdditionalItems = { query, limit in await membersSource.items(matching: query, limit: limit) }
         palette.symbolsExcludedDocuments = { [weak self] in await MainActor.run { self?.openJavaDocumentIDs() ?? [] } }
         palette.toolWindowEntriesProvider = { [weak self] in self?.toolWindowEntries() ?? [] }
-        palette.fileStructureEntriesProvider = { [weak self] in await self?.javaFileStructureEntries() }
+        palette.fileStructureEntriesProvider = { [weak self] in await self?.fileStructureEntries() }
         palette.activeDocumentIDProvider = { [weak self] in self?.workbench.activePane.selectedDocument?.documentID }
         palette.workspaceRoot = project.rootURL
         palette.onOpenFile = { [weak self] url in
@@ -5228,7 +5248,7 @@ public final class IDEWorkspace {
         adapter.refreshCachedDocuments()
         host.intelligenceController?.refreshDiagnostics()
         host.intelligenceController?.refreshBreadcrumbs()
-        refreshJavaStructure()
+        refreshStructure()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
@@ -5328,7 +5348,7 @@ public final class IDEWorkspace {
                 onReveal: { [weak self] in self?.revealInSidebar(url) }
             )
         case .symbol(let range):
-            return await javaStructureBreadcrumbMenu(for: range)
+            return await structureBreadcrumbMenu(for: range)
         }
     }
 
@@ -5341,41 +5361,31 @@ public final class IDEWorkspace {
         }
     }
 
-    /// The type a Java breadcrumb symbol names (or the type enclosing it) with all its members,
-    /// the symbol checked. Other languages have no member outline here and return `nil`.
-    private func javaStructureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
-        guard statusLanguage == "java" else { return nil }
+    /// The type a breadcrumb symbol names (or the type enclosing it) with all its members, the symbol
+    /// checked. A language without a structure provider has no member outline here and returns `nil`.
+    private func structureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
+        guard let provider = languages.structure(for: statusLanguage) else { return nil }
         let text = host(for: workbench.activePaneID).textView.text
-        guard let roots = await javaSupport.structureProvider.allStructure(for: text) else { return nil }
+        guard let roots = await provider.allStructure(forSource: text) else { return nil }
         let utf16Offset = min(max(range.start.utf16Offset, 0), text.utf16.count)
-        let byteOffset = text.utf8.distance(from: text.startIndex, to: String.Index(utf16Offset: utf16Offset, in: text))
         // The path from a root to the segment's declaration, found by its name's start.
-        func path(to byteOffset: Int, in nodes: [JavaStructureNode]) -> [JavaStructureNode]? {
-            for node in nodes {
-                if node.nameByteRange.lowerBound == byteOffset { return [node] }
-                if node.bodyByteRange.contains(byteOffset), let rest = path(to: byteOffset, in: node.children) {
-                    return [node] + rest
-                }
-            }
-            return nil
-        }
-        guard let chain = path(to: byteOffset, in: roots), let target = chain.last else { return nil }
+        guard let chain = StructureNode.path(toNameAt: utf16Offset, in: roots), let target = chain.last else { return nil }
         let container = target.kind == .type ? target : (chain.dropLast().last ?? target)
         return IDEBreadcrumbMenu.structureMenu(container, selectedID: target.id) { [weak self] node in
             self?.selectStructureNode(node)
         }
     }
 
-    /// File Structure (⌘F12) rows for the focused Java file: every type and member in source order,
-    /// `nil` for other languages, so the symbol index answers.
-    func javaFileStructureEntries() async -> [FileStructureEntry]? {
-        guard statusLanguage == "java" else { return nil }
+    /// File Structure (⌘F12) rows for the focused file: every type and member in source order,
+    /// `nil` for a language without a structure provider, so the symbol index answers.
+    func fileStructureEntries() async -> [FileStructureEntry]? {
+        guard let provider = languages.structure(for: statusLanguage) else { return nil }
         let textView = host(for: workbench.activePaneID).textView
         let text = textView.text
-        guard let roots = await javaSupport.structureProvider.allStructure(for: text) else { return nil }
+        guard let roots = await provider.allStructure(forSource: text) else { return nil }
         var entries: [FileStructureEntry] = []
-        func visit(_ node: JavaStructureNode) {
-            let range = node.nameTextRange(in: text)
+        func visit(_ node: StructureNode) {
+            let range = NSRange(location: node.nameRange.lowerBound, length: node.nameRange.count)
             entries.append(FileStructureEntry(
                 id: node.id,
                 title: node.title,
@@ -5388,31 +5398,28 @@ public final class IDEWorkspace {
         return entries
     }
 
-    func selectStructureNode(_ node: JavaStructureNode) {
-        let textView = host(for: workbench.activePaneID).textView
-        jumpToSymbol(node.nameTextRange(in: textView.text))
+    func selectStructureNode(_ node: StructureNode) {
+        jumpToSymbol(NSRange(location: node.nameRange.lowerBound, length: node.nameRange.count))
     }
 
-    func refreshJavaStructure() {
-        javaStructureRefreshTask?.cancel()
-        guard statusLanguage == "java" else {
+    func refreshStructure() {
+        structureRefreshTask?.cancel()
+        guard let provider = languages.structure(for: statusLanguage) else {
             if showsStructureSidebar {
-                javaStructure.show(message: "Open a Java file")
+                structureStore.show(message: "No outline for this file")
             }
             return
         }
         let textView = host(for: workbench.activePaneID).textView
         let text = textView.text
         let caret = textView.selectedRange.location
-        let provider = javaSupport.structureProvider
-        javaStructureRefreshTask = Task { @MainActor [weak self] in
+        structureRefreshTask = Task { @MainActor [weak self] in
             guard let self, !Task.isCancelled else { return }
-            guard let root = await provider.structure(for: text, atUTF16Offset: caret) else {
-                self.javaStructure.show(message: "No type at the caret")
+            guard let root = await provider.structure(forSource: text, atUTF16Offset: caret) else {
+                self.structureStore.show(message: "No type at the caret")
                 return
             }
-            let selected = await provider.selectedNode(in: root, text: text, atUTF16Offset: caret)
-            self.javaStructure.show(root: root, selectedID: selected?.id)
+            self.structureStore.show(root: root, selectedID: root.deepestNode(containing: caret).id)
         }
     }
 
@@ -5667,9 +5674,12 @@ public final class IDEWorkspace {
     }
 
     private func jumpToSymbol(_ range: EditorIntelligence.TextRange) {
+        jumpToSymbol(TextEditApplicator.nsRange(for: range, in: host(for: workbench.activePaneID).textView))
+    }
+
+    private func jumpToSymbol(_ nsRange: NSRange) {
         let textView = host(for: workbench.activePaneID).textView
         textView.recordNavigationCheckpoint()
-        let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
         textView.selectedRanges = [nsRange]
         textView.scrollRangeToCenter(nsRange)
         _ = textView.focusTextInput()
@@ -6243,7 +6253,7 @@ public final class IDEWorkspace {
         host.refreshJSONDiagram()
         host.refreshCSVTable()
         scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
-        scheduleJavaLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
+        scheduleLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
         // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
@@ -6416,7 +6426,7 @@ extension IDEWorkspace: IDEWorkspaceEditHost {
 extension IDEWorkspace: TextViewDelegate {
     public func textViewDidChangeSelection(_ textView: TextView) {
         updateStatus(from: textView)
-        refreshJavaStructure()
+        refreshStructure()
     }
 
     public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
@@ -6433,7 +6443,7 @@ extension IDEWorkspace: TextViewDelegate {
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
         refreshJavaRunAvailability(from: textView)
-        refreshJavaStructure()
+        refreshStructure()
         recordRecentlyEdited()
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.

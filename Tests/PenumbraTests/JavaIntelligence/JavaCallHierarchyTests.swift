@@ -44,6 +44,34 @@ final class JavaCallHierarchyTests: XCTestCase {
         XCTAssertTrue(callees.contains { $0.displayName.hasPrefix("Helper.help") })
     }
 
+    func testTheGenericProtocolWrapsCallersAndKeepsTheNode() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Chain.java", """
+        class Chain {
+            void €caller() { callee(); }
+            void callee() { }
+        }
+        """)
+        try fixture.add("Use.java", "class Use { void go(Chain c) { c.caller(); } }")
+        let provider = try await makeProvider(fixture)
+        let generic: any CallHierarchyProviding = provider
+        let caret = try XCTUnwrap(fixture.caretLocation)
+        let source = try XCTUnwrap(fixture.sources[caret.file])
+        let rootOptional = await generic.rootItem(source: source, fileURL: fixture.url(caret.file), utf16Offset: caret.utf16Offset)
+        let root = try XCTUnwrap(rootOptional)
+        XCTAssertEqual(root.kind, .method)
+        XCTAssertNotNil(root.payload as? JavaCallHierarchyNode)
+
+        let callers = await generic.callers(of: root, file: fixture.url("Chain.java"))
+        XCTAssertEqual(callers.map(\.name), ["Use.go(Chain)"])
+        XCTAssertEqual(callers.first?.origin, .project)
+        XCTAssertEqual(callers.first?.detail, "Use")
+
+        let foreign = HierarchyItem(id: "x", name: "X", kind: .method, origin: .project)
+        let none = await generic.callers(of: foreign, file: nil)
+        XCTAssertTrue(none.isEmpty)
+    }
+
     func testCallersListEnclosingMethodsAtCallSites() async throws {
         let fixture = try JavaReferenceFixture()
         try fixture.add("Chain.java", """

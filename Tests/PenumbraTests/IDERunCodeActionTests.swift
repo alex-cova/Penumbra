@@ -52,7 +52,7 @@ final class IDERunCodeActionTests: XCTestCase {
         )
     }
 
-    private func document(_ text: String, line: Int) -> Document {
+    private func document(_ text: String, line: Int, language: String? = "java") -> Document {
         let position = TextPosition(line: line, column: 0, utf16Offset: 0)
         return Document(
             id: DocumentID(), url: url, displayName: "FooTest.java",
@@ -60,7 +60,7 @@ final class IDERunCodeActionTests: XCTestCase {
             selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
             cursor: Cursor(position: position),
             viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
-            languageIdentifier: "java"
+            languageIdentifier: language
         )
     }
 
@@ -77,16 +77,18 @@ final class IDERunCodeActionTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
-    func testTheCompositeListsEveryProvidersActionsInOrder() async {
-        struct Fixed: CodeActionProviding {
-            let title: String
-            func codeActions(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> [CodeAction] {
-                [CodeAction(title: title, edits: [])]
-            }
-        }
-        let doc = document("", line: 0)
-        let composite = IDECompositeCodeActionProvider(providers: [Fixed(title: "one"), Fixed(title: "two")])
-        let titles = await composite.codeActions(for: doc, at: doc.cursor.position, diagnostics: []).map(\.title)
-        XCTAssertEqual(titles, ["one", "two"])
+    /// The Run actions are a service of their own, registered for Java after Java's: the router puts
+    /// them last, and only for Java documents.
+    @MainActor
+    func testTheRouterOffersTheRunActionsForJavaDocumentsAfterJavasOwn() async {
+        let router = IDEIntelligenceServices().languages.codeActions
+        let onTest = document(testSource, line: 6)
+        let actions = await router.codeActions(for: onTest, at: onTest.cursor.position, diagnostics: [])
+        XCTAssertEqual(actions.suffix(3).map(\.title), ["Run ‘testAdds()’", "Debug ‘testAdds()’", "Modify Run Configuration…"])
+        XCTAssertEqual(actions.filter { $0.command != nil }.count, 3)
+
+        let notJava = document(testSource, line: 6, language: "markdown")
+        let none = await router.codeActions(for: notJava, at: notJava.cursor.position, diagnostics: [])
+        XCTAssertTrue(none.isEmpty)
     }
 }

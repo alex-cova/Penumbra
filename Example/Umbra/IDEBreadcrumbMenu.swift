@@ -1,11 +1,11 @@
 import AppKit
-import JavaIntelligence
+import EditorIntelligence
 import Penumbra
 import SwiftUI
 
 /// The dropdowns the status bar breadcrumb opens: a folder or file segment lists that folder
 /// (subfolders open lazily as submenus, so a click never walks more than one directory level),
-/// and a Java symbol segment lists the enclosing type and its members.
+/// and a symbol segment lists the enclosing type and its members.
 @MainActor
 enum IDEBreadcrumbMenu {
     /// The entries of `directory`, with `currentURL` checked. `onReveal` adds a trailing
@@ -30,13 +30,13 @@ enum IDEBreadcrumbMenu {
     /// `container` and everything it declares, nested types indented under their parent, with
     /// `selectedID` checked.
     static func structureMenu(
-        _ container: JavaStructureNode,
+        _ container: StructureNode,
         selectedID: String,
-        onSelect: @escaping (JavaStructureNode) -> Void
+        onSelect: @escaping (StructureNode) -> Void
     ) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        func add(_ node: JavaStructureNode, depth: Int) {
+        func add(_ node: StructureNode, depth: Int) {
             let item = IDEClosureMenuItem(title: node.title) { onSelect(node) }
             item.image = image(systemName: node.kind.iconSystemName, tint: node.kind.iconTint)
             item.indentationLevel = min(depth, 15)
@@ -69,7 +69,7 @@ enum IDEBreadcrumbMenu {
     }
 }
 
-extension JavaStructureKind {
+extension StructureKind {
     var iconSystemName: String {
         switch self {
         case .type: "c.circle.fill"

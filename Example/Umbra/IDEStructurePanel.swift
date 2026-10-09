@@ -1,30 +1,30 @@
-import JavaIntelligence
+import EditorIntelligence
 import SwiftUI
 
-/// The sidebar's Structure tab, listing the Java type at the caret and its members.
-struct IDEJavaStructurePanel: View {
+/// The sidebar's Structure tab, listing the type at the caret and its members.
+struct IDEStructurePanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let store = workspace.javaStructure
+        let store = workspace.structureStore
         VStack(alignment: .leading, spacing: 0) {
             if let root = store.root {
                 tree(store, root: root)
             } else {
-                emptyState(store.message ?? "Open a Java file")
+                emptyState(store.message ?? "No outline for this file")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
     }
 
-    private func tree(_ store: IDEJavaStructureStore, root: JavaStructureNode) -> some View {
+    private func tree(_ store: IDEStructureStore, root: StructureNode) -> some View {
         let rows = store.rows
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(rows) { row in
-                    IDEJavaStructureRowView(
+                    IDEStructureRowView(
                         row: row,
                         isSelected: store.selectedID == row.id,
                         onToggle: { store.toggle(row.node) },
@@ -93,8 +93,8 @@ struct IDEJavaStructurePanel: View {
     }
 }
 
-private struct IDEJavaStructureRowView: View {
-    let row: IDEJavaStructureStore.Row
+private struct IDEStructureRowView: View {
+    let row: IDEStructureStore.Row
     let isSelected: Bool
     let onToggle: () -> Void
     let onSelect: () -> Void
@@ -156,30 +156,30 @@ private struct IDEJavaStructureRowView: View {
 }
 
 #Preview {
-    IDEJavaStructurePanel()
+    IDEStructurePanel()
         .environment({
             let workspace = IDEWorkspace()
-            workspace.javaStructure.show(
-                root: JavaStructureNode(
+            workspace.structureStore.show(
+                root: StructureNode(
                     id: "type-0",
                     title: "Outer<T>",
                     kind: .type,
-                    nameByteRange: 0..<5,
-                    bodyByteRange: 0..<100,
+                    nameRange: 0..<5,
+                    bodyRange: 0..<100,
                     children: [
-                        JavaStructureNode(
+                        StructureNode(
                             id: "field-10",
                             title: "field: int",
                             kind: .field,
-                            nameByteRange: 10..<15,
-                            bodyByteRange: 10..<20
+                            nameRange: 10..<15,
+                            bodyRange: 10..<20
                         ),
-                        JavaStructureNode(
+                        StructureNode(
                             id: "method-30",
                             title: "top()",
                             kind: .method,
-                            nameByteRange: 30..<33,
-                            bodyByteRange: 30..<50
+                            nameRange: 30..<33,
+                            bodyRange: 30..<50
                         )
                     ]
                 ),

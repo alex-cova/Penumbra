@@ -192,6 +192,30 @@ final class JavaLineMarkerProviderTests: XCTestCase {
 
     // MARK: - Helpers
 
+    func testTheGenericProtocolReturnsTheSameMarkersAndHandsThemBack() async throws {
+        let shape = try write("Shape.java", "interface Shape {\n    double area();\n}\n")
+        let circle = try write("Circle.java", "class Circle implements Shape {\n    public double area() { return 1; }\n}\n")
+        let provider = try await makeProvider(indexing: [shape, circle])
+        let generic: any LineMarkerProviding = provider
+
+        let nativeOptional = await provider.markers(source: circle.source, fileURL: circle.url)
+        let native = try XCTUnwrap(nativeOptional)
+        let genericMarkers = await generic.lineMarkers(
+            source: circle.source, fileURL: circle.url, kinds: Set(LineMarkerKind.allCases)
+        )
+        let markers = try XCTUnwrap(genericMarkers)
+        XCTAssertEqual(markers.map(\.kind), native.map(\.kind))
+        XCTAssertEqual(markers.map(\.line), native.map(\.line))
+        XCTAssertEqual(markers.map(\.anchorUTF16Offset), native.map(\.anchorUTF16Offset))
+        XCTAssertEqual(markers.map(\.tooltip), native.map(\.tooltip))
+        XCTAssertTrue(markers.allSatisfy { $0.payload is JavaLineMarker })
+
+        // A marker some other provider made carries no Java record, so it leads nowhere.
+        let foreign = LineMarker(kind: .siblingInherited, line: 1, anchorUTF16Offset: 0, tooltip: "")
+        let nowhere = await generic.siblingTargets(of: foreign, source: circle.source, fileURL: circle.url, documentID: DocumentID())
+        XCTAssertTrue(nowhere.isEmpty)
+    }
+
     private struct Fixture {
         let url: URL
         let source: String

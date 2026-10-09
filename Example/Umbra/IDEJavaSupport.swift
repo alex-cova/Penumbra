@@ -257,6 +257,31 @@ final class IDEJavaSupport {
         }
     }
 
+    /// Java as one language service for the router (`LanguageServiceRegistry`): these providers, in
+    /// the order each engine asks them, and Java's opt-outs from the generic name-based features.
+    var languageService: JavaLanguageService {
+        JavaLanguageService(
+            completion: completionProvider,
+            hover: hoverProvider,
+            compilerDiagnostics: compilerDiagnostics,
+            inspections: inspectionService,
+            navigation: navigationProvider,
+            findUsages: findUsagesProvider,
+            formatting: formattingProvider,
+            codeActions: codeActionProvider,
+            rename: renameProvider,
+            refactoring: refactoringProvider,
+            breadcrumbs: breadcrumbProvider,
+            inlayHints: inlayHintProvider,
+            codeVision: codeVisionProvider,
+            semanticTokens: semanticTokenProvider,
+            lineMarkers: lineMarkerProvider,
+            structure: structureProvider,
+            typeHierarchy: hierarchyProvider,
+            callHierarchy: callHierarchyProvider
+        )
+    }
+
     func tests(for file: URL) async -> JavaTestClass? {
         await testIndex.testClass(for: file)
     }

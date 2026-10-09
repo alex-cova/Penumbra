@@ -23,7 +23,7 @@ struct IDELeftSidebar: View {
                 case .explorer:
                     EmptyView()
                 case .structure:
-                    IDEJavaStructurePanel()
+                    IDEStructurePanel()
                 case .changes:
                     IDEChangesPanel(gitStatus: workspace.gitStatus)
                 case .breakpoints:

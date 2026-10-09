@@ -86,62 +86,63 @@ public extension TreeSitterLanguage {
         )
     }
 
-    /// Prepared language for a ``LanguageIdentifier`` string (`"javascript"`, `"python"`, …).
+    /// Prepared language for a ``LanguageIdentifier`` string (`"javascript"`, `"python"`, …), from
+    /// ``LanguageDefinitionRegistry/shared``: the bundled grammars (``BundledGrammars``) and any a host
+    /// registered. Prefer ``BundledLanguages/language(forIdentifier:)``, which caches the result.
     static func bundled(forIdentifier identifier: String) -> TreeSitterLanguage? {
-        switch identifier {
-        case "javascript":
-            return .javaScript
-        case "typescript":
-            return .typeScript
-        case "json":
-            return .json
-        case "python":
-            return .python
-        case "yaml":
-            return .yaml
-        case "toml":
-            return .toml
-        case "sql":
-            return .sql
-        case "html", "xml":
-            return .html
-        case "css", "scss":
-            return .css
-        case "swift":
-            return .swift
-        case "java", "groovy":
-            return .java
-        case "kotlin":
-            return .kotlin
-        case "go":
-            return .go
-        case "shell", "bash", "sh", "zsh":
-            return .bash
-        case "graphql":
-            return .graphQL
-        case "markdown":
-            return .markdown
-        // Not a file type: `Block/injections.scm` injects this into every `(inline)` node. This switch
-        // is `BundledLanguageProvider`'s only resolution path, and omitting it silently disabled all
-        // inline highlighting (bold, italic, links, code spans) for hosts using that provider.
-        case "markdown_inline":
-            return .markdownInline
-        case "http":
-            return .http
-        case "mermaid":
-            return .mermaid
-        case "rust":
-            return .rust
-        case "c":
-            return .c
-        case "cpp":
-            return .cpp
-        case "diff", "patch":
-            return .diff
-        case "plain":
-            return nil
-        default:
-            return nil
+        BundledGrammars.install()
+        return LanguageDefinitionRegistry.shared.grammar(forIdentifier: identifier)
+    }
+}
+
+/// The grammars `PenumbraLanguages` ships, keyed by the identifier they highlight. Installed into
+/// ``LanguageDefinitionRegistry/shared`` the first time any bundled lookup runs, without replacing a
+/// grammar a host registered for the same identifier.
+///
+/// Identifiers that share a grammar list it twice (`xml` highlights as HTML). `bash`, `sh`, `zsh` and
+/// `patch` are aliases of `shell` and `diff` (``LanguageDefinition/aliases``), so they need no entry.
+enum BundledGrammars {
+    private static let grammars: [(identifier: String, make: @Sendable () -> TreeSitterLanguage?)] = [
+        ("javascript", { .javaScript }),
+        ("typescript", { .typeScript }),
+        ("json", { .json }),
+        ("python", { .python }),
+        ("yaml", { .yaml }),
+        ("toml", { .toml }),
+        ("sql", { .sql }),
+        ("html", { .html }),
+        ("xml", { .html }),
+        ("css", { .css }),
+        ("scss", { .css }),
+        ("swift", { .swift }),
+        ("java", { .java }),
+        ("groovy", { .java }),
+        ("kotlin", { .kotlin }),
+        ("go", { .go }),
+        ("shell", { .bash }),
+        ("graphql", { .graphQL }),
+        ("markdown", { .markdown }),
+        // Not a file type: `Block/injections.scm` injects this into every `(inline)` node. Omitting it
+        // silently disabled all inline highlighting (bold, italic, links, code spans) for hosts using
+        // `BundledLanguageProvider`.
+        ("markdown_inline", { .markdownInline }),
+        ("http", { .http }),
+        ("mermaid", { .mermaid }),
+        ("rust", { .rust }),
+        ("c", { .c }),
+        ("cpp", { .cpp }),
+        ("diff", { .diff })
+    ]
+
+    private static let installed: Void = {
+        let registry = LanguageDefinitionRegistry.shared
+        for (identifier, make) in grammars {
+            registry.setGrammar(forIdentifier: identifier, replacingExisting: false, make)
         }
+    }()
+
+    /// Idempotent and thread-safe.
+    static func install() {
+        _ = installed
     }
 }

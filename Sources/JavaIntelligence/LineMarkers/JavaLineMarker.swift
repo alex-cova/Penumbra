@@ -1,20 +1,9 @@
+import EditorIntelligence
 import Foundation
 
-/// What a Java gutter marker says about the declaration or call on its line.
-public enum JavaLineMarkerKind: String, CaseIterable, Hashable, Sendable {
-    /// A method that implements an abstract or interface method (↑).
-    case implementing
-    /// A method that overrides a concrete method (↑).
-    case overriding
-    /// An abstract or interface method, or an interface, that project types implement (↓).
-    case implemented
-    /// A concrete method that project subclasses override, or a class they extend (↓).
-    case overridden
-    /// A method that implements an interface method on behalf of a subclass that inherits it (↕).
-    case siblingInherited
-    /// A call to the method it sits in.
-    case recursiveCall
-}
+/// What a Java gutter marker says about the declaration or call on its line: the generic
+/// ``LineMarkerKind`` (same cases and raw values, so saved preferences keep working).
+public typealias JavaLineMarkerKind = LineMarkerKind
 
 /// One gutter marker for a Java file.
 public struct JavaLineMarker: Hashable, Sendable {

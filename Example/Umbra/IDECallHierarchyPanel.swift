@@ -1,4 +1,4 @@
-import JavaIntelligence
+import EditorIntelligence
 import Observation
 import SwiftUI
 
@@ -12,7 +12,7 @@ final class IDECallHierarchyStore {
     }
 
     struct Row: Identifiable {
-        let node: JavaCallHierarchyNode
+        let node: HierarchyItem
         let depth: Int
         let isExpanded: Bool
         let isLoading: Bool
@@ -20,16 +20,16 @@ final class IDECallHierarchyStore {
         var id: String { node.id }
     }
 
-    typealias Loader = @MainActor (JavaCallHierarchyNode, Direction, URL?) async -> [JavaCallHierarchyNode]
+    typealias Loader = @MainActor (HierarchyItem, Direction, URL?) async -> [HierarchyItem]
 
-    private(set) var root: JavaCallHierarchyNode?
+    private(set) var root: HierarchyItem?
     private(set) var message: String?
     private(set) var direction: Direction = .callers
     private(set) var file: URL?
     var selectedID: String?
 
     @ObservationIgnored var loader: Loader?
-    private var children: [String: [JavaCallHierarchyNode]] = [:]
+    private var children: [String: [HierarchyItem]] = [:]
     private var expanded: Set<String> = []
     private var loading: Set<String> = []
     private var generation = 0
@@ -43,7 +43,7 @@ final class IDECallHierarchyStore {
         return result
     }
 
-    func show(root: JavaCallHierarchyNode, file: URL?) {
+    func show(root: HierarchyItem, file: URL?) {
         generation += 1
         self.root = root
         message = nil
@@ -85,7 +85,7 @@ final class IDECallHierarchyStore {
         generation += 1
     }
 
-    func toggle(_ node: JavaCallHierarchyNode) {
+    func toggle(_ node: HierarchyItem) {
         if expanded.contains(node.id) {
             expanded.remove(node.id)
             return
@@ -105,7 +105,7 @@ final class IDECallHierarchyStore {
         }
     }
 
-    private func appendRows(for node: JavaCallHierarchyNode, depth: Int, into rows: inout [Row]) {
+    private func appendRows(for node: HierarchyItem, depth: Int, into rows: inout [Row]) {
         let childList = children[node.id]
         let isExpanded = expanded.contains(node.id)
         let isLoading = loading.contains(node.id)
@@ -130,13 +130,13 @@ struct IDECallHierarchyPanel: View {
                 Divider()
                 tree(store)
             } else {
-                emptyState(store.message ?? "Place the caret in a Java method and open Call Hierarchy")
+                emptyState(store.message ?? "Place the caret in a method and open Call Hierarchy")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func header(_ store: IDECallHierarchyStore, root: JavaCallHierarchyNode) -> some View {
+    private func header(_ store: IDECallHierarchyStore, root: HierarchyItem) -> some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             Picker("Direction", selection: Binding(
                 get: { store.direction },
@@ -147,7 +147,7 @@ struct IDECallHierarchyPanel: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 200)
-            Text(root.displayName)
+            Text(root.name)
                 .font(IDEAppearance.Typography.body.weight(.medium))
                 .lineLimit(1)
             Spacer()
@@ -174,7 +174,7 @@ struct IDECallHierarchyPanel: View {
                         }
                         .buttonStyle(.plain)
                         .frame(width: 12)
-                        Text(row.node.displayName)
+                        Text(row.node.name)
                             .font(IDEAppearance.Typography.body)
                             .foregroundStyle(store.selectedID == row.node.id ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.foreground)
                         Spacer()

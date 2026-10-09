@@ -10,45 +10,22 @@ enum IDELanguageSupport {
     }
 
     /// Every syntax the user can pick from ``IDEWorkspace/setLanguage(identifier:in:)``, in the
-    /// order Sublime Text-style syntax menus list them: Plain Text first, then alphabetical.
-    /// Mirrors the identifiers ``TreeSitterLanguage/bundled(forIdentifier:)`` resolves to a
-    /// grammar for, so every option here actually highlights something.
-    static let selectableSyntaxes: [SyntaxOption] = [
-        SyntaxOption(id: nil, displayName: "Plain Text"),
-        SyntaxOption(id: "c", displayName: "C"),
-        SyntaxOption(id: "cpp", displayName: "C++"),
-        SyntaxOption(id: "css", displayName: "CSS"),
-        SyntaxOption(id: "diff", displayName: "Diff"),
-        SyntaxOption(id: "go", displayName: "Go"),
-        SyntaxOption(id: "graphql", displayName: "GraphQL"),
-        SyntaxOption(id: "html", displayName: "HTML"),
-        SyntaxOption(id: "http", displayName: "HTTP"),
-        SyntaxOption(id: "java", displayName: "Java"),
-        SyntaxOption(id: "javascript", displayName: "JavaScript"),
-        SyntaxOption(id: "json", displayName: "JSON"),
-        SyntaxOption(id: "kotlin", displayName: "Kotlin"),
-        SyntaxOption(id: "markdown", displayName: "Markdown"),
-        SyntaxOption(id: "mermaid", displayName: "Mermaid"),
-        SyntaxOption(id: "python", displayName: "Python"),
-        SyntaxOption(id: "rust", displayName: "Rust"),
-        SyntaxOption(id: "scss", displayName: "SCSS"),
-        SyntaxOption(id: "shell", displayName: "Shell Script"),
-        SyntaxOption(id: "sql", displayName: "SQL"),
-        SyntaxOption(id: "swift", displayName: "Swift"),
-        SyntaxOption(id: "toml", displayName: "TOML"),
-        SyntaxOption(id: "typescript", displayName: "TypeScript"),
-        SyntaxOption(id: "xml", displayName: "XML"),
-        SyntaxOption(id: "yaml", displayName: "YAML")
-    ]
+    /// order Sublime Text-style syntax menus list them: Plain Text first, then alphabetical. Built from
+    /// the selectable ``LanguageDefinition``s in ``LanguageDefinitionRegistry/shared``, so a language
+    /// registered there shows up here without an edit. Read on each use, not cached.
+    static var selectableSyntaxes: [SyntaxOption] {
+        [SyntaxOption(id: nil, displayName: "Plain Text")]
+            + LanguageDefinitionRegistry.shared.selectableDefinitions.map {
+                SyntaxOption(id: $0.id, displayName: $0.displayName)
+            }
+    }
 
-    /// Display name for `identifier`, falling back to a capitalized identifier for one this table
-    /// doesn't know about (e.g. a language a host app registered on its own).
+    /// Display name for `identifier`: its definition's name, falling back to a capitalized identifier
+    /// for one nobody defined (e.g. a language a host app used without registering it).
     static func displayName(forIdentifier identifier: String?) -> String {
-        selectableSyntaxes.first { $0.id == identifier }?.displayName
-            ?? (identifier == "csv" ? "CSV" : nil)
-            ?? (identifier == "tsv" ? "TSV" : nil)
-            ?? identifier?.capitalized
-            ?? "Plain Text"
+        guard let identifier else { return "Plain Text" }
+        return LanguageDefinitionRegistry.shared.definition(forIdentifier: identifier)?.displayName
+            ?? identifier.capitalized
     }
 
     /// True when the document's language is inferred from its path and must not be overridden

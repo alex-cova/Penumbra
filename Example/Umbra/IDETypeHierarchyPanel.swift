@@ -1,4 +1,4 @@
-import JavaIntelligence
+import EditorIntelligence
 import Observation
 import SwiftUI
 
@@ -15,7 +15,7 @@ final class IDETypeHierarchyStore {
     }
 
     struct Row: Identifiable {
-        let node: JavaTypeHierarchyNode
+        let node: HierarchyItem
         let depth: Int
         let isExpanded: Bool
         let isLoading: Bool
@@ -25,9 +25,9 @@ final class IDETypeHierarchyStore {
         var id: String { node.id }
     }
 
-    typealias Loader = @MainActor (JavaTypeHierarchyNode, Direction, URL?) async -> [JavaTypeHierarchyNode]
+    typealias Loader = @MainActor (HierarchyItem, Direction, URL?) async -> [HierarchyItem]
 
-    private(set) var root: JavaTypeHierarchyNode?
+    private(set) var root: HierarchyItem?
     /// A line shown instead of a tree, e.g. when the caret is not in a type.
     private(set) var message: String?
     private(set) var direction: Direction = .supertypes
@@ -36,7 +36,7 @@ final class IDETypeHierarchyStore {
     var selectedID: String?
 
     @ObservationIgnored var loader: Loader?
-    private var children: [String: [JavaTypeHierarchyNode]] = [:]
+    private var children: [String: [HierarchyItem]] = [:]
     private var expanded: Set<String> = []
     private var loading: Set<String> = []
     /// Bumped whenever the tree is replaced, so a slow load for the old tree is dropped.
@@ -49,7 +49,7 @@ final class IDETypeHierarchyStore {
     var rows: [Row] {
         guard let root else { return [] }
         var result: [Row] = []
-        func visit(_ node: JavaTypeHierarchyNode, depth: Int) {
+        func visit(_ node: HierarchyItem, depth: Int) {
             let isExpanded = expanded.contains(node.id)
             let known = children[node.id]
             result.append(Row(
@@ -65,7 +65,7 @@ final class IDETypeHierarchyStore {
     }
 
     /// Shows `root` and expands its first level.
-    func show(root: JavaTypeHierarchyNode, file: URL?) {
+    func show(root: HierarchyItem, file: URL?) {
         self.root = root
         self.file = file
         message = nil
@@ -94,7 +94,7 @@ final class IDETypeHierarchyStore {
         expand(root)
     }
 
-    func toggle(_ node: JavaTypeHierarchyNode) {
+    func toggle(_ node: HierarchyItem) {
         if expanded.contains(node.id) {
             expanded.remove(node.id)
         } else {
@@ -102,7 +102,7 @@ final class IDETypeHierarchyStore {
         }
     }
 
-    func node(withID id: String) -> JavaTypeHierarchyNode? {
+    func node(withID id: String) -> HierarchyItem? {
         rows.first { $0.id == id }?.node
     }
 
@@ -122,7 +122,7 @@ final class IDETypeHierarchyStore {
         selectedID = root?.id
     }
 
-    private func expand(_ node: JavaTypeHierarchyNode) {
+    private func expand(_ node: HierarchyItem) {
         expanded.insert(node.id)
         guard children[node.id] == nil, !loading.contains(node.id), let loader else { return }
         loading.insert(node.id)
@@ -152,13 +152,13 @@ struct IDETypeHierarchyPanel: View {
                 Divider()
                 tree(store)
             } else {
-                emptyState(store.message ?? "Place the caret in a Java type and press ⌃H")
+                emptyState(store.message ?? "Place the caret in a type and press ⌃H")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func header(_ store: IDETypeHierarchyStore, root: JavaTypeHierarchyNode) -> some View {
+    private func header(_ store: IDETypeHierarchyStore, root: HierarchyItem) -> some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             Picker("Direction", selection: Binding(
                 get: { store.direction },
@@ -170,7 +170,7 @@ struct IDETypeHierarchyPanel: View {
             .labelsHidden()
             .frame(width: 200)
 
-            Text(root.displayName)
+            Text(root.name)
                 .font(IDEAppearance.Typography.body.weight(.medium))
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
@@ -270,14 +270,14 @@ private struct IDETypeHierarchyRowView: View {
 
             Image(systemName: kindSymbol)
                 .font(.system(size: 11))
-                .foregroundStyle(row.node.isProjectType ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .foregroundStyle((row.node.origin == .project) ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
                 .frame(width: 14)
-            Text(row.node.displayName)
+            Text(row.node.name)
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
-            if !row.node.packageName.isEmpty {
-                Text(row.node.packageName)
+            if !row.node.detail.isEmpty {
+                Text(row.node.detail)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
@@ -301,37 +301,33 @@ private struct IDETypeHierarchyRowView: View {
         .onTapGesture(count: 2, perform: onOpen)
         .onTapGesture(perform: onSelect)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(row.node.displayName), \(kindName)")
+        .accessibilityLabel("\(row.node.name), \(kindName)")
         .accessibilityAddTraits(.isButton)
     }
 
     private var kindSymbol: String {
         switch row.node.kind {
-        case .classKind: return "c.square"
-        case .interfaceKind: return "i.square"
-        case .enumKind: return "e.square"
-        case .recordKind: return "r.square"
-        case .annotationKind: return "at"
+        case .classType: return "c.square"
+        case .interfaceType: return "i.square"
+        case .enumType: return "e.square"
+        case .recordType: return "r.square"
+        case .annotationType: return "at"
+        case .method: return "m.square"
         }
     }
 
     private var kindName: String {
         switch row.node.kind {
-        case .classKind: return "class"
-        case .interfaceKind: return "interface"
-        case .enumKind: return "enum"
-        case .recordKind: return "record"
-        case .annotationKind: return "annotation"
+        case .classType: return "class"
+        case .interfaceType: return "interface"
+        case .enumType: return "enum"
+        case .recordType: return "record"
+        case .annotationType: return "annotation"
+        case .method: return "method"
         }
     }
 
-    private var badge: String? {
-        switch row.node.origin {
-        case .source: return nil
-        case .jar: return "jar"
-        case .jdk: return "JDK"
-        }
-    }
+    private var badge: String? { row.node.badge }
 }
 
 /// The Type Hierarchy tab in the bottom panel's tab strip.

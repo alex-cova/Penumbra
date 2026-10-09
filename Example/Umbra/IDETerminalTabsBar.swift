@@ -47,7 +47,7 @@ struct IDETerminalTabsBar: View {
                 }
                 if workspace.showsTypeHierarchyTab {
                     IDETypeHierarchyTabItem(
-                        title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.displayName)" } ?? "Hierarchy",
+                        title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.name)" } ?? "Hierarchy",
                         isSelected: workspace.isTypeHierarchySelected,
                         onSelect: { workspace.selectTypeHierarchyTab() }
                     )
@@ -76,7 +76,7 @@ struct IDETerminalTabsBar: View {
                 }
                 if workspace.showsCallHierarchyTab {
                     IDECallHierarchyTabItem(
-                        title: workspace.callHierarchy.root.map { "Calls · \($0.displayName)" } ?? "Calls",
+                        title: workspace.callHierarchy.root.map { "Calls · \($0.name)" } ?? "Calls",
                         isSelected: workspace.isCallHierarchySelected,
                         onSelect: { workspace.selectCallHierarchyTab() }
                     )

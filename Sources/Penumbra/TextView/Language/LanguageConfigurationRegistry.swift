@@ -18,17 +18,14 @@ public struct LanguageConfigurationRegistry: Sendable {
         self.fallback = fallback
     }
 
-    /// The built-in registry: dedicated tables for `javascript`, `typescript`, `java`, `swift`,
-    /// everything else resolving to ``LanguageConfiguration/generic``.
-    public static let builtIns: LanguageConfigurationRegistry = {
-        var map: [String: LanguageConfiguration] = [:]
-        for identifier in ["javascript", "jsx", "typescript", "tsx", "java", "swift"] {
-            if let configuration = LanguageConfiguration.builtIn(forIdentifier: identifier) {
-                map[identifier] = configuration
-            }
-        }
-        return LanguageConfigurationRegistry(configurations: map)
-    }()
+    /// The configurations of every language in ``LanguageDefinitionRegistry/shared`` that has one: the
+    /// bundled `javascript`, `jsx`, `typescript`, `tsx`, `java` and `swift`, plus any a host registered
+    /// through ``LanguageDefinition/configuration``. Everything else resolves to
+    /// ``LanguageConfiguration/generic``. Read each time it is used, so a text view created after a
+    /// registration sees it.
+    public static var builtIns: LanguageConfigurationRegistry {
+        LanguageConfigurationRegistry(configurations: LanguageDefinitionRegistry.shared.configurations)
+    }
 
     /// The configuration for `identifier`, or ``fallback`` (default: ``LanguageConfiguration/generic``)
     /// when the identifier is `nil` or unknown.

@@ -20,32 +20,60 @@ final class IDEIntelligenceServices {
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
 
+    /// Every language's intelligence, routed by the document's language: Java, the app's Run actions
+    /// for Java files, `@file` mentions in Markdown, `.http` completion and JSON formatting. The order
+    /// is the order each engine asks its providers, and the order services that share a language are
+    /// combined in (Java's code actions come before the Run ones).
+    let languages: LanguageServiceRegistry
+
     init() {
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
+        let languages = LanguageServiceRegistry(services: [
+            javaSupport.languageService,
+            BasicLanguageService(
+                name: "umbra.run", languageIdentifiers: ["java"],
+                providers: LanguageProviders(codeActions: IDERunCodeActionProvider())
+            ),
+            BasicLanguageService(
+                name: "umbra.markdown-mentions", languageIdentifiers: ["markdown"],
+                providers: LanguageProviders(completion: [markdownFileMentions])
+            ),
+            BasicLanguageService(
+                name: "umbra.http", languageIdentifiers: ["http"],
+                providers: LanguageProviders(completion: [httpCompletion]),
+                policy: LanguagePolicy(disabling: [.snippets, .duplicateSymbolDiagnostics])
+            ),
+            BasicLanguageService(
+                name: "umbra.json", languageIdentifiers: ["json"],
+                providers: LanguageProviders(formatting: IDEJSONFormattingProvider(indentUnit: {
+                    await MainActor.run {
+                        let preferences = IDEPreferences.shared
+                        return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
+                    }
+                }))
+            )
+        ])
+        self.languages = languages
+        // The generic, name-based providers come first for completion and diagnostics and last for
+        // hover and navigation; each skips the languages whose service opted out of it.
         completionEngine = CompletionEngine(providers: [
             SymbolCompletionProvider(index: symbolIndex),
             WordCompletionProvider(index: symbolIndex),
-            // The built-in snippets are JavaScript-flavored (`function`, `for (let i ...`).
-            SnippetCompletionProvider(excludedLanguageIdentifiers: ["java", "http"]),
-            javaSupport.completionProvider,
-            markdownFileMentions,
-            httpCompletion
-        ])
-        hoverEngine = HoverEngine(providers: [
-            javaSupport.hoverProvider,
-            SymbolHoverProvider(index: symbolIndex, skippingLanguages: ["java"])
+            SnippetCompletionProvider(excludedLanguageIdentifiers: languages.identifiers(disabling: .snippets))
+        ] + languages.completionProviders)
+        hoverEngine = HoverEngine(providers: languages.hoverProviders + [
+            SymbolHoverProvider(index: symbolIndex, skippingLanguages: Array(languages.identifiers(disabling: .symbolHover)))
         ])
         diagnosticEngine = DiagnosticEngine(providers: [
-            DuplicateSymbolDiagnosticProvider(index: symbolIndex, skippingLanguages: ["http"]),
-            javaSupport.compilerDiagnostics,
-            javaSupport.inspectionService
-        ])
-        navigationEngine = NavigationEngine(providers: [
-            javaSupport.navigationProvider,
-            javaSupport.findUsagesProvider,
-            GoToDefinitionProvider(index: symbolIndex, skippingLanguages: ["java"]),
-            FindReferencesProvider(index: symbolIndex, skippingLanguages: ["java"])
+            DuplicateSymbolDiagnosticProvider(
+                index: symbolIndex, skippingLanguages: Array(languages.identifiers(disabling: .duplicateSymbolDiagnostics))
+            )
+        ] + languages.diagnosticProviders)
+        let symbolNavigationSkips = Array(languages.identifiers(disabling: .symbolNavigation))
+        navigationEngine = NavigationEngine(providers: languages.navigationProviders + [
+            GoToDefinitionProvider(index: symbolIndex, skippingLanguages: symbolNavigationSkips),
+            FindReferencesProvider(index: symbolIndex, skippingLanguages: symbolNavigationSkips)
         ])
     }
 
@@ -54,27 +82,7 @@ final class IDEIntelligenceServices {
         adapter: PenumbraWorkbenchEditorAdapter,
         workspace: Workspace
     ) -> EditorIntelligenceController {
-        let services = EditorIntelligenceServices(
-            formattingProvider: IDECompositeFormattingProvider(providers: [
-                javaSupport.formattingProvider,
-                IDEJSONFormattingProvider(indentUnit: {
-                    await MainActor.run {
-                        let preferences = IDEPreferences.shared
-                        return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
-                    }
-                })
-            ]),
-            signatureHelpProvider: javaSupport.completionProvider,
-            codeActionProvider: IDECompositeCodeActionProvider(providers: [javaSupport.codeActionProvider, IDERunCodeActionProvider()]),
-            renameProvider: javaSupport.renameProvider,
-            refactoringProvider: javaSupport.refactoringProvider,
-            codeGenerationProvider: JavaCodeGenerationProvider(),
-            breadcrumbProvider: javaSupport.breadcrumbProvider,
-            inlayHintProvider: javaSupport.inlayHintProvider,
-            codeVisionProvider: javaSupport.codeVisionProvider,
-            symbolIndex: symbolIndex,
-            workspace: workspace
-        )
+        let services = EditorIntelligenceServices(languages: languages, symbolIndex: symbolIndex, workspace: workspace)
         let controller = EditorIntelligenceController(
             textView: textView,
             adapter: adapter,

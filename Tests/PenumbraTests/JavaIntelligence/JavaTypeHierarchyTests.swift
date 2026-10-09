@@ -257,6 +257,68 @@ final class JavaTypeHierarchyTests: XCTestCase {
         return try JavaIndexShardReader(url: url)
     }
 
+    // MARK: - Generic protocol
+
+    func testTheGenericProtocolAnswersWithItemsThatCarryTheJavaNode() async throws {
+        let provider = try await makeProvider(sources: [
+            "Iface.java": "interface Iface { }",
+            "Base.java": "abstract class Base implements Iface { }",
+            "Leaf.java": "class Leaf extends Base { }"
+        ])
+        let generic: any TypeHierarchyProviding = provider
+        let native = try await root(provider, "class T { €Leaf l; }")
+
+        let source = "class T { Leaf l; }"
+        let item = await generic.rootItem(source: source, fileURL: scratch.appendingPathComponent("T.java"), utf16Offset: 10)
+        XCTAssertEqual(item?.id, native.id)
+        XCTAssertEqual(item?.name, native.displayName)
+        XCTAssertEqual(item?.kind, .classType)
+        XCTAssertEqual(item?.origin, .project)
+        XCTAssertNil(item?.badge)
+        XCTAssertNotNil(item?.payload as? JavaTypeHierarchyNode)
+
+        let leaf = try XCTUnwrap(item)
+        let supers = await generic.supertypes(of: leaf, file: nil)
+        let nativeSupers = await provider.supertypes(of: native, file: nil)
+        XCTAssertEqual(supers.map(\.id), nativeSupers.map(\.id))
+        let base = try XCTUnwrap(supers.first)
+        let baseSupers = await generic.supertypes(of: base, file: nil)
+        XCTAssertEqual(baseSupers.map(\.name), ["Iface"])
+        XCTAssertEqual(baseSupers.first?.kind, .interfaceType)
+
+        // Subtypes come from a fresh root: Base is already on the path of Leaf > Base > Iface.
+        let ifaceRoot = await generic.rootItem(
+            source: "class T { Iface i; }", fileURL: scratch.appendingPathComponent("T.java"), utf16Offset: 10
+        )
+        let subs = await generic.subtypes(of: try XCTUnwrap(ifaceRoot), file: nil)
+        XCTAssertEqual(subs.map(\.name), ["Base"])
+
+        // An item some other provider made has no Java node behind it, so there is nothing to expand.
+        let foreign = HierarchyItem(id: "x", name: "X", kind: .classType, origin: .project)
+        let none = await generic.supertypes(of: foreign, file: nil)
+        XCTAssertTrue(none.isEmpty)
+        let nowhere = await generic.location(of: foreign, file: nil)
+        XCTAssertNil(nowhere)
+    }
+
+    func testLibraryAndRuntimeTypesGetTheirOwnBadges() async throws {
+        let provider = try await makeProvider(sources: [
+            "Leaf.java": "class Leaf extends java.util.ArrayList<String> { }"
+        ])
+        let generic: any TypeHierarchyProviding = provider
+        let leaf = try await root(provider, "class T { €Leaf l; }")
+        let rootItem = await generic.rootItem(
+            source: "class T { Leaf l; }", fileURL: scratch.appendingPathComponent("T.java"), utf16Offset: 10
+        )
+        let item = try XCTUnwrap(rootItem)
+        XCTAssertEqual(item.id, leaf.id)
+        let supers = await generic.supertypes(of: item, file: nil)
+        // With no JDK shard in this fixture the supertype may be absent; when present it is a runtime type.
+        for superItem in supers where superItem.origin != .project {
+            XCTAssertTrue(superItem.badge == "jar" || superItem.badge == "JDK", "\(superItem.name): \(String(describing: superItem.badge))")
+        }
+    }
+
     private func makeProvider(sources: [String: String], extraStubs: [JavaClassStub] = []) async throws -> JavaTypeHierarchyProvider {
         var all = extraStubs
         for (name, source) in sources.sorted(by: { $0.key < $1.key }) {

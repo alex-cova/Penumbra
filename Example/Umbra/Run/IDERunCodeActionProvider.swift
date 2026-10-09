@@ -58,16 +58,3 @@ struct IDERunCodeActionProvider: CodeActionProviding {
         return nil
     }
 }
-
-/// Several providers asked in turn, their actions in one list: the language's own fixes first.
-struct IDECompositeCodeActionProvider: CodeActionProviding {
-    let providers: [any CodeActionProviding]
-
-    func codeActions(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> [CodeAction] {
-        var result: [CodeAction] = []
-        for provider in providers {
-            result += await provider.codeActions(for: document, at: position, diagnostics: diagnostics)
-        }
-        return result
-    }
-}

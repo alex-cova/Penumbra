@@ -75,22 +75,3 @@ struct IDEJSONFormattingProvider: FormattingProviding {
         return [TextEdit(range: range, replacement: replacement)]
     }
 }
-
-/// Offers a document to each provider in turn and uses the first one that formats it.
-struct IDECompositeFormattingProvider: FormattingProviding {
-    let providers: [any FormattingProviding]
-
-    func supportsFormatting(_ document: Document) -> Bool {
-        providers.contains { $0.supportsFormatting(document) }
-    }
-
-    func formatDocument(_ document: Document) async -> [TextEdit] {
-        guard let provider = providers.first(where: { $0.supportsFormatting(document) }) else { return [] }
-        return await provider.formatDocument(document)
-    }
-
-    func formatSelection(in document: Document, range: EditorIntelligence.TextRange) async -> [TextEdit] {
-        guard let provider = providers.first(where: { $0.supportsFormatting(document) }) else { return [] }
-        return await provider.formatSelection(in: document, range: range)
-    }
-}
