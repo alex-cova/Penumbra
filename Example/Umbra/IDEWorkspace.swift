@@ -1206,6 +1206,16 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.reformatCode)
     }
 
+    /// "Format Document" in the editor's right-click menu, for the languages that have a formatter
+    /// (Java and JSON). It formats the whole file even when text is selected.
+    func formatDocumentContextMenuItems(textView: TextView, paneID: UUID) -> [NSMenuItem] {
+        guard textView.isEditable, ["java", "json"].contains(textView.languageIdentifier ?? "") else { return [] }
+        let item = IDEClosureMenuItem(title: "Format Document") { [weak self] in
+            self?.host(for: paneID).intelligenceController?.formatDocument()
+        }
+        return [.separator(), item]
+    }
+
     /// Renames the symbol at the caret (⇧F6 in the IntelliJ keymap): prompt, preview, apply.
     func renameSymbol() {
         _ = host(for: workbench.activePane.id).textView.perform(.rename)
@@ -4092,6 +4102,7 @@ public final class IDEWorkspace {
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
                 + self.diagramContextMenuItems(url: url)
+                + self.formatDocumentContextMenuItems(textView: host.textView, paneID: paneID)
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
                 + self.textToolsContextMenuItems(context: context, textView: host.textView)
                 + self.localHistoryContextMenuItems(url: url)

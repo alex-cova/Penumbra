@@ -55,7 +55,15 @@ final class IDEIntelligenceServices {
         workspace: Workspace
     ) -> EditorIntelligenceController {
         let services = EditorIntelligenceServices(
-            formattingProvider: javaSupport.formattingProvider,
+            formattingProvider: IDECompositeFormattingProvider(providers: [
+                javaSupport.formattingProvider,
+                IDEJSONFormattingProvider(indentUnit: {
+                    await MainActor.run {
+                        let preferences = IDEPreferences.shared
+                        return preferences.useSpacesForTab ? String(repeating: " ", count: max(1, preferences.tabWidth)) : "\t"
+                    }
+                })
+            ]),
             signatureHelpProvider: javaSupport.completionProvider,
             codeActionProvider: javaSupport.codeActionProvider,
             renameProvider: javaSupport.renameProvider,
