@@ -534,17 +534,17 @@ public final class IDEWorkspace {
     /// stays offered for any file (it explains itself outside Java) so the tab does not come and
     /// go as the active file changes.
     func isSidebarTabAvailable(_ tab: IDESidebarTab) -> Bool {
-        tab != .changes || showsSourceControlTab
+        IDESidebarTabs.descriptor(for: tab)?.isAvailable(self) ?? false
     }
 
     /// The tabs the sidebar's tab bar shows, in order.
     var sidebarTabs: [IDESidebarTab] {
-        IDESidebarTab.allCases.filter { isSidebarTabAvailable($0) && !closedSidebarTabs.contains($0) }
+        IDESidebarTabs.all.map(\.tab).filter { isSidebarTabAvailable($0) && !closedSidebarTabs.contains($0) }
     }
 
     /// Closed tabs the + menu can bring back.
     var reopenableSidebarTabs: [IDESidebarTab] {
-        IDESidebarTab.allCases.filter { isSidebarTabAvailable($0) && closedSidebarTabs.contains($0) }
+        IDESidebarTabs.all.map(\.tab).filter { isSidebarTabAvailable($0) && closedSidebarTabs.contains($0) }
     }
 
     /// The tab the sidebar is actually showing: the selected one, or the Explorer when that tab is
@@ -3469,11 +3469,7 @@ public final class IDEWorkspace {
         closedSidebarTabs.remove(tab)
         selectedSidebarTab = tab
         isSidebarVisible = true
-        switch tab {
-        case .structure: refreshStructure()
-        case .changes: gitStatus.refresh()
-        case .explorer, .breakpoints, .history: break
-        }
+        IDESidebarTabs.descriptor(for: tab)?.onShow(self)
         saveSession()
     }
 

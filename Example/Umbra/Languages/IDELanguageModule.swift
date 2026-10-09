@@ -36,6 +36,12 @@ protocol IDELanguageModule {
     /// built-in ones.
     func toolWindows(for workspace: IDEWorkspace) -> [IDEToolWindow]
 
+    /// Bottom-panel tabs available right now: the strip item and the panel for each.
+    func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution]
+
+    /// Left-sidebar tabs. They are offered through their descriptor's `isAvailable`.
+    var sidebarTabs: [IDESidebarTabDescriptor] { get }
+
     /// The menu-bar menu, or nil while the module does not apply.
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu?
 
@@ -45,8 +51,10 @@ protocol IDELanguageModule {
 extension IDELanguageModule {
     func commands(for workspace: IDEWorkspace) -> [EditorCommand] { [] }
     func toolWindows(for workspace: IDEWorkspace) -> [IDEToolWindow] { [] }
+    func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution] { [] }
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? { nil }
     var preferencePanes: [IDEPreferencesPane] { [] }
+    var sidebarTabs: [IDESidebarTabDescriptor] { [] }
 }
 
 /// The modules Umbra ships, in the order their pages and entries appear.

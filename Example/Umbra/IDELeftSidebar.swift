@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The left sidebar: one card with a tab bar (Explorer, Structure, Changes, Breakpoints, History) over the
+/// The left sidebar: one card with a tab bar (the `IDESidebarTabs`: Explorer, Structure, Changes, Breakpoints, History) over the
 /// selected tab's content. Which tabs exist and which one shows is `IDEWorkspace`'s
 /// `sidebarTabs` / `activeSidebarTab`.
 struct IDELeftSidebar: View {
@@ -19,17 +19,9 @@ struct IDELeftSidebar: View {
                     .allowsHitTesting(active == .explorer)
                     .accessibilityHidden(active != .explorer)
 
-                switch active {
-                case .explorer:
-                    EmptyView()
-                case .structure:
-                    IDEStructurePanel()
-                case .changes:
-                    IDEChangesPanel(gitStatus: workspace.gitStatus)
-                case .breakpoints:
-                    IDEBreakpointsPanel()
-                case .history:
-                    IDELocalHistoryPanel()
+                // The selected tab's content; the Explorer is the one mounted above.
+                if active != .explorer, let descriptor = IDESidebarTabs.descriptor(for: active) {
+                    descriptor.content(workspace)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -68,11 +60,7 @@ private struct IDESidebarTabBar: View {
     }
 
     private func badge(for tab: IDESidebarTab) -> Int {
-        switch tab {
-        case .changes: workspace.gitStatus.changes.count
-        case .breakpoints: workspace.breakpoints.count
-        case .explorer, .structure, .history: 0
-        }
+        IDESidebarTabs.descriptor(for: tab)?.badge(workspace) ?? 0
     }
 
     private var addMenu: some View {
@@ -108,11 +96,12 @@ private struct IDESidebarTabItem: View {
 
     @State private var isHovering = false
 
+    private var descriptor: IDESidebarTabDescriptor? { IDESidebarTabs.descriptor(for: tab) }
+
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: tab.systemImage)
-                // The breakpoint glyph is a dot: at the size of the other icons it reads as a blob.
-                .font(.system(size: tab == .breakpoints ? 8 : 11, weight: .medium))
+                .font(.system(size: descriptor?.iconSize ?? 11, weight: .medium))
                 .foregroundStyle(iconColor)
                 .frame(width: 14)
 
@@ -147,7 +136,7 @@ private struct IDESidebarTabItem: View {
     }
 
     private var iconColor: Color {
-        if tab == .breakpoints { return IDEAppearance.ColorToken.error }
+        if let color = descriptor?.iconColor { return color }
         return isSelected || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted
     }
 

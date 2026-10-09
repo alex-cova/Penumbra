@@ -119,4 +119,104 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertTrue(workspace.languageModuleToolWindows().isEmpty)
         XCTAssertTrue(workspace.toolWindows.isEmpty, "the stripe stays hidden until a folder or file is open")
     }
+
+    // MARK: Bottom panel tabs
+
+    func testTheBottomTabsKeepTheirNamesAndTheStripOrder() {
+        XCTAssertEqual(
+            [IDEBottomPanelTab.terminal, .gradle, .http, .sourceControl, .problems, .typeHierarchy, .usages,
+             .testResults, .debug, .callHierarchy, .run].map(\.id),
+            ["terminal", "gradle", "http", "sourceControl", "problems", "typeHierarchy", "usages",
+             "testResults", "debug", "callHierarchy", "run"]
+        )
+        XCTAssertEqual("\(IDEBottomPanelTab.callHierarchy)", "callHierarchy", "tool-window ids interpolate the tab")
+        typealias Order = IDEBottomPanelTab.Order
+        let strip = [
+            Order.run, Order.gradle, Order.http, Order.problems, Order.typeHierarchy, Order.usages,
+            Order.testResults, Order.debug, Order.callHierarchy, Order.sourceControl
+        ]
+        XCTAssertEqual(strip, strip.sorted())
+        XCTAssertEqual(Set(strip).count, strip.count)
+    }
+
+    func testNoModuleTabsWhileNothingIsToShow() {
+        XCTAssertTrue(makeWorkspace().languageModuleBottomTabs().isEmpty)
+    }
+
+    func testTheHTTPTabAppearsForAnHTTPFile() {
+        let workspace = makeWorkspace()
+        workspace.statusLanguage = "http"
+        let tabs = workspace.languageModuleBottomTabs()
+        XCTAssertEqual(tabs.map(\.tab), [.http])
+        XCTAssertEqual(tabs.first?.order, IDEBottomPanelTab.Order.http)
+        _ = tabs.first?.item(workspace)
+        _ = tabs.first?.content(workspace)
+    }
+
+    func testTheHierarchyTabsComeFromTheJavaModuleOnceAskedFor() {
+        let workspace = makeWorkspace()
+        workspace.typeHierarchy.show(message: "No type at the caret")
+        workspace.callHierarchy.show(message: "No method at the caret")
+        let tabs = IDEJavaModule().bottomTabs(for: workspace)
+        XCTAssertEqual(tabs.map(\.tab), [.typeHierarchy, .callHierarchy])
+        XCTAssertEqual(
+            workspace.languageModuleBottomTabs().map(\.tab), [.typeHierarchy, .callHierarchy],
+            "HTTP adds nothing here"
+        )
+        workspace.typeHierarchy.clear()
+        XCTAssertEqual(IDEJavaModule().bottomTabs(for: workspace).map(\.tab), [.callHierarchy])
+    }
+
+    // MARK: Sidebar tabs
+
+    func testTheSidebarKeepsItsFiveTabsInOrder() {
+        XCTAssertEqual(
+            IDESidebarTabs.all.map(\.tab.rawValue),
+            ["explorer", "structure", "changes", "breakpoints", "history"]
+        )
+        XCTAssertEqual(IDESidebarTabs.all.map(\.title), ["Explorer", "Structure", "Changes", "Breakpoints", "History"])
+        XCTAssertEqual(IDESidebarTab.breakpoints.systemImage, "circle.fill")
+        XCTAssertEqual(IDESidebarTabs.descriptor(for: .breakpoints)?.iconSize, 8)
+        XCTAssertEqual(IDESidebarTabs.descriptor(for: .explorer)?.shortcut, "⌘0")
+        XCTAssertEqual(IDESidebarTabs.descriptor(for: .structure)?.shortcut, "⌘7")
+        XCTAssertEqual(IDESidebarTabs.descriptor(for: .changes)?.shortcut, "⌃⌘G")
+        XCTAssertNil(IDESidebarTabs.descriptor(for: .breakpoints)?.shortcut)
+        XCTAssertEqual(IDESidebarTabs.all.map(\.order), IDESidebarTabs.all.map(\.order).sorted())
+    }
+
+    func testOnlyTheBreakpointsTabComesFromTheJavaModule() {
+        XCTAssertEqual(IDEJavaModule().sidebarTabs.map(\.tab), [.breakpoints])
+        XCTAssertTrue(IDEHTTPModule().sidebarTabs.isEmpty)
+        XCTAssertEqual(IDESidebarTabs.builtIn.map(\.tab.rawValue), ["explorer", "structure", "changes", "history"])
+    }
+
+    func testAFreshWindowOffersEveryTabButChangesWithoutARepository() {
+        let workspace = makeWorkspace()
+        XCTAssertEqual(workspace.sidebarTabs.map(\.rawValue), ["explorer", "structure", "breakpoints", "history"])
+        XCTAssertFalse(workspace.isSidebarTabAvailable(.changes))
+        XCTAssertFalse(workspace.isSidebarTabAvailable(IDESidebarTab(rawValue: "mystery")))
+        XCTAssertEqual(workspace.activeSidebarTab, .explorer)
+    }
+
+    func testSavedSessionsStillDecodeTheirSidebarTabs() throws {
+        let session = IDEWindowSession(sidebarTab: .breakpoints, closedSidebarTabs: [.history, .structure])
+        let data = try JSONEncoder().encode(session)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"breakpoints\""), "saved as the plain string it always was")
+        let decoded = try JSONDecoder().decode(IDEWindowSession.self, from: data)
+        XCTAssertEqual(decoded.sidebarTab, .breakpoints)
+        XCTAssertEqual(decoded.closedSidebarTabs, [.history, .structure])
+
+        // A tab a later build no longer ships decodes, and is simply never offered.
+        let legacy = try JSONDecoder().decode(IDEWindowSession.self, from: Data(json.replacingOccurrences(of: "\"breakpoints\"", with: "\"mystery\"").utf8))
+        XCTAssertEqual(legacy.sidebarTab?.rawValue, "mystery")
+        let workspace = makeWorkspace()
+        XCTAssertFalse(workspace.sidebarTabs.contains(IDESidebarTab(rawValue: "mystery")))
+    }
+
+    func testTheExplorerIsTheOnlyTabThatCannotBeClosed() {
+        XCTAssertFalse(IDESidebarTab.explorer.isClosable)
+        XCTAssertTrue(IDESidebarTab.breakpoints.isClosable)
+        XCTAssertTrue(IDESidebarTab.history.isClosable)
+    }
 }

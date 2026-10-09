@@ -52,8 +52,11 @@ The feature catalog lives next to the code and loads when you work there:
 
 ```bash
 swift run -c release PerfHarness enter-session synthetic --lines 20000  # Enter latency + line-handle growth
+caffeinate -u -d -i -s swift test                                      # the full suite needs a live display (see below)
 swift run AgentEval run --provider ollama --model <name> --trials 3     # agent eval: pass rate, turns, tokens (Tools/AgentEval/CLAUDE.md)
 ```
+
+**Run the full test suite with the display on.** Many tests drive AppKit views, wait a few seconds for background parses, and use animations. With the display off or the Mac idle-sleeping (a long run after you step away), parse waits time out in bulk (`MarkdownLanguageTests`, `TextViewStateParsePolicyTests`, `IncrementalHighlightConsistencyTests`…), blocked `NSAnimation` threads pile up, and the test process can hang or trap. `caffeinate -u -d -i -s swift test` turns the display on and keeps it and the system awake for the run. A failure that passes alone and appears only after the machine slept is this, not the change.
 
 Performance work is measured in Release with `PerfHarness` (`Tools/PerfHarness`); `enter-session` opens a generated Java file with Umbra's defaults (folding, minimap, method separators, Metal) and reports Enter latency by caret position and `LineManager` handle counts (through `@_spi(Benchmarks) import Penumbra`). Plan, baselines and results: `docs/EDITOR_PERF_PLAN.md`. Debug-build timings are misleading for byte-scanning code.
 

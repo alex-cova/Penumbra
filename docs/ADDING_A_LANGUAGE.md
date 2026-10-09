@@ -138,8 +138,8 @@ Everything that is UI or project state. A language adds its chrome as an `IDELan
 | Menu-bar menu | `menu(for: workspace)` returns an `IDEModuleMenu` (title and SwiftUI content built from an `IDEWorkspaceRef`) while the language applies, nil otherwise. Add one line for it in `IDEAppCommands.swift`: SwiftUI cannot build a menu bar from a list |
 | Settings page | `preferencePanes`: an `IDEPreferencesPane` with an `IDEPreferencesDomain` (id, title, SF Symbol, search terms) and the page's view. It appears between Project and Agent |
 | Tool window (stripe entry) | `toolWindows(for: workspace)`: `workspace.bottomToolWindow(.tab, …, order:)` for a built-in bottom tab, or an `IDEToolWindow` of your own; `order` places it among the others (`IDEToolWindow.Order`) |
-| Bottom panel tab content | **not open yet**: `IDEBottomPanelTab` is an enum; content is switched in `IDETerminalPanel.swift` and tabs in `IDETerminalTabsBar.swift`. Needs a new case until plan phase 4 finishes |
-| Left sidebar tab | **not open yet**: `IDESidebarTab` (enum, `Codable`, saved in sessions: a new case must not change existing raw values) |
+| Bottom-panel tab | `bottomTabs(for: workspace)` returns an `IDEBottomTabContribution` while the tab has something to show: `tab` (a new `IDEBottomPanelTab("id")`, declared as a static member in your module file), `order` among the strip items (`IDEBottomPanelTab.Order`), the strip `item` and the `content` panel. Select it with `workspace.selectedBottomTab = tab`, toggle it from the stripe with `toggleBottomToolWindow(tab)` |
+| Left sidebar tab | `sidebarTabs`: an `IDESidebarTabDescriptor` (a new `IDESidebarTab(rawValue: "id")`; the raw value is saved in sessions, so never rename it), title, symbol, `order`, availability, badge, `onShow` and `content`; it appears in the tab bar, the `+` menu and the stripe |
 | Status bar item, toolbar button | `IDEStatusBarPanel.swift`, `IDEToolbarPanel.swift` (by hand) |
 | Gutter run buttons | `IDEWorkspace+Debugger.swift` (`applyJavaGutter`); the line-marker column is reserved by `reservedLineMarkerSlots` |
 | Run and console | `IDERunSession`, `IDERunSessions`, `IDEWorkspace+Run.swift` |

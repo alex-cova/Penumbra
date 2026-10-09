@@ -22,6 +22,27 @@ struct IDEHTTPModule: IDELanguageModule {
         return [workspace.bottomToolWindow(.http, "network", "HTTP Response", nil, .blue, .trailingBottom, order: IDEToolWindow.Order.httpResponse)]
     }
 
+    func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution] {
+        guard workspace.showsHTTPTab else { return [] }
+        return [IDEBottomTabContribution(
+            tab: .http, order: IDEBottomPanelTab.Order.http,
+            item: { workspace in
+                AnyView(IDEHTTPTabItem(
+                    isSelected: workspace.isHTTPConsoleSelected,
+                    isSending: workspace.httpSupport.isSending,
+                    onSelect: { [weak workspace] in workspace?.selectHTTPConsoleTab() }
+                ))
+            },
+            content: { workspace in
+                AnyView(IDEHTTPResponseView(
+                    log: workspace.httpSupport.responseLog,
+                    fontName: workspace.preferences.fontName,
+                    fontSize: workspace.preferences.fontSize
+                ))
+            }
+        )]
+    }
+
     /// The HTTP menu exists while an `.http` file is the selected tab.
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? {
         guard workspace.statusLanguage == "http" else { return nil }
@@ -45,4 +66,9 @@ private struct IDEHTTPCommands: View {
         Button("Show Response", action: { workspace?.showHTTPResponse() })
             .disabled(workspace?.httpSupport.responseLog.lines.isEmpty ?? true)
     }
+}
+
+extension IDEBottomPanelTab {
+    /// The response of the last `.http` request.
+    static let http = IDEBottomPanelTab("http")
 }

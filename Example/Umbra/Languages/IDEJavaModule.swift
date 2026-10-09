@@ -80,10 +80,115 @@ struct IDEJavaModule: IDELanguageModule {
         return windows
     }
 
+    func bottomTabs(for workspace: IDEWorkspace) -> [IDEBottomTabContribution] {
+        typealias Order = IDEBottomPanelTab.Order
+        var tabs: [IDEBottomTabContribution] = []
+        if workspace.showsRunTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .run, order: Order.run,
+                item: { workspace in
+                    AnyView(IDERunTabItem(
+                        isSelected: workspace.isRunSelected,
+                        isRunning: workspace.runs.isAnyActive,
+                        onSelect: { [weak workspace] in workspace?.selectRunTab() }
+                    ))
+                },
+                content: { _ in AnyView(IDERunPanel()) }
+            ))
+        }
+        if workspace.showsGradleConsoleTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .gradle, order: Order.gradle,
+                item: { workspace in
+                    AnyView(IDEGradleTabItem(
+                        isSelected: workspace.isGradleConsoleSelected,
+                        isSyncing: workspace.javaSupport.isGradleBusy,
+                        isFailed: workspace.javaSupport.gradleSync.isFailed,
+                        onSelect: { [weak workspace] in workspace?.selectGradleConsoleTab() }
+                    ))
+                },
+                content: { workspace in
+                    AnyView(IDEGradleConsoleView(
+                        log: workspace.javaSupport.gradleConsole,
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize
+                    ))
+                }
+            ))
+        }
+        if workspace.showsTypeHierarchyTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .typeHierarchy, order: Order.typeHierarchy,
+                item: { workspace in
+                    AnyView(IDETypeHierarchyTabItem(
+                        title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.name)" } ?? "Hierarchy",
+                        isSelected: workspace.isTypeHierarchySelected,
+                        onSelect: { [weak workspace] in workspace?.selectTypeHierarchyTab() }
+                    ))
+                },
+                content: { _ in AnyView(IDETypeHierarchyPanel()) }
+            ))
+        }
+        if workspace.showsTestResultsTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .testResults, order: Order.testResults,
+                item: { workspace in
+                    let results = workspace.testResults
+                    let total = results.passedCount + results.failedCount + results.skippedCount
+                    return AnyView(IDETestResultsTabItem(
+                        title: results.isRunning ? "Tests · …" : "Tests · \(results.passedCount)/\(total)",
+                        isSelected: workspace.isTestResultsSelected,
+                        onSelect: { [weak workspace] in workspace?.selectTestResultsTab() }
+                    ))
+                },
+                content: { _ in AnyView(IDETestResultsPanel()) }
+            ))
+        }
+        if workspace.showsDebugTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .debug, order: Order.debug,
+                item: { workspace in
+                    AnyView(IDEDebugTabItem(
+                        isSelected: workspace.isDebugSelected,
+                        onSelect: { [weak workspace] in workspace?.selectDebugTab() }
+                    ))
+                },
+                content: { _ in AnyView(IDEDebugPanel()) }
+            ))
+        }
+        if workspace.showsCallHierarchyTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .callHierarchy, order: Order.callHierarchy,
+                item: { workspace in
+                    AnyView(IDECallHierarchyTabItem(
+                        title: workspace.callHierarchy.root.map { "Calls · \($0.name)" } ?? "Calls",
+                        isSelected: workspace.isCallHierarchySelected,
+                        onSelect: { [weak workspace] in workspace?.selectCallHierarchyTab() }
+                    ))
+                },
+                content: { _ in AnyView(IDECallHierarchyPanel()) }
+            ))
+        }
+        return tabs
+    }
+
     /// The Java menu exists for a Java file or a Gradle project, the same condition as the JDK picker.
     func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? {
         guard workspace.showsJDKPicker else { return nil }
         return IDEModuleMenu(title: "Java") { ref in AnyView(IDEJavaCommands(ref: ref)) }
+    }
+
+    var sidebarTabs: [IDESidebarTabDescriptor] {
+        [
+            IDESidebarTabDescriptor(
+                tab: .breakpoints, title: "Breakpoints", systemImage: "circle.fill",
+                order: IDESidebarTabs.Order.breakpoints,
+                // The breakpoint glyph is a dot: at the size of the other icons it reads as a blob.
+                iconSize: 8, iconColor: IDEAppearance.ColorToken.error, tint: .red,
+                badge: { $0.breakpoints.count },
+                content: { _ in AnyView(IDEBreakpointsPanel()) }
+            )
+        ]
     }
 
     var preferencePanes: [IDEPreferencesPane] {
@@ -162,6 +267,24 @@ private struct IDEJavaCommands: View {
         Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
             .disabled(workspace?.javaSupport.gradleConsole.lines.isEmpty ?? true)
     }
+}
+
+extension IDESidebarTab {
+    static let breakpoints = IDESidebarTab(rawValue: "breakpoints")
+}
+
+extension IDEBottomPanelTab {
+    /// The consoles of programs started with Run.
+    static let run = IDEBottomPanelTab("run")
+    static let gradle = IDEBottomPanelTab("gradle")
+    /// The supertype/subtype tree of the type last asked for with ⌃H.
+    static let typeHierarchy = IDEBottomPanelTab("typeHierarchy")
+    /// The results of the last test run.
+    static let testResults = IDEBottomPanelTab("testResults")
+    /// Debugger call stack and variables.
+    static let debug = IDEBottomPanelTab("debug")
+    /// Callers and callees of the method last asked for.
+    static let callHierarchy = IDEBottomPanelTab("callHierarchy")
 }
 
 extension IDEPreferencesDomain {

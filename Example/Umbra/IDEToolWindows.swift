@@ -94,16 +94,10 @@ extension IDEWorkspace {
 
     /// The sidebar's tabs are tool windows too: open while the sidebar is showing that tab.
     private func sidebarToolWindow(_ tab: IDESidebarTab, order: Int) -> IDEToolWindow {
-        let details: (shortcut: String?, tint: PaletteIcon.Tint) = switch tab {
-        case .explorer: ("⌘0", .blue)
-        case .structure: ("⌘7", .secondary)
-        case .changes: ("⌃⌘G", .green)
-        case .breakpoints: (nil, .red)
-        case .history: (nil, .orange)
-        }
+        let descriptor = IDESidebarTabs.descriptor(for: tab)
         return IDEToolWindow(
             id: tab == .explorer ? "explorer" : tab.rawValue, systemImage: tab.systemImage, title: tab.title,
-            shortcut: details.shortcut, tint: details.tint, placement: .leadingTop,
+            shortcut: descriptor?.shortcut, tint: descriptor?.tint ?? .secondary, placement: .leadingTop,
             isOpen: showsSidebar && activeSidebarTab == tab,
             toggle: { [weak self] in self?.toggleSidebarTab(tab) },
             order: order

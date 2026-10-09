@@ -458,47 +458,11 @@ struct IDETerminalPanel: View {
                     .allowsHitTesting(isSelected)
                 }
 
-                if workspace.showsRunTab {
-                    IDERunPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isRunSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isRunSelected)
-                }
-
-                if workspace.showsGradleConsoleTab {
-                    IDEGradleConsoleView(
-                        log: workspace.javaSupport.gradleConsole,
-                        fontName: workspace.preferences.fontName,
-                        fontSize: workspace.preferences.fontSize
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(workspace.isGradleConsoleSelected ? 1 : 0)
-                    .allowsHitTesting(workspace.isGradleConsoleSelected)
-                }
-
-                if workspace.showsHTTPTab {
-                    IDEHTTPResponseView(
-                        log: workspace.httpSupport.responseLog,
-                        fontName: workspace.preferences.fontName,
-                        fontSize: workspace.preferences.fontSize
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(workspace.isHTTPConsoleSelected ? 1 : 0)
-                    .allowsHitTesting(workspace.isHTTPConsoleSelected)
-                }
-
                 if workspace.showsProblemsTab {
                     IDEProblemsPanel()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isProblemsSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isProblemsSelected)
-                }
-
-                if workspace.showsTypeHierarchyTab {
-                    IDETypeHierarchyPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isTypeHierarchySelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isTypeHierarchySelected)
                 }
 
                 if workspace.showsUsagesTab {
@@ -508,32 +472,20 @@ struct IDETerminalPanel: View {
                         .allowsHitTesting(workspace.isUsagesSelected)
                 }
 
-                if workspace.showsTestResultsTab {
-                    IDETestResultsPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isTestResultsSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isTestResultsSelected)
-                }
-
-                if workspace.showsDebugTab {
-                    IDEDebugPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isDebugSelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isDebugSelected)
-                }
-
-                if workspace.showsCallHierarchyTab {
-                    IDECallHierarchyPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(workspace.isCallHierarchySelected ? 1 : 0)
-                        .allowsHitTesting(workspace.isCallHierarchySelected)
-                }
-
                 if workspace.showsSourceControlTab {
                     IDESourceControlPanel(gitStatus: workspace.gitStatus)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isSourceControlSelected ? 1 : 0)
                         .allowsHitTesting(workspace.isSourceControlSelected)
+                }
+
+                // The language modules' tabs (Run, Gradle, HTTP, hierarchies, tests, debugger).
+                ForEach(workspace.languageModuleBottomTabs(), id: \.tab) { contribution in
+                    let isSelected = workspace.selectedBottomTab == contribution.tab
+                    contribution.content(workspace)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(isSelected ? 1 : 0)
+                        .allowsHitTesting(isSelected)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

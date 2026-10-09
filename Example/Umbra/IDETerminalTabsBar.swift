@@ -15,83 +15,52 @@ struct IDETerminalTabsBar: View {
                         onClose: { workspace.closeTerminalTab(tab.id) }
                     )
                 }
-                if workspace.showsRunTab {
-                    IDERunTabItem(
-                        isSelected: workspace.isRunSelected,
-                        isRunning: workspace.runs.isAnyActive,
-                        onSelect: { workspace.selectRunTab() }
-                    )
-                }
-                if workspace.showsGradleConsoleTab {
-                    IDEGradleTabItem(
-                        isSelected: workspace.isGradleConsoleSelected,
-                        isSyncing: workspace.javaSupport.isGradleBusy,
-                        isFailed: workspace.javaSupport.gradleSync.isFailed,
-                        onSelect: { workspace.selectGradleConsoleTab() }
-                    )
-                }
-                if workspace.showsHTTPTab {
-                    IDEHTTPTabItem(
-                        isSelected: workspace.isHTTPConsoleSelected,
-                        isSending: workspace.httpSupport.isSending,
-                        onSelect: { workspace.selectHTTPConsoleTab() }
-                    )
-                }
-                if workspace.showsProblemsTab {
-                    IDEProblemsTabItem(
-                        isSelected: workspace.isProblemsSelected,
-                        errorCount: workspace.problems.errorCount,
-                        warningCount: workspace.problems.warningCount,
-                        onSelect: { workspace.selectProblemsTab() }
-                    )
-                }
-                if workspace.showsTypeHierarchyTab {
-                    IDETypeHierarchyTabItem(
-                        title: workspace.typeHierarchy.root.map { "Hierarchy · \($0.name)" } ?? "Hierarchy",
-                        isSelected: workspace.isTypeHierarchySelected,
-                        onSelect: { workspace.selectTypeHierarchyTab() }
-                    )
-                }
-                if workspace.showsUsagesTab {
-                    IDEUsagesTabItem(
-                        title: workspace.usages.isSearching ? "Usages · …" : "Usages · \(workspace.usages.count)",
-                        isSelected: workspace.isUsagesSelected,
-                        onSelect: { workspace.selectUsagesTab() }
-                    )
-                }
-                if workspace.showsTestResultsTab {
-                    IDETestResultsTabItem(
-                        title: workspace.testResults.isRunning
-                            ? "Tests · …"
-                            : "Tests · \(workspace.testResults.passedCount)/\(workspace.testResults.passedCount + workspace.testResults.failedCount + workspace.testResults.skippedCount)",
-                        isSelected: workspace.isTestResultsSelected,
-                        onSelect: { workspace.selectTestResultsTab() }
-                    )
-                }
-                if workspace.showsDebugTab {
-                    IDEDebugTabItem(
-                        isSelected: workspace.isDebugSelected,
-                        onSelect: { workspace.selectDebugTab() }
-                    )
-                }
-                if workspace.showsCallHierarchyTab {
-                    IDECallHierarchyTabItem(
-                        title: workspace.callHierarchy.root.map { "Calls · \($0.name)" } ?? "Calls",
-                        isSelected: workspace.isCallHierarchySelected,
-                        onSelect: { workspace.selectCallHierarchyTab() }
-                    )
-                }
-                if workspace.showsSourceControlTab {
-                    IDESourceControlTabItem(
-                        isSelected: workspace.isSourceControlSelected,
-                        onSelect: { workspace.selectSourceControlTab() }
-                    )
+                ForEach(stripItems) { item in
+                    item.view
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
         }
         .frame(height: IDEAppearance.Spacing.tabHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private struct StripItem: Identifiable {
+        let id: String
+        let order: Int
+        let view: AnyView
+    }
+
+    /// The items after the shells: the built-in Problems, Usages and History tabs and every language
+    /// module's, in ``IDEBottomPanelTab/Order``.
+    private var stripItems: [StripItem] {
+        typealias Order = IDEBottomPanelTab.Order
+        var items: [StripItem] = []
+        if workspace.showsProblemsTab {
+            items.append(StripItem(id: "problems", order: Order.problems, view: AnyView(IDEProblemsTabItem(
+                isSelected: workspace.isProblemsSelected,
+                errorCount: workspace.problems.errorCount,
+                warningCount: workspace.problems.warningCount,
+                onSelect: { workspace.selectProblemsTab() }
+            ))))
+        }
+        if workspace.showsUsagesTab {
+            items.append(StripItem(id: "usages", order: Order.usages, view: AnyView(IDEUsagesTabItem(
+                title: workspace.usages.isSearching ? "Usages · …" : "Usages · \(workspace.usages.count)",
+                isSelected: workspace.isUsagesSelected,
+                onSelect: { workspace.selectUsagesTab() }
+            ))))
+        }
+        if workspace.showsSourceControlTab {
+            items.append(StripItem(id: "sourceControl", order: Order.sourceControl, view: AnyView(IDESourceControlTabItem(
+                isSelected: workspace.isSourceControlSelected,
+                onSelect: { workspace.selectSourceControlTab() }
+            ))))
+        }
+        for contribution in workspace.languageModuleBottomTabs() {
+            items.append(StripItem(id: contribution.tab.id, order: contribution.order, view: contribution.item(workspace)))
+        }
+        return items.sorted { $0.order < $1.order }
     }
 }
 
@@ -116,7 +85,7 @@ private struct IDETerminalTabItem: View {
 
 /// The bottom panel's read-only "Gradle" console tab -- always last, no close button (it comes and
 /// goes with `IDEWorkspace.showsGradleConsoleTab`, not by user action).
-private struct IDEGradleTabItem: View {
+struct IDEGradleTabItem: View {
     let isSelected: Bool
     let isSyncing: Bool
     let isFailed: Bool
@@ -183,7 +152,7 @@ private struct IDEGradleTabItem: View {
     }
 }
 
-private struct IDEHTTPTabItem: View {
+struct IDEHTTPTabItem: View {
     let isSelected: Bool
     let isSending: Bool
     let onSelect: () -> Void

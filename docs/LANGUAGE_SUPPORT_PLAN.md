@@ -4,7 +4,7 @@ How a contributor adds a language to Umbra, from syntax colors up to a Java-clas
 
 ## Status
 
-**Phases 0 to 3 are implemented, and phase 4 in part** (see their sections for what shipped and how it differs from the sketch). The rest of phase 4 and phases 5 and 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
+**Phases 0 to 4 are implemented** (see their sections for what shipped and how it differs from the sketch; phase 4 lists what it left out). Phases 5 and 6 are a proposal. The measurements in Motivation were taken on branch `java-run-configurations` (October 2026), before phase 0.
 
 ## Motivation
 
@@ -153,10 +153,10 @@ Wraps a `LanguageService` and contributes UI. Every member has a default, so a m
 
 Reuse what exists: `EditorCommand` (`Sources/Penumbra/Workbench/CommandPalette/EditorCommand.swift`) and `IDEToolWindow` (`Example/Umbra/IDEToolWindows.swift`) are already plain structs.
 
-**Opening the closed enums.**
-- `IDEBottomPanelTab` and `IDEPreferencesDomain` gain `.contributed(id)`.
-- `IDESidebarTab` is `Codable` and saved in `IDEWindowSession`. It becomes an id-backed struct with a custom `Codable` that decodes the current raw strings, so existing sessions keep restoring.
-- `IDEPreferencesDomain.searchTerms` (which includes `JavaInspectionRule.allCases.map(\.title)`) becomes a pane property.
+**Opening the closed enums** (as built; see phase 4).
+- `IDEBottomPanelTab` is an id value and `IDEPreferencesDomain` a value type with static built-ins, not `.contributed(id)` cases: a module declares its tabs and pages as static members and contributes descriptors.
+- `IDESidebarTab` is `Codable` and saved in `IDEWindowSession`. It is a `RawRepresentable` string, which `Codable` encodes as the plain string, so existing sessions keep restoring with no custom coding.
+- `IDEPreferencesDomain.searchTerms` (which includes `JavaInspectionRule.allCases.map(\.title)`) is a property of the page, declared by the Java module.
 
 **Menu bar limit.** SwiftUI `Commands` cannot be built from a runtime list of menus. `IDEAppCommands` keeps one menu per built-in module and fills its items from the module; an externally registered module gets palette commands and tool windows, not a top-level menu. Stated as a known limit.
 
@@ -226,7 +226,7 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
   - No status, progress or logging closures: nothing uses them yet. `IDEJavaSupport` still owns its status message and Gradle trust prompt (`requestTrust`), which are project concerns for phase 5.
   - `hasConsent` is in the sketch's place of a single `requestConsent`, because the decompiler gate treats "already agreed" differently from "ask now": only a manual navigation may ask, but a hover may decompile once the user has agreed.
 
-### Phase 4: modules and open enums (partly implemented)
+### Phase 4: modules and open enums (implemented)
 
 **Implemented: the contribution points that are data or closures, with HTTP and Java as modules.**
 - **`IDELanguageModule`** (`Example/Umbra/Languages/IDELanguageModule.swift`): a stateless value with `commands(for:)`, `toolWindows(for:)`, `menu(for:)` and `preferencePanes`, all defaulted. It takes the workspace as an argument and never keeps it, so a module cannot keep a window alive; per-window state (`IDEJavaSupport`, `IDEHTTPSupport`) stays on the workspace. `IDELanguageModules.all` lists the shipped ones (`IDEJavaModule`, `IDEHTTPModule`).
@@ -236,12 +236,17 @@ Each phase lists files, what "done" means, and tests. All keep existing suites g
 - **Tool windows:** `IDEToolWindow` has an `order` (constants in `IDEToolWindow.Order`, spaced so a module can slot between two). The Debug, Test Results, Hierarchy, Call Hierarchy, Gradle and HTTP Response entries come from their modules and the list is merged by `order`, which reproduces the old sequence.
 - **Tests:** `IDELanguageModuleTests` (the module list, each module's command ids, titles and groups, each registered once, Java's group before Git, menu visibility rules, the settings order and search, the order constants).
 
-**Not done, and still the plan:**
-- `IDEBottomPanelTab` and `IDESidebarTab` are still closed enums. Opening them means the bottom panel's content switch (`IDETerminalPanel`), tab strip (`IDETerminalTabsBar`) and its per-tab `is…Selected` flags, and `IDESidebarTab`'s saved raw values, change together; the module stripe entries still toggle a built-in tab. This is the next piece.
-- Status-bar items, toolbar buttons, gutter actions, palette sources and agent tools are not module contributions yet.
+- **Bottom-panel tabs are open.** `IDEBottomPanelTab` is a value (an id; `terminal`, `sourceControl`, `problems` and `usages` stay built in, and `"\(tab)"` still prints the old case names). A module returns `IDEBottomTabContribution`s from `bottomTabs(for:)`: the tab, its `order` in the strip (`IDEBottomPanelTab.Order`), the strip item and the panel. `IDETerminalTabsBar` merges its built-in items with the modules' by `order`, and `IDETerminalPanel` mounts each module panel next to the built-in ones, hidden rather than removed while another tab is selected, as before. Run, Gradle, Type Hierarchy, Test Results, Debug and Call Hierarchy are the Java module's; HTTP Response is the HTTP module's.
+- **Sidebar tabs are open.** `IDESidebarTab` is a `RawRepresentable` string, so saved sessions decode exactly as before (an id no build ships decodes and is never offered). Everything else about a tab is its `IDESidebarTabDescriptor`: title, symbol, `order`, shortcut and tint for the stripe, availability, badge, an `onShow` action and its content. Explorer, Structure, Changes and History are `IDESidebarTabs.builtIn`; Breakpoints is the Java module's (`sidebarTabs`). The sidebar, tab bar, `+` menu, stripe and `showSidebarTab` read descriptors instead of switching on cases.
+- **Tests:** `IDELanguageModuleTests` also covers the bottom tab names and strip order, module tabs appearing and disappearing with their content, the sidebar's five tabs in order with their shortcuts, availability without a repository, that a saved session round-trips and a vanished tab id is ignored, and that only Explorer cannot be closed.
+
+**Still not done:**
+- Status-bar items, toolbar buttons, gutter actions, palette sources and agent tools are not module contributions yet; each is wired by hand where it was.
 - Markdown, JSON and CSV (previews, text tools) are not modules; their per-language switches in `IDEAppCommands` and the toolbar remain.
-- Java's behavior (Gradle, run, debug, diagrams, structure sidebar content) still lives in `IDEWorkspace` extensions, called from the module's closures. Moving it is phase 5.
-- **Differences:** the HTTP palette group is now registered with Java's rather than last, so with an empty query Find Action lists HTTP before Edit, Git, Run and View. `IDEToolWindow` gained a stored `order`, so any new construction site must set it.
+- Java's behavior (Gradle, run, debug, diagrams, the content of the Structure sidebar) still lives in `IDEWorkspace` extensions, called from the module's closures. Moving it is phase 5.
+- The per-tab `is…Selected` flags on `IDEWorkspace` (`isTypeHierarchySelected`, `isDebugSelected`, …) and the `select…Tab()` methods remain; they are views over `selectedBottomTab`. A new module's tab uses `selectedBottomTab = tab` and `toggleBottomToolWindow(tab)` directly.
+- No test registers a third module end to end: `IDELanguageModules.all` is a static list, so openness is shown by Java and HTTP using only the public contribution types.
+- **Differences:** the HTTP palette group is now registered with Java's rather than last, so with an empty query Find Action lists HTTP before Edit, Git, Run and View. `IDEToolWindow` has a stored `order`, so any new construction site must set it.
 
 ### Phase 5: project systems, run and test
 - `IDEProjectSystem` and `IDERunProvider`; split `IDEJavaSupport` into the Java service, a Gradle project system and `IDEJDKSelection`.
