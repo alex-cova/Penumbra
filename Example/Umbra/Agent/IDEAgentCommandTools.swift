@@ -206,6 +206,45 @@ struct IDEGradleTool: AgentTool {
     }
 }
 
+/// Runs one task the active project system lists (an npm script, a SwiftPM command). Gradle stays
+/// on the `gradle` tool.
+struct IDEProjectTaskTool: AgentTool {
+    let host: IDEAgentHostBox
+
+    var risk: ToolRisk { .command }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "project_task",
+            description: """
+            Run a task the open project lists, such as an npm script or a SwiftPM command. \
+            The user approves each run. For a Gradle build use gradle, not this tool.
+            """,
+            parameters: [
+                ToolParameter("task", .string, "The task path, exactly as the project lists it."),
+                ToolParameter("reason", .string, "One sentence on why, shown to the user."),
+            ])
+    }
+
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let task = try? arguments.string("task"), !task.isEmpty else { return .none }
+        return .command("project_task \(task)")
+    }
+
+    func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
+        guard let task = try? arguments.string("task"), !task.isEmpty else { return nil }
+        return ApprovalRequest(
+            title: "Run project task", command: "project_task \(task)",
+            workingDirectory: context.workspace.rootPath, reason: try? arguments.optionalString("reason"),
+            warnings: [], notes: [])
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let task = try arguments.string("task")
+        guard !task.isEmpty else { throw ToolError("Give a task.") }
+        return await host.runProjectTask(task)
+    }
+}
+
 struct IDERunTestsTool: AgentTool {
     let support: IDEAgentCommandSupport
 

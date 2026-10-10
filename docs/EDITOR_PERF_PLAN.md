@@ -559,6 +559,41 @@ sequence diagrams); hosted 800×900 window, Metal on. Medians, M1 Pro, Release.
 Remaining: the cold parse (Foundation's markdown parser, ~140 ms here) and the first render of
 each diagram (~20 ms per large diagram). The largest scroll step (38 ms) is a one-off first tile.
 
+## Language index and completion (2026-10-10, Release)
+
+`swift run -c release PerfHarness <command> synthetic`. One machine, one run. These are the phase-0
+baselines for `docs/LANGUAGE_PARITY_PLAN.md`; later phases should stay within the noise of a
+repeat run, not a number invented ahead of the measurement.
+
+| Command | Result |
+| --- | --- |
+| `swift-index synthetic --files 1000` | cold `setRoot` 42 ms, 1000 files, resident 23.7 MB (+9.9 MB) |
+| `ts-index synthetic --files 1000` | cold `setRoot` 44 ms, 1000 files, resident 21.4 MB (+7.6 MB) |
+| `swift-completion synthetic --files 200 --lines 5000` | `provide` median 16 ms, p95 16 ms; one-character reparse of 5000 lines 2.8 ms |
+| `ts-completion synthetic --files 200 --lines 5000` | `provide` median 4.94 s, p95 4.95 s; one-character reparse of 5000 lines 1.8 ms |
+
+The TypeScript completion row is the native member completion on a 5000-line file (`box.`). The
+reparse is cheap; the completion itself is not. That number is the baseline the semantic tier and
+any native change are measured against.
+
+## enter-session after the language-parity work (2026-10-10, Release)
+
+`caffeinate -u -d -i -s swift run -c release PerfHarness enter-session synthetic --lines N`. One run
+each, metal on. The parent is `20fad79` (the commit the uncommitted work sits on). Mid-file Enter
+stays on the ~12 ms line already recorded above. This run is not a gate.
+
+| | 20k parent | 20k this tree | 120k parent | 120k this tree |
+| --- | ---: | ---: | ---: | ---: |
+| Handles after open | 64 | 64 | 64 | 64 |
+| Enter, top | 0.91 ms | 0.89 ms | 1.00 ms | 0.89 ms |
+| Enter, middle | 11.64 ms | 11.66 ms | 11.64 ms | 11.68 ms |
+| Enter, middle, after the walk | 11.63 ms | 11.71 ms | 11.59 ms | 11.75 ms |
+| Scroll page | 3.11 ms | 3.10 ms | 3.14 ms | 3.15 ms |
+| Select all occurrences | 27.6 ms | 36.4 ms | 554 ms | 550 ms |
+
+Select-all at 20k moved more than Enter did (27.6 ms to 36.4 ms). One run, so that is noise until
+a repeat says otherwise. Enter, scroll, and the handle count did not move.
+
 ## Next
 
 0. **Phase 1, Enter indent scan.** With the harness fixed, mid-file Enter is ~12 ms in Release

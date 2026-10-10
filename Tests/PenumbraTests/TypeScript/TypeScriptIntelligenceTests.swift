@@ -1,6 +1,11 @@
 import EditorIntelligence
 import JavaIntelligence
+import Penumbra
+import PenumbraLanguages
+import TypeScriptIntelligence
 import XCTest
+@testable import Penumbra
+@testable import TypeScriptIntelligence
 @testable import Umbra
 
 /// Syntactic TypeScript intelligence: the tree-sitter document layer, the project index, and the
@@ -179,6 +184,36 @@ final class TypeScriptIntelligenceTests: XCTestCase {
         XCTAssertNil(plan.blockingError)
         XCTAssertEqual(plan.entries.count, 2)
         XCTAssertTrue(plan.entries.allSatisfy { $0.oldText == "value" && $0.newText == "other" })
+    }
+
+    func testTSXGrammarReadsJSX() {
+        let source = "const view = <div className=\"ok\" />;"
+        let tsx = TypeScriptAnalysis.parse(source, fileURL: URL(fileURLWithPath: "/tmp/View.tsx"))
+        let jsx = TypeScriptAnalysis.parse(source, fileURL: URL(fileURLWithPath: "/tmp/View.jsx"))
+        let plain = TypeScriptAnalysis.parse(source, fileURL: URL(fileURLWithPath: "/tmp/View.ts"))
+        XCTAssertTrue(tsx?.tree.rootNode.sExpression.contains("jsx") == true, tsx?.tree.rootNode.sExpression ?? "")
+        XCTAssertTrue(jsx?.tree.rootNode.sExpression.contains("jsx") == true)
+        XCTAssertFalse(plain?.tree.rootNode.sExpression.contains("jsx") == true)
+    }
+
+    func testTSXAndJSXFilesHighlightWithTheTSXGrammar() throws {
+        let tsxURL = URL(fileURLWithPath: "/tmp/View.tsx")
+        let jsxURL = URL(fileURLWithPath: "/tmp/View.jsx")
+        let tsURL = URL(fileURLWithPath: "/tmp/View.ts")
+        let tsx = IDELanguageSupport.language(forIdentifier: "typescript", fileURL: tsxURL)
+        let jsx = IDELanguageSupport.language(forIdentifier: "javascript", fileURL: jsxURL)
+        let typescript = IDELanguageSupport.language(forIdentifier: "typescript", fileURL: tsURL)
+        let highlighting = BundledLanguages.tsxHighlighting()
+        XCTAssertEqual(tsx?.languagePointer, highlighting?.languagePointer)
+        XCTAssertEqual(jsx?.languagePointer, highlighting?.languagePointer)
+        XCTAssertNotEqual(typescript?.languagePointer, highlighting?.languagePointer)
+        XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: "tsx"), "typescript")
+        XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: "jsx"), "javascript")
+        XCTAssertNil(BundledLanguages.language(forIdentifier: "tsx"))
+
+        let query = try XCTUnwrap(highlighting?.highlightsQuery?.string)
+        let pointer = try XCTUnwrap(highlighting?.languagePointer)
+        XCTAssertNoThrow(try TreeSitterQuery(source: query, language: pointer))
     }
 
     func testSyntaxErrorOnABrokenFunctionAndNoneOnAConst() async throws {

@@ -22,13 +22,17 @@ let package = Package(
         .library(name: "PenumbraGraphQLLanguage", targets: ["PenumbraGraphQLLanguage"]),
         .library(name: "PenumbraMarkdownLanguage", targets: ["PenumbraMarkdownLanguage"]),
         .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"]),
-        .library(name: "JavaIntelligence", targets: ["JavaIntelligence"])
+        .library(name: "LanguageSyntax", targets: ["LanguageSyntax"]),
+        .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
+        .library(name: "SwiftIntelligence", targets: ["SwiftIntelligence"]),
+        .library(name: "TypeScriptIntelligence", targets: ["TypeScriptIntelligence"])
     ],
     dependencies: [
         .package(path: "Packages/AgentKit"),
         .package(path: "Packages/AgentKitMLX"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
+        .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
         .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
         .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
@@ -86,7 +90,8 @@ let package = Package(
             dependencies: [
                 "EditorIntelligence",
                 .product(name: "LanguageClient", package: "LanguageClient"),
-                .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
+                .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol"),
+                .product(name: "JSONRPC", package: "JSONRPC")
             ],
             swiftSettings: swift6
         ),
@@ -107,9 +112,18 @@ let package = Package(
         // EditorIntelligence and the vendored tree-sitter-java grammar. See
         // Sources/JavaIntelligence/README.md for the architecture.
         .target(
+            name: "LanguageSyntax",
+            dependencies: [
+                "EditorIntelligence",
+                "TreeSitter"
+            ],
+            swiftSettings: swift6
+        ),
+        .target(
             name: "JavaIntelligence",
             dependencies: [
                 "EditorIntelligence",
+                "LanguageSyntax",
                 "TreeSitter",
                 "TreeSitterJava",
                 .product(name: "FernflowerKit", package: "sunflower"),
@@ -118,10 +132,40 @@ let package = Package(
             exclude: ["CLAUDE.md"],
             swiftSettings: swift6
         ),
+        // Syntactic Swift and TypeScript engines. They still parse through JavaIntelligence's
+        // syntax types until LanguageSyntax exists (docs/LANGUAGE_PARITY_PLAN.md, phase 1).
+        // Umbra-only wiring (support objects, SwiftPM, the palette) stays in the app target.
+        .target(
+            name: "SwiftIntelligence",
+            dependencies: [
+                "EditorIntelligence",
+                "LanguageSyntax",
+                "TreeSitterSwift"
+            ],
+            swiftSettings: swift6
+        ),
+        .target(
+            name: "TypeScriptIntelligence",
+            dependencies: [
+                "EditorIntelligence",
+                "LanguageSyntax",
+                "TreeSitterTypeScript"
+            ],
+            swiftSettings: swift6
+        ),
         .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
-            dependencies: ["Penumbra", "EditorIntelligence", "JavaIntelligence", "PenumbraMarkdownLanguage", "PenumbraLanguages"],
+            dependencies: [
+                "Penumbra",
+                "EditorIntelligence",
+                "JavaIntelligence",
+                "SwiftIntelligence",
+                "TypeScriptIntelligence",
+                "LanguageSyntax",
+                "PenumbraMarkdownLanguage",
+                "PenumbraLanguages"
+            ],
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),
@@ -159,6 +203,9 @@ let package = Package(
                 "PenumbraLanguages",
                 "PenumbraMarkdownLanguage",
                 "JavaIntelligence",
+                "SwiftIntelligence",
+                "TypeScriptIntelligence",
+                "EditorIntelligenceLSP",
                 "TreeSitter",
                 "TreeSitterHTTP",
                 "TreeSitterTypeScript",
@@ -404,12 +451,14 @@ let package = Package(
             "PenumbraLanguages",
             "PenumbraBeautifulMermaid",
             "JavaIntelligence",
+            "SwiftIntelligence",
+            "TypeScriptIntelligence",
             "Umbra",
             "GitIntelligence",
             .product(name: "AgentKit", package: "AgentKit"),
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus")], swiftSettings: swift6)
     ]
 )

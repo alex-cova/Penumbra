@@ -1,5 +1,7 @@
 import Foundation
+import SwiftIntelligence
 import XCTest
+@testable import SwiftIntelligence
 @testable import Umbra
 
 final class SwiftModelTests: XCTestCase {

@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import SwiftIntelligence
 
 /// Swift indexing and providers for one window. A project or file change starts a task and
 /// returns; a keystroke never waits on the index and never walks the project.
@@ -45,6 +46,7 @@ final class IDESwiftSupport {
                 diagnostics: [diagnostics],
                 navigation: [navigation],
                 signatureHelp: signatureHelp,
+                codeActions: SwiftCodeActionProvider(),
                 rename: rename,
                 codeGeneration: codeGeneration,
                 breadcrumbs: structure,

@@ -107,6 +107,21 @@ public protocol LanguageService: Sendable {
     var providers: LanguageProviders { get }
     /// The generic features switched off for ``languageIdentifiers``.
     var policy: LanguagePolicy { get }
+    /// Syntactic services are the fallback. A semantic service is asked first while it is ready.
+    var tier: LanguageServiceTier { get }
+
+    /// `nil` means "derive from ``tier``".
+    func fidelity(of feature: LanguageFeature) -> FeatureFidelity?
+    /// Features this service will not answer yet. Empty means ready. A property, not a method:
+    /// the registry lives in this module, and a method with a default implementation is not
+    /// dispatched to the conforming type from here.
+    var unavailableFeatures: Set<LanguageFeature> { get }
+    /// One request the conformance test cancels. A property for the same reason as
+    /// ``unavailableFeatures``: a defaulted method would not reach an override. The default
+    /// returns `false` as soon as the task is cancelled, and no result before that.
+    var cancellableRequest: @Sendable () async -> Bool { get }
+    /// Read on every request, so this must not await. The default is ready.
+    func isReady(for feature: LanguageFeature) -> Bool
 
     /// Called once when the editor window starts, before any request. Take what the service needs
     /// from `environment` (open buffers, the indent unit, consent). The default does nothing.
@@ -124,17 +139,96 @@ public protocol LanguageService: Sendable {
     /// the host's watcher. Same rules as ``projectDidChange(root:)``. The default does nothing.
     @MainActor func filesDidChange(_ urls: [URL])
 
+    /// The host calls this after a save. A semantic service refreshes pushed diagnostics here.
+    @MainActor func documentsDidSave(_ urls: [URL])
+
     /// Called when the window closes: drop everything taken from the environment. The default does
     /// nothing.
     func stop() async
 }
 
+/// How complete a service's answers are. A syntactic service is always available. A semantic one
+/// answers only while ``LanguageService/isReady(for:)`` is true; the registry falls through to the
+/// lower tier until then.
+public enum LanguageServiceTier: Int, Comparable, Sendable {
+    case syntactic = 1
+    case semantic = 2
+
+    public static func < (lhs: LanguageServiceTier, rhs: LanguageServiceTier) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+/// A feature the registry can route. The set is the matrix in `docs/LANGUAGE_PARITY_PLAN.md`.
+public enum LanguageFeature: String, CaseIterable, Sendable {
+    case completion, hover, signatureHelp, definition, implementation, typeDefinition, references
+    case superMethod, rename, refactoring, codeActions, formatting, diagnostics, semanticTokens
+    case inlayHints, codeVision, structure, breadcrumbs, lineMarkers, typeHierarchy, callHierarchy
+    case codeGeneration
+}
+
+/// How accurate a feature's answer is. `nil` from ``LanguageService/fidelity(of:)`` means the
+/// registry derives it from the service's tier.
+public enum FeatureFidelity: Int, Comparable, Sendable {
+    case syntactic, semantic, compiler
+
+    public static func < (lhs: FeatureFidelity, rhs: FeatureFidelity) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 public extension LanguageService {
     var policy: LanguagePolicy { .none }
+    var tier: LanguageServiceTier { .syntactic }
+
+    /// `nil` means "derive from ``tier``". A service that has no provider for `feature` is absent
+    /// from the capability report whether or not this returns a value.
+    func fidelity(of feature: LanguageFeature) -> FeatureFidelity? { nil }
+
+    var unavailableFeatures: Set<LanguageFeature> { [] }
+
+    var cancellableRequest: @Sendable () async -> Bool {
+        {
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            return false
+        }
+    }
+
+    /// Read on every request, so this must not await. The default follows ``unavailableFeatures``.
+    func isReady(for feature: LanguageFeature) -> Bool { !unavailableFeatures.contains(feature) }
+
     func start(environment: LanguageEnvironment) async {}
     @MainActor func projectDidChange(root: URL?) {}
     @MainActor func filesDidChange(_ urls: [URL]) {}
+
+    /// The host calls this after a save, on the main actor. A semantic service refreshes pushed
+    /// diagnostics here. The default does nothing.
+    @MainActor func documentsDidSave(_ urls: [URL]) {}
+
     func stop() async {}
+}
+
+/// Who answers one feature for one language, and at what fidelity.
+public struct LanguageFeatureOwner: Sendable, Equatable {
+    public var service: String
+    public var fidelity: FeatureFidelity
+
+    public init(service: String, fidelity: FeatureFidelity) {
+        self.service = service
+        self.fidelity = fidelity
+    }
+}
+
+/// The features a language can answer right now, one owner each. Diagnostics are the exception:
+/// every ready tier contributes, and this report names the highest.
+public struct LanguageCapabilityReport: Sendable, Equatable {
+    public var features: [LanguageFeature: LanguageFeatureOwner]
+
+    public init(features: [LanguageFeature: LanguageFeatureOwner] = [:]) {
+        self.features = features
+    }
 }
 
 /// A ``LanguageService`` that is just its values: for a service whose providers already exist (an app

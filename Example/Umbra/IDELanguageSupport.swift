@@ -1,3 +1,4 @@
+import Foundation
 import Penumbra
 import PenumbraLanguages
 
@@ -35,15 +36,25 @@ enum IDELanguageSupport {
         return LanguageIdentifier.identifier(for: url) != nil
     }
 
-    static func language(forIdentifier identifier: String?) -> TreeSitterLanguage? {
-        BundledLanguages.language(forIdentifier: identifier)
+    static func language(forIdentifier identifier: String?, fileURL: URL? = nil) -> TreeSitterLanguage? {
+        if let fileURL, highlightsWithTSX(fileURL) {
+            return BundledLanguages.tsxHighlighting()
+        }
+        return BundledLanguages.language(forIdentifier: identifier)
     }
 
     static func languageResolver(snapshot: WorkbenchDocumentSnapshot) -> TreeSitterLanguage? {
-        language(forIdentifier: snapshot.languageIdentifier)
+        language(forIdentifier: snapshot.languageIdentifier, fileURL: snapshot.url)
     }
 
     static func fileBackedLanguageResolver(document: WorkbenchDocument) -> TreeSitterLanguage? {
-        language(forIdentifier: document.languageIdentifier)
+        language(forIdentifier: document.languageIdentifier, fileURL: document.url)
+    }
+
+    /// `.tsx` and `.jsx` keep their language identifiers (`typescript`, `javascript`) and highlight
+    /// with the TSX grammar, which is what parses JSX.
+    private static func highlightsWithTSX(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "tsx" || ext == "jsx"
     }
 }

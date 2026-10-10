@@ -44,6 +44,11 @@ final class IDENpmProjectSystem: IDEProjectSystem {
     @ObservationIgnored private let scriptDefaults: UserDefaults
     @ObservationIgnored private var projectRootURL: URL?
     @ObservationIgnored private var manifest: IDENpmManifest?
+    @ObservationIgnored private(set) var packageManager: IDENpmPackageManager = .npm
+    @ObservationIgnored private(set) var workspaceGlobs: [String] = []
+    @ObservationIgnored private(set) var testRunner: IDENpmTestRunner?
+    @ObservationIgnored private(set) var tsconfigBaseURL: String?
+    @ObservationIgnored private(set) var tsconfigPaths: [String: [String]] = [:]
     /// The bytes of package.json as the last load, Reload or Dismiss saw them (nil when there was no
     /// file). The reload banner means "the file now differs from this", so a save of unchanged text
     /// raises nothing and an undone edit clears it.
@@ -84,6 +89,35 @@ final class IDENpmProjectSystem: IDEProjectSystem {
     var isActive: Bool {
         if case .notDetected = syncState { return false }
         return projectRootURL != nil
+    }
+
+    func claim(root: URL) -> IDEProjectClaim? {
+        guard isActive else { return nil }
+        let nested = Self.packageRoots(globs: workspaceGlobs, under: root)
+        return IDEProjectClaim(strength: .rootBuildFile, packageRoots: [root] + nested)
+    }
+
+    /// `packages/*` and a path with no wildcard become directories under `root`.
+    static func packageRoots(globs: [String], under root: URL) -> [URL] {
+        var urls: [URL] = []
+        for glob in globs {
+            if glob.hasSuffix("/*") {
+                let directory = root.appendingPathComponent(String(glob.dropLast(2)))
+                let children = (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+                )) ?? []
+                urls += children.filter { url in
+                    (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                }
+            } else if !glob.contains("*") {
+                let url = root.appendingPathComponent(glob)
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    urls.append(url)
+                }
+            }
+        }
+        return urls.map { $0.standardizedFileURL }
     }
 
     var isBusy: Bool { isRunningTasks }
@@ -212,8 +246,9 @@ final class IDENpmProjectSystem: IDEProjectSystem {
             self.console.reset()
             self.console.appendNote("Project: \(root.path)")
             self.onActivity?()
-            guard let executable = Self.resolveNpm(environment: environment) else {
-                self.console.appendNote("No npm found on PATH")
+            guard let executable = Self.resolveExecutable(named: self.packageManager.executableName, environment: environment)
+                    ?? Self.resolveExecutable(named: "npm", environment: environment) else {
+                self.console.appendNote("No \(self.packageManager.executableName) found on PATH")
                 self.console.markFinished()
                 return
             }
@@ -335,6 +370,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         guard FileManager.default.fileExists(atPath: file.path) else {
             manifest = nil
             manifestBaseline = nil
+            clearFacts()
             tasks = []
             syncState = .notDetected
             return
@@ -344,11 +380,13 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         guard let data,
               let parsed = IDENpmManifest.parse(data: data, folderName: root.lastPathComponent) else {
             manifest = nil
+            clearFacts()
             tasks = []
             syncState = .failed(summary: "Couldn't read package.json")
             return
         }
         manifest = parsed
+        applyFacts(packageJSON: data, root: root)
         tasks = parsed.scripts.map {
             IDEProjectTask(path: $0.name, name: $0.name, module: ":", group: "scripts", summary: $0.command)
         }
@@ -441,12 +479,34 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         }
     }
 
-    /// The first executable named `npm` on PATH. The lookup uses `launchEnvironment` when tests set it.
-    private static func resolveNpm(environment: [String: String]?) -> String? {
+    private func clearFacts() {
+        packageManager = .npm
+        workspaceGlobs = []
+        testRunner = nil
+        tsconfigBaseURL = nil
+        tsconfigPaths = [:]
+    }
+
+    private func applyFacts(packageJSON: Data, root: URL) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)).map(Set.init) ?? []
+        let pnpm = try? String(contentsOf: root.appendingPathComponent("pnpm-workspace.yaml"), encoding: .utf8)
+        let tsconfig = try? Data(contentsOf: root.appendingPathComponent("tsconfig.json"))
+        guard let facts = IDENpmProjectFacts.read(
+            packageJSON: packageJSON, siblingFileNames: names, pnpmWorkspace: pnpm, tsconfig: tsconfig
+        ) else { return }
+        packageManager = facts.packageManager
+        workspaceGlobs = facts.workspaceGlobs
+        testRunner = facts.testRunner
+        tsconfigBaseURL = facts.baseURL
+        tsconfigPaths = facts.paths
+    }
+
+    /// The first executable of `name` on PATH. The lookup uses `launchEnvironment` when tests set it.
+    private static func resolveExecutable(named name: String, environment: [String: String]?) -> String? {
         let path = environment?["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
         let fileManager = FileManager.default
         for directory in path.split(separator: ":") where !directory.isEmpty {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("npm").path
+            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
             if fileManager.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil

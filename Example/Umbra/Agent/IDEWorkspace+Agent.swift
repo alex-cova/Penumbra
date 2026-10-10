@@ -209,14 +209,31 @@ extension IDEWorkspace: IDEAgentHost {
 
     var agentIsGradleProject: Bool { gradle.isActive }
 
+    func agentProjectTaskNames() -> [String] {
+        guard let system = projectSystems.active, system.id != "gradle" else { return [] }
+        return system.tasks.map(\.path)
+    }
+
+    func agentRunProjectTask(_ name: String) async -> String {
+        guard let system = projectSystems.active, system.id != "gradle" else {
+            return "This folder has no project tasks. Use gradle for a Gradle build."
+        }
+        guard system.tasks.contains(where: { $0.path == name }) else {
+            let known = system.tasks.map(\.path).joined(separator: ", ")
+            return known.isEmpty ? "\(system.displayName) has no tasks." : "Unknown task. Known tasks: \(known)"
+        }
+        system.runTasks([name])
+        return "Started \(system.displayName) task \(name)."
+    }
+
     /// Java tools are offered in a Gradle project or when a Java file is open: elsewhere they would
     /// only add to the tool list a small model has to read.
-    func agentJavaNavigator() -> (any IDEAgentJavaNavigating)? {
-        let hasJava = gradle.isActive
-            || workbench.allDocuments().contains { $0.url?.pathExtension.lowercased() == "java" }
-        guard hasJava else { return nil }
-        return IDEJavaAgentNavigator(
-            definitionProvider: javaSupport.navigationProvider, usageProvider: javaSupport.findUsagesProvider)
+    func agentJavaNavigator() -> (any IDEAgentNavigating)? {
+        let extensions = ["java", "swift", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
+        let hasSource = gradle.isActive || swiftPM.isActive || npm.isActive
+            || workbench.allDocuments().contains { extensions.contains($0.url?.pathExtension.lowercased() ?? "") }
+        guard hasSource else { return nil }
+        return IDEEngineAgentNavigator(engine: navigationEngine)
     }
 
     func agentLineText(url: URL, line: Int) -> String? {

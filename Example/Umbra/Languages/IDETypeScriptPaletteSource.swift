@@ -1,6 +1,7 @@
 import EditorIntelligence
 import Foundation
 import Penumbra
+import TypeScriptIntelligence
 
 /// TypeScript types and their members for the Symbols tab, read from the in-memory index.
 /// Java's members are listed first; this source is appended and does not walk the disk.

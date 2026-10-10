@@ -24,7 +24,7 @@ final class JavaCompletionCorpusTests: XCTestCase {
         } catch is CorpusIndex.NoJDK {
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
-        var cases = try CorpusCase.load(from: corpus.casesDirectory)
+        var cases = try CompletionCorpusRunner.Case.load(from: corpus.casesDirectory, extension: "java")
         let only = ProcessInfo.processInfo.environment["JAVA_COMPLETION_CASE"]
         if let only { let names = only.split(separator: ",").map(String.init); cases = cases.filter { name in names.contains { name.name.hasPrefix($0) } } } else { XCTAssertGreaterThan(cases.count, 100) }
 
@@ -310,48 +310,7 @@ private struct CorpusIndex: Sendable {
     }
 }
 
-private struct CorpusCase {
-    static let caret = "/*|*/"
-
-    let name: String
-    let url: URL
-    let text: String
-    let caretUTF16Offset: Int
-    let directives: [String: String]
-
-    var invocationCount: Int { directives["invocation"].flatMap(Int.init) ?? 1 }
-
-    /// Typing drives most completion: the popup opens on the character before the caret. An
-    /// empty prefix after whitespace or `(` is an explicit Ctrl+Space.
-    var trigger: RequestTrigger {
-        if directives["trigger"] == "manual" { return .manual }
-        let before = (text as NSString).substring(to: caretUTF16Offset)
-        guard let last = before.last, last != " ", last != "\n", last != "(", last != "\t" else { return .manual }
-        if before.hasSuffix("::") { return .keystroke(":") }
-        return .keystroke(String(last))
-    }
-
-    static func load(from directory: URL) throws -> [CorpusCase] {
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "java" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return try files.map { url in
-            let raw = try String(contentsOf: url, encoding: .utf8)
-            guard let caretRange = raw.range(of: caret) else { throw NSError(domain: "corpus", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(url.lastPathComponent) has no caret"]) }
-            let offset = raw.utf16.distance(from: raw.utf16.startIndex, to: caretRange.lowerBound.samePosition(in: raw.utf16)!)
-            var directives: [String: String] = [:]
-            for line in raw.components(separatedBy: "\n") where line.hasPrefix("//! ") {
-                let body = line.dropFirst(4)
-                guard let colon = body.firstIndex(of: ":") else { continue }
-                directives[String(body[..<colon]).trimmingCharacters(in: .whitespaces)] = String(body[body.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-            }
-            return CorpusCase(
-                name: url.deletingPathExtension().lastPathComponent, url: url,
-                text: raw.replacingOccurrences(of: caret, with: ""), caretUTF16Offset: offset, directives: directives
-            )
-        }
-    }
-}
+private typealias CorpusCase = CompletionCorpusRunner.Case
 
 private struct CaseResult {
     let name: String

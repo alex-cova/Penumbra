@@ -4,6 +4,7 @@ extern "C" {
 
 typedef struct TSLanguage TSLanguage;
 const TSLanguage *tree_sitter_typescript(void);
+const TSLanguage *tree_sitter_tsx(void);
 
 #ifdef __cplusplus
 }

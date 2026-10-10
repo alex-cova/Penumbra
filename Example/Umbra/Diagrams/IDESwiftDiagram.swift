@@ -1,4 +1,5 @@
 import Foundation
+import SwiftIntelligence
 
 /// One Swift file's types as a class diagram. An extension is folded into the type it extends when
 /// that type is in the file; one for a type declared elsewhere is its own box. Conformances are

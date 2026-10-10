@@ -6,7 +6,7 @@ How to add a language to Penumbra and Umbra **as the code stands today**. Three 
 2. **Intelligence**: completion, hover, navigation, diagnostics, formatting and so on, without any UI of its own.
 3. **IDE features**: commands, tool windows, preferences, run buttons, project model.
 
-`docs/LANGUAGE_SUPPORT_PLAN.md` replaces most of the manual steps below with a single registration. Each section ends with what changes when that phase lands, so a PR written now is easy to port.
+`docs/LANGUAGE_SUPPORT_PLAN.md` replaces most of the manual steps below with a single registration. Each section ends with what changes when that phase lands, so a PR written now is easy to port. Semantic depth for Swift and TypeScript, and the shared syntax and LSP work that makes the next language small, is `docs/LANGUAGE_PARITY_PLAN.md`.
 
 Read first: the root `CLAUDE.md` (App Store safety, performance rules), `docs/PERFORMANCE_RULES.md`, and for level 2 `Sources/EditorIntelligence/CLAUDE.md`.
 
@@ -90,7 +90,7 @@ Implement the protocols you need (all `Sendable`, usually `actor`s):
 | Structure outline, File Structure, breadcrumb member menu | `StructureProviding` | UTF-16 ranges; a file of ASCII needs no conversion |
 | Type hierarchy, call hierarchy | `TypeHierarchyProviding`, `CallHierarchyProviding` | `HierarchyItem`s with a `payload` your provider gets back when the host expands or opens one |
 
-A language with a tree-sitter grammar and no server can do all of this inside Umbra, as TypeScript and Swift do (`Example/Umbra/TypeScript/`, `Example/Umbra/Swift/`: a parse through `JavaSyntaxParser(language:)`, a model walked iteratively, an index actor, and providers returned as one `LanguageService`). Swift's is the larger example. Its grammar is tree-sitter-swift 0.7.4; syntax problems are warnings because a few constructs still do not parse (`SwiftDiagnosticProvider`).
+A language with a tree-sitter grammar and no server can do all of this as a library, as TypeScript and Swift do (`Sources/TypeScriptIntelligence/`, `Sources/SwiftIntelligence/`: a parse through `JavaSyntaxParser(language:)`, a model walked iteratively, an index actor, and providers returned as one `LanguageService`). The window's support object stays in the app (`IDETypeScriptSupport`, `IDESwiftSupport`). Swift's is the larger example. Its grammar is tree-sitter-swift 0.7.4; syntax problems are warnings because a few constructs still do not parse (`SwiftDiagnosticProvider`).
 
 Start with completion and diagnostics; they carry most of the value. For an external language server, use `EditorIntelligenceLSP` and the `LSP*Provider` types instead of writing providers (the server process is started by the app, not by the library; see `docs/SWIFT_SOURCEKIT_LSP_PLAN.md`).
 

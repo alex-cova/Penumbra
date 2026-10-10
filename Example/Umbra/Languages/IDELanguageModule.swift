@@ -136,6 +136,9 @@ protocol IDELanguageModule {
 
     /// A diagram this module knows how to draw. Nil when `request` belongs to someone else.
     func loadDiagram(_ request: IDEDiagramRequest, settings: IDEDiagramSettings, workspace: IDEWorkspace) async -> IDEDiagramLoad?
+
+    /// Language servers this module launches once the folder is trusted.
+    var languageServers: [IDELanguageServerDefinition] { get }
 }
 
 extension IDELanguageModule {
@@ -153,6 +156,7 @@ extension IDELanguageModule {
     func loadDiagram(
         _: IDEDiagramRequest, settings _: IDEDiagramSettings, workspace _: IDEWorkspace
     ) async -> IDEDiagramLoad? { nil }
+    var languageServers: [IDELanguageServerDefinition] { [] }
 }
 
 /// The language modules of the app, in the order their pages and entries appear. The shipped ones are
@@ -239,9 +243,14 @@ extension IDEWorkspace {
 
     /// Every module's status-bar items for `placement`, in their order.
     func statusItems(_ placement: IDEStatusItem.Placement) -> [IDEStatusItem] {
-        IDELanguageModules.all.flatMap { $0.statusItems(for: self) }
-            .filter { $0.placement == placement }
-            .sorted { $0.order < $1.order }
+        var items = IDELanguageModules.all.flatMap { $0.statusItems(for: self) }
+        if placement == .leading, let summary = languageServerHost.summary {
+            items.append(IDEStatusItem(
+                id: "language-servers", placement: .leading, order: -10,
+                content: AnyView(Text(summary).font(.caption))
+            ))
+        }
+        return items.filter { $0.placement == placement }.sorted { $0.order < $1.order }
     }
 
     /// Every module's View menu items.

@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import TypeScriptIntelligence
 
 /// TypeScript intelligence for one window. The support object is held weakly: the service lives in
 /// the registry for the window's life and must not keep what the window owns alive.
@@ -13,8 +14,8 @@ struct IDETypeScriptLanguageService: LanguageService {
     }
 
     var name: String { "typescript" }
-    var languageIdentifiers: Set<String> { [TypeScriptAnalysis.languageIdentifier] }
-    var policy: LanguagePolicy { LanguagePolicy(disabling: [.symbolHover, .symbolNavigation]) }
+    var languageIdentifiers: Set<String> { [TypeScriptAnalysis.languageIdentifier, "javascript"] }
+    var policy: LanguagePolicy { LanguagePolicy(disabling: [.snippets, .symbolHover, .symbolNavigation]) }
 
     func start(environment: LanguageEnvironment) async {
         let lookup = environment.openBufferText

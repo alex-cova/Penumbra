@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 import JavaIntelligence
 import Penumbra
+import TypeScriptIntelligence
 import XCTest
+@testable import TypeScriptIntelligence
 @testable import Umbra
 
 /// npm beside Gradle: the manifest, trust, a fake `npm` on PATH, the TypeScript diagram and index.
@@ -115,6 +117,96 @@ final class IDENpmProjectSystemTests: XCTestCase {
         let bare = IDENpmDiagram.document(manifest: empty, title: "Dependencies")
         XCTAssertEqual(bare.nodes.map(\.key), ["npm:widget"])
         XCTAssertTrue(bare.edges.isEmpty)
+    }
+
+    func testPackageManagerWorkspacesTsconfigAndTestRunner() throws {
+        let json = """
+        {
+          "packageManager": "pnpm@9.1.0",
+          "scripts": { "test": "vitest" },
+          "devDependencies": { "vitest": "2.0.0", "jest": "29.0.0" }
+        }
+        """
+        let tsconfig = """
+        { "compilerOptions": { "baseUrl": "src", "paths": { "@app/*": ["src/*"] } } }
+        """
+        let facts = try XCTUnwrap(IDENpmProjectFacts.read(
+            packageJSON: Data(json.utf8),
+            siblingFileNames: ["yarn.lock"],
+            pnpmWorkspace: "packages:\n  - \"packages/*\"\n  - apps/*\n",
+            tsconfig: Data(tsconfig.utf8)
+        ))
+        XCTAssertEqual(facts.packageManager, .pnpm, "packageManager beats the yarn lockfile")
+        XCTAssertEqual(facts.workspaceGlobs, ["packages/*", "apps/*"])
+        XCTAssertEqual(facts.testRunner, .vitest)
+        XCTAssertEqual(facts.baseURL, "src")
+        XCTAssertEqual(facts.paths["@app/*"], ["src/*"])
+
+        let fromLock = try XCTUnwrap(IDENpmProjectFacts.read(
+            packageJSON: Data("{}".utf8), siblingFileNames: ["bun.lockb"]
+        ))
+        XCTAssertEqual(fromLock.packageManager, .bun)
+        let jest = try XCTUnwrap(IDENpmProjectFacts.read(
+            packageJSON: Data(#"{"scripts":{"test":"jest"}}"#.utf8)
+        ))
+        XCTAssertEqual(jest.testRunner, .jest)
+        XCTAssertEqual(jest.packageManager, .npm)
+
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = directory.appendingPathComponent("app", isDirectory: true)
+        try writePackage(json, in: root)
+        try "packages:\n  - packages/*\n".write(to: root.appendingPathComponent("pnpm-workspace.yaml"), atomically: false, encoding: .utf8)
+        let (npm, _) = makeNpm(in: directory, defaults: defaults)
+        defer { npm.stop() }
+        npm.projectDidChange(root: root)
+        XCTAssertEqual(npm.packageManager, .pnpm)
+        XCTAssertEqual(npm.workspaceGlobs, ["packages/*"])
+        XCTAssertEqual(npm.testRunner, .vitest)
+    }
+
+    func testAWorkspacePackageIsTheOwnerOfAFileInsideIt() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = directory.appendingPathComponent("app", isDirectory: true)
+        try writePackage(#"{"name":"app","workspaces":["packages/*"]}"#, in: root)
+        let package = root.appendingPathComponent("packages/left", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        let (npm, _) = makeNpm(in: directory, defaults: defaults)
+        defer { npm.stop() }
+        let systems = IDEProjectSystems([npm])
+        systems.projectDidChange(root: root)
+        let file = package.appendingPathComponent("src/A.ts")
+        XCTAssertEqual(systems.owner(of: file)?.lastPathComponent, "left")
+        XCTAssertEqual(systems.active?.id, "npm")
+    }
+
+    func testJavaInlayKeysStillReadAndAnotherLanguageDoesNotInheritThem() {
+        let name = "umbra.prefs.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(true, forKey: "com.umbra.editor.javaInlayHints")
+        XCTAssertTrue(IDELanguageEditorPreferences.inlayParameterNames(for: "java", defaults: defaults))
+        XCTAssertFalse(IDELanguageEditorPreferences.inlayParameterNames(for: "swift", defaults: defaults))
+        defaults.set(true, forKey: "com.umbra.editor.swift.inlayHints")
+        XCTAssertTrue(IDELanguageEditorPreferences.inlayParameterNames(for: "swift", defaults: defaults))
+    }
+
+    func testAJavaTestCaseBecomesAGenericResult() {
+        let java = JavaTestCaseResult(
+            className: "demo.FooTest", name: "adds()", status: .failed, duration: 0.2,
+            message: "expected 2", sourceFile: URL(fileURLWithPath: "/tmp/FooTest.java"), line: 12
+        )
+        let generic = IDETestCaseResult(java)
+        XCTAssertEqual(generic.className, "demo.FooTest")
+        XCTAssertEqual(generic.status, .failed)
+        XCTAssertEqual(generic.line, 12)
+        XCTAssertEqual(generic.id, "demo.FooTest.adds()")
     }
 
     func testOpeningParsesWithoutAskingAndABadManifestStaysActive() throws {

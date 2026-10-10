@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import SwiftIntelligence
 
 /// Swift intelligence for one window. The support object is held weakly: the service lives in
 /// the registry for the window's life and must not keep what the window owns alive.

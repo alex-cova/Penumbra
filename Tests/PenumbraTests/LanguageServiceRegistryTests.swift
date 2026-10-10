@@ -113,12 +113,12 @@ final class LanguageServiceRegistryTests: XCTestCase {
         XCTAssertEqual(registry.identifiers(disabling: .duplicateSymbolDiagnostics), [])
     }
 
-    func testEngineProvidersAreAllServicesProvidersInServiceOrder() {
+    func testEngineProvidersAreOneTieredProviderPerLanguage() {
         let registry = LanguageServiceRegistry(services: [
             service("one", ["a"], LanguageProviders(completion: [FakeCompletion(name: "c1"), FakeCompletion(name: "c2")])),
             service("two", ["b"], LanguageProviders(completion: [FakeCompletion(name: "c3")]))
         ])
-        XCTAssertEqual(registry.completionProviders.map(\.name), ["c1", "c2", "c3"])
+        XCTAssertEqual(registry.completionProviders.map(\.name), ["a", "b"])
     }
 
     // MARK: Routing
@@ -369,9 +369,9 @@ final class LanguageServiceRegistryTests: XCTestCase {
     @MainActor
     func testUmbraRegistryOptsOutOfTheSameGenericFeaturesAsBefore() {
         let languages = IDEIntelligenceServices().languages
-        XCTAssertEqual(languages.identifiers(disabling: .snippets), ["java", "http", "swift"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "typescript", "swift"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "typescript", "swift"])
+        XCTAssertEqual(languages.identifiers(disabling: .snippets), ["http", "java", "javascript", "swift", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "javascript", "swift", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "javascript", "swift", "typescript"])
         XCTAssertEqual(languages.identifiers(disabling: .duplicateSymbolDiagnostics), ["http", "swift"])
     }
 
@@ -379,12 +379,15 @@ final class LanguageServiceRegistryTests: XCTestCase {
     func testUmbraRegistryKeepsTheEngineProviderOrder() {
         let languages = IDEIntelligenceServices().languages
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["Java", "TypeScript", "Swift", "Markdown File Mention", "HTTP"],
-            "completion: Java, TypeScript, Swift, then Markdown mentions, then HTTP"
+            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "markdown", "http"],
+            "one tiered completion provider per language, in registration order"
         )
-        XCTAssertEqual(languages.hoverProviders.count, 3)
-        XCTAssertEqual(languages.diagnosticProviders.count, 4, "javac, inspections, TypeScript syntax, then Swift syntax")
-        XCTAssertEqual(languages.navigationProviders.count, 4, "Java definition, Java usages, TypeScript, then Swift")
+        XCTAssertEqual(languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift"])
+        XCTAssertEqual(
+            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift"],
+            "Java's javac and inspection providers share one tiered provider"
+        )
+        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift"])
     }
 
     @MainActor
@@ -454,5 +457,218 @@ final class LanguageServiceRegistryTests: XCTestCase {
         XCTAssertTrue(formatting.supportsFormatting(document("json")))
         XCTAssertFalse(formatting.supportsFormatting(document("markdown")))
         XCTAssertFalse(formatting.supportsFormatting(document(nil)))
+    }
+
+    func testASemanticServiceThatIsNotReadyFallsThroughAndAReadyOneWins() {
+        let native = TieredFake(name: "native", tier: .syntactic, ready: true, hasHover: true)
+        let server = TieredFake(name: "server", tier: .semantic, ready: false, hasHover: true)
+        let starting = LanguageServiceRegistry(services: [native, server])
+        XCTAssertEqual(starting.services(for: "swift").map(\.name), ["server", "native"])
+        XCTAssertEqual(starting.services(for: "swift").first?.unavailableFeatures, [.hover])
+        XCTAssertEqual(starting.capabilities(for: "swift").features[.hover]?.service, "native")
+        XCTAssertEqual(starting.capabilities(for: "swift").features[.completion]?.service, "server")
+
+        let ready = LanguageServiceRegistry(services: [
+            native, TieredFake(name: "server", tier: .semantic, ready: true, hasHover: true)
+        ])
+        XCTAssertEqual(ready.capabilities(for: "swift").features[.hover]?.service, "server")
+        XCTAssertEqual(ready.capabilities(for: "swift").features[.hover]?.fidelity, .semantic)
+        XCTAssertEqual(ready.capabilities(for: "swift").features[.completion]?.service, "server")
+    }
+
+    func testABasicServicePassesConformance() async {
+        let service = service("one", ["a"], LanguageProviders(hover: [TieredHover(name: "one")]))
+        await LanguageServiceConformance.check(service)
+    }
+
+    func testAnUnreadySemanticTierFallsThroughAndAReadyOneReplacesCompletion() async {
+        let native = BatchService(name: "native", tier: .syntactic, label: "native", hover: "native hover")
+        let starting = BatchService(name: "server", tier: .semantic, label: "semantic", hover: "semantic hover", unavailable: [.completion, .hover])
+        let registry = LanguageServiceRegistry(services: [native, starting])
+        let context = completionContext(language: "swift")
+
+        let whileStarting = await labels(from: registry, context: context)
+        XCTAssertEqual(whileStarting, [["native"]])
+
+        let ready = BatchService(name: "server", tier: .semantic, label: "semantic", hover: "semantic hover")
+        let readyRegistry = LanguageServiceRegistry(services: [native, ready])
+        let snapshots = await labels(from: readyRegistry, context: context)
+        XCTAssertEqual(snapshots.first, ["native"])
+        XCTAssertEqual(snapshots.last, ["semantic"], "the semantic batch replaces the syntactic one")
+        XCTAssertFalse(snapshots.contains { $0.contains("native") && $0.contains("semantic") })
+    }
+
+    func testHoverAsksTheTopReadyTierAndFallsBackOnNil() async {
+        let native = BatchService(name: "native", tier: .syntactic, label: "native", hover: "native hover")
+        let silent = BatchService(name: "server", tier: .semantic, label: "semantic", hover: nil)
+        let registry = LanguageServiceRegistry(services: [native, silent])
+        let hover = await registry.hoverProviders.first?.provide(context: hoverContext(language: "swift"))
+        XCTAssertEqual(hover?.contents, "native hover")
+
+        let answering = BatchService(name: "server", tier: .semantic, label: "semantic", hover: "semantic hover")
+        let both = LanguageServiceRegistry(services: [native, answering])
+        var answers: [String] = []
+        for _ in 0..<8 {
+            let result = await both.hoverProviders.first?.provide(context: hoverContext(language: "swift"))
+            answers.append(result?.contents ?? "")
+        }
+        XCTAssertEqual(Set(answers), ["semantic hover"])
+    }
+
+    func testDiagnosticsKeepBothTiersAndTheEngineDedupes() async {
+        let range = EditorIntelligence.TextRange(
+            start: TextPosition(line: 0, column: 0, utf16Offset: 0),
+            end: TextPosition(line: 0, column: 1, utf16Offset: 1)
+        )
+        let native = BatchService(
+            name: "native", tier: .syntactic, label: "native", hover: nil,
+            diagnostics: [Diagnostic(severity: .warning, message: "syntax", range: range, source: "native")]
+        )
+        let server = BatchService(
+            name: "server", tier: .semantic, label: "semantic", hover: nil,
+            diagnostics: [
+                Diagnostic(severity: .warning, message: "syntax", range: range, source: "server"),
+                Diagnostic(severity: .error, message: "type", range: range, source: "server")
+            ]
+        )
+        let registry = LanguageServiceRegistry(services: [native, server])
+        let report = await DiagnosticEngine(providers: registry.diagnosticProviders).diagnostics(for: document("swift"))
+        XCTAssertEqual(report.diagnostics.map(\.message).sorted(), ["syntax", "type"])
+    }
+
+    func testNavigationFallsBackWhenTheSemanticTierReturnsNil() async {
+        let native = BatchService(name: "native", tier: .syntactic, label: "native", hover: nil, navigation: "native")
+        let empty = BatchService(name: "server", tier: .semantic, label: "semantic", hover: nil, navigation: nil)
+        let registry = LanguageServiceRegistry(services: [native, empty])
+        let context = NavigationContext(
+            document: document("swift"), cursor: document("swift").cursor,
+            selection: document("swift").selection, kind: .definition
+        )
+        let result = await registry.navigationProviders.first?.provide(context: context)
+        guard case .single(let location) = result else {
+            return XCTFail("expected the native destination")
+        }
+        XCTAssertEqual(location.displayName, "native")
+    }
+
+    private func labels(from registry: LanguageServiceRegistry, context: CompletionContext) async -> [[String]] {
+        let engine = CompletionEngine(providers: registry.completionProviders, debounceInterval: 0)
+        var snapshots: [[String]] = []
+        do {
+            for try await update in await engine.completeUpdates(context: context) {
+                snapshots.append(update.items.map(\.label))
+            }
+        } catch {
+            XCTFail("\(error)")
+        }
+        return snapshots
+    }
+
+    private func completionContext(language: String) -> CompletionContext {
+        let doc = document(language, text: "name")
+        return CompletionContext(
+            document: doc, cursor: doc.cursor, trigger: .manual, prefix: "", range: doc.selection.range
+        )
+    }
+
+    private func hoverContext(language: String) -> HoverContext {
+        let doc = document(language)
+        return HoverContext(document: doc, cursor: doc.cursor, selection: doc.selection)
+    }
+}
+
+/// A service whose tier and readiness the registry tests can set.
+private struct TieredFake: LanguageService {
+    let name: String
+    let languageIdentifiers: Set<String> = ["swift"]
+    let providers: LanguageProviders
+    let tier: LanguageServiceTier
+    let unavailableFeatures: Set<LanguageFeature>
+
+    init(name: String, tier: LanguageServiceTier, ready: Bool, hasHover: Bool) {
+        self.name = name
+        self.tier = tier
+        unavailableFeatures = ready ? [] : [.hover]
+        providers = LanguageProviders(
+            completion: [TieredCompletion(name: name)],
+            hover: hasHover ? [TieredHover(name: name)] : []
+        )
+    }
+}
+
+private struct TieredCompletion: CompletionProvider {
+    let name: String
+    func provide(context: CompletionContext) async -> [CompletionItem] { [] }
+}
+
+private struct TieredHover: HoverProvider {
+    let name: String
+    func provide(context: HoverContext) async -> HoverResult? { nil }
+}
+
+/// A syntactic or semantic service whose completion, hover, diagnostics and navigation the tier tests read.
+private struct BatchService: LanguageService {
+    let name: String
+    let languageIdentifiers: Set<String> = ["swift"]
+    let providers: LanguageProviders
+    let tier: LanguageServiceTier
+    let unavailableFeatures: Set<LanguageFeature>
+
+    init(
+        name: String,
+        tier: LanguageServiceTier,
+        label: String,
+        hover: String?,
+        unavailable: Set<LanguageFeature> = [],
+        diagnostics: [Diagnostic] = [],
+        navigation: String? = nil
+    ) {
+        self.name = name
+        self.tier = tier
+        unavailableFeatures = unavailable
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let range = EditorIntelligence.TextRange(start: position, end: position)
+        providers = LanguageProviders(
+            completion: [LabeledCompletion(name: name, label: label, range: range)],
+            hover: [LabeledHover(name: name, contents: hover)],
+            diagnostics: [FixedDiagnostics(name: name, items: diagnostics)],
+            navigation: [LabeledNavigation(name: name, displayName: navigation)]
+        )
+    }
+}
+
+private struct LabeledCompletion: CompletionProvider {
+    let name: String
+    let label: String
+    let range: EditorIntelligence.TextRange
+    func isPrimary(for context: CompletionContext) -> Bool { true }
+    func provide(context: CompletionContext) async -> [CompletionItem] {
+        [CompletionItem(label: label, insertText: label, kind: .variable, range: range, source: name)]
+    }
+}
+
+private struct LabeledHover: HoverProvider {
+    let name: String
+    let contents: String?
+    func provide(context: HoverContext) async -> HoverResult? {
+        contents.map { HoverResult(contents: $0, source: name) }
+    }
+}
+
+private struct FixedDiagnostics: DiagnosticProvider {
+    let name: String
+    let items: [Diagnostic]
+    func diagnostics(for document: Document) async -> [Diagnostic] { items }
+}
+
+private struct LabeledNavigation: NavigationProvider {
+    let name: String
+    let displayName: String?
+    func isPrimary(for context: NavigationContext) -> Bool { true }
+    func provide(context: NavigationContext) async -> NavigationResult? {
+        guard let displayName else { return nil }
+        return .single(Location(
+            documentID: context.document.id, range: context.document.selection.range, displayName: displayName
+        ))
     }
 }

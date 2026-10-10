@@ -1,5 +1,6 @@
 import Foundation
 import Penumbra
+import SwiftIntelligence
 
 /// Swift in Umbra's chrome: palette commands, Run and the gutter's play buttons through SwiftPM,
 /// the symbol-palette source, and the class and target diagrams. There is no menu-bar menu.
@@ -7,6 +8,8 @@ import Penumbra
 struct IDESwiftModule: IDELanguageModule {
     static let id = "swift"
     var id: String { Self.id }
+
+    var languageServers: [IDELanguageServerDefinition] { [IDESourceKitServer.definition()] }
 
     private static let classDiagramPrefix = "swift:classes:"
 

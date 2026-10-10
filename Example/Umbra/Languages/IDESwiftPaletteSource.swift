@@ -1,6 +1,7 @@
 import EditorIntelligence
 import Foundation
 import Penumbra
+import SwiftIntelligence
 
 /// Swift types and their members for the Symbols tab, read from the in-memory index. It is
 /// appended after Java's members and does not walk the disk.

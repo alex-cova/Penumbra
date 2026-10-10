@@ -74,16 +74,35 @@ public extension TreeSitterLanguage {
 
     /// TypeScript (not TSX). Highlights are JavaScript's query plus TypeScript-specific captures.
     static var typeScript: TreeSitterLanguage {
+        TreeSitterLanguage(
+            tree_sitter_typescript(),
+            highlightsQuery: typeScriptHighlights,
+            indentationScopes: .javaScript,
+            lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
+        )
+    }
+
+    /// TSX, also used to highlight `.jsx`. The file's language identifier stays `typescript` or
+    /// `javascript`; only the grammar changes, so the mapping tests stay as they are.
+    static var tsx: TreeSitterLanguage {
         let highlightsQuery = QueryResources.combinedQuery(fromFilesAt: [
             QueryResources.url(named: "highlights", in: "JavaScript"),
+            QueryResources.url(named: "highlights-jsx", in: "JavaScript"),
             QueryResources.url(named: "highlights", in: "TypeScript")
         ])
         return TreeSitterLanguage(
-            tree_sitter_typescript(),
+            tree_sitter_tsx(),
             highlightsQuery: highlightsQuery,
             indentationScopes: .javaScript,
             lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
         )
+    }
+
+    private static var typeScriptHighlights: TreeSitterLanguage.Query? {
+        QueryResources.combinedQuery(fromFilesAt: [
+            QueryResources.url(named: "highlights", in: "JavaScript"),
+            QueryResources.url(named: "highlights", in: "TypeScript")
+        ])
     }
 
     /// Prepared language for a ``LanguageIdentifier`` string (`"javascript"`, `"python"`, …), from

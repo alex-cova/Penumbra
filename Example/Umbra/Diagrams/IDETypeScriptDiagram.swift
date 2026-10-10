@@ -1,4 +1,5 @@
 import Foundation
+import TypeScriptIntelligence
 
 /// One TypeScript file's types, taken from the syntactic model. Neighbour depth is ignored:
 /// a name written in `extends` or `implements` is linked when that file declares it.

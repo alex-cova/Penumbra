@@ -150,7 +150,8 @@ final class IDEDiffViewerView: NSView {
 
     private var language: TreeSitterLanguage? {
         guard let path = session?.request.filePath else { return nil }
-        return IDELanguageSupport.language(forIdentifier: LanguageIdentifier.identifier(for: URL(fileURLWithPath: path)))
+        let url = URL(fileURLWithPath: path)
+        return IDELanguageSupport.language(forIdentifier: LanguageIdentifier.identifier(for: url), fileURL: url)
     }
 
     private func state(for text: String) -> TextViewState {

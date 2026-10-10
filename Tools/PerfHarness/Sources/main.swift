@@ -39,6 +39,10 @@ func printUsageAndExit() -> Never {
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inspections <path|synthetic> [--lines N] [--samples N]
+      swift-index <path|synthetic> [--files N]
+      swift-completion <path|synthetic> [--files N] [--lines N]
+      ts-index <path|synthetic> [--files N]
+      ts-completion <path|synthetic> [--files N] [--lines N]
       enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
       markdown-preview <path|synthetic> [--sections N] [--samples N]
 
@@ -77,6 +81,7 @@ let options = Commands.Options(
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
+    || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -105,6 +110,16 @@ do {
         )
     case "java-members":
         JavaMembersProfile.run(root: path)
+    case "swift-index", "ts-index", "swift-completion", "ts-completion":
+        let language: LanguageIndexProfile.Language = command.hasPrefix("swift") ? .swift : .typescript
+        let mode: LanguageIndexProfile.Mode = command.hasSuffix("index") ? .index : .completion
+        try LanguageIndexProfile.run(
+            language: language,
+            mode: mode,
+            pathOrSynthetic: path,
+            files: Int(flagValue("--files", in: rest) ?? "") ?? 1_000,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 5_000
+        )
     case "enter-session":
         let lines = Int(flagValue("--lines", in: rest) ?? "") ?? 120_000
         let samples = Int(flagValue("--samples", in: rest) ?? "") ?? 15

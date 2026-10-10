@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import TypeScriptIntelligence
 
 /// TypeScript indexing and providers for one window. A project or file change starts a task and
 /// returns; a keystroke never waits on the index and never walks the project.

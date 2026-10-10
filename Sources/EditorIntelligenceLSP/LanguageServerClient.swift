@@ -1,26 +1,74 @@
+import EditorIntelligence
 import Foundation
+import JSONRPC
 import LanguageClient
 import LanguageServerProtocol
-import EditorIntelligence
 
 /// Concrete LSP client backed by ChimeHQ's `LanguageClient`.
 public actor LanguageServerClient: LSPClient {
     private let server: InitializingServer
     private let documentURI: @Sendable (Document) -> String
     private var uris: [DocumentID: String] = [:]
+    /// Diagnostics the server pushed with `textDocument/publishDiagnostics`. An empty push clears the file.
+    private var publishedDiagnostics = LSPPublishedDiagnostics()
+    private var cachedCapabilities: ServerCapabilities?
 
     public init(server: InitializingServer, documentURI: @escaping @Sendable (Document) -> String) {
         self.server = server
         self.documentURI = documentURI
+        Task { await self.consumeServerEvents() }
+    }
+
+    /// A client speaking JSON-RPC over `write` and `read`. The host owns the process; this only
+    /// frames messages. `initialize` asks for the workspace folder and leaves position encoding at
+    /// the UTF-16 offsets EditorIntelligence already uses.
+    public static func make(
+        write: @escaping @Sendable (Data) async throws -> Void,
+        read: AsyncStream<Data>,
+        documentURI: @escaping @Sendable (Document) -> String,
+        workspaceRoot: URL? = nil,
+        initializationOptions: Data? = nil
+    ) -> LanguageServerClient {
+        let channel = DataChannel(writeHandler: write, dataSequence: read)
+        let connection = JSONRPCServerConnection(dataChannel: channel)
+        let server = InitializingServer(server: connection) {
+            let folders = workspaceRoot.map {
+                [WorkspaceFolder(uri: $0.absoluteString, name: $0.lastPathComponent)]
+            }
+            return InitializeParams(
+                processId: Int(ProcessInfo.processInfo.processIdentifier),
+                clientInfo: InitializeParams.ClientInfo(name: "Umbra"),
+                locale: nil,
+                rootPath: workspaceRoot?.path,
+                rootUri: workspaceRoot?.absoluteString,
+                initializationOptions: initializationOptions.flatMap { try? JSONDecoder().decode(LSPAny.self, from: $0) },
+                capabilities: ClientCapabilities(
+                    workspace: nil, textDocument: nil, window: nil, general: nil, experimental: nil
+                ),
+                trace: nil,
+                workspaceFolders: folders
+            )
+        }
+        return LanguageServerClient(server: server, documentURI: documentURI)
+    }
+
+    /// Features the server advertised. Runs `initialize` if it has not happened yet.
+    public func advertisedFeatures() async -> Set<LanguageFeature> {
+        guard let capabilities = await capabilities() else { return [] }
+        return LSPServerCapabilities.features(in: capabilities)
     }
 
     public func requestDiagnostics(for document: Document) async throws -> [EditorIntelligence.LSPDiagnostic] {
-        // Pull diagnostics are optional in LSP; most servers publish via `textDocument/publishDiagnostics`.
-        _ = document
-        return []
+        publishedDiagnostics.diagnostics(for: documentURI(document))
+    }
+
+    /// The version the server attached to the last push for this document, when it sent one.
+    public func publishedDiagnosticsVersion(for document: Document) -> Int? {
+        publishedDiagnostics.version(for: documentURI(document))
     }
 
     public func requestHover(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPHover? {
+        guard await allows(.hover) else { return nil }
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -35,10 +83,11 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestCompletions(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPCompletionItem] {
+        guard await allows(.completion) else { return [] }
         let params = CompletionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
-            context: nil
+            context: CompletionContext(triggerKind: .invoked, triggerCharacter: nil)
         )
         guard let result = try await server.completion(params) else {
             return []
@@ -51,7 +100,64 @@ public actor LanguageServerClient: LSPClient {
         }
     }
 
+    /// `completionItem/resolve`. Returns `item` unchanged when the server did not advertise resolve,
+    /// or when the item has no payload to send back.
+    public func resolveCompletion(
+        _ item: EditorIntelligence.LSPCompletionItem
+    ) async throws -> EditorIntelligence.LSPCompletionItem {
+        guard let payload = item.resolvePayload,
+              let capabilities = await capabilities(),
+              LSPServerCapabilities.resolvesCompletionItems(capabilities),
+              let original = try? JSONDecoder().decode(LanguageServerProtocol.CompletionItem.self, from: payload)
+        else { return item }
+        let resolved = try await server.completeItemResolve(original)
+        return eipCompletionItem(from: resolved)
+    }
+
+    public func requestPrepareCallHierarchy(
+        for document: Document, at position: TextPosition
+    ) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.callHierarchy) else { return [] }
+        let params = CallHierarchyPrepareParams(textDocument: textDocument(for: document), position: lspPosition(from: position))
+        let items = try await server.prepareCallHierarchy(params) ?? []
+        return items.compactMap(LSPHierarchySymbol.init(call:))
+    }
+
+    public func requestIncomingCalls(for symbol: LSPHierarchySymbol) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.callHierarchy), let item = symbol.callItem else { return [] }
+        let calls = try await server.callHierarchyIncomingCalls(CallHierarchyIncomingCallsParams(item: item)) ?? []
+        return calls.compactMap { LSPHierarchySymbol(call: $0.from) }
+    }
+
+    public func requestOutgoingCalls(for symbol: LSPHierarchySymbol) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.callHierarchy), let item = symbol.callItem else { return [] }
+        let calls = try await server.callHierarchyOutgoingCalls(CallHierarchyOutgoingCallsParams(item: item)) ?? []
+        return calls.compactMap { LSPHierarchySymbol(call: $0.to) }
+    }
+
+    public func requestPrepareTypeHierarchy(
+        for document: Document, at position: TextPosition
+    ) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.typeHierarchy) else { return [] }
+        let params = TypeHierarchyPrepareParams(textDocument: textDocument(for: document), position: lspPosition(from: position))
+        let items = try await server.prepareTypeHeirarchy(params) ?? []
+        return items.compactMap(LSPHierarchySymbol.init(type:))
+    }
+
+    public func requestSupertypes(of symbol: LSPHierarchySymbol) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.typeHierarchy), let item = symbol.typeItem else { return [] }
+        let items = try await server.typeHierarchySupertypes(TypeHierarchySupertypesParams(item: item)) ?? []
+        return items.compactMap(LSPHierarchySymbol.init(type:))
+    }
+
+    public func requestSubtypes(of symbol: LSPHierarchySymbol) async throws -> [LSPHierarchySymbol] {
+        guard await allows(.typeHierarchy), let item = symbol.typeItem else { return [] }
+        let items = try await server.typeHierarchySubtypes(TypeHierarchySubtypesParams(item: item)) ?? []
+        return items.compactMap(LSPHierarchySymbol.init(type:))
+    }
+
     public func requestDefinition(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
+        guard await allows(.definition) else { return [] }
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -63,6 +169,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestReferences(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
+        guard await allows(.references) else { return [] }
         let params = ReferenceParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
@@ -75,6 +182,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestImplementation(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
+        guard await allows(.implementation) else { return [] }
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -86,6 +194,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestTypeDefinition(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
+        guard await allows(.typeDefinition) else { return [] }
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -97,6 +206,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> EditorIntelligence.LSPWorkspaceEdit? {
+        guard await allows(.rename) else { return nil }
         let params = RenameParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
@@ -105,18 +215,11 @@ public actor LanguageServerClient: LSPClient {
         guard let edit = try await server.rename(params) else {
             return nil
         }
-        var changes: [String: [EditorIntelligence.LSPTextEdit]] = [:]
-        if let documentChanges = edit.changes {
-            for (uri, edits) in documentChanges {
-                changes[uri] = edits.map {
-                    EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
-                }
-            }
-        }
-        return EditorIntelligence.LSPWorkspaceEdit(changes: changes)
+        return EditorIntelligence.LSPWorkspaceEdit(changes: LSPWorkspaceEditMapping.changes(from: edit))
     }
 
     public func requestFormatting(for document: Document, in range: EditorIntelligence.TextRange?) async throws -> [EditorIntelligence.LSPTextEdit] {
+        guard await allows(.formatting) else { return [] }
         let options = FormattingOptions(tabSize: 4, insertSpaces: true)
         if let range {
             let params = DocumentRangeFormattingParams(
@@ -144,6 +247,7 @@ public actor LanguageServerClient: LSPClient {
         at position: TextPosition,
         diagnostics: [EditorIntelligence.LSPDiagnostic]
     ) async throws -> [EditorIntelligence.LSPCodeAction] {
+        guard await allows(.codeActions) else { return [] }
         let params = CodeActionParams(
             textDocument: textDocument(for: document),
             range: LSPRange(
@@ -163,6 +267,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPSignatureHelp? {
+        guard await allows(.signatureHelp) else { return nil }
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -178,6 +283,9 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestSemanticTokens(for document: Document) async throws -> EditorIntelligence.LSPSemanticTokens {
+        guard await allows(.semanticTokens) else {
+            return EditorIntelligence.LSPSemanticTokens(resultId: nil, data: [])
+        }
         let params = SemanticTokensParams(textDocument: textDocument(for: document))
         guard let tokens = try await server.semanticTokensFull(params) else {
             return EditorIntelligence.LSPSemanticTokens(resultId: nil, data: [])
@@ -186,6 +294,9 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestSemanticTokensDelta(for document: Document, previousResultId: String) async throws -> EditorIntelligence.LSPSemanticTokensDelta {
+        guard await allows(.semanticTokens) else {
+            return EditorIntelligence.LSPSemanticTokensDelta(resultId: nil, data: [])
+        }
         let params = SemanticTokensDeltaParams(
             textDocument: textDocument(for: document),
             previousResultId: previousResultId
@@ -262,6 +373,55 @@ public actor LanguageServerClient: LSPClient {
         try? await server.textDocumentDidChange(params)
     }
 
+    public func notifySaved(_ document: Document, text: String?) async {
+        let uri = uris[document.id] ?? documentURI(document)
+        try? await server.textDocumentDidSave(DidSaveTextDocumentParams(uri: uri, text: text))
+    }
+
+    public func notifyWatchedFilesChanged(_ events: [(uri: String, kind: LSPWatchedFileChange)]) async {
+        let changes = events.map { FileEvent(uri: $0.uri, type: $0.kind.lsp) }
+        try? await server.workspaceDidChangeWatchedFiles(DidChangeWatchedFilesParams(changes: changes))
+    }
+
+    public func cancelRequest(id: String) async {
+        try? await server.sendNotification(.protocolCancelRequest(CancelParams(id: id)))
+    }
+
+    public func requestDocumentSymbols(for document: Document) async throws -> [LSPOutlineSymbol] {
+        guard await allows(.structure) else { return [] }
+        guard let response = try await server.documentSymbol(DocumentSymbolParams(textDocument: textDocument(for: document))) else {
+            return []
+        }
+        switch response {
+        case .optionA(let symbols):
+            return symbols.map(LSPOutlineSymbol.init)
+        case .optionB(let symbols):
+            return symbols.map(LSPOutlineSymbol.init)
+        }
+    }
+
+    public func requestWorkspaceSymbols(matching query: String) async throws -> [LSPOutlineSymbol] {
+        guard let capabilities = await capabilities(), LSPServerCapabilities.supportsWorkspaceSymbols(capabilities) else { return [] }
+        guard let response = try await server.workspaceSymbol(WorkspaceSymbolParams(query: query)) else {
+            return []
+        }
+        switch response {
+        case .optionA(let symbols):
+            return symbols.map(LSPOutlineSymbol.init)
+        case .optionB(let symbols):
+            return symbols.map { LSPOutlineSymbol(workspace: $0) }
+        }
+    }
+
+    public func requestInlayHints(for document: Document, in range: EditorIntelligence.TextRange) async throws -> [LSPRenderedInlayHint] {
+        guard await allows(.inlayHints) else { return [] }
+        let hints = try await server.inlayHint(InlayHintParams(
+            textDocument: textDocument(for: document),
+            range: lspRange(from: range)
+        )) ?? []
+        return hints.map(LSPRenderedInlayHint.init)
+    }
+
     public func notifyClosed(documentID: DocumentID) async {
         guard let uri = uris.removeValue(forKey: documentID) else {
             return
@@ -269,8 +429,52 @@ public actor LanguageServerClient: LSPClient {
         try? await server.textDocumentDidClose(LSPDocumentSyncMapper.closeParams(uri: uri))
     }
 
+    private func capabilities() async -> ServerCapabilities? {
+        if let cachedCapabilities { return cachedCapabilities }
+        guard let response = try? await server.initializeIfNeeded() else { return nil }
+        cachedCapabilities = response.capabilities
+        return response.capabilities
+    }
+
+    private func allows(_ feature: LanguageFeature) async -> Bool {
+        guard let capabilities = await capabilities() else { return false }
+        return LSPServerCapabilities.supports(feature, capabilities)
+    }
+
     private func textDocument(for document: Document) -> TextDocumentIdentifier {
         TextDocumentIdentifier(uri: DocumentUri(stringLiteral: documentURI(document)))
+    }
+
+    private func consumeServerEvents() async {
+        for await event in server.eventSequence {
+            guard case .notification(.textDocumentPublishDiagnostics(let params)) = event else { continue }
+            publishedDiagnostics.apply(params)
+        }
+    }
+}
+
+/// Turns an LSP workspace edit into URI-keyed text edits. `documentChanges` wins when the server
+/// sends it (the spec's preferred form, including SourceKit-LSP); otherwise `changes` is used.
+public enum LSPWorkspaceEditMapping {
+    public static func changes(from edit: LanguageServerProtocol.WorkspaceEdit) -> [String: [EditorIntelligence.LSPTextEdit]] {
+        if let documentChanges = edit.documentChanges, !documentChanges.isEmpty {
+            var changes: [String: [EditorIntelligence.LSPTextEdit]] = [:]
+            for change in documentChanges {
+                guard case .textDocumentEdit(let documentEdit) = change else { continue }
+                let mapped = documentEdit.edits.map {
+                    EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
+                }
+                changes[documentEdit.textDocument.uri, default: []].append(contentsOf: mapped)
+            }
+            return changes
+        }
+        var changes: [String: [EditorIntelligence.LSPTextEdit]] = [:]
+        for (uri, edits) in edit.changes ?? [:] {
+            changes[uri] = edits.map {
+                EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
+            }
+        }
+        return changes
     }
 }
 
@@ -287,7 +491,7 @@ private func lspRange(from range: EditorIntelligence.TextRange) -> LanguageServe
     )
 }
 
-private func eipRange(from range: LanguageServerProtocol.LSPRange) -> EditorIntelligence.LSPRange {
+func eipRange(from range: LanguageServerProtocol.LSPRange) -> EditorIntelligence.LSPRange {
     EditorIntelligence.LSPRange(
         start: EditorIntelligence.LSPPosition(line: range.start.line, character: range.start.character),
         end: EditorIntelligence.LSPPosition(line: range.end.line, character: range.end.character)
@@ -317,7 +521,8 @@ private func eipCompletionItem(from item: LanguageServerProtocol.CompletionItem)
             EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
         },
         filterText: item.filterText,
-        sortText: item.sortText
+        sortText: item.sortText,
+        resolvePayload: try? JSONEncoder().encode(item)
     )
 }
 
@@ -397,14 +602,7 @@ private func eipCodeAction(from action: TwoTypeOption<Command, LanguageServerPro
             isPreferred: false
         )
     case .optionB(let codeAction):
-        let edits: [EditorIntelligence.LSPTextEdit]
-        if let workspaceEdit = codeAction.edit, let changes = workspaceEdit.changes {
-            edits = changes.values.flatMap { $0 }.map {
-                EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
-            }
-        } else {
-            edits = []
-        }
+        let edits = codeAction.edit.map { LSPWorkspaceEditMapping.changes(from: $0).values.flatMap { $0 } } ?? []
         return EditorIntelligence.LSPCodeAction(
             title: codeAction.title,
             kind: codeAction.kind,

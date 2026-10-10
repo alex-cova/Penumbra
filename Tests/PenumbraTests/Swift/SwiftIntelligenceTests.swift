@@ -1,6 +1,8 @@
 import EditorIntelligence
 import JavaIntelligence
+import SwiftIntelligence
 import XCTest
+@testable import SwiftIntelligence
 @testable import Umbra
 
 /// The Swift providers Umbra registers, against small projects on disk with `/*|*/` as the caret.
@@ -305,6 +307,16 @@ final class SwiftIntelligenceTests: XCTestCase {
 
         let keys = await provider.generate(SwiftCodeGenerationProvider.codingKeys, fieldNames: ["x", "y", "z"], context: context)
         XCTAssertTrue(keys.entries[0].newText.contains("case x, y, z"))
+
+        let equatable = await provider.generate(SwiftCodeGenerationProvider.equatable, fieldNames: ["x", "y"], context: context)
+        XCTAssertNil(equatable.blockingError)
+        XCTAssertTrue(equatable.entries[0].newText.contains("lhs.x == rhs.x && lhs.y == rhs.y"))
+        XCTAssertEqual(equatable.entries[1].newText, ": Equatable")
+
+        let hashable = await provider.generate(SwiftCodeGenerationProvider.hashable, fieldNames: ["x"], context: context)
+        XCTAssertNil(hashable.blockingError)
+        XCTAssertTrue(hashable.entries[0].newText.contains("hasher.combine(x)"))
+        XCTAssertEqual(hashable.entries[1].newText, ": Hashable")
     }
 
     // MARK: Diagnostics, structure, colours, hover

@@ -3,6 +3,18 @@ import XCTest
 @testable import SubprocessKit
 
 final class SpawnTests: XCTestCase {
+    func testDiscardDoesNotKeepAHundredMegabyteStream() async throws {
+        var request = SubprocessRequest(
+            executable: "/bin/dd", arguments: ["if=/dev/zero", "bs=1048576", "count=100"]
+        )
+        request.stdoutCapture = .discard
+        request.stderrCapture = .discard
+        let result = try await SubprocessRunner.run(request)
+        XCTAssertTrue(result.exit.succeeded)
+        XCTAssertTrue(result.stdout.isEmpty)
+        XCTAssertEqual(result.stdout.omittedBytes, 100 * 1_048_576)
+    }
+
     func testCapturesStdoutAndStderrSeparately() async throws {
         let result = try await SubprocessRunner.run(shell("echo out; echo err 1>&2"))
         XCTAssertEqual(result.exit, SubprocessExit(exitCode: 0, signal: nil))

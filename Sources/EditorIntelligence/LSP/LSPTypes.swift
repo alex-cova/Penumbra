@@ -79,6 +79,8 @@ public struct LSPCompletionItem: Sendable, Hashable {
     public let additionalTextEdits: [LSPTextEdit]
     public let filterText: String?
     public let sortText: String?
+    /// The server's original completion item, JSON-encoded, sent back to `completionItem/resolve`.
+    public let resolvePayload: Data?
 
     public init(
         label: String,
@@ -90,7 +92,8 @@ public struct LSPCompletionItem: Sendable, Hashable {
         deprecated: Bool = false,
         additionalTextEdits: [LSPTextEdit] = [],
         filterText: String? = nil,
-        sortText: String? = nil
+        sortText: String? = nil,
+        resolvePayload: Data? = nil
     ) {
         self.label = label
         self.insertText = insertText
@@ -102,6 +105,7 @@ public struct LSPCompletionItem: Sendable, Hashable {
         self.additionalTextEdits = additionalTextEdits
         self.filterText = filterText
         self.sortText = sortText
+        self.resolvePayload = resolvePayload
     }
 }
 

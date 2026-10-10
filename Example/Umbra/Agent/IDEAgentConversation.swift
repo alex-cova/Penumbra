@@ -700,6 +700,9 @@ final class IDEAgentConversation: Identifiable {
         tools += EditingTools.all()
             + [IDERunCommandTool(support: support)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
+        if !host.agentProjectTaskNames().isEmpty {
+            tools.append(IDEProjectTaskTool(host: box))
+        }
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
         let git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),

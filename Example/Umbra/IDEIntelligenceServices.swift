@@ -1,4 +1,5 @@
 import EditorIntelligence
+import EditorIntelligenceLSP
 import JavaIntelligence
 import Penumbra
 
@@ -40,6 +41,12 @@ final class IDEIntelligenceServices {
     /// formatting. The order is the order each engine asks its providers, and the order services that
     /// share a language are combined in (Java's code actions come before the Run ones).
     let languages: LanguageServiceRegistry
+    /// Semantic-tier connections. The host fills them when a trusted folder's server is running.
+    let sourceKitConnection = LSPConnectionBox()
+    let typeScriptServerConnection = LSPConnectionBox()
+    var languageServerConnections: [String: LSPConnectionBox] {
+        [IDESourceKitServer.id: sourceKitConnection, IDETypeScriptServer.id: typeScriptServerConnection]
+    }
 
     init() {
         let jdk = IDEJDKSelection()
@@ -55,10 +62,18 @@ final class IDEIntelligenceServices {
         projectSystems = IDEProjectSystems([gradle, npm, swiftPM])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
+        let sourceKit = LSPLanguageService(
+            configuration: IDESourceKitServer.definition().configuration, connections: sourceKitConnection
+        )
+        let typeScriptServer = LSPLanguageService(
+            configuration: IDETypeScriptServer.definition().configuration, connections: typeScriptServerConnection
+        )
         let languages = LanguageServiceRegistry(services: [
             javaSupport.languageService,
             typescriptSupport.languageService,
             swiftSupport.languageService,
+            sourceKit,
+            typeScriptServer,
             BasicLanguageService(
                 name: "umbra.run", languageIdentifiers: ["java"],
                 providers: LanguageProviders(codeActions: IDERunCodeActionProvider())

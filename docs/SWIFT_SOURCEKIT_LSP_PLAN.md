@@ -1,6 +1,6 @@
 # SourceKit-LSP integration plan for Umbra
 
-Status: proposal. The LSP layer here is not implemented. Swift has since gained a native, syntactic language service and a SwiftPM project system (`Example/Umbra/Swift/`, `Example/Umbra/Projects/IDESwiftPM*.swift`; see `docs/LANGUAGE_SUPPORT_PLAN.md`, "Swift, natively"), so "Where Swift stands today" below describes the state before that. Phases 1 to 3 (toolchain, transport, the LSP layer's gaps) are unchanged; phase 4 is now one `LanguageService` registered ahead of the native one, and phase 5's project model, build, run and test already exist.
+Status: proposal. The LSP layer here is not implemented. Swift has since gained a native, syntactic language service and a SwiftPM project system (`Sources/SwiftIntelligence/`, `Example/Umbra/Projects/IDESwiftPM*.swift`; see `docs/LANGUAGE_SUPPORT_PLAN.md`, "Swift, natively", and `docs/LANGUAGE_PARITY_PLAN.md`), so "Where Swift stands today" below describes the state before that. Phases 1 to 3 (toolchain, transport, the LSP layer's gaps) are unchanged; phase 4 is now one `LanguageService` registered ahead of the native one, and phase 5's project model, build, run and test already exist.
 
 ## Where Swift stands today
 

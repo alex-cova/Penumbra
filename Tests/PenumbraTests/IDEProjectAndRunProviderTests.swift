@@ -27,6 +27,7 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         var environment = IDEProjectEnvironment()
         var detects: (URL) -> Bool
         var isActive = false
+        var claimStrength: IDEProjectClaim.Strength?
         var syncState = IDEProjectSyncState.notDetected
         var isBusy = false
         var runningTasks: [String] = []
@@ -50,6 +51,11 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         func projectDidChange(root: URL?) {
             isActive = root.map(detects) ?? false
             log.events.append("\(id) root=\(root?.lastPathComponent ?? "nil")")
+        }
+
+        func claim(root: URL) -> IDEProjectClaim? {
+            guard isActive else { return nil }
+            return IDEProjectClaim(strength: claimStrength ?? .rootBuildFile, packageRoots: [root])
         }
 
         func reload() { log.events.append("\(id) reload") }
@@ -79,6 +85,19 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         XCTAssertNil(systems.active)
         XCTAssertEqual(systems.system(id: "gradle")?.displayName, "Gradle")
         XCTAssertEqual(log.events, ["cargo root=app", "gradle root=app", "cargo root=crate", "gradle root=crate", "cargo root=nil", "gradle root=nil"])
+    }
+
+    func testARootClaimBeatsANestedOneAndTheDeepestPackageOwnsAFile() {
+        let log = FakeProjectSystem.Log()
+        let nested = FakeProjectSystem(id: "nested", log: log) { _ in true }
+        nested.claimStrength = .nested
+        let root = FakeProjectSystem(id: "root", log: log) { _ in true }
+        let systems = IDEProjectSystems([nested, root])
+        let folder = URL(fileURLWithPath: "/work/app")
+        systems.projectDidChange(root: folder)
+        XCTAssertEqual(systems.active?.id, "root")
+        let file = URL(fileURLWithPath: "/work/app/src/Main.swift")
+        XCTAssertEqual(systems.owner(of: file)?.lastPathComponent, "app")
     }
 
     func testSeveralSystemsCanBeActiveAndTheBannerNamesTheOneThatChanged() {

@@ -14,6 +14,154 @@ struct IDENpmDependency: Equatable, Sendable {
     var requirement: String
 }
 
+/// Which program runs scripts. `packageManager` wins; otherwise the lockfile; otherwise npm.
+enum IDENpmPackageManager: String, Equatable, Sendable {
+    case npm, pnpm, yarn, bun
+
+    var executableName: String { rawValue }
+}
+
+/// The test runner named by a dependency or a script. Vitest wins when both are present.
+enum IDENpmTestRunner: String, Equatable, Sendable {
+    case vitest, jest
+}
+
+/// What a folder's package.json, lockfile, workspace file and tsconfig say. No install and no network.
+struct IDENpmProjectFacts: Equatable, Sendable {
+    var packageManager: IDENpmPackageManager
+    var workspaceGlobs: [String]
+    var testRunner: IDENpmTestRunner?
+    var baseURL: String?
+    var paths: [String: [String]]
+
+    static func read(
+        packageJSON: Data,
+        siblingFileNames: Set<String> = [],
+        pnpmWorkspace: String? = nil,
+        tsconfig: Data? = nil
+    ) -> IDENpmProjectFacts? {
+        guard let object = try? JSONSerialization.jsonObject(with: IDENpmManifest.strippingBOM(packageJSON)) as? [String: Any] else {
+            return nil
+        }
+        let declared = (object["packageManager"] as? String).flatMap(IDENpmPackageManager.init(specifier:))
+        let packageManager = declared ?? IDENpmPackageManager(lockfiles: siblingFileNames) ?? .npm
+        var globs = workspaceGlobs(in: object)
+        if globs.isEmpty, let pnpmWorkspace {
+            globs = pnpmWorkspaceGlobs(pnpmWorkspace)
+        }
+        let dependencies = dependencyNames(in: object)
+        let scripts = scriptCommands(in: object)
+        return IDENpmProjectFacts(
+            packageManager: packageManager,
+            workspaceGlobs: globs,
+            testRunner: IDENpmTestRunner.detect(dependencyNames: dependencies, scriptCommands: scripts),
+            baseURL: compilerString(tsconfig, key: "baseUrl"),
+            paths: compilerPaths(tsconfig)
+        )
+    }
+
+    private static func workspaceGlobs(in object: [String: Any]) -> [String] {
+        if let list = object["workspaces"] as? [String] { return list }
+        if let wrapped = object["workspaces"] as? [String: Any], let packages = wrapped["packages"] as? [String] {
+            return packages
+        }
+        return []
+    }
+
+    private static func dependencyNames(in object: [String: Any]) -> Set<String> {
+        var names: Set<String> = []
+        for section in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] {
+            guard let map = object[section] as? [String: Any] else { continue }
+            names.formUnion(map.keys)
+        }
+        return names
+    }
+
+    private static func scriptCommands(in object: [String: Any]) -> [String] {
+        guard let scripts = object["scripts"] as? [String: Any] else { return [] }
+        return scripts.values.compactMap { $0 as? String }
+    }
+
+    private static func compilerString(_ data: Data?, key: String) -> String? {
+        guard let options = compilerOptions(data) else { return nil }
+        return options[key] as? String
+    }
+
+    private static func compilerPaths(_ data: Data?) -> [String: [String]] {
+        guard let options = compilerOptions(data), let paths = options["paths"] as? [String: Any] else { return [:] }
+        var result: [String: [String]] = [:]
+        for (key, value) in paths {
+            if let list = value as? [String] { result[key] = list }
+            else if let one = value as? String { result[key] = [one] }
+        }
+        return result
+    }
+
+    private static func compilerOptions(_ data: Data?) -> [String: Any]? {
+        guard let data, let object = try? JSONSerialization.jsonObject(with: IDENpmManifest.strippingBOM(data)) as? [String: Any] else {
+            return nil
+        }
+        return object["compilerOptions"] as? [String: Any]
+    }
+
+    /// `packages:` list items. Quoted and bare values both count. Other YAML is ignored.
+    static func pnpmWorkspaceGlobs(_ text: String) -> [String] {
+        var inPackages = false
+        var globs: [String] = []
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#") || line.isEmpty { continue }
+            if line == "packages:" {
+                inPackages = true
+                continue
+            }
+            guard inPackages else { continue }
+            if !line.hasPrefix("-") {
+                if !raw.hasPrefix(" ") && !raw.hasPrefix("\t") { inPackages = false }
+                continue
+            }
+            var value = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
+                value = String(value.dropFirst().dropLast())
+            } else if value.hasPrefix("'"), value.hasSuffix("'"), value.count >= 2 {
+                value = String(value.dropFirst().dropLast())
+            }
+            if !value.isEmpty { globs.append(value) }
+        }
+        return globs
+    }
+}
+
+extension IDENpmPackageManager {
+    init?(specifier: String) {
+        let name = specifier.split(separator: "@").first.map(String.init) ?? specifier
+        switch name {
+        case "pnpm": self = .pnpm
+        case "yarn": self = .yarn
+        case "bun": self = .bun
+        case "npm": self = .npm
+        default: return nil
+        }
+    }
+
+    init?(lockfiles: Set<String>) {
+        if lockfiles.contains("pnpm-lock.yaml") { self = .pnpm }
+        else if lockfiles.contains("yarn.lock") { self = .yarn }
+        else if lockfiles.contains("bun.lock") || lockfiles.contains("bun.lockb") { self = .bun }
+        else if lockfiles.contains("package-lock.json") { self = .npm }
+        else { return nil }
+    }
+}
+
+extension IDENpmTestRunner {
+    static func detect(dependencyNames: Set<String>, scriptCommands: [String]) -> IDENpmTestRunner? {
+        let commands = scriptCommands.joined(separator: "\n")
+        if dependencyNames.contains("vitest") || commands.contains("vitest") { return .vitest }
+        if dependencyNames.contains("jest") || commands.contains("jest") { return .jest }
+        return nil
+    }
+}
+
 /// The root package.json: the package name, the scripts, and the declared dependency names.
 /// Parsing does not install anything and does not read a lockfile. Key order is the file's order.
 struct IDENpmManifest: Equatable, Sendable {
@@ -41,7 +189,7 @@ struct IDENpmManifest: Equatable, Sendable {
         return IDENpmManifest(packageName: packageName, scripts: scripts, dependencies: dependencies)
     }
 
-    private static func strippingBOM(_ data: Data) -> Data {
+    fileprivate static func strippingBOM(_ data: Data) -> Data {
         if data.starts(with: [0xEF, 0xBB, 0xBF]) { return Data(data.dropFirst(3)) }
         return data
     }

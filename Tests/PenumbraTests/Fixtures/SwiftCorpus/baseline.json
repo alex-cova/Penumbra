@@ -1,0 +1,8 @@
+{
+  "passing" : [
+    "EnumCases",
+    "MemberInstance",
+    "ScopeLocals",
+    "StringMembers"
+  ]
+}

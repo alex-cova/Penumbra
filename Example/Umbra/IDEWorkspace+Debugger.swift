@@ -488,7 +488,7 @@ extension IDEWorkspace {
     }
 
     /// Opens a test case at its method, else at the line its failure points to.
-    func openTestSource(_ testCase: JavaTestCaseResult) {
+    func openTestSource(_ testCase: IDETestCaseResult) {
         Task { [self] in
             let classes = await javaSupport.allTestClasses()
             let methodName = String(testCase.name.prefix { $0 != "(" && $0 != "[" && $0 != " " })
@@ -501,7 +501,7 @@ extension IDEWorkspace {
     }
 
     /// Runs or debugs one test case from the Test Results tree.
-    func runTestCase(_ testCase: JavaTestCaseResult, debug: Bool) {
+    func runTestCase(_ testCase: IDETestCaseResult, debug: Bool) {
         Task { [self] in
             let classes = await javaSupport.allTestClasses()
             let methodName = String(testCase.name.prefix { $0 != "(" && $0 != "[" && $0 != " " })

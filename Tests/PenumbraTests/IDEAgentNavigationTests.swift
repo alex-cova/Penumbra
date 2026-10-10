@@ -123,7 +123,7 @@ final class IDEAgentNavigationToolTests: XCTestCase {
     func testBadInputsGetErrorsTheModelCanActOn() async {
         let tool = IDEFindUsagesTool(navigator: FakeNavigator(), lineText: lineText)
         let notJava = await run(tool, #"{"path":"README.md","line":1,"symbol":"notes"}"#)
-        XCTAssertTrue(notJava.isError && notJava.text.contains("Java files"))
+        XCTAssertTrue(notJava.isError && notJava.text.contains("not one"))
         let wrongSymbol = await run(tool, #"{"path":"src/A.java","line":2,"symbol":"missing"}"#)
         XCTAssertTrue(wrongSymbol.isError && wrongSymbol.text.contains("does not appear as a whole word on line 2"))
         let beyond = await run(tool, #"{"path":"src/A.java","line":99,"symbol":"total"}"#)

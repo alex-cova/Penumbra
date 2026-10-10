@@ -1,6 +1,6 @@
 # Language support plan
 
-How a contributor adds a language to Umbra, from syntax colors up to a Java-class IDE experience, without editing `IDEWorkspace`. Companion guide for what to do **today**: `docs/ADDING_A_LANGUAGE.md`.
+How a contributor adds a language to Umbra, from syntax colors up to a Java-class IDE experience, without editing `IDEWorkspace`. Companion guide for what to do **today**: `docs/ADDING_A_LANGUAGE.md`. The follow-on plan for Swift and TypeScript parity, shared syntax, tiers and LSP is `docs/LANGUAGE_PARITY_PLAN.md`.
 
 ## Status
 

@@ -93,6 +93,28 @@ final class IDEProjectStatus {
     }
 }
 
+/// How strongly a project system claims a folder. Equal strengths keep registration order, so Gradle
+/// registered before npm still owns the sidebar when both match the root.
+struct IDEProjectClaim: Equatable, Sendable {
+    enum Strength: Int, Comparable, Sendable {
+        case weak = 0
+        case nested = 1
+        case rootBuildFile = 2
+
+        static func < (lhs: Strength, rhs: Strength) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
+    var strength: Strength
+    /// Package roots this system owns, the project root first. `owner(of:)` picks the deepest one
+    /// that contains a file.
+    var packageRoots: [URL]
+
+    init(strength: Strength, packageRoots: [URL]) {
+        self.strength = strength
+        self.packageRoots = packageRoots
+    }
+}
+
 /// One kind of project Umbra understands: it recognizes a folder, syncs the project model (asking for
 /// trust first), keeps a console log, runs the project's tasks and shows a tool window. Gradle is the
 /// first (`IDEGradleProjectSystem`); npm is the second (`IDENpmProjectSystem`). SwiftPM or Cargo would
@@ -151,6 +173,9 @@ protocol IDEProjectSystem: AnyObject {
     var showsConsole: Bool { get }
     /// A diagram this system knows how to draw. Nil when `request` belongs to someone else.
     func loadDiagram(_ request: IDEDiagramRequest, settings: IDEDiagramSettings, workspace: IDEWorkspace) async -> IDEDiagramLoad?
+
+    /// Why this system wants `root`, or nil when the folder is not its kind of project.
+    func claim(root: URL) -> IDEProjectClaim?
 }
 
 extension IDEProjectSystem {
@@ -160,6 +185,11 @@ extension IDEProjectSystem {
     func loadDiagram(
         _: IDEDiagramRequest, settings _: IDEDiagramSettings, workspace _: IDEWorkspace
     ) async -> IDEDiagramLoad? { nil }
+
+    func claim(root: URL) -> IDEProjectClaim? {
+        guard isActive else { return nil }
+        return IDEProjectClaim(strength: .rootBuildFile, packageRoots: [root])
+    }
 }
 
 /// The project systems of one window, in the order they claim a folder.
@@ -167,15 +197,43 @@ extension IDEProjectSystem {
 @Observable
 final class IDEProjectSystems {
     let systems: [any IDEProjectSystem]
+    private(set) var root: URL?
 
     init(_ systems: [any IDEProjectSystem]) {
         self.systems = systems
     }
 
-    /// The system that recognized the open folder, if any. When several do, this is the first, and
-    /// it owns the right-hand sidebar.
+    /// The system that owns the sidebar. The strongest claim wins. Equal claims keep registration
+    /// order, which is today's Gradle-then-npm choice when both match the folder.
     var active: (any IDEProjectSystem)? {
-        activeSystems.first
+        guard let root else { return nil }
+        var chosen: (any IDEProjectSystem)?
+        var chosenStrength: IDEProjectClaim.Strength?
+        for system in systems {
+            guard let claim = system.claim(root: root) else { continue }
+            if let chosenStrength, claim.strength <= chosenStrength { continue }
+            chosen = system
+            chosenStrength = claim.strength
+        }
+        return chosen
+    }
+
+    /// The deepest package root among the active claims that contains `url`.
+    func owner(of url: URL) -> URL? {
+        guard let root else { return nil }
+        let file = url.standardizedFileURL.path
+        var best: URL?
+        for system in systems {
+            guard let claim = system.claim(root: root) else { continue }
+            for package in claim.packageRoots {
+                let base = package.standardizedFileURL
+                let contains = file == base.path || file.hasPrefix(base.path + "/")
+                if contains, best == nil || base.path.count > best!.path.count {
+                    best = base
+                }
+            }
+        }
+        return best
     }
 
     /// Every system that recognized the open folder, in registration order. A folder can be a
@@ -206,6 +264,7 @@ final class IDEProjectSystems {
     }
 
     func projectDidChange(root: URL?) {
+        self.root = root
         for system in systems { system.projectDidChange(root: root) }
     }
 

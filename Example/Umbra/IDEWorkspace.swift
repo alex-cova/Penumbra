@@ -92,6 +92,8 @@ public final class IDEWorkspace {
     var diffSessions: [UUID: IDEDiffSession] = [:]
     var diagramSessions: [UUID: IDEDiagramSession] = [:]
     private let intelligenceServices = IDEIntelligenceServices()
+    /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
+    let languageServerHost = IDELanguageServerHost()
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
     @ObservationIgnored
@@ -209,6 +211,7 @@ public final class IDEWorkspace {
     var projectStatus: IDEProjectStatus { intelligenceServices.projectStatus }
     /// Every language's intelligence, routed by the active document's language.
     var languages: LanguageServiceRegistry { intelligenceServices.languages }
+    var navigationEngine: NavigationEngine { intelligenceServices.navigationEngine }
 
     /// The window this workspace is shown in, set by `IDEWindowConfiguratorView`. Sheets, alerts and
     /// first-responder changes target this window, not whichever one happens to be key.
@@ -668,6 +671,14 @@ public final class IDEWorkspace {
                 self.showProblems()
             }
         }
+        languageServerHost.requestTrust = { [weak self] definition, url in
+            guard let self, self.window != nil else { return false }
+            let name = url.lastPathComponent
+            return await self.promptProjectTrust(
+                message: "Trust and run \(definition.configuration.name) for “\(name)”?",
+                detail: "\(definition.configuration.name) is an external program. It can read this folder and run the project's tools. Trust this folder only if you trust its contents."
+            )
+        }
         swiftPM.onModelChanged = { [weak self] manifest, root in
             guard let self else { return }
             let resolver = manifest.flatMap { manifest in root.map { manifest.moduleResolver(root: $0) } }
@@ -685,6 +696,9 @@ public final class IDEWorkspace {
         gradle.onModelChanged = { [weak self] model in
             self?.fileIndexer.setGradleModel(model)
             if model != nil { self?.reloadDiagramSessions(classes: false) }
+        }
+        intelligenceServices.javaSupport.openJavaDocuments = { [weak self] in
+            self?.openJavaDocuments() ?? []
         }
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
@@ -793,6 +807,7 @@ public final class IDEWorkspace {
         runProviders.stopAll()
         projectSystems.stop()
         intelligenceServices.javaSupport.teardown()
+        languageServerHost.stop()
         for task in nameIndexOverlayTasks.values { task.cancel() }
         nameIndexOverlayTasks.removeAll()
         for task in semanticHighlightTasks.values { task.cancel() }
@@ -900,7 +915,7 @@ public final class IDEWorkspace {
         guard document.contentKind == .text else { return }
         guard let identifier = LanguageIdentifier.identifier(for: url) else { return }
         document.languageIdentifier = identifier
-        document.language = IDELanguageSupport.language(forIdentifier: identifier)
+        document.language = IDELanguageSupport.language(forIdentifier: identifier, fileURL: url)
 
         let languageMode: LanguageMode
         if let language = document.language {
@@ -1196,7 +1211,7 @@ public final class IDEWorkspace {
             gitStatus.refresh()
             refreshBlame(in: pane, force: true)
             refreshPresentation()
-            recheckJavaAfterSave(of: destination)
+            noteDocumentSaved(destination)
             return true
         } catch {
             presentError(error)
@@ -1231,7 +1246,7 @@ public final class IDEWorkspace {
             localHistory.recordSaved(url)
             gitStatus.refresh()
             refreshPresentation()
-            recheckJavaAfterSave(of: url)
+            noteDocumentSaved(url)
             return true
         } catch {
             return false
@@ -1411,7 +1426,7 @@ public final class IDEWorkspace {
             recordRecentFile(url)
             gitStatus.refresh()
             refreshPresentation()
-            recheckJavaAfterSave(of: url)
+            noteDocumentSaved(url)
         } catch {
             presentError(error)
         }
@@ -3872,7 +3887,7 @@ public final class IDEWorkspace {
             return WorkbenchDocument.loadImage(from: url)
         }
         let identifier = LanguageIdentifier.identifier(for: url)
-        let language = IDELanguageSupport.language(forIdentifier: identifier)
+        let language = IDELanguageSupport.language(forIdentifier: identifier, fileURL: url)
         // A remembered non-UTF-8 encoding is tried first; if the file no longer fits it, detect afresh.
         var attempts: [TextFileEncoding?] = [encoding]
         if encoding == nil, let preferredEncoding, preferredEncoding != .utf8 {
@@ -4065,7 +4080,7 @@ public final class IDEWorkspace {
     }
 
     private func applyInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
-        problems.setInspectionDiagnostics(diagnostics, for: url)
+        problems.publish(DiagnosticPublication(source: .javaInspection, url: url, diagnostics: diagnostics))
         if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
             host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
         }
@@ -4073,7 +4088,7 @@ public final class IDEWorkspace {
 
     /// A finished compile: list its problems, and redraw the squiggles if that file is showing.
     private func applyCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
-        problems.setCompilerDiagnostics(diagnostics, for: url)
+        problems.publish(DiagnosticPublication(source: .javac, url: url, diagnostics: diagnostics))
         if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
             host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
         }
@@ -4125,7 +4140,7 @@ public final class IDEWorkspace {
         isTerminalVisible = true
     }
 
-    func openTestResult(_ result: JavaTestCaseResult) {
+    func openTestResult(_ result: IDETestCaseResult) {
         guard let file = result.sourceFile else { return }
         Task {
             await openDocument(from: file)
@@ -4160,11 +4175,11 @@ public final class IDEWorkspace {
         return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }
     }
 
-    /// After a save, recheck every open Java file: one that didn't change can still break because a
-    /// file it depends on did.
-    private func recheckJavaAfterSave(of url: URL? = nil) {
+    /// A save drops that file's build-output problems (the in-editor check takes over) and tells
+    /// every language service. Java recompiles the open Java files from ``documentsDidSave``.
+    private func noteDocumentSaved(_ url: URL?) {
         if let url { problems.clearBuildDiagnostics(for: url) }
-        javaSupport.compileNow(openJavaDocuments(), force: true)
+        languages.documentsDidSave(url.map { [$0] } ?? [])
     }
 
     func javaInlayHintsPreferenceChanged() {
@@ -4749,6 +4764,7 @@ public final class IDEWorkspace {
         // index when Gradle starts from a cached model). Both are synchronous, so what follows sees them.
         projectSystems.projectDidChange(root: url)
         languages.projectDidChange(root: url)
+        languageServerHost.projectDidChange(root: url, connections: intelligenceServices.languageServerConnections)
         refreshLastRunConfiguration()
         refreshBreakpoints()
         loadWatches()

@@ -21,6 +21,8 @@ struct IDEJavaLanguageService: LanguageService {
     var languageIdentifiers: Set<String> { base.languageIdentifiers }
     var providers: LanguageProviders { base.providers }
     var policy: LanguagePolicy { base.policy }
+    var tier: LanguageServiceTier { base.tier }
+    var unavailableFeatures: Set<LanguageFeature> { base.unavailableFeatures }
 
     func start(environment: LanguageEnvironment) async {
         await base.start(environment: environment)
@@ -36,5 +38,13 @@ struct IDEJavaLanguageService: LanguageService {
 
     @MainActor func filesDidChange(_ urls: [URL]) {
         support?.filesDidChange(urls)
+    }
+
+    /// A save rechecks every open Java file. One that did not change can still break because a
+    /// file it depends on did.
+    @MainActor func documentsDidSave(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let documents = support?.openJavaDocuments?() ?? []
+        support?.compileNow(documents, force: true)
     }
 }

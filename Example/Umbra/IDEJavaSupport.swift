@@ -313,6 +313,10 @@ final class IDEJavaSupport {
         }
     }
 
+    /// The window's open Java documents, read when a save asks for a fresh compile. The closure
+    /// does not retain the window.
+    var openJavaDocuments: (@MainActor () -> [EditorIntelligence.Document])?
+
     /// Checks `documents` now instead of waiting for the editor to go idle -- after a save, or once
     /// the compiler is configured. `force` rechecks files whose own text did not change.
     func compileNow(_ documents: [EditorIntelligence.Document], force: Bool = false) {

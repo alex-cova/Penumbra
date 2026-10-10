@@ -11,6 +11,7 @@ import Foundation
 public struct JavaLanguageService: LanguageService {
     public let name = "java"
     public let languageIdentifiers: Set<String> = ["java"]
+    public let tier: LanguageServiceTier = .semantic
     /// Java's own completion, hover and navigation answer better than the name-based ones, and the
     /// built-in snippets are JavaScript-flavored. Duplicate-symbol warnings stay on.
     public let policy = LanguagePolicy(disabling: [.snippets, .symbolHover, .symbolNavigation])

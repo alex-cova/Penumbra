@@ -1,5 +1,6 @@
 import Foundation
 import JavaIntelligence
+import SwiftIntelligence
 
 /// What a SwiftPM package declares: its targets, products and package dependencies.
 ///

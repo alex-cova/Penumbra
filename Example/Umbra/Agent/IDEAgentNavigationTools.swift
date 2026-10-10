@@ -14,12 +14,14 @@ struct IDEAgentCodeLocation: Sendable, Equatable {
     var isAmbiguous = false
 }
 
-/// Java symbol navigation as the agent tools use it. `IDEWorkspace` backs it with the same
-/// providers as Go to Definition and Find Usages; tests use a fake.
-protocol IDEAgentJavaNavigating: Sendable {
+/// Symbol navigation as the agent tools use it. The window backs it with ``NavigationEngine``;
+/// tests use a fake, and the Java providers remain available for tests that call them directly.
+protocol IDEAgentNavigating: Sendable {
     func definitions(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation]
     func usages(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation]
 }
+
+typealias IDEAgentJavaNavigating = IDEAgentNavigating
 
 /// Finds the character offset of a symbol on a line, so the model can name a symbol instead of
 /// counting columns.
@@ -139,8 +141,8 @@ private struct SymbolQuery {
 
     init(_ arguments: ToolArguments, context: ToolContext) async throws {
         path = try arguments.string("path")
-        guard path.lowercased().hasSuffix(".java") else {
-            throw ToolError("Symbol navigation works on Java files; \(path) is not one. Use grep instead.")
+        guard Self.languageIdentifier(for: path) != nil else {
+            throw ToolError("Symbol navigation works on Java, Swift, TypeScript and JavaScript files; \(path) is not one. Use grep instead.")
         }
         guard let line = try arguments.optionalInt("line") else { throw ToolError("Missing `line`.") }
         let symbol = try arguments.string("symbol")
@@ -154,8 +156,18 @@ private struct SymbolQuery {
         url = URL(fileURLWithPath: context.workspace.rootPath).appendingPathComponent(path).standardizedFileURL
     }
 
+    static func languageIdentifier(for path: String) -> String? {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "java": return "java"
+        case "swift": return "swift"
+        case "ts", "tsx", "mts", "cts": return "typescript"
+        case "js", "jsx", "mjs", "cjs": return "javascript"
+        default: return nil
+        }
+    }
+
     static let parameters = [
-        ToolParameter("path", .string, "Project-relative path of the Java file where the symbol appears."),
+        ToolParameter("path", .string, "Project-relative path of the source file where the symbol appears."),
         ToolParameter("line", .integer, "1-based line where the symbol appears."),
         ToolParameter("symbol", .string, "The identifier, exactly as written on that line."),
         ToolParameter("occurrence", .integer, "Which match when the identifier appears more than once on the line.", optional: true),
@@ -171,8 +183,8 @@ struct IDEGoToDefinitionTool: AgentTool {
         ToolDefinition(
             name: "go_to_definition",
             description: """
-            Find where a Java symbol is declared, resolved by the compiler's rules (imports, overloads, \
-            inheritance), which grep cannot do. Give the file, the line and the identifier as written there.
+            Find where a symbol is declared. Java, Swift, TypeScript and JavaScript use the language's \
+            own navigation, which grep cannot do. Give the file, the line and the identifier as written there.
             """,
             parameters: SymbolQuery.parameters)
     }
@@ -197,9 +209,9 @@ struct IDEFindUsagesTool: AgentTool {
         ToolDefinition(
             name: "find_usages",
             description: """
-            List every place the project uses a Java symbol (calls, reads, writes, type references, \
-            imports), not the declaration itself. It tells a method from another of the same name, so it \
-            is safer than grep before renaming or changing a signature.
+            List every place the project uses a symbol, not the declaration itself. Java, Swift, \
+            TypeScript and JavaScript use the language's own navigation, so a method is told from \
+            another of the same name. Safer than grep before renaming or changing a signature.
             """,
             parameters: SymbolQuery.parameters)
     }
@@ -219,7 +231,47 @@ struct IDEFindUsagesTool: AgentTool {
 
 /// Backs the tools with Umbra's Java providers. Definitions never ask about decompiling a class
 /// file: the trigger is `.idle`, which the provider treats as "don't prompt".
-struct IDEJavaAgentNavigator: IDEAgentJavaNavigating {
+/// Asks ``NavigationEngine``, so every language that registered navigation answers.
+struct IDEEngineAgentNavigator: IDEAgentNavigating {
+    let engine: NavigationEngine
+
+    func definitions(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] {
+        await locate(file: file, source: source, utf16Offset: utf16Offset, kind: .definition)
+    }
+
+    func usages(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] {
+        await locate(file: file, source: source, utf16Offset: utf16Offset, kind: .references)
+    }
+
+    private func locate(file: URL, source: String, utf16Offset: Int, kind: NavigationKind) async -> [IDEAgentCodeLocation] {
+        let position = IDEJavaAgentNavigator.position(in: source, utf16Offset: utf16Offset)
+        let range = TextRange(start: position, end: position)
+        let document = Document(
+            url: file, displayName: file.lastPathComponent,
+            contentSnapshot: TextSnapshot(version: 0, text: source),
+            selection: Selection(range: range), cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 0, height: 0),
+            languageIdentifier: SymbolQuery.languageIdentifier(for: file.path))
+        let context = NavigationContext(
+            document: document, cursor: document.cursor, selection: document.selection, trigger: .idle, kind: kind)
+        let locations: [Location]
+        switch await engine.navigate(context: context) {
+        case .single(let location)?: locations = [location]
+        case .multiple(let found)?: locations = found
+        case nil: locations = []
+        }
+        return locations.map { location in
+            IDEAgentCodeLocation(
+                fileURL: location.url ?? (location.documentID == document.id ? file : nil),
+                line: location.range.start.line + 1,
+                label: location.displayName,
+                kind: location.usage?.kindLabel,
+                isAmbiguous: location.usage?.isAmbiguous ?? false)
+        }
+    }
+}
+
+struct IDEJavaAgentNavigator: IDEAgentNavigating {
     let definitionProvider: JavaGoToDefinitionProvider
     let usageProvider: JavaFindUsagesProvider
 
@@ -254,7 +306,7 @@ struct IDEJavaAgentNavigator: IDEAgentJavaNavigating {
         }
     }
 
-    private static func position(in text: String, utf16Offset: Int) -> TextPosition {
+    static func position(in text: String, utf16Offset: Int) -> TextPosition {
         let ns = text as NSString
         let end = min(max(0, utf16Offset), ns.length)
         var line = 0

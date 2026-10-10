@@ -12,7 +12,11 @@
 		00000000000000000000006E /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006D /* PenumbraLanguages */; };
 		000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006F /* PenumbraMarkdownLanguage */; };
 		000000000000000000000072 /* JavaIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000071 /* JavaIntelligence */; };
+		000000000000000000000084 /* SwiftIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000083 /* SwiftIntelligence */; };
+		000000000000000000000088 /* LanguageSyntax in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000087 /* LanguageSyntax */; };
+		000000000000000000000086 /* TypeScriptIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000085 /* TypeScriptIntelligence */; };
 		000000000000000000000074 /* EditorIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000073 /* EditorIntelligence */; };
+		00000000000000000000008A /* EditorIntelligenceLSP in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000008B /* EditorIntelligenceLSP */; };
 		000000000000000000000076 /* GitIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000075 /* GitIntelligence */; };
 		000000000000000000000078 /* SubprocessKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000077 /* SubprocessKit */; };
 		00000000000000000000007A /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000079 /* AgentKit */; };
@@ -119,7 +123,11 @@
 				00000000000000000000006E /* PenumbraLanguages in Frameworks */,
 				000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */,
 				000000000000000000000072 /* JavaIntelligence in Frameworks */,
+				000000000000000000000084 /* SwiftIntelligence in Frameworks */,
+				000000000000000000000088 /* LanguageSyntax in Frameworks */,
+				000000000000000000000086 /* TypeScriptIntelligence in Frameworks */,
 				000000000000000000000074 /* EditorIntelligence in Frameworks */,
+				00000000000000000000008A /* EditorIntelligenceLSP in Frameworks */,
 				000000000000000000000076 /* GitIntelligence in Frameworks */,
 				000000000000000000000078 /* SubprocessKit in Frameworks */,
 				00000000000000000000007A /* AgentKit in Frameworks */,
@@ -185,7 +193,11 @@
 				00000000000000000000006D /* PenumbraLanguages */,
 				00000000000000000000006F /* PenumbraMarkdownLanguage */,
 				000000000000000000000071 /* JavaIntelligence */,
+				000000000000000000000083 /* SwiftIntelligence */,
+				000000000000000000000087 /* LanguageSyntax */,
+				000000000000000000000085 /* TypeScriptIntelligence */,
 				000000000000000000000073 /* EditorIntelligence */,
+				00000000000000000000008B /* EditorIntelligenceLSP */,
 				000000000000000000000075 /* GitIntelligence */,
 				000000000000000000000077 /* SubprocessKit */,
 				000000000000000000000079 /* AgentKit */,
@@ -442,10 +454,30 @@
 			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = JavaIntelligence;
 		};
+		000000000000000000000083 /* SwiftIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = SwiftIntelligence;
+		};
+		000000000000000000000087 /* LanguageSyntax */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = LanguageSyntax;
+		};
+		000000000000000000000085 /* TypeScriptIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = TypeScriptIntelligence;
+		};
 		000000000000000000000073 /* EditorIntelligence */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = EditorIntelligence;
+		};
+		00000000000000000000008B /* EditorIntelligenceLSP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = EditorIntelligenceLSP;
 		};
 		000000000000000000000075 /* GitIntelligence */ = {
 			isa = XCSwiftPackageProductDependency;

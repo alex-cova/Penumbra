@@ -36,6 +36,10 @@ protocol IDEAgentHost: AnyObject {
     /// Saves these open buffers to disk, so a command or build sees the agent's edits.
     func agentSaveBuffers(relativePaths: [String]) async
     var agentIsGradleProject: Bool { get }
+    /// Task paths the active project system lists, excluding Gradle (that tool stays `gradle`).
+    func agentProjectTaskNames() -> [String]
+    /// Starts one of those tasks. Returns a short status; the console shows the output.
+    func agentRunProjectTask(_ name: String) async -> String
     /// Runs Gradle through the window's own runner (console, Problems, Test Results), asking for
     /// the project's trust first. Ends exactly once, whatever happens.
     func agentRunGradle(tasks: [String], options: [String], timeout: TimeInterval) async -> IDEGradleRunOutcome
@@ -45,7 +49,7 @@ protocol IDEAgentHost: AnyObject {
 
     // Navigation. Both are optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
-    func agentJavaNavigator() -> (any IDEAgentJavaNavigating)?
+    func agentJavaNavigator() -> (any IDEAgentNavigating)?
     /// The text of 1-based `line` of a file, from its open buffer or from disk.
     func agentLineText(url: URL, line: Int) -> String?
 
@@ -82,7 +86,9 @@ protocol IDEAgentHost: AnyObject {
 
 extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
-    func agentJavaNavigator() -> (any IDEAgentJavaNavigating)? { nil }
+    func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
+    func agentProjectTaskNames() -> [String] { [] }
+    func agentRunProjectTask(_ name: String) async -> String { "This folder has no project tasks." }
     func agentLineText(url: URL, line: Int) -> String? { nil }
     func agentSelection() -> IDEAgentSelection? { nil }
     func agentOpenFilePaths() -> [String] { [] }
@@ -137,6 +143,12 @@ final class IDEAgentHostBox: @unchecked Sendable {
     @MainActor
     func saveBuffers(relativePaths: [String]) async {
         await host?.agentSaveBuffers(relativePaths: relativePaths)
+    }
+
+    @MainActor
+    func runProjectTask(_ name: String) async -> String {
+        guard let host else { return "This folder has no project tasks." }
+        return await host.agentRunProjectTask(name)
     }
 
     @MainActor

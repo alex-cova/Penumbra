@@ -26,6 +26,18 @@ final class IDEProblemsStoreTests: XCTestCase {
         XCTAssertEqual(store.errorCount, 1)
     }
 
+    func testAPublicationReplacesOneSourceForOneFile() {
+        let store = IDEProblemsStore()
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: [diagnostic("old", source: "javac")]))
+        store.publish(DiagnosticPublication(source: .swiftPM, url: file, diagnostics: [diagnostic("swift", source: "swiftpm")]))
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: [diagnostic("new", source: "javac")]))
+        XCTAssertEqual(store.compilerDiagnostics[other.standardizedFileURL]?.map(\.message), ["new"])
+        XCTAssertEqual(store.buildDiagnostics[file.standardizedFileURL]?.map(\.message), ["swift"])
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: []))
+        XCTAssertNil(store.compilerDiagnostics[other.standardizedFileURL])
+        XCTAssertEqual(store.errorCount, 1)
+    }
+
     func testClearingAFileDropsItFromEverySource() {
         let store = IDEProblemsStore()
         store.setBuildDiagnostics([file: [diagnostic("a", source: "gradle")]], source: IDEProblemsStore.gradleBuildSource)

@@ -5,12 +5,12 @@ import SwiftUI
 /// One class of the Test Results tree, with its test cases.
 struct IDETestResultGroup: Identifiable {
     let className: String
-    let cases: [JavaTestCaseResult]
+    let cases: [IDETestCaseResult]
 
     var id: String { className }
 
     /// Failed if any case failed, else skipped if all were, else passed.
-    var status: JavaTestCaseResult.Status {
+    var status: IDETestCaseResult.Status {
         if cases.contains(where: { $0.status == .failed || $0.status == .aborted }) { return .failed }
         if !cases.isEmpty, cases.allSatisfy({ $0.status == .skipped }) { return .skipped }
         return .passed
@@ -28,7 +28,7 @@ final class IDETestResultsStore {
         case duration = "Duration"
     }
 
-    private(set) var cases: [JavaTestCaseResult] = []
+    private(set) var cases: [IDETestCaseResult] = []
     private(set) var passedCount = 0
     private(set) var failedCount = 0
     private(set) var skippedCount = 0
@@ -79,7 +79,7 @@ final class IDETestResultsStore {
 
     func finishRun(_ result: JavaTestRunResult) {
         isRunning = false
-        cases = result.cases
+        cases = result.cases.map(IDETestCaseResult.init)
         passedCount = result.passedCount
         failedCount = result.failedCount
         skippedCount = result.skippedCount
@@ -105,7 +105,7 @@ final class IDETestResultsStore {
 
     /// The classes and cases the filters let through, sorted.
     var groups: [IDETestResultGroup] {
-        var grouped: [String: [JavaTestCaseResult]] = [:]
+        var grouped: [String: [IDETestCaseResult]] = [:]
         var order: [String] = []
         for testCase in cases where isShown(testCase) {
             if grouped[testCase.className] == nil { order.append(testCase.className) }
@@ -118,7 +118,7 @@ final class IDETestResultsStore {
         }
     }
 
-    private func isShown(_ testCase: JavaTestCaseResult) -> Bool {
+    private func isShown(_ testCase: IDETestCaseResult) -> Bool {
         switch testCase.status {
         case .passed: return showsPassed
         case .skipped: return showsSkipped
@@ -126,7 +126,7 @@ final class IDETestResultsStore {
         }
     }
 
-    private func sorted(_ cases: [JavaTestCaseResult]) -> [JavaTestCaseResult] {
+    private func sorted(_ cases: [IDETestCaseResult]) -> [IDETestCaseResult] {
         switch sort {
         case .name: return cases.sorted { $0.name < $1.name }
         case .duration: return cases.sorted { $0.duration > $1.duration }
@@ -141,7 +141,7 @@ final class IDETestResultsStore {
         failedScope != nil || (rerunHandler != nil && cases.contains { $0.status == .failed || $0.status == .aborted })
     }
 
-    var selectedCase: JavaTestCaseResult? {
+    var selectedCase: IDETestCaseResult? {
         cases.first { $0.id == selectedID }
     }
 
@@ -354,7 +354,7 @@ struct IDETestResultsPanel: View {
         }
     }
 
-    private func statusIcon(_ status: JavaTestCaseResult.Status) -> some View {
+    private func statusIcon(_ status: IDETestCaseResult.Status) -> some View {
         Image(systemName: icon(for: status))
             .font(.system(size: 11))
             .foregroundStyle(color(for: status))
@@ -369,7 +369,7 @@ struct IDETestResultsPanel: View {
         }
     }
 
-    private func icon(for status: JavaTestCaseResult.Status) -> String {
+    private func icon(for status: IDETestCaseResult.Status) -> String {
         switch status {
         case .passed: return "checkmark.circle.fill"
         case .failed, .aborted: return "xmark.circle.fill"
@@ -377,7 +377,7 @@ struct IDETestResultsPanel: View {
         }
     }
 
-    private func color(for status: JavaTestCaseResult.Status) -> Color {
+    private func color(for status: IDETestCaseResult.Status) -> Color {
         switch status {
         case .passed: return .green
         case .failed, .aborted: return .red

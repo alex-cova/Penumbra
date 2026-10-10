@@ -1,5 +1,6 @@
 import Foundation
 import JavaIntelligence
+import SwiftIntelligence
 
 /// Run, Run in Context and the gutter's play buttons for Swift files in a SwiftPM package.
 ///

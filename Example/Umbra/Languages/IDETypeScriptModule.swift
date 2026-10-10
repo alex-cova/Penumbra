@@ -1,5 +1,6 @@
 import Foundation
 import Penumbra
+import TypeScriptIntelligence
 
 /// TypeScript in Umbra's chrome: palette commands, the symbol-palette source, the one-file class
 /// diagram, and Run for TypeScript and JavaScript through the npm project. There is no menu-bar menu.
@@ -7,6 +8,8 @@ import Penumbra
 struct IDETypeScriptModule: IDELanguageModule {
     static let id = "typescript"
     var id: String { Self.id }
+
+    var languageServers: [IDELanguageServerDefinition] { [IDETypeScriptServer.definition()] }
 
     private static let classDiagramPrefix = "typescript:classes:"
 
