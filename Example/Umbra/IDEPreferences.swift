@@ -623,7 +623,7 @@ public final class IDEPreferences {
         uiFontName = defaults.string(forKey: Keys.uiFontName) ?? IDEUIFonts.defaultFamilyName
         uiFontSize = defaults.object(forKey: Keys.uiFontSize) as? Double ?? IDEUIFonts.defaultFontSize
         welcomeBackground = defaults.string(forKey: Keys.welcomeBackground)
-            .flatMap(IDEWelcomeBackground.init(rawValue:)) ?? .starfield
+            .flatMap(IDEWelcomeBackground.init(rawValue:)) ?? .moltenMetal
         let savedUIColorSchemeID = defaults.string(forKey: Keys.uiColorSchemeID)
         uiColorSchemeID = switch savedUIColorSchemeID {
         case "fleet", "fleet-dark-edited": IDEUIColorSchemeCatalog.defaultID
