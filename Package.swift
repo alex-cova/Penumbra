@@ -161,6 +161,7 @@ let package = Package(
                 "JavaIntelligence",
                 "TreeSitter",
                 "TreeSitterHTTP",
+                "TreeSitterTypeScript",
                 "GitIntelligence",
                 "SubprocessKit",
                 .product(name: "AgentKit", package: "AgentKit"),

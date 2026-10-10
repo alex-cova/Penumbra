@@ -370,8 +370,8 @@ final class LanguageServiceRegistryTests: XCTestCase {
     func testUmbraRegistryOptsOutOfTheSameGenericFeaturesAsBefore() {
         let languages = IDEIntelligenceServices().languages
         XCTAssertEqual(languages.identifiers(disabling: .snippets), ["java", "http"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "typescript"])
         XCTAssertEqual(languages.identifiers(disabling: .duplicateSymbolDiagnostics), ["http"])
     }
 
@@ -379,12 +379,12 @@ final class LanguageServiceRegistryTests: XCTestCase {
     func testUmbraRegistryKeepsTheEngineProviderOrder() {
         let languages = IDEIntelligenceServices().languages
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["Java", "Markdown File Mention", "HTTP"],
-            "completion: Java, then Markdown mentions, then HTTP"
+            languages.completionProviders.map(\.name), ["Java", "TypeScript", "Markdown File Mention", "HTTP"],
+            "completion: Java, then TypeScript, then Markdown mentions, then HTTP"
         )
-        XCTAssertEqual(languages.hoverProviders.count, 1)
-        XCTAssertEqual(languages.diagnosticProviders.count, 2, "javac, then inspections")
-        XCTAssertEqual(languages.navigationProviders.count, 2, "go to definition / implementation, then usages")
+        XCTAssertEqual(languages.hoverProviders.count, 2)
+        XCTAssertEqual(languages.diagnosticProviders.count, 3, "javac, inspections, then TypeScript syntax")
+        XCTAssertEqual(languages.navigationProviders.count, 3, "Java definition, Java usages, then TypeScript")
     }
 
     @MainActor
@@ -395,6 +395,11 @@ final class LanguageServiceRegistryTests: XCTestCase {
         XCTAssertNotNil(languages.structure(for: "java"))
         XCTAssertNotNil(languages.typeHierarchy(for: "java"))
         XCTAssertNotNil(languages.callHierarchy(for: "java"))
+        XCTAssertNotNil(languages.semanticTokens(for: "typescript"))
+        XCTAssertNotNil(languages.structure(for: "typescript"))
+        XCTAssertNil(languages.lineMarkers(for: "typescript"))
+        XCTAssertNil(languages.typeHierarchy(for: "typescript"))
+        XCTAssertNil(languages.callHierarchy(for: "typescript"))
         for language in ["markdown", "json", "http", "swift", nil] as [String?] {
             XCTAssertNil(languages.semanticTokens(for: language), language ?? "nil")
             XCTAssertNil(languages.lineMarkers(for: language), language ?? "nil")

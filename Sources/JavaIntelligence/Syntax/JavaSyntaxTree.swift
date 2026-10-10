@@ -70,15 +70,21 @@ public final class JavaSyntaxTree: @unchecked Sendable {
     }
 }
 
-/// Parses Java source into a ``JavaSyntaxTree``. Not thread-safe by itself (mirrors
-/// `ts_parser_t`'s own single-threaded contract) -- callers create one per parse or confine an
-/// instance to one task/actor.
+/// Parses source into a ``JavaSyntaxTree``. Not thread-safe by itself (mirrors `ts_parser_t`'s
+/// own single-threaded contract) — callers create one per parse or confine an instance to one
+/// task/actor. The no-argument initializer selects the Java grammar; another tree-sitter language
+/// can be passed in (Umbra uses this for TypeScript).
 public final class JavaSyntaxParser {
     private let parser: OpaquePointer
 
-    public init() {
+    /// `language` is a `tree_sitter_*()` pointer and must stay valid for the parser's lifetime.
+    public init(language: OpaquePointer) {
         parser = ts_parser_new()
-        ts_parser_set_language(parser, tree_sitter_java())
+        ts_parser_set_language(parser, language)
+    }
+
+    public convenience init() {
+        self.init(language: tree_sitter_java())
     }
 
     deinit {

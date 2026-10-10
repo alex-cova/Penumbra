@@ -15,6 +15,8 @@ final class IDEIntelligenceServices {
     /// `.java` documents as the primary provider, so the engine only falls back to the generic
     /// Symbol/Word results when it has nothing (in comments and strings) and never after a `.`.
     let javaSupport: IDEJavaSupport
+    /// Syntactic TypeScript indexing and providers. Retained here: the language service holds it weakly.
+    let typescriptSupport: IDETypeScriptSupport
     /// The window's background status line ("Indexing JDK 24…", "Resolving Gradle project…"), written
     /// by the project systems and Java's indexing.
     let projectStatus = IDEProjectStatus()
@@ -27,10 +29,10 @@ final class IDEIntelligenceServices {
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
 
-    /// Every language's intelligence, routed by the document's language: Java, the app's Run actions
-    /// for Java files, `@file` mentions in Markdown, `.http` completion and JSON formatting. The order
-    /// is the order each engine asks its providers, and the order services that share a language are
-    /// combined in (Java's code actions come before the Run ones).
+    /// Every language's intelligence, routed by the document's language: Java, TypeScript, the app's
+    /// Run actions for Java files, `@file` mentions in Markdown, `.http` completion and JSON
+    /// formatting. The order is the order each engine asks its providers, and the order services that
+    /// share a language are combined in (Java's code actions come before the Run ones).
     let languages: LanguageServiceRegistry
 
     init() {
@@ -38,11 +40,13 @@ final class IDEIntelligenceServices {
         let gradle = IDEGradleProjectSystem(jdk: jdk, status: projectStatus)
         self.gradle = gradle
         javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, status: projectStatus)
+        typescriptSupport = IDETypeScriptSupport()
         projectSystems = IDEProjectSystems([gradle])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let languages = LanguageServiceRegistry(services: [
             javaSupport.languageService,
+            typescriptSupport.languageService,
             BasicLanguageService(
                 name: "umbra.run", languageIdentifiers: ["java"],
                 providers: LanguageProviders(codeActions: IDERunCodeActionProvider())

@@ -1,8 +1,12 @@
 import EditorIntelligence
 import Foundation
+import TreeSitterJava
 
-/// Per-document incremental Java parse cache. Applies tree-sitter ``ts_tree_edit`` for small edits
+/// Per-document incremental parse cache. Applies tree-sitter ``ts_tree_edit`` for small edits
 /// and falls back to a full parse when there is no cached tree or edits are unavailable.
+///
+/// The default grammar is Java. A host can point the same cache at another tree-sitter language
+/// (Umbra does this for TypeScript); only documents with that ``languageIdentifier`` are parsed.
 public actor JavaDocumentParseCache {
     private struct Entry {
         var source: String
@@ -12,12 +16,24 @@ public actor JavaDocumentParseCache {
     }
 
     private var entries: [URL: Entry] = [:]
+    private let languageIdentifier: String
+    private let language: OpaquePointer
 
-    public init() {}
+    /// The Java grammar. The pointer is chosen here, not as a default argument: a client that also
+    /// imports Tree-sitter sees `tree_sitter_java` as a different pointer type and cannot re-check it.
+    public init() {
+        self.init(languageIdentifier: "java", language: tree_sitter_java())
+    }
+
+    /// `language` is a `tree_sitter_*()` pointer and must stay valid for the cache's lifetime.
+    public init(languageIdentifier: String, language: OpaquePointer) {
+        self.languageIdentifier = languageIdentifier
+        self.language = language
+    }
 
     /// Returns a syntax tree for `document`, incrementally when possible.
     public func tree(for document: Document, edits: [TextEdit]? = nil) -> JavaSyntaxTree? {
-        guard document.languageIdentifier == "java", let url = document.url else { return nil }
+        guard document.languageIdentifier == languageIdentifier, let url = document.url else { return nil }
         guard !document.contentSnapshot.isElided else { return nil }
         let text = document.text
         if var entry = entries[url], entry.version <= document.version {
@@ -33,7 +49,7 @@ public actor JavaDocumentParseCache {
                 }
             }
         }
-        let parser = JavaSyntaxParser()
+        let parser = JavaSyntaxParser(language: language)
         guard let tree = parser.parse(text) else { return nil }
         entries[url] = Entry(source: text, version: document.version, tree: tree, parser: parser)
         return tree
