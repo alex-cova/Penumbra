@@ -487,6 +487,80 @@ final class IDENpmProjectSystemTests: XCTestCase {
         XCTAssertTrue(changed)
     }
 
+    /// A save of unchanged text is an event, not a change. The edit at the end proves the watcher is
+    /// still listening, including after the atomic save replaced the file it was attached to.
+    func testSavingPackageJsonWithTheSameBytesDoesNotRaiseTheBanner() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (npm, _) = makeNpm(in: directory, defaults: defaults)
+        defer { npm.stop() }
+        let root = directory.appendingPathComponent("app", isDirectory: true)
+        let json = #"{"scripts":{"start":"node index.js"}}"#
+        try writePackage(json, in: root)
+        npm.projectDidChange(root: root)
+        let file = root.appendingPathComponent("package.json")
+
+        try json.write(to: file, atomically: false, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(npm.hasConfigurationChanges, "An in-place rewrite with the same bytes is not a change")
+
+        try json.write(to: file, atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(npm.hasConfigurationChanges, "An atomic save with the same bytes is not a change")
+
+        try (json + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let changed = await waitUntil(seconds: 3) { npm.hasConfigurationChanges }
+        XCTAssertTrue(changed)
+    }
+
+    func testRestoringPackageJsonClearsTheBanner() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (npm, _) = makeNpm(in: directory, defaults: defaults)
+        defer { npm.stop() }
+        let root = directory.appendingPathComponent("app", isDirectory: true)
+        let json = #"{"scripts":{"start":"node index.js"}}"#
+        try writePackage(json, in: root)
+        npm.projectDidChange(root: root)
+        let file = root.appendingPathComponent("package.json")
+
+        try #"{"scripts":{"start":"node server.js"}}"#.write(to: file, atomically: true, encoding: .utf8)
+        let raised = await waitUntil(seconds: 3) { npm.hasConfigurationChanges }
+        XCTAssertTrue(raised)
+
+        try json.write(to: file, atomically: true, encoding: .utf8)
+        let cleared = await waitUntil(seconds: 3) { !npm.hasConfigurationChanges }
+        XCTAssertTrue(cleared, "The banner stayed after the edit was undone")
+    }
+
+    func testDismissingAcceptsTheEditedPackageJson() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (npm, _) = makeNpm(in: directory, defaults: defaults)
+        defer { npm.stop() }
+        let root = directory.appendingPathComponent("app", isDirectory: true)
+        try writePackage(#"{"scripts":{"start":"node index.js"}}"#, in: root)
+        npm.projectDidChange(root: root)
+        let file = root.appendingPathComponent("package.json")
+
+        let edited = #"{"scripts":{"start":"node index.js","lint":"eslint ."}}"#
+        try edited.write(to: file, atomically: false, encoding: .utf8)
+        let raised = await waitUntil(seconds: 3) { npm.hasConfigurationChanges }
+        XCTAssertTrue(raised)
+
+        npm.dismissConfigurationChanges()
+        XCTAssertFalse(npm.hasConfigurationChanges)
+        try edited.write(to: file, atomically: false, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(npm.hasConfigurationChanges, "Dismiss accepted these bytes")
+    }
+
     func testDiagramSessionsLoadNpmAndTypeScript() async throws {
         let workspace = IDEWorkspace()
         workspace.bootstrap()

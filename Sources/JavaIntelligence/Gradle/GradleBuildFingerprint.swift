@@ -26,51 +26,17 @@ public struct GradleBuildFingerprint: Codable, Hashable, Sendable {
 }
 
 public enum GradleBuildFingerprintCollector {
-    private static let ignoredDirectoryNames: Set<String> = [
-        ".git", ".gradle", "build", "out", "node_modules", ".idea", ".vscode"
-    ]
-
-    /// Walks `projectRoot` and collects stamps for every path ``GradleBuildFiles`` would treat as a
-    /// build input (root scripts, version catalogs, wrapper properties, and subproject scripts).
+    /// Walks `projectRoot` and collects stamps for every path ``GradleBuildFiles`` treats as a build
+    /// input (root scripts, version catalogs, wrapper properties, and subproject scripts).
     public static func collect(projectRoot: URL) -> GradleBuildFingerprint {
         let root = projectRoot.standardizedFileURL.resolvingSymlinksInPath()
-        var stamps: [GradleBuildFingerprint.FileStamp] = []
-        collect(from: root, projectRootPath: root.path, into: &stamps)
+        let stamps: [GradleBuildFingerprint.FileStamp] = GradleBuildFiles.inputPaths(under: root).compactMap { relative in
+            guard let stamp = JavaStamp(url: root.appendingPathComponent(relative)) else { return nil }
+            return .init(relativePath: relative, size: stamp.size, modificationDate: stamp.modificationDate)
+        }
         return GradleBuildFingerprint(
             scriptFormatVersion: GradleProjectModelScript.formatVersion,
             files: stamps
         )
-    }
-
-    private static func collect(from directory: URL, projectRootPath: String, into stamps: inout [GradleBuildFingerprint.FileStamp]) {
-        let fileManager = FileManager.default
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-
-        for entry in entries {
-            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true {
-                guard !ignoredDirectoryNames.contains(entry.lastPathComponent) else { continue }
-                collect(from: entry, projectRootPath: projectRootPath, into: &stamps)
-                continue
-            }
-
-            let path = entry.standardizedFileURL.resolvingSymlinksInPath().path
-            guard GradleBuildFiles.matches(path: path) else { continue }
-            guard let stamp = JavaStamp(url: entry) else { continue }
-            let relative = path.hasPrefix(projectRootPath + "/")
-                ? String(path.dropFirst(projectRootPath.count + 1))
-                : entry.lastPathComponent
-            stamps.append(.init(
-                relativePath: relative,
-                size: stamp.size,
-                modificationDate: stamp.modificationDate
-            ))
-        }
     }
 }

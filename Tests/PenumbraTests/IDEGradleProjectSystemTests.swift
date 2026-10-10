@@ -392,6 +392,68 @@ final class IDEGradleProjectSystemTests: XCTestCase {
         XCTAssertFalse(harness.buildFilesChanged)
     }
 
+    /// What the banner used to get wrong: a save of an unchanged file, `touch` and attribute writes are
+    /// events, not changes. The edit at the end proves the watcher was listening the whole time.
+    func testRewritingABuildFileWithTheSameBytesDoesNotRaiseTheBanner() async throws {
+        try makeGradleProject()
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+        await eventually { harness.state == .synced(subprojects: 1, jars: 0) }
+        try await Task.sleep(for: .milliseconds(1200))
+
+        let build = project.appendingPathComponent("build.gradle")
+        try "plugins { id 'java' }".write(to: build, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(120)], ofItemAtPath: build.path)
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertFalse(harness.buildFilesChanged, "Identical bytes are not a change")
+
+        try "plugins { id 'java' }\n// edited".write(to: build, atomically: true, encoding: .utf8)
+        await eventually("the watcher never reported the edit", seconds: 15) { harness.buildFilesChanged }
+    }
+
+    func testRestoringAnEditedBuildFileClearsTheBanner() async throws {
+        try makeGradleProject()
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+        await eventually { harness.state == .synced(subprojects: 1, jars: 0) }
+        try await Task.sleep(for: .milliseconds(1200))
+
+        let build = project.appendingPathComponent("build.gradle")
+        try "plugins { id 'java' }\n// edited".write(to: build, atomically: true, encoding: .utf8)
+        await eventually("the watcher never reported the edit", seconds: 15) { harness.buildFilesChanged }
+
+        try "plugins { id 'java' }".write(to: build, atomically: true, encoding: .utf8)
+        await eventually("the banner stayed after the edit was undone", seconds: 15) { !harness.buildFilesChanged }
+    }
+
+    func testDismissingAcceptsTheEditedFileAndFilesInDependencyFoldersAreIgnored() async throws {
+        try makeGradleProject()
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+        await eventually { harness.state == .synced(subprojects: 1, jars: 0) }
+        try await Task.sleep(for: .milliseconds(1200))
+
+        // A build file inside node_modules is not this project's.
+        let vendored = project.appendingPathComponent("node_modules/pkg/android/build.gradle")
+        try FileManager.default.createDirectory(at: vendored.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "apply plugin: 'com.android.library'".write(to: vendored, atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertFalse(harness.buildFilesChanged)
+
+        let build = project.appendingPathComponent("build.gradle")
+        let edited = "plugins { id 'java' }\n// edited"
+        try edited.write(to: build, atomically: true, encoding: .utf8)
+        await eventually("the watcher never reported the edit", seconds: 15) { harness.buildFilesChanged }
+
+        harness.dismissBuildFileChanges()
+        XCTAssertFalse(harness.buildFilesChanged)
+        // Dismiss re-reads the files; saving the same text again is no longer a change.
+        try await Task.sleep(for: .milliseconds(800))
+        try edited.write(to: build, atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertFalse(harness.buildFilesChanged)
+    }
+
     func testTheSyncedModelListsItsTasksWithTheirModule() async throws {
         try makeGradleProject()
         harness.requestTrust = { _ in true }

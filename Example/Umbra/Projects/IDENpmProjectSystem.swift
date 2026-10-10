@@ -44,6 +44,10 @@ final class IDENpmProjectSystem: IDEProjectSystem {
     @ObservationIgnored private let scriptDefaults: UserDefaults
     @ObservationIgnored private var projectRootURL: URL?
     @ObservationIgnored private var manifest: IDENpmManifest?
+    /// The bytes of package.json as the last load, Reload or Dismiss saw them (nil when there was no
+    /// file). The reload banner means "the file now differs from this", so a save of unchanged text
+    /// raises nothing and an undone edit clears it.
+    @ObservationIgnored private var manifestBaseline: Data?
     @ObservationIgnored private var projectGeneration = 0
     @ObservationIgnored private var runGeneration = 0
     @ObservationIgnored private var runTask: Task<Void, Never>?
@@ -114,6 +118,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         projectRootURL = standardized
         guard let standardized else {
             manifest = nil
+            manifestBaseline = nil
             tasks = []
             syncState = .notDetected
             return
@@ -147,7 +152,12 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         }
     }
 
+    /// Accepts package.json as it is now: a later event on a file that still has these bytes doesn't
+    /// raise the banner again.
     func dismissConfigurationChanges() {
+        if let root = projectRootURL {
+            manifestBaseline = try? Data(contentsOf: root.appendingPathComponent("package.json"))
+        }
         hasConfigurationChanges = false
     }
 
@@ -249,6 +259,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         stopManifestWatcher()
         projectRootURL = nil
         manifest = nil
+        manifestBaseline = nil
         tasks = []
         syncState = .notDetected
     }
@@ -323,11 +334,14 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         let file = root.appendingPathComponent("package.json")
         guard FileManager.default.fileExists(atPath: file.path) else {
             manifest = nil
+            manifestBaseline = nil
             tasks = []
             syncState = .notDetected
             return
         }
-        guard let data = try? Data(contentsOf: file),
+        let data = try? Data(contentsOf: file)
+        manifestBaseline = data
+        guard let data,
               let parsed = IDENpmManifest.parse(data: data, folderName: root.lastPathComponent) else {
             manifest = nil
             tasks = []
@@ -361,7 +375,10 @@ final class IDENpmProjectSystem: IDEProjectSystem {
             let flags = source?.data ?? []
             Task { @MainActor in
                 guard let self, self.projectRootURL?.standardizedFileURL == watched else { return }
-                self.hasConfigurationChanges = true
+                // An event says the file was touched, not that it changed: compare the bytes. A
+                // file that is gone differs from one that was there.
+                let current = try? Data(contentsOf: watched.appendingPathComponent("package.json"))
+                self.hasConfigurationChanges = current != self.manifestBaseline
                 if flags.contains(.delete) || flags.contains(.rename) || flags.contains(.revoke) {
                     self.startManifestWatcher(root: watched)
                 }

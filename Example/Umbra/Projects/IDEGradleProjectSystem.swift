@@ -75,8 +75,9 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// Live output of the most recent (or in-progress) sync or task run -- backs the "Gradle" console
     /// tab in the bottom panel. Reset at the start of every sync.
     private(set) var console = IDEProjectConsoleLog()
-    /// Set when a watched Gradle build file changes outside of a sync. Bursts collapse to one banner;
-    /// cleared by Reload or Dismiss.
+    /// Set when the content of a Gradle build file differs from what the last sync (or the project
+    /// open) saw, outside of a sync. A save of an unchanged file, `touch` and attribute writes don't
+    /// count, and reverting an edit clears it. Cleared by Reload or Dismiss.
     private(set) var hasConfigurationChanges = false
     /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
     private(set) var isRunningTasks = false
@@ -109,6 +110,14 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     @ObservationIgnored private var syncInFlight = false
     @ObservationIgnored private var buildFileWatcher: FSEventsFileSystemWatcher?
     @ObservationIgnored private var buildFileWatchTask: Task<Void, Never>?
+    /// The build files as the last sync, project open or Dismiss saw them. `nil` while it is being
+    /// read; events in that window are skipped, because the snapshot is taken after them.
+    @ObservationIgnored private var buildFileBaseline: GradleBuildFileSnapshot?
+    /// Relative paths of the build files that differ from `buildFileBaseline`.
+    @ObservationIgnored private var changedBuildFiles: Set<String> = []
+    /// Bumped whenever the baseline is reset or dropped, so a read or a comparison that was in flight
+    /// for the old one doesn't publish.
+    @ObservationIgnored private var baselineGeneration = 0
     @ObservationIgnored private var dependencyGraphCache: [String: (fingerprint: GradleBuildFingerprint, graph: GradleDependencyGraph)] = [:]
 
     /// The trust store is the app's shared one by default, so every window sees the same Gradle trust
@@ -274,8 +283,10 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         model = nil
     }
 
+    /// Accepts the build files as they are now: a later event on a file that still has these bytes
+    /// doesn't raise the banner again.
     func dismissConfigurationChanges() {
-        hasConfigurationChanges = false
+        resetBuildFileBaseline()
     }
 
     // MARK: - Sync
@@ -342,7 +353,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     ) {
         syncTask?.cancel()
         if !silent {
-            hasConfigurationChanges = false
+            // What Gradle is about to read is the new baseline.
+            resetBuildFileBaseline()
         }
         syncInFlight = true
         syncTask = Task { [trustStore, extractor, modelCache] in
@@ -743,23 +755,78 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
 
     private func startBuildFileWatcher(root: URL) {
         stopBuildFileWatcher()
-        let watcher = FSEventsFileSystemWatcher(root: root, latency: 0.4) { path in
-            GradleBuildFiles.matches(path: path)
+        // FSEvents reports `realpath` paths (`/private/var/…`), so the prefix the filter and the
+        // comparison strip is the root's `realpath` too.
+        let rootPath = GradleBuildFiles.canonicalRootPath(for: root)
+        let canonicalRoot = URL(fileURLWithPath: rootPath, isDirectory: true)
+        let watcher = FSEventsFileSystemWatcher(root: canonicalRoot, latency: 0.4) { path in
+            GradleBuildFiles.matches(path: path, root: rootPath)
         }
         buildFileWatcher = watcher
+        resetBuildFileBaseline()
         buildFileWatchTask = Task { [weak self] in
             await watcher.start()
-            for await _ in watcher.events {
+            for await event in watcher.events {
                 guard let self, !Task.isCancelled else { return }
                 guard self.buildFileWatcher === watcher else { return }
                 if self.syncInFlight { continue }
                 if case .syncing = self.syncState { continue }
-                self.hasConfigurationChanges = true
+                let url: URL
+                switch event {
+                case let .fileAdded(changed), let .fileRemoved(changed), let .fileChanged(changed):
+                    url = changed
+                }
+                let prefix = rootPath + "/"
+                guard url.path.hasPrefix(prefix) else { continue }
+                await self.compareBuildFile(
+                    relativePath: String(url.path.dropFirst(prefix.count)),
+                    root: canonicalRoot,
+                    watcher: watcher
+                )
             }
         }
     }
 
+    /// Re-reads the baseline from disk. The banner goes away: the files as they are now are what the
+    /// next change is measured against.
+    private func resetBuildFileBaseline() {
+        baselineGeneration += 1
+        let baselineToken = baselineGeneration
+        let projectToken = projectGeneration
+        buildFileBaseline = nil
+        changedBuildFiles.removeAll()
+        hasConfigurationChanges = false
+        guard let root = projectRootURL else { return }
+        Task { [weak self] in
+            let snapshot = await Task.detached(priority: .utility) {
+                GradleBuildFileSnapshot.capture(projectRoot: root)
+            }.value
+            guard let self, self.projectGeneration == projectToken, self.baselineGeneration == baselineToken else { return }
+            self.buildFileBaseline = snapshot
+        }
+    }
+
+    /// Raises or clears the banner for one build file by comparing its bytes with the baseline. A
+    /// file edited and then restored clears itself. Does nothing while the baseline is being read.
+    private func compareBuildFile(relativePath: String, root: URL, watcher: FSEventsFileSystemWatcher) async {
+        guard let baseline = buildFileBaseline else { return }
+        let token = baselineGeneration
+        let differs = await Task.detached(priority: .utility) {
+            baseline.differs(relativePath: relativePath, projectRoot: root)
+        }.value
+        guard buildFileWatcher === watcher, baselineGeneration == token else { return }
+        if differs {
+            changedBuildFiles.insert(relativePath)
+        } else {
+            changedBuildFiles.remove(relativePath)
+        }
+        hasConfigurationChanges = !changedBuildFiles.isEmpty
+    }
+
     private func stopBuildFileWatcher() {
+        baselineGeneration += 1
+        buildFileBaseline = nil
+        changedBuildFiles.removeAll()
         buildFileWatchTask?.cancel()
         buildFileWatchTask = nil
         let watcher = buildFileWatcher
