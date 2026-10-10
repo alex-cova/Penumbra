@@ -153,26 +153,58 @@ extension IDEWorkspace {
         let java = javaSupport
         let gradle = gradle
         let readBuffer: @MainActor @Sendable (URL) -> String? = { [weak self] url in self?.openBufferText(for: url) }
-        session.loadClassGraph = { scope, options in
-            let builder = JavaClassGraphBuilder(
-                index: java.javaIndex,
-                openBuffer: { url in await readBuffer(url) }
-            )
-            return await builder.build(scope: scope, options: options)
-        }
-        session.loadModuleGraph = { [weak self] in
-            guard self != nil else { return .failure(.message("The window was closed.")) }
-            guard let graph = gradle.moduleDependencyGraph else {
-                return .failure(.message(
-                    gradle.isBusy
+        session.load = { [weak self] request, settings in
+            if request.isClassDiagram, let scope = request.classScope {
+                let builder = JavaClassGraphBuilder(
+                    index: java.javaIndex,
+                    openBuffer: { url in await readBuffer(url) }
+                )
+                let graph = await builder.build(scope: scope, options: settings.classOptions)
+                return IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
+            }
+            if request.id == IDEDiagramRequest.gradleModules.id {
+                guard let graph = gradle.moduleDependencyGraph else {
+                    let message = gradle.isBusy
                         ? "Gradle is still syncing the project. Reload the diagram when it finishes."
                         : "The Gradle project has not been synced yet. Reload the Gradle project, then try again."
-                ))
+                    return IDEDiagramLoad(document: .empty(title: request.title), failure: message)
+                }
+                return IDEDiagramDocumentBuilder.load(
+                    from: graph, title: request.title, emptyMessage: "This Gradle build has no project modules."
+                )
             }
-            return .success(graph)
+            if request.offersConfigurationPicker, let projectPath = request.gradleProjectPath {
+                let configuration = settings.libraryConfiguration
+                let emptyMessage = "\(configuration) has no dependencies in this project."
+                switch await gradle.resolveDependencyGraph(projectPath: projectPath, configuration: configuration) {
+                case let .failure(.message(text)):
+                    return IDEDiagramLoad(document: .empty(title: request.title), emptyMessage: emptyMessage, failure: text)
+                case let .success(graph):
+                    return IDEDiagramDocumentBuilder.load(from: graph, title: request.title, emptyMessage: emptyMessage)
+                }
+            }
+            if let self {
+                for module in IDELanguageModules.all {
+                    if let loaded = await module.loadDiagram(request, settings: settings, workspace: self) {
+                        return loaded
+                    }
+                }
+                for system in self.projectSystems.systems {
+                    if let loaded = await system.loadDiagram(request, settings: settings, workspace: self) {
+                        return loaded
+                    }
+                }
+            }
+            return IDEDiagramLoad(document: .empty(title: request.title), failure: "This diagram is unavailable.")
         }
-        session.loadLibraryGraph = { projectPath, configuration in
-            await gradle.resolveDependencyGraph(projectPath: projectPath, configuration: configuration)
+        session.relatedTypeDiagram = { [weak session] node in
+            guard node.kind.isType, session?.request.id.hasPrefix("classes:") == true else { return nil }
+            return (IDEDiagramRequest.classes(.types([node.key])), 1)
+        }
+        session.relatedDependencyDiagram = { node, configuration in
+            guard node.kind == .project, node.key.hasPrefix("project:") else { return nil }
+            let path = String(node.key.dropFirst("project:".count))
+            return IDEDiagramRequest.gradleLibraries(projectPath: path, configuration: configuration)
         }
         session.invalidateCaches = { gradle.invalidateDependencyGraphs() }
         session.openSource = { [weak self] url in
@@ -197,7 +229,7 @@ extension IDEWorkspace {
 
     /// After the project's sources were re-indexed or Gradle re-synced, open diagrams of that kind redraw.
     func reloadDiagramSessions(classes: Bool) {
-        for session in diagramSessions.values where classes ? session.request.isClassDiagram : session.request == .gradleModules {
+        for session in diagramSessions.values where classes ? session.request.isClassDiagram : session.request.id == IDEDiagramRequest.gradleModules.id {
             session.reload()
         }
     }

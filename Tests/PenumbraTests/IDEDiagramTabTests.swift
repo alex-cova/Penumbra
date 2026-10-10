@@ -147,10 +147,10 @@ final class IDEDiagramTabTests: XCTestCase {
 
     func testASessionLoadsLaysOutAndSummarises() async throws {
         let session = makeSession(.classes(.project))
-        var received: (JavaClassGraphScope, JavaClassGraphOptions)?
-        session.loadClassGraph = { [graph = twoTypeGraph()] scope, options in
-            received = (scope, options)
-            return graph
+        var received: (JavaClassGraphScope?, JavaClassGraphOptions)?
+        session.load = { [graph = twoTypeGraph()] request, settings in
+            received = (request.classScope, settings.classOptions)
+            return IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
         }
         session.reload()
         try await waitUntil { session.state == .ready }
@@ -165,7 +165,9 @@ final class IDEDiagramTabTests: XCTestCase {
 
     func testAnEmptyGraphShowsTheEmptyState() async throws {
         let session = makeSession(.classes(.project))
-        session.loadClassGraph = { _, _ in JavaClassGraph() }
+        session.load = { request, _ in
+            IDEDiagramDocumentBuilder.load(from: JavaClassGraph(), title: request.title)
+        }
         session.reload()
         try await waitUntil { if case .empty = session.state { return true } else { return false } }
         XCTAssertTrue(session.document.nodes.isEmpty)
@@ -176,7 +178,9 @@ final class IDEDiagramTabTests: XCTestCase {
         var graph = twoTypeGraph()
         graph.truncated = true
         graph.omittedCount = 40
-        session.loadClassGraph = { _, _ in graph }
+        session.load = { request, _ in
+            IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
+        }
         session.reload()
         try await waitUntil { session.state == .ready }
         XCTAssertEqual(session.notice?.contains("40 more"), true)
@@ -185,13 +189,18 @@ final class IDEDiagramTabTests: XCTestCase {
     func testAGradleFailureIsShownAndRetryRecovers() async throws {
         let session = makeSession(.gradleModules)
         var succeed = false
-        session.loadModuleGraph = {
-            succeed
-                ? .success(GradleDependencyGraph(
-                    rootKey: "project::",
-                    components: [.init(key: "project::", kind: .project, name: "root", projectPath: ":")]
-                ))
-                : .failure(.message("not synced"))
+        session.load = { request, _ in
+            if succeed {
+                return IDEDiagramDocumentBuilder.load(
+                    from: GradleDependencyGraph(
+                        rootKey: "project::",
+                        components: [.init(key: "project::", kind: .project, name: "root", projectPath: ":")]
+                    ),
+                    title: request.title,
+                    emptyMessage: "This Gradle build has no project modules."
+                )
+            }
+            return IDEDiagramLoad(document: .empty(title: request.title), failure: "not synced")
         }
         session.reload()
         try await waitUntil { if case .failed = session.state { return true } else { return false } }
@@ -206,13 +215,11 @@ final class IDEDiagramTabTests: XCTestCase {
     func testANewerLoadWinsOverASlowerOlderOne() async throws {
         let session = makeSession(.classes(.project))
         var calls = 0
-        session.loadClassGraph = { [slow = twoTypeGraph(extra: 3), fast = twoTypeGraph()] _, _ in
+        session.load = { [slow = twoTypeGraph(extra: 3), fast = twoTypeGraph()] request, _ in
             calls += 1
-            if calls == 1 {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                return slow
-            }
-            return fast
+            let graph = calls == 1 ? slow : fast
+            if calls == 1 { try? await Task.sleep(nanoseconds: 300_000_000) }
+            return IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
         }
         session.reload()
         try await Task.sleep(nanoseconds: 30_000_000)
@@ -224,7 +231,9 @@ final class IDEDiagramTabTests: XCTestCase {
 
     func testReloadingKeepsTheSelectionOfBoxesThatStillExist() async throws {
         let session = makeSession(.classes(.project))
-        session.loadClassGraph = { [graph = twoTypeGraph()] _, _ in graph }
+        session.load = { [graph = twoTypeGraph()] request, _ in
+            IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
+        }
         session.reload()
         try await waitUntil { session.state == .ready }
         let selected = try XCTUnwrap(session.document.nodes.first { $0.key == "a.A" }?.id)
@@ -239,9 +248,9 @@ final class IDEDiagramTabTests: XCTestCase {
     func testChangingTheLayoutMovesTheBoxesWithoutReloading() async throws {
         let session = makeSession(.classes(.project))
         var loads = 0
-        session.loadClassGraph = { [graph = twoTypeGraph(extra: 4)] _, _ in
+        session.load = { [graph = twoTypeGraph(extra: 4)] request, _ in
             loads += 1
-            return graph
+            return IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
         }
         session.reload()
         try await waitUntil { session.state == .ready }
@@ -254,9 +263,9 @@ final class IDEDiagramTabTests: XCTestCase {
     func testChangingWhatIsShownReloadsTheGraph() async throws {
         let session = makeSession(.classes(.project))
         var optionsSeen: [JavaClassGraphOptions] = []
-        session.loadClassGraph = { [graph = twoTypeGraph()] _, options in
-            optionsSeen.append(options)
-            return graph
+        session.load = { [graph = twoTypeGraph()] request, settings in
+            optionsSeen.append(settings.classOptions)
+            return IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
         }
         session.reload()
         try await waitUntil { session.state == .ready }
@@ -268,12 +277,16 @@ final class IDEDiagramTabTests: XCTestCase {
     func testSwitchingTheGradleConfigurationRetargetsTheRequest() async throws {
         let session = makeSession(.gradleLibraries(projectPath: ":app", configuration: "runtimeClasspath"))
         var configurations: [String] = []
-        session.loadLibraryGraph = { _, configuration in
-            configurations.append(configuration)
-            return .success(GradleDependencyGraph(
-                rootKey: "project::app",
-                components: [.init(key: "project::app", kind: .project, name: "app", projectPath: ":app")]
-            ))
+        session.load = { request, settings in
+            configurations.append(settings.libraryConfiguration)
+            return IDEDiagramDocumentBuilder.load(
+                from: GradleDependencyGraph(
+                    rootKey: "project::app",
+                    components: [.init(key: "project::app", kind: .project, name: "app", projectPath: ":app")]
+                ),
+                title: request.title,
+                emptyMessage: ""
+            )
         }
         session.reload()
         try await waitUntil { session.state == .ready }
@@ -286,7 +299,9 @@ final class IDEDiagramTabTests: XCTestCase {
 
     func testExportsProduceAPNGAPDFAndAnSVG() async throws {
         let session = makeSession(.classes(.project))
-        session.loadClassGraph = { [graph = twoTypeGraph(extra: 2)] _, _ in graph }
+        session.load = { [graph = twoTypeGraph(extra: 2)] request, _ in
+            IDEDiagramDocumentBuilder.load(from: graph, title: request.title)
+        }
         session.reload()
         try await waitUntil { session.state == .ready }
 
@@ -313,13 +328,21 @@ final class IDEDiagramTabTests: XCTestCase {
     func testNodeActionsReachTheWorkspaceClosures() async throws {
         let session = makeSession(.classes(.project))
         let url = URL(fileURLWithPath: "/tmp/a/A.java")
-        session.loadClassGraph = { _, _ in
-            JavaClassGraph(nodes: [.init(qualifiedName: "a.A", displayName: "A", packageName: "a", kind: .classKind, sourceURL: url)])
+        session.load = { request, _ in
+            IDEDiagramDocumentBuilder.load(
+                from: JavaClassGraph(nodes: [.init(
+                    qualifiedName: "a.A", displayName: "A", packageName: "a", kind: .classKind, sourceURL: url
+                )]),
+                title: request.title
+            )
         }
         var opened: URL?
         var diagram: (IDEDiagramRequest, Int)?
         session.openSource = { opened = $0 }
         session.openDiagram = { diagram = ($0, $1) }
+        session.relatedTypeDiagram = { node in
+            (IDEDiagramRequest.classes(.types([node.key])), 1)
+        }
         session.reload()
         try await waitUntil { session.state == .ready }
         let node = try XCTUnwrap(session.document.nodes.first)
@@ -328,5 +351,25 @@ final class IDEDiagramTabTests: XCTestCase {
         XCTAssertEqual(opened, url)
         XCTAssertEqual(diagram?.0, .classes(.types(["a.A"])))
         XCTAssertEqual(diagram?.1, 1)
+    }
+
+    func testADependencyDiagramLoadsWithoutAJavaGraph() async throws {
+        let request = IDEDiagramRequest(
+            id: "npm:dependencies", title: "Dependencies", symbolName: "shippingbox", presentation: .dependencies
+        )
+        let session = makeSession(request)
+        session.load = { request, _ in
+            let document = IDEDiagramDocument(
+                meta: .init(title: request.title),
+                canvas: .init(),
+                nodes: [IDEDiagramNode(key: "pkg:left-pad", kind: .library, title: "left-pad")],
+                edges: []
+            )
+            return IDEDiagramLoad(document: document, emptyMessage: "No dependencies.")
+        }
+        session.reload()
+        try await waitUntil { session.state == .ready }
+        XCTAssertEqual(session.document.nodes.map(\.title), ["left-pad"])
+        XCTAssertEqual(session.summary, "1 node · 0 links")
     }
 }

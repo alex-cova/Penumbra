@@ -75,7 +75,7 @@ public struct IDERootView: View {
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
                         }
 
-                        if workspace.projectSystems.active?.hasConfigurationChanges == true {
+                        if workspace.projectSystems.pendingReload != nil {
                             IDEProjectReloadBanner()
                                 .opacity(workspace.chromeOpacity)
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -315,13 +315,13 @@ struct IDEProjectReloadBanner: View {
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            Text("Build files changed — reload \(workspace.projectSystems.active?.displayName ?? "the") project?")
+            Text("Build files changed — reload \(workspace.projectSystems.pendingReload?.displayName ?? "the") project?")
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
             Spacer(minLength: IDEAppearance.Spacing.sm)
             Button("Reload") {
-                workspace.reloadProject()
+                workspace.reloadPendingProject()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)

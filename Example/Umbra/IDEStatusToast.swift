@@ -7,6 +7,9 @@ struct IDEStatusToast: View {
     @Environment(IDEWorkspace.self) private var workspace
     private var projectSystems: IDEProjectSystems { workspace.projectSystems }
 
+    /// The first busy system, otherwise the sidebar's system. A Gradle-only window follows Gradle.
+    private var statusSystem: (any IDEProjectSystem)? { projectSystems.statusSystem }
+
     private enum Content: Equatable {
         case syncing(message: String)
         case working(message: String)
@@ -14,7 +17,7 @@ struct IDEStatusToast: View {
 
     private var content: Content? {
         guard let message = workspace.projectStatus.message else { return nil }
-        return projectSystems.active?.syncState.isSyncing == true ? .syncing(message: message) : .working(message: message)
+        return statusSystem?.syncState.isSyncing == true ? .syncing(message: message) : .working(message: message)
     }
 
     var body: some View {
@@ -37,10 +40,15 @@ struct IDEStatusToast: View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             switch content {
             case .syncing(let message):
-                Button(action: workspace.showGradleOutput) {
+                let name = statusSystem?.displayName ?? "Project"
+                Button {
+                    if let tab = statusSystem?.consoleTab {
+                        workspace.showBottomTab(tab)
+                    }
+                } label: {
                     HStack(spacing: IDEAppearance.Spacing.sm) {
                         spinner
-                        TimelineView(.periodic(from: projectSystems.active?.console.startedAt ?? .now, by: 1)) { context in
+                        TimelineView(.periodic(from: statusSystem?.console.startedAt ?? .now, by: 1)) { context in
                             Text(syncingSummary(message, now: context.date))
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(1)
@@ -49,8 +57,8 @@ struct IDEStatusToast: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .help("Show Gradle output")
-                .accessibilityLabel("Gradle sync in progress")
+                .help("Show \(name) output")
+                .accessibilityLabel("\(name) sync in progress")
                 .accessibilityHint(message)
             case .working(let message):
                 spinner
@@ -121,11 +129,11 @@ struct IDEStatusToast: View {
     /// message plus elapsed time plus the latest console line, all in the one truncating label.
     private func syncingSummary(_ message: String, now: Date) -> String {
         var parts = [message]
-        if let startedAt = projectSystems.active?.console.startedAt {
+        if let startedAt = statusSystem?.console.startedAt {
             let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
             parts.append(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
         }
-        if let latest = projectSystems.active?.console.latestLine {
+        if let latest = statusSystem?.console.latestLine {
             parts.append(latest)
         }
         return parts.joined(separator: "  ·  ")

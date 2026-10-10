@@ -47,6 +47,7 @@ extension IDEBottomPanelTab {
     enum Order {
         static let run = 10
         static let gradle = 20
+        static let npm = 25
         static let http = 30
         static let problems = 40
         static let typeHierarchy = 50

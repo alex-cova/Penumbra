@@ -23,8 +23,17 @@ actor TypeScriptIndex {
     private var buildingToken: Int?
     private var pendingEdits: [URL: TypeScriptFileModel?] = [:]
     private var files: [URL: TypeScriptFileModel] = [:]
+    struct PaletteSymbol: Sendable, Equatable {
+        var name: String
+        var container: String
+        var url: URL
+        var kind: TypeScriptFileModel.Kind
+        var nameBytes: Range<Int>
+    }
+
     private var names: [String: Set<URL>] = [:]
     private var exportsByName: [String: [ExportRef]] = [:]
+    private var paletteSymbols: [PaletteSymbol] = []
     private var openBuffer: (@Sendable (URL) async -> String?)?
 
     func setOpenBufferLookup(_ lookup: (@Sendable (URL) async -> String?)?) {
@@ -242,11 +251,27 @@ actor TypeScriptIndex {
         }
     }
 
+    /// Types and members whose names match `query`, in index order, up to `limit`. An empty query matches nothing.
+    func symbols(matching query: String, limit: Int) -> [PaletteSymbol] {
+        guard limit > 0, !query.isEmpty else { return [] }
+        var matches: [PaletteSymbol] = []
+        matches.reserveCapacity(min(limit, 32))
+        for symbol in paletteSymbols {
+            guard CompletionMatcher.couldMatch(query, symbol.name),
+                  CompletionMatcher.matches(query, symbol.name) else { continue }
+            matches.append(symbol)
+            if matches.count == limit { break }
+        }
+        return matches
+    }
+
     private func publish(_ models: [URL: TypeScriptFileModel]) {
         files = models
         var names: [String: Set<URL>] = [:]
         var exports: [String: [ExportRef]] = [:]
+        var symbols: [PaletteSymbol] = []
         for (url, model) in models {
+            collectPaletteSymbols(model.declarations, container: "", url: url, into: &symbols)
             for name in model.identifiers {
                 names[name, default: []].insert(url)
             }
@@ -266,6 +291,27 @@ actor TypeScriptIndex {
         }
         self.names = names
         exportsByName = exports
+        paletteSymbols = symbols
+    }
+
+    private func collectPaletteSymbols(
+        _ declarations: [TypeScriptFileModel.Declaration], container: String, url: URL,
+        into symbols: inout [PaletteSymbol]
+    ) {
+        for declaration in declarations {
+            let include = declaration.kind.isType
+                || declaration.kind == .method || declaration.kind == .field || declaration.kind == .enumMember
+            if include {
+                symbols.append(PaletteSymbol(
+                    name: declaration.name, container: container, url: url,
+                    kind: declaration.kind, nameBytes: declaration.nameBytes
+                ))
+            }
+            let next = declaration.kind.isType ? declaration.name : container
+            if !declaration.members.isEmpty {
+                collectPaletteSymbols(declaration.members, container: next, url: url, into: &symbols)
+            }
+        }
     }
 
     private static func enumerate(_ root: URL) -> [URL] {

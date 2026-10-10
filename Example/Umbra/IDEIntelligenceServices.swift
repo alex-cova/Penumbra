@@ -22,6 +22,8 @@ final class IDEIntelligenceServices {
     let projectStatus = IDEProjectStatus()
     /// Gradle as a project system: syncs the model Java indexes, runs tasks, keeps the console.
     let gradle: IDEGradleProjectSystem
+    /// npm, registered after Gradle. A folder with both keeps Gradle first.
+    let npm: IDENpmProjectSystem
     /// The window's project systems, in the order they claim a folder.
     let projectSystems: IDEProjectSystems
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
@@ -41,7 +43,9 @@ final class IDEIntelligenceServices {
         self.gradle = gradle
         javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, status: projectStatus)
         typescriptSupport = IDETypeScriptSupport()
-        projectSystems = IDEProjectSystems([gradle])
+        let npm = IDENpmProjectSystem(status: projectStatus)
+        self.npm = npm
+        projectSystems = IDEProjectSystems([gradle, npm])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let languages = LanguageServiceRegistry(services: [

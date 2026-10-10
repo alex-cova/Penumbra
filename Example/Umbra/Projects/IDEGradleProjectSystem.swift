@@ -58,6 +58,7 @@ extension IDEProjectConsoleLog {
 final class IDEGradleProjectSystem: IDEProjectSystem {
     let id = "gradle"
     let displayName = "Gradle"
+    var consoleTab: IDEBottomPanelTab? { .gradle }
     @ObservationIgnored var environment = IDEProjectEnvironment()
 
     private(set) var syncState: IDEProjectSyncState = .notDetected

@@ -164,9 +164,13 @@ public final class IDEWorkspace {
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
     /// The window's project systems: what recognizes the open folder, syncs it and runs its tasks.
     var projectSystems: IDEProjectSystems { intelligenceServices.projectSystems }
-    /// Gradle, the one project system there is today. The Java run and test code asks it for the
-    /// synced model; everything generic asks `projectSystems`.
+    /// Gradle. The Java run and test code asks it for the synced model; everything generic asks
+    /// `projectSystems`.
     var gradle: IDEGradleProjectSystem { intelligenceServices.gradle }
+    /// npm, registered after Gradle. A folder with both keeps Gradle as `projectSystems.active`.
+    var npm: IDENpmProjectSystem { intelligenceServices.npm }
+    /// The window's TypeScript index. The symbol palette reads it; the language service holds it weakly.
+    var typescriptSupport: IDETypeScriptSupport { intelligenceServices.typescriptSupport }
     /// The run providers language modules contributed, one per window, made on first use.
     var runProviders: IDERunProviders {
         if let runProvidersStorage { return runProvidersStorage }
@@ -501,8 +505,7 @@ public final class IDEWorkspace {
     /// Whether the "Gradle" tab should appear at all: while a sync is running, or once one has
     /// produced output worth revisiting.
     var showsGradleConsoleTab: Bool {
-        gradle.isActive
-            && (gradle.isBusy || !gradle.console.lines.isEmpty)
+        gradle.showsConsole
     }
     /// Whether the "HTTP" tab should appear for the active `.http` file or after a request runs.
     var showsHTTPTab: Bool {
@@ -626,6 +629,19 @@ public final class IDEWorkspace {
                 self?.runProviders.projectTasksDidFinish(report)
             }
         ))
+        // npm ignores `environment.requestTrust`: that closure is worded for Gradle build scripts,
+        // and agreeing to Gradle does not agree to npm.
+        npm.trustPrompt = { [weak self] url in
+            guard let self else { return false }
+            let name = url.lastPathComponent
+            return await self.promptProjectTrust(
+                message: "Trust and run npm scripts for “\(name)”?",
+                detail: "npm scripts can run arbitrary code. Trust this folder only if you trust its contents."
+            )
+        }
+        npm.onActivity = { [weak self] in
+            self?.showBottomTab(.npm)
+        }
         gitStatus.onActionReport = { [weak self] message, isFailure in
             self?.notifications.post(
                 isFailure ? "Git action failed" : "Git",
@@ -3927,6 +3943,11 @@ public final class IDEWorkspace {
         return NSRange(location: location, length: length)
     }
 
+    /// Opens a declaration the TypeScript index reported, selecting its name. The byte range is UTF-8.
+    func openIndexedDeclaration(in url: URL, utf8NameRange: Range<Int>, inRightSplit: Bool) {
+        openClassDeclaration(in: url, utf8NameRange: utf8NameRange, inRightSplit: inRightSplit)
+    }
+
     private func openClassDeclaration(in url: URL, utf8NameRange: Range<Int>, inRightSplit: Bool) {
         Task {
             let range = await Task.detached { Self.utf16Range(fromUTF8: utf8NameRange, in: url) }.value
@@ -4460,7 +4481,18 @@ public final class IDEWorkspace {
             fileIndex: { [weak self] in self?.fileIndexer.index },
             onOpen: { [weak self] member, inSplit in self?.openJavaMember(member, inRightSplit: inSplit) }
         )
-        palette.symbolsAdditionalItems = { query, limit in await membersSource.items(matching: query, limit: limit) }
+        palette.symbolsAdditionalItems = { [weak self] query, limit in
+            let members = await membersSource.items(matching: query, limit: limit)
+            guard let workspace = self else { return members }
+            let sources = await MainActor.run {
+                IDELanguageModules.all.flatMap { $0.symbolPaletteSources(for: workspace) }
+            }
+            var items = members
+            for source in sources {
+                items.append(contentsOf: await source.items(matching: query, limit: limit))
+            }
+            return items
+        }
         palette.symbolsExcludedDocuments = { [weak self] in await MainActor.run { self?.openJavaDocumentIDs() ?? [] } }
         palette.toolWindowEntriesProvider = { [weak self] in self?.toolWindowEntries() ?? [] }
         palette.fileStructureEntriesProvider = { [weak self] in await self?.fileStructureEntries() }
@@ -4642,12 +4674,18 @@ public final class IDEWorkspace {
         projectSystems.active?.reload()
     }
 
+    /// Reloads the system the banner is about, which is the first active system whose build files
+    /// changed. A Gradle-only project has one system, so this is the same reload as ``reloadProject``.
+    func reloadPendingProject() {
+        projectSystems.pendingReload?.reload()
+    }
+
     func showGradleOutput() {
         showBottomTab(.gradle)
     }
 
     func dismissProjectReloadBanner() {
-        projectSystems.active?.dismissConfigurationChanges()
+        projectSystems.pendingReload?.dismissConfigurationChanges()
     }
 
     private func applyProjectRoot(_ url: URL?) {
@@ -5318,37 +5356,41 @@ public final class IDEWorkspace {
         }
     }
 
-    /// The Java gutter: breakpoints, test run buttons in a test source (one per test method, one on
-    /// the class), and a run button on every `main`. A click on a breakpoint removes it, a click on
-    /// a run button opens its Run / Debug menu, and a click on any other line number adds a
-    /// breakpoint; a right click opens the breakpoint's properties or the line's menu.
+    /// Breakpoints on a Java file, and run buttons from the active run provider on any file. A click
+    /// on a breakpoint removes it, a click on a run button opens its Run / Debug menu, and a click
+    /// on any other Java line number adds a breakpoint. A file that is not Java gets run buttons
+    /// only, and only when its provider names locations.
     func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
+        let language = isJava ? "java" : workbench.activePane.selectedDocument?.languageIdentifier
+        let runDocument = IDERunDocument(
+            url: fileURL, languageIdentifier: language,
+            caretUTF16Offset: textView.selectedRange.location, text: textView.text
+        )
+        let provider = runProviders.provider(forLanguage: language)
+        let locations = await provider?.runnableLocations(in: runDocument) ?? []
         guard isJava, let fileURL else {
             javaFileCanTest = false
             activeJavaTestClass = nil
-            textView.setGutterDecorations([])
-            textView.gutterDecorationHandler = nil
-            textView.gutterLineClickHandler = nil
-            textView.gutterDecorationsDidMove = nil
-            textView.alwaysShowGutterDecorationColumn = false
+            guard let fileURL, !locations.isEmpty else {
+                textView.setGutterDecorations([])
+                textView.gutterDecorationHandler = nil
+                textView.gutterLineClickHandler = nil
+                textView.gutterDecorationsDidMove = nil
+                textView.alwaysShowGutterDecorationColumn = false
+                return
+            }
+            applyRunLocationGutter(fileURL: fileURL, locations: locations, to: textView)
             return
         }
-        let mains = await mainLocations(in: textView, fileName: fileURL.lastPathComponent)
-        var testClass: JavaTestClass?
-        var classLine: Int?
         if await javaSupport.isTestSource(file: fileURL) {
-            testClass = await javaSupport.tests(for: fileURL)
+            let testClass = await javaSupport.tests(for: fileURL)
             activeJavaTestClass = testClass
             javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
-            if let testClass, !testClass.methods.isEmpty {
-                classLine = await IDEJavaRunProvider.classDeclarationLine(of: testClass, in: textView.text)
-            }
         } else {
             javaFileCanTest = false
             activeJavaTestClass = nil
         }
-        let gutter = JavaGutterContent(fileURL: fileURL, testClass: testClass, classLine: classLine, mains: mains)
-        applyJavaGutter(gutter, to: textView)
+        applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
     }
 
     /// The `main` methods in `textView`'s buffer, parsed off the main thread and reused until the
@@ -5742,11 +5784,18 @@ public final class IDEWorkspace {
 
     private func promptGradleTrust(for url: URL) async -> Bool {
         let name = url.lastPathComponent
-        return await withCheckedContinuation { continuation in
+        return await promptProjectTrust(
+            message: "Trust and run Gradle build scripts for “\(name)”?",
+            detail: "Gradle build scripts can run arbitrary code, including code from plugins they apply. Trust this folder only if you trust its contents."
+        )
+    }
+
+    private func promptProjectTrust(message: String, detail: String) async -> Bool {
+        await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Trust and run Gradle build scripts for “\(name)”?"
-            alert.informativeText = "Gradle build scripts can run arbitrary code, including code from plugins they apply. Trust this folder only if you trust its contents."
+            alert.messageText = message
+            alert.informativeText = detail
             alert.addButton(withTitle: "Trust Project")
             alert.addButton(withTitle: "Don't Trust")
             let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in

@@ -95,8 +95,8 @@ final class IDEProjectStatus {
 
 /// One kind of project Umbra understands: it recognizes a folder, syncs the project model (asking for
 /// trust first), keeps a console log, runs the project's tasks and shows a tool window. Gradle is the
-/// first (`IDEGradleProjectSystem`); SwiftPM, Cargo or npm would be others. See
-/// `docs/LANGUAGE_SUPPORT_PLAN.md` (phase 5).
+/// first (`IDEGradleProjectSystem`); npm is the second (`IDENpmProjectSystem`). SwiftPM or Cargo would
+/// be others. See `docs/LANGUAGE_SUPPORT_PLAN.md` (phase 5 and its follow-up).
 ///
 /// One instance per window, made with the window's other services (`IDEIntelligenceServices`). A
 /// project system is not a language service: a language that wants the model (Java reads Gradle's)
@@ -144,10 +144,22 @@ protocol IDEProjectSystem: AnyObject {
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem]
     /// The right-hand tool window's content.
     func makeSidebar() -> AnyView
+    /// The bottom-panel tab that shows this system's console, when it has one. The status toast
+    /// opens it while this system is the one being followed.
+    var consoleTab: IDEBottomPanelTab? { get }
+    /// Whether that console tab, and its tool-window entry, should be offered right now.
+    var showsConsole: Bool { get }
+    /// A diagram this system knows how to draw. Nil when `request` belongs to someone else.
+    func loadDiagram(_ request: IDEDiagramRequest, settings: IDEDiagramSettings, workspace: IDEWorkspace) async -> IDEDiagramLoad?
 }
 
 extension IDEProjectSystem {
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] { [] }
+    var consoleTab: IDEBottomPanelTab? { nil }
+    var showsConsole: Bool { isActive && (isBusy || !console.lines.isEmpty) }
+    func loadDiagram(
+        _: IDEDiagramRequest, settings _: IDEDiagramSettings, workspace _: IDEWorkspace
+    ) async -> IDEDiagramLoad? { nil }
 }
 
 /// The project systems of one window, in the order they claim a folder.
@@ -160,9 +172,27 @@ final class IDEProjectSystems {
         self.systems = systems
     }
 
-    /// The system that recognized the open folder, if any.
+    /// The system that recognized the open folder, if any. When several do, this is the first, and
+    /// it owns the right-hand sidebar.
     var active: (any IDEProjectSystem)? {
-        systems.first { $0.isActive }
+        activeSystems.first
+    }
+
+    /// Every system that recognized the open folder, in registration order. A folder can be a
+    /// Gradle project and an npm project at once; each keeps its own console and tasks.
+    var activeSystems: [any IDEProjectSystem] {
+        systems.filter(\.isActive)
+    }
+
+    /// The first active system whose build files changed. The reload banner names this one and
+    /// reloads only it.
+    var pendingReload: (any IDEProjectSystem)? {
+        activeSystems.first { $0.hasConfigurationChanges }
+    }
+
+    /// The system the status toast reads: the first one that is busy, otherwise ``active``.
+    var statusSystem: (any IDEProjectSystem)? {
+        systems.first { $0.isBusy } ?? active
     }
 
     var isBusy: Bool { systems.contains { $0.isBusy } }

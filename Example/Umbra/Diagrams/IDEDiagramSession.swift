@@ -1,6 +1,5 @@
 import DiagramKit
 import Foundation
-import JavaIntelligence
 import AppKit
 import Observation
 
@@ -9,8 +8,8 @@ enum IDEDiagramLoadFailure: Error, Equatable {
 }
 
 /// One diagram tab: the request that produced it, the options it is drawn with, and the DiagramKit session
-/// holding the document, selection and viewport. Graphs are loaded and laid out off the main actor; a newer
-/// load makes an older one's result get dropped.
+/// holding the document, selection and viewport. The opener supplies the document through ``load``; layout
+/// runs off the main actor, and a newer load makes an older one's result get dropped.
 @MainActor
 @Observable
 final class IDEDiagramSession {
@@ -32,14 +31,17 @@ final class IDEDiagramSession {
         didSet { settingsDidChange(from: oldValue) }
     }
 
-    @ObservationIgnored var loadClassGraph: ((JavaClassGraphScope, JavaClassGraphOptions) async -> JavaClassGraph)?
-    @ObservationIgnored var loadModuleGraph: (() async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure>)?
-    @ObservationIgnored var loadLibraryGraph: ((_ projectPath: String, _ configuration: String) async -> Result<GradleDependencyGraph, IDEDiagramLoadFailure>)?
+    /// Builds the document for this tab. Nil means the diagram cannot be drawn.
+    @ObservationIgnored var load: (@MainActor (IDEDiagramRequest, IDEDiagramSettings) async -> IDEDiagramLoad)?
     /// The editor buffer a JSON preview draws. Read on the main actor when a load starts.
     @ObservationIgnored var loadJSONText: (() -> String)?
     @ObservationIgnored var openSource: ((URL) -> Void)?
     /// Opens (or reuses) another diagram tab; the Int is the least neighbour depth it should show.
     @ObservationIgnored var openDiagram: ((IDEDiagramRequest, Int) -> Void)?
+    /// A diagram of the type a node stands for, and the least neighbour depth that tab should show.
+    @ObservationIgnored var relatedTypeDiagram: ((IDEDiagramNode) -> (IDEDiagramRequest, Int)?)?
+    /// A dependency diagram for a project node, using the configuration the toolbar has selected.
+    @ObservationIgnored var relatedDependencyDiagram: ((IDEDiagramNode, String) -> IDEDiagramRequest?)?
     @ObservationIgnored var invalidateCaches: (() -> Void)?
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -103,13 +105,13 @@ final class IDEDiagramSession {
     }
 
     func showDiagramAround(_ node: IDEDiagramNode) {
-        openDiagram?(.classes(.types([node.key])), 1)
+        guard let (request, depth) = relatedTypeDiagram?(node) else { return }
+        openDiagram?(request, depth)
     }
 
     func showLibraries(of node: IDEDiagramNode) {
-        guard node.kind == .project else { return }
-        let path = String(node.key.dropFirst("project:".count))
-        openDiagram?(.gradleLibraries(projectPath: path, configuration: settings.libraryConfiguration), 0)
+        guard let request = relatedDependencyDiagram?(node, settings.libraryConfiguration) else { return }
+        openDiagram?(request, 0)
     }
 
     func copyName(of node: IDEDiagramNode) {
@@ -138,23 +140,21 @@ final class IDEDiagramSession {
         host.fitViewport()
     }
 
-    /// Re-targets the Gradle library view at another configuration without opening a new tab.
+    /// Re-targets a dependency diagram at another configuration without opening a new tab.
+    /// The settings change reloads the tab once.
     func setLibraryConfiguration(_ configuration: String) {
-        guard case let .gradleLibraries(projectPath, current) = request, current != configuration else { return }
-        request = .gradleLibraries(projectPath: projectPath, configuration: configuration)
-        if settings.libraryConfiguration != configuration { settings.libraryConfiguration = configuration }
-        reload()
+        guard request.offersConfigurationPicker, settings.libraryConfiguration != configuration else { return }
+        settings.libraryConfiguration = configuration
     }
 
     var libraryConfiguration: String? {
-        if case let .gradleLibraries(_, configuration) = request { return configuration }
-        return nil
+        request.offersConfigurationPicker ? settings.libraryConfiguration : nil
     }
 
     /// Points a JSON preview at another file without dropping the viewport. The next reload reads
     /// the buffer through ``loadJSONText``.
     func setJSONPreviewTitle(_ title: String) {
-        guard case .jsonPreview = request, request.title != title else { return }
+        guard request.isJSONPreview, request.title != title else { return }
         request = .jsonPreview(title: title)
     }
 
@@ -169,37 +169,7 @@ final class IDEDiagramSession {
         let title = request.title
         let layout = settings.layout
         let routing = settings.routing
-        switch request {
-        case let .classes(scope):
-            guard let loadClassGraph else {
-                return Outcome(document: .empty(title: title), emptyMessage: "", failure: "Class diagrams are unavailable.")
-            }
-            let graph = await loadClassGraph(scope, settings.classOptions)
-            let document = await Task.detached(priority: .userInitiated) {
-                Self.laidOut(IDEDiagramDocumentBuilder.document(from: graph, title: title), layout: layout, routing: routing)
-            }.value
-            var notice: String?
-            if graph.truncated {
-                notice = "Showing \(graph.nodes.count) types; \(graph.omittedCount) more omitted. Narrow the scope to see them."
-            }
-            return Outcome(
-                document: document,
-                notice: notice,
-                emptyMessage: "No Java types found for this scope. If the project was just opened, wait for indexing to finish and reload."
-            )
-        case .gradleModules:
-            guard let loadModuleGraph else {
-                return Outcome(document: .empty(title: title), emptyMessage: "", failure: "Gradle diagrams are unavailable.")
-            }
-            return await outcome(for: await loadModuleGraph(), title: title, layout: layout, routing: routing,
-                                 emptyMessage: "This Gradle build has no project modules.")
-        case let .gradleLibraries(projectPath, configuration):
-            guard let loadLibraryGraph else {
-                return Outcome(document: .empty(title: title), emptyMessage: "", failure: "Gradle diagrams are unavailable.")
-            }
-            return await outcome(for: await loadLibraryGraph(projectPath, configuration), title: title, layout: layout, routing: routing,
-                                 emptyMessage: "\(configuration) has no dependencies in this project.")
-        case .jsonPreview:
+        if request.isJSONPreview {
             let text = loadJSONText?() ?? ""
             let built = await Task.detached(priority: .userInitiated) {
                 let parsed = JSONDiagramBuilder.build(text: text, title: title)
@@ -215,30 +185,19 @@ final class IDEDiagramSession {
                 failure: built.failure
             )
         }
-    }
-
-    private func outcome(
-        for result: Result<GradleDependencyGraph, IDEDiagramLoadFailure>,
-        title: String,
-        layout: IDEDiagramLayoutKind,
-        routing: EdgeRoutingStyle,
-        emptyMessage: String
-    ) async -> Outcome {
-        switch result {
-        case let .failure(.message(text)):
-            return Outcome(document: .empty(title: title), emptyMessage: emptyMessage, failure: text)
-        case let .success(graph):
-            let document = await Task.detached(priority: .userInitiated) {
-                Self.laidOut(IDEDiagramDocumentBuilder.document(from: graph, title: title), layout: layout, routing: routing)
-            }.value
-            var notice: String?
-            if let error = graph.error, !error.isEmpty {
-                notice = error
-            } else if graph.truncated {
-                notice = "Showing \(graph.components.count) libraries; \(graph.omittedCount) more omitted."
-            }
-            return Outcome(document: document, notice: notice, emptyMessage: emptyMessage)
+        guard let load else {
+            return Outcome(document: .empty(title: title), emptyMessage: "", failure: "This diagram is unavailable.")
         }
+        let loaded = await load(request, settings)
+        guard loaded.failure == nil else {
+            return Outcome(
+                document: loaded.document, notice: loaded.notice, emptyMessage: loaded.emptyMessage, failure: loaded.failure
+            )
+        }
+        let document = await Task.detached(priority: .userInitiated) {
+            Self.laidOut(loaded.document, layout: layout, routing: routing)
+        }.value
+        return Outcome(document: document, notice: loaded.notice, emptyMessage: loaded.emptyMessage)
     }
 
     private nonisolated static func laidOut(_ document: IDEDiagramDocument, layout: IDEDiagramLayoutKind, routing: EdgeRoutingStyle) -> IDEDiagramDocument {
@@ -306,10 +265,7 @@ final class IDEDiagramSession {
                 return
             }
         }
-        if old.libraryConfiguration != settings.libraryConfiguration, case let .gradleLibraries(path, current) = request,
-           current != settings.libraryConfiguration
-        {
-            request = .gradleLibraries(projectPath: path, configuration: settings.libraryConfiguration)
+        if request.offersConfigurationPicker, old.libraryConfiguration != settings.libraryConfiguration {
             reload()
             return
         }

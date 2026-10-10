@@ -130,6 +130,12 @@ protocol IDELanguageModule {
     /// What makes Run, Debug and Run in Context work on this language's files: one per window, made
     /// once. The provider must hold `workspace` weakly.
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)?
+
+    /// Extra rows for the Symbols tab, after Java's members. Read an index the window already holds.
+    func symbolPaletteSources(for workspace: IDEWorkspace) -> [any SearchEverywhereProvider]
+
+    /// A diagram this module knows how to draw. Nil when `request` belongs to someone else.
+    func loadDiagram(_ request: IDEDiagramRequest, settings: IDEDiagramSettings, workspace: IDEWorkspace) async -> IDEDiagramLoad?
 }
 
 extension IDELanguageModule {
@@ -143,6 +149,10 @@ extension IDELanguageModule {
     func statusItems(for workspace: IDEWorkspace) -> [IDEStatusItem] { [] }
     func viewMenuItems(for workspace: IDEWorkspace) -> [IDEViewMenuContribution] { [] }
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? { nil }
+    func symbolPaletteSources(for _: IDEWorkspace) -> [any SearchEverywhereProvider] { [] }
+    func loadDiagram(
+        _: IDEDiagramRequest, settings _: IDEDiagramSettings, workspace _: IDEWorkspace
+    ) async -> IDEDiagramLoad? { nil }
 }
 
 /// The language modules of the app, in the order their pages and entries appear. The shipped ones are
@@ -152,7 +162,8 @@ extension IDELanguageModule {
 @MainActor
 enum IDELanguageModules {
     static let shipped: [any IDELanguageModule] = [
-        IDEJavaModule(), IDEHTTPModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule()
+        IDEJavaModule(), IDEHTTPModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule(),
+        IDETypeScriptModule()
     ]
 
     private(set) static var all: [any IDELanguageModule] = shipped
@@ -182,18 +193,48 @@ extension IDEWorkspace {
         IDELanguageModules.all.flatMap { $0.commands(for: self) }
     }
 
-    /// Every module's tool-window entries that are available now, and those of the project system
-    /// that recognized the folder (the Gradle sidebar and console).
+    /// Every module's tool-window entries that are available now, and those of every active project system.
     func languageModuleToolWindows() -> [IDEToolWindow] {
         IDELanguageModules.all.flatMap { $0.toolWindows(for: self) }
             + projectSystems.systems.filter(\.isActive).flatMap { $0.toolWindows(for: self) }
     }
 
-    /// Every module's and the active project system's toolbar buttons, in their order.
+    /// Every module's and the active project system's toolbar buttons, plus Run, Debug and Stop,
+    /// in their order. Those three follow the active file's run provider, so they are not a
+    /// language module's. Their ids stay `java.run`, `java.debug` and `java.stop`.
     func toolbarItems() -> [IDEToolbarItem] {
         (IDELanguageModules.all.flatMap { $0.toolbarItems(for: self) }
-            + projectSystems.systems.filter(\.isActive).flatMap { $0.toolbarItems(for: self) })
+            + projectSystems.systems.filter(\.isActive).flatMap { $0.toolbarItems(for: self) }
+            + runToolbarItems())
             .sorted { $0.order < $1.order }
+    }
+
+    /// Run, Debug and Stop for whatever language is in front. Hidden when that file cannot run,
+    /// except Stop, which stays while a run is going.
+    private func runToolbarItems() -> [IDEToolbarItem] {
+        typealias Order = IDEToolbarItem.Order
+        let canRun = runFileCanRun
+        let running = isRunActive
+        guard canRun || running else { return [] }
+        var items: [IDEToolbarItem] = []
+        if canRun {
+            items.append(.button(
+                id: "java.run", order: Order.run, systemImage: "play.fill", help: runHelp,
+                tint: IDEAppearance.ColorToken.run, action: { [weak self] in self?.runActiveFile() }
+            ))
+            let canDebug = runFileCanDebug
+            items.append(.button(
+                id: "java.debug", order: Order.debug, systemImage: "ladybug.fill", help: debugHelp,
+                tint: canDebug ? IDEAppearance.ColorToken.run : nil, isEnabled: canDebug,
+                action: { [weak self] in self?.debugActiveFile() }
+            ))
+        }
+        items.append(.button(
+            id: "java.stop", order: Order.stop, systemImage: "stop.fill", help: "Stop",
+            tint: running ? IDEAppearance.ColorToken.error : nil, isEnabled: running,
+            action: { [weak self] in self?.stopRunning() }
+        ))
+        return items
     }
 
     /// Every module's status-bar items for `placement`, in their order.

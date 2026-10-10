@@ -81,6 +81,34 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         XCTAssertEqual(log.events, ["cargo root=app", "gradle root=app", "cargo root=crate", "gradle root=crate", "cargo root=nil", "gradle root=nil"])
     }
 
+    func testSeveralSystemsCanBeActiveAndTheBannerNamesTheOneThatChanged() {
+        let log = FakeProjectSystem.Log()
+        let gradle = FakeProjectSystem(id: "gradle", log: log) { _ in true }
+        let npm = FakeProjectSystem(id: "npm", log: log) { _ in true }
+        let systems = IDEProjectSystems([gradle, npm])
+
+        systems.projectDidChange(root: URL(fileURLWithPath: "/work/app"))
+        XCTAssertEqual(systems.active?.id, "gradle", "The first system keeps the sidebar")
+        XCTAssertEqual(systems.activeSystems.map(\.id), ["gradle", "npm"])
+        XCTAssertNil(systems.pendingReload)
+        XCTAssertTrue(systems.statusSystem === gradle)
+
+        npm.hasConfigurationChanges = true
+        XCTAssertEqual(systems.pendingReload?.id, "npm")
+        gradle.hasConfigurationChanges = true
+        XCTAssertEqual(systems.pendingReload?.id, "gradle", "The first changed system owns the banner")
+
+        npm.isBusy = true
+        XCTAssertTrue(systems.statusSystem === npm, "A busy system is what the status toast follows")
+        npm.isBusy = false
+        XCTAssertTrue(systems.statusSystem === gradle)
+
+        systems.projectDidChange(root: nil)
+        XCTAssertTrue(systems.activeSystems.isEmpty)
+        XCTAssertNil(systems.pendingReload)
+        XCTAssertNil(systems.statusSystem)
+    }
+
     func testStartingGivesEverySystemTheSameEnvironmentAndStoppingGoesInReverse() {
         let log = FakeProjectSystem.Log()
         let first = FakeProjectSystem(id: "a", log: log)
@@ -330,6 +358,9 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         XCTAssertEqual(places.map(\.kind), [.entryPoint, .entryPoint])
         XCTAssertEqual(places.map(\.line), [3, 6])
         XCTAssertEqual(places.map(\.title), ["Tool.main()", "Other.main()"])
+        let parsed = JavaMainMethod.locations(in: source, fileName: "Tool.java")
+        XCTAssertEqual(places.map(\.line), parsed.map(\.line))
+        XCTAssertEqual(places.map(\.title), parsed.map { "\($0.simpleClassName).main()" })
 
         let none = await workspace.javaRun.runnableLocations(in: IDERunDocument(url: nil, languageIdentifier: "java", text: source))
         XCTAssertTrue(none.isEmpty, "Without a file there is nothing to launch")
@@ -337,6 +368,24 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
             in: IDERunDocument(url: URL(fileURLWithPath: "/x.md"), languageIdentifier: "markdown", text: source)
         )
         XCTAssertTrue(notJava.isEmpty)
+    }
+
+    func testRunnableLocationsMatchTheMainsAndTheTestScan() {
+        let file = URL(fileURLWithPath: "/proj/src/test/java/demo/CalculatorTest.java")
+        let method = JavaTestMethod(
+            className: "demo.CalculatorTest", methodName: "adds", displayName: "adds",
+            sourceFile: file, line: 8, column: 4, framework: .junit4
+        )
+        let testClass = JavaTestClass(
+            qualifiedName: "demo.CalculatorTest", sourceFile: file, methods: [method],
+            gradleProjectPath: ":app", gradleTaskPath: ":app:test"
+        )
+        let main = JavaMainMethodLocation(line: 4, simpleClassName: "CalculatorTest", binaryClassName: "demo.CalculatorTest")
+        let places = IDEJavaRunProvider.locations(fromMains: [main], testClass: testClass, classLine: 3)
+        XCTAssertEqual(places.map(\.kind), [.testGroup, .entryPoint, .test])
+        XCTAssertEqual(places.map(\.line), [3, 4, 8])
+        XCTAssertEqual(places.map(\.title), ["CalculatorTest", "CalculatorTest.main()", "adds()"])
+        XCTAssertTrue(IDEJavaRunProvider.locations(fromMains: [], testClass: nil, classLine: nil).isEmpty)
     }
 
     func testAFileWithoutARunProviderRepeatsNothingAndDoesNotCrash() async {

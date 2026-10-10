@@ -336,7 +336,7 @@ private final class TypeScriptWalker {
             recordsDeclarations: true, moduleLevel: true, exportMode: .none,
             inTypePosition: false, depth: 0
         )
-        _ = collectErrors(root)
+        collectErrors(root)
         walk(root, frame)
         var declarations = stack.first ?? []
         for export in localExports {
@@ -358,61 +358,88 @@ private final class TypeScriptWalker {
         )
     }
 
+    /// Indexing runs on a cooperative pool thread, whose stack is about 512KB. This switch
+    /// keeps a large frame, so a few hundred recursive calls write into the stack guard.
+    /// Member chains and parenthesized types reach that depth. Descendants stay on `pending`.
     private func walk(_ node: SyntaxNode, _ frame: TypeScriptFrame) {
-        guard frame.depth < 400 else { return }
-        var frame = frame
-        frame.depth += 1
-        switch node.type {
-        case "export_statement":
-            walkExport(node, frame)
-        case "import_statement":
-            walkImport(node, frame)
-        case "lexical_declaration", "variable_declaration":
-            walkVariables(node, frame)
-        case "function_declaration", "generator_function_declaration", "function_signature":
-            walkFunction(node, frame, kind: .function, hoisted: true)
-        case "function", "generator_function", "arrow_function":
-            walkFunction(node, frame, kind: .function, hoisted: false)
-        case "class_declaration", "abstract_class_declaration":
-            walkClass(node, frame)
-        case "interface_declaration":
-            walkInterface(node, frame)
-        case "type_alias_declaration":
-            walkTypeAlias(node, frame)
-        case "enum_declaration":
-            walkEnum(node, frame)
-        case "internal_module", "module":
-            guard node.isNamed else { walkChildren(node, frame); return }
-            walkNamespace(node, frame)
-        case "ambient_declaration":
-            walkChildren(node, frame)
-        case "statement_block":
-            var inner = frame
-            inner.blockStart = node.startByte
-            inner.blockEnd = node.endByte
-            walkChildren(node, inner)
-        case "for_statement", "for_in_statement":
-            var inner = frame
-            inner.blockStart = node.startByte
-            inner.blockEnd = node.endByte
-            walkChildren(node, inner)
-        case "catch_clause":
-            walkCatch(node, frame)
-        case "call_expression":
-            walkCall(node, frame)
-        case "object_type", "interface_body":
-            walkObjectType(node, frame)
-        case "comment", "string":
-            return
-        case "template_string":
-            for child in node.namedChildren where child.type == "template_substitution" {
-                walk(child, frame)
+        var pending: [(SyntaxNode, TypeScriptFrame)] = [(node, frame)]
+        while let (current, incoming) = pending.popLast() {
+            guard incoming.depth < 400 else { continue }
+            var frame = incoming
+            frame.depth += 1
+            switch current.type {
+            case "export_statement":
+                walkExport(current, frame)
+            case "import_statement":
+                walkImport(current, frame)
+            case "lexical_declaration", "variable_declaration":
+                walkVariables(current, frame)
+            case "function_declaration", "generator_function_declaration", "function_signature":
+                walkFunction(current, frame, kind: .function, hoisted: true)
+            case "function", "generator_function", "arrow_function":
+                walkFunction(current, frame, kind: .function, hoisted: false)
+            case "class_declaration", "abstract_class_declaration":
+                walkClass(current, frame)
+            case "interface_declaration":
+                walkInterface(current, frame)
+            case "type_alias_declaration":
+                walkTypeAlias(current, frame)
+            case "enum_declaration":
+                walkEnum(current, frame)
+            case "internal_module", "module":
+                guard current.isNamed else {
+                    pushChildren(of: current, frame, onto: &pending)
+                    continue
+                }
+                walkNamespace(current, frame)
+            case "ambient_declaration":
+                pushChildren(of: current, frame, onto: &pending)
+            case "statement_block":
+                var inner = frame
+                inner.blockStart = current.startByte
+                inner.blockEnd = current.endByte
+                pushChildren(of: current, inner, onto: &pending)
+            case "for_statement", "for_in_statement":
+                var inner = frame
+                inner.blockStart = current.startByte
+                inner.blockEnd = current.endByte
+                pushChildren(of: current, inner, onto: &pending)
+            case "catch_clause":
+                walkCatch(current, frame)
+            case "call_expression":
+                walkCall(current, frame)
+            case "object_type", "interface_body":
+                walkObjectType(current, frame)
+            case "comment", "string":
+                continue
+            case "template_string":
+                let substitutions = current.namedChildren.filter { $0.type == "template_substitution" }
+                for child in substitutions.reversed() {
+                    pending.append((child, frame))
+                }
+            default:
+                if TypeScriptNames.isName(current.type) {
+                    recordUse(current, frame)
+                } else {
+                    pushChildren(of: current, frame, onto: &pending)
+                }
             }
-        default:
-            if TypeScriptNames.isName(node.type) {
-                recordUse(node, frame)
-            } else {
-                walkChildren(node, frame)
+        }
+    }
+
+    /// Left-to-right. Pushed back-to-front so `popLast` visits the first child next, and that
+    /// child's own descendants land above the later siblings.
+    private func pushChildren(
+        of node: SyntaxNode, _ frame: TypeScriptFrame, onto pending: inout [(SyntaxNode, TypeScriptFrame)]
+    ) {
+        let count = node.namedChildCount
+        guard count > 0 else { return }
+        pending.reserveCapacity(pending.count + count)
+        var index = count
+        while index > 0 {
+            index -= 1
+            if let child = node.namedChild(at: index) {
+                pending.append((child, frame))
             }
         }
     }
@@ -1007,17 +1034,33 @@ private final class TypeScriptWalker {
         return names
     }
 
-    private func collectErrors(_ node: SyntaxNode) -> Bool {
-        var reported = false
-        for child in node.children where collectErrors(child) {
-            reported = true
+    /// Post-order, on the heap. Every parse scans the tree here before `walk`, and a recursive
+    /// scan of a deep file overflows the same cooperative-thread stack.
+    private func collectErrors(_ root: SyntaxNode) {
+        struct Frame {
+            var node: SyntaxNode
+            var nextChild: Int
+            var reported: Bool
         }
-        let isError = node.type == "ERROR" || node.isMissing
-        if !reported && (isError || node.hasError) {
-            errors.append(Model.SyntaxError(bytes: node.byteRange))
-            return true
+        var stack = [Frame(node: root, nextChild: 0, reported: false)]
+        while var frame = stack.popLast() {
+            if frame.nextChild < frame.node.childCount, stack.count < 8_192 {
+                let index = frame.nextChild
+                frame.nextChild += 1
+                stack.append(frame)
+                if let child = frame.node.child(at: index) {
+                    stack.append(Frame(node: child, nextChild: 0, reported: false))
+                }
+                continue
+            }
+            let isError = frame.node.type == "ERROR" || frame.node.isMissing
+            if !frame.reported && (isError || frame.node.hasError) {
+                errors.append(Model.SyntaxError(bytes: frame.node.byteRange))
+            }
+            if frame.reported || isError || frame.node.hasError, !stack.isEmpty {
+                stack[stack.count - 1].reported = true
+            }
         }
-        return reported || isError
     }
 
     private func declarationName(_ node: SyntaxNode) -> SyntaxNode? {

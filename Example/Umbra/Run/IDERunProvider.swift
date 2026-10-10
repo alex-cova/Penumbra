@@ -135,6 +135,13 @@ protocol IDERunProvider: AnyObject {
 
     /// The play and bug buttons: what the active file runs by default.
     func run(_ document: IDERunDocument, mode: IDERunMode)
+    /// The gutter's Run or Debug item for one ``IDERunnableLocation``. The default runs the whole
+    /// document, which is what a language with no per-line launch does.
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, mode: IDERunMode)
+    /// Whether the gutter menu offers Modify Run Configuration for `location`.
+    func canEditRunConfiguration(_ location: IDERunnableLocation) -> Bool
+    /// Opens the editor on the configuration that would launch `location`.
+    func editRunConfiguration(_ document: IDERunDocument, location: IDERunnableLocation)
     /// ⌃⇧R and ⌃⇧D: what the caret is in. `false` when it is in nothing runnable, and the host
     /// repeats the last run instead, so the key is never dead.
     func runInContext(_ document: IDERunDocument, mode: IDERunMode) async -> Bool
@@ -152,6 +159,11 @@ protocol IDERunProvider: AnyObject {
 extension IDERunProvider {
     func projectTasksDidFinish(_ report: IDEProjectTaskReport) {}
     func runnableLocations(in document: IDERunDocument) async -> [IDERunnableLocation] { [] }
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, mode: IDERunMode) {
+        run(document, mode: mode)
+    }
+    func canEditRunConfiguration(_ location: IDERunnableLocation) -> Bool { false }
+    func editRunConfiguration(_ document: IDERunDocument, location: IDERunnableLocation) {}
 }
 
 /// The run providers of one window, found by language.

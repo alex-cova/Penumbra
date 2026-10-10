@@ -12,7 +12,7 @@ final class IDELanguageModuleTests: XCTestCase {
     }
 
     func testTheShippedModulesAreJavaHTTPAndTheThreePreviewLanguages() {
-        XCTAssertEqual(IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv"])
+        XCTAssertEqual(IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript"])
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
         XCTAssertNil(IDELanguageModules.module(id: "swift"))
     }

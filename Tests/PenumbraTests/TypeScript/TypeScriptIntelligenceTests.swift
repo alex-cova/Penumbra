@@ -16,6 +16,22 @@ final class TypeScriptIntelligenceTests: XCTestCase {
         super.tearDown()
     }
 
+    /// A few hundred nested nodes used to overflow the cooperative thread stack inside `walk`.
+    func testDeepNestingStillIndexesTheLeaf() {
+        let depth = 250
+        let wrapped = "declare type T = " + String(repeating: "(", count: depth) + "Foo" + String(repeating: ")", count: depth)
+        let parsed = TypeScriptAnalysis.parse(wrapped)
+        XCTAssertEqual(parsed?.model.declarations.first?.name, "T", parsed?.tree.rootNode.sExpression ?? "no tree")
+        XCTAssertTrue(parsed?.model.uses.contains { $0.name == "Foo" && $0.inTypePosition } == true)
+
+        let names = (0..<depth).map { "n\($0)" }
+        let chained = TypeScriptAnalysis.parse("const value = " + names.joined(separator: "."))
+        XCTAssertEqual(chained?.model.declarations.first?.name, "value")
+        let used = Set(chained?.model.uses.map(\.name) ?? [])
+        XCTAssertTrue(used.contains("n0"))
+        XCTAssertTrue(used.contains("n\(depth - 1)"))
+    }
+
     func testParserSeesAnInterfaceAndTheJavaParserStaysJava() {
         let parsed = TypeScriptAnalysis.parse("interface Foo { bar: string }")
         XCTAssertEqual(parsed?.model.declarations.first?.kind, .interface, parsed?.tree.rootNode.sExpression ?? "no tree")

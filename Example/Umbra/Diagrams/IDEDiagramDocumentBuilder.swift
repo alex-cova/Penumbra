@@ -78,6 +78,30 @@ nonisolated enum IDEDiagramDocumentBuilder {
         return IDEDiagramDocument(meta: .init(title: title), canvas: IDEDiagramDocument.defaultCanvas, nodes: nodes, edges: edges)
     }
 
+    /// A class graph as the session's loader returns it, including the truncation notice.
+    static func load(from graph: JavaClassGraph, title: String) -> IDEDiagramLoad {
+        var notice: String?
+        if graph.truncated {
+            notice = "Showing \(graph.nodes.count) types; \(graph.omittedCount) more omitted. Narrow the scope to see them."
+        }
+        return IDEDiagramLoad(
+            document: document(from: graph, title: title),
+            notice: notice,
+            emptyMessage: "No Java types found for this scope. If the project was just opened, wait for indexing to finish and reload."
+        )
+    }
+
+    /// A Gradle dependency graph as the session's loader returns it.
+    static func load(from graph: GradleDependencyGraph, title: String, emptyMessage: String) -> IDEDiagramLoad {
+        var notice: String?
+        if let error = graph.error, !error.isEmpty {
+            notice = error
+        } else if graph.truncated {
+            notice = "Showing \(graph.components.count) libraries; \(graph.omittedCount) more omitted."
+        }
+        return IDEDiagramLoad(document: document(from: graph, title: title), notice: notice, emptyMessage: emptyMessage)
+    }
+
     private static func nodeKind(for node: JavaClassGraph.Node) -> IDEDiagramNodeKind {
         if node.isExternal { return .externalType }
         switch node.kind {

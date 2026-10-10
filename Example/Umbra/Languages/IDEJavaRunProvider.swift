@@ -74,12 +74,28 @@ final class IDEJavaRunProvider: IDERunProvider {
         let mains = await Task.detached(priority: .utility) {
             JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text, fileName: fileName) : []
         }.value
+        var testClass: JavaTestClass?
+        var classLine: Int?
+        if await java.isTestSource(file: url), let found = await java.tests(for: url), !found.methods.isEmpty {
+            testClass = found
+            classLine = await Self.classDeclarationLine(of: found, in: text)
+        }
+        return Self.locations(fromMains: mains, testClass: testClass, classLine: classLine)
+    }
+
+    /// The gutter buttons for a set of mains and a test class. The same lines and titles the gutter
+    /// used to derive itself, so a provider location is that button.
+    static func locations(
+        fromMains mains: [JavaMainMethodLocation], testClass: JavaTestClass?, classLine: Int?
+    ) -> [IDERunnableLocation] {
         var locations = mains.map {
             IDERunnableLocation(kind: .entryPoint, line: $0.line, title: "\($0.simpleClassName).main()")
         }
-        if await java.isTestSource(file: url), let testClass = await java.tests(for: url), !testClass.methods.isEmpty {
-            if let line = await Self.classDeclarationLine(of: testClass, in: text) {
-                locations.append(IDERunnableLocation(kind: .testGroup, line: line, title: Self.simpleName(testClass.qualifiedName)))
+        if let testClass, !testClass.methods.isEmpty {
+            if let classLine {
+                locations.append(IDERunnableLocation(
+                    kind: .testGroup, line: classLine, title: simpleName(testClass.qualifiedName)
+                ))
             }
             locations += testClass.methods.map {
                 IDERunnableLocation(kind: .test, line: $0.line, title: "\($0.methodName)()")
@@ -115,6 +131,69 @@ final class IDEJavaRunProvider: IDERunProvider {
 
     func run(_ document: IDERunDocument, mode: IDERunMode) {
         launchActiveFile(mode: mode == .debug ? .debug : .run)
+    }
+
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, mode: IDERunMode) {
+        let launchMode: JavaLaunchMode = mode == .debug ? .debug : .run
+        switch location.kind {
+        case .entryPoint:
+            launchMain(in: document, line: location.line, mode: launchMode)
+        case .test, .testGroup:
+            let debug = mode == .debug
+            Task { await launchTest(in: document, location: location, debug: debug) }
+        }
+    }
+
+    func canEditRunConfiguration(_ location: IDERunnableLocation) -> Bool {
+        location.kind == .entryPoint
+    }
+
+    func editRunConfiguration(_ document: IDERunDocument, location: IDERunnableLocation) {
+        guard let configuration = mainConfiguration(in: document, line: location.line) else { return }
+        host?.openRunConfigurationDraft(configuration)
+    }
+
+    private func launchMain(in document: IDERunDocument, line: Int, mode: JavaLaunchMode) {
+        guard let configuration = mainConfiguration(in: document, line: line) else { return }
+        launch(configuration, mode: mode)
+    }
+
+    private func mainConfiguration(in document: IDERunDocument, line: Int) -> JavaRunConfiguration? {
+        guard let url = document.url else { return nil }
+        let text = document.text
+        guard let found = JavaMainMethod.locations(in: text, fileName: url.lastPathComponent).first(where: { $0.line == line }) else {
+            return nil
+        }
+        return mainRunConfiguration(for: found, file: url, source: text)
+    }
+
+    private func launchTest(in document: IDERunDocument, location: IDERunnableLocation, debug: Bool) async {
+        guard let url = document.url else { return }
+        let standard = url.standardizedFileURL
+        let cached = host?.activeJavaTestClass
+        let testClass: JavaTestClass?
+        if let cached, cached.sourceFile.standardizedFileURL == standard {
+            testClass = cached
+        } else {
+            testClass = await java.tests(for: url)
+        }
+        guard let testClass, !testClass.methods.isEmpty else { return }
+        if location.kind == .testGroup {
+            let title = Self.simpleName(testClass.qualifiedName)
+            if debug {
+                host?.debugTests(scope: .testClass(testClass), title: title, recording: nil)
+            } else {
+                runTests(scope: .testClass(testClass), title: title)
+            }
+            return
+        }
+        guard let method = testClass.methods.first(where: { $0.line == location.line }) else { return }
+        let title = "\(method.methodName)()"
+        if debug {
+            host?.debugTests(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: title, recording: nil)
+        } else {
+            runTests(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: title)
+        }
     }
 
     /// Launches the active file's configuration in `mode`, or asks which Gradle task to run when

@@ -1,35 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The response log's text view. It takes focus on a click and answers ⌘C and ⌘A itself, so
-/// copying does not depend on the menu bar's Copy item finding this view in the responder chain
-/// (the editor and the terminal share the window).
-private final class IDEResponseTextView: NSTextView {
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard window?.firstResponder === self, modifiers == .command else {
-            return super.performKeyEquivalent(with: event)
-        }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "c" where selectedRange().length > 0:
-            copy(nil)
-            return true
-        case "a":
-            selectAll(nil)
-            return true
-        default:
-            return super.performKeyEquivalent(with: event)
-        }
-    }
-}
-
 /// Read-only live view of `IDEHTTPSupport.responseLog`, hosted as the "HTTP" tab in the bottom panel.
 struct IDEHTTPResponseView: NSViewRepresentable {
     let log: HTTPResponseLog
@@ -45,7 +16,7 @@ struct IDEHTTPResponseView: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = IDEAppearance.NSToken.editor
 
-        let textView = IDEResponseTextView()
+        let textView = IDEReadOnlyLogTextView()
         textView.isEditable = false
         textView.isSelectable = true
         // ⌘F while this view has focus opens the find bar (`IDEWorkspace.showFind` routes it here).

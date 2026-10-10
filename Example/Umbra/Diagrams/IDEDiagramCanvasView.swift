@@ -129,8 +129,8 @@ private struct IDEDiagramContentView: View {
     @ViewBuilder
     private func nodeMenu(for node: IDEDiagramNode) -> some View {
         let offersSource = node.fileURL != nil
-        let offersAround = session.request.isClassDiagram && node.kind.isType
-        let offersLibraries = node.kind == .project
+        let offersAround = session.relatedTypeDiagram?(node) != nil
+        let offersLibraries = session.relatedDependencyDiagram?(node, session.settings.libraryConfiguration) != nil
         if offersSource {
             Button("Open Source") { session.open(node) }
         }

@@ -19,9 +19,12 @@ struct IDEProjectConsoleView: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = IDEAppearance.NSToken.editor
 
-        let textView = NSTextView()
+        let textView = IDEReadOnlyLogTextView()
         textView.isEditable = false
         textView.isSelectable = true
+        // ⌘F while this view has focus opens its find bar (`IDEWorkspace.showFind` routes it here).
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.isRichText = true
         textView.drawsBackground = true
         textView.backgroundColor = IDEAppearance.NSToken.editor
@@ -147,6 +150,35 @@ struct IDEProjectConsoleView: NSViewRepresentable {
                 color = IDEAppearance.NSToken.muted
             }
             return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        }
+    }
+}
+
+/// A read-only log text view. It takes focus on a click and answers ⌘C and ⌘A itself, so copying
+/// does not depend on the menu bar's Copy item finding this view in the responder chain (the editor
+/// and the terminal share the window). The HTTP response log and the project consoles use it.
+final class IDEReadOnlyLogTextView: NSTextView {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard window?.firstResponder === self, modifiers == .command else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c" where selectedRange().length > 0:
+            copy(nil)
+            return true
+        case "a":
+            selectAll(nil)
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
         }
     }
 }

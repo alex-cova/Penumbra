@@ -1,68 +1,59 @@
-import DiagramKit
 import Foundation
-import JavaIntelligence
 
-/// What a diagram tab shows. Two requests with the same ``id`` are the same tab.
-nonisolated enum IDEDiagramRequest: Hashable, Sendable {
-    /// The UML classes of a file, package, some types, or the whole project.
-    case classes(JavaClassGraphScope)
-    /// The Gradle projects of the build and which depend on which.
-    case gradleModules
-    /// The libraries one Gradle project resolves for a configuration.
-    case gradleLibraries(projectPath: String, configuration: String)
-    /// The JSON buffer open in an editor, drawn over that editor. Not a diagram tab: every preview
-    /// shares one id because the session lives on the pane, not in `diagramSessions`.
-    case jsonPreview(title: String)
+/// What kind of picture a diagram tab is. The session uses this for its toolbar and its summary.
+/// It does not say which language produced the picture.
+enum IDEDiagramPresentation: Hashable, Sendable {
+    /// Types and their members.
+    case classes
+    /// Modules or libraries and the links between them.
+    case dependencies
+    /// A JSON value drawn over its editor. Not a diagram tab.
+    case jsonPreview
+}
 
-    var id: String {
-        switch self {
-        case .classes(.file(let url)): "classes:file:" + url.standardizedFileURL.path
-        case .classes(.package(let name)): "classes:package:" + name
-        case .classes(.types(let names)): "classes:types:" + names.sorted().joined(separator: ",")
-        case .classes(.project): "classes:project"
-        case .gradleModules: "gradle:modules"
-        case .gradleLibraries(let projectPath, _): "gradle:libraries:" + projectPath
-        case .jsonPreview: "json:preview"
-        }
+/// What a diagram tab shows. Two requests with the same ``id`` are the same tab. The graph itself
+/// is loaded by the opener (`IDEDiagramSession.load`) and comes back as an ``IDEDiagramLoad``.
+nonisolated struct IDEDiagramRequest: Hashable, Sendable {
+    var id: String
+    var title: String
+    var symbolName: String
+    var presentation: IDEDiagramPresentation
+    /// The toolbar offers the dependency configuration picker.
+    var offersConfigurationPicker: Bool
+
+    init(
+        id: String, title: String, symbolName: String, presentation: IDEDiagramPresentation,
+        offersConfigurationPicker: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.symbolName = symbolName
+        self.presentation = presentation
+        self.offersConfigurationPicker = offersConfigurationPicker
     }
 
-    var title: String {
-        switch self {
-        case .classes(.file(let url)): "Classes: " + url.lastPathComponent
-        case .classes(.package(let name)): "Classes: " + (name.isEmpty ? "(default package)" : name)
-        case .classes(.types(let names)):
-            "Classes: " + (names.first.map { String($0.split(separator: ".").last ?? Substring($0)) } ?? "")
-                + (names.count > 1 ? " +\(names.count - 1)" : "")
-        case .classes(.project): "Classes: Project"
-        case .gradleModules: "Gradle Modules"
-        case .gradleLibraries(let projectPath, _): "Dependencies: " + projectPath
-        case .jsonPreview(let title): title
-        }
-    }
+    var isClassDiagram: Bool { presentation == .classes }
+    var isDependencyDiagram: Bool { presentation == .dependencies }
+    /// Kept for the JSON preview, which is neither a class diagram nor a dependency diagram.
+    var isGradleDiagram: Bool { isDependencyDiagram }
+    var isJSONPreview: Bool { presentation == .jsonPreview }
 
-    var symbolName: String {
-        switch self {
-        case .classes: "square.stack.3d.up"
-        case .gradleModules: "shippingbox"
-        case .gradleLibraries: "cube.transparent"
-        case .jsonPreview: "curlybraces"
-        }
+    static func jsonPreview(title: String) -> IDEDiagramRequest {
+        IDEDiagramRequest(id: "json:preview", title: title, symbolName: "curlybraces", presentation: .jsonPreview)
     }
+}
 
-    var isClassDiagram: Bool {
-        if case .classes = self { return true }
-        return false
-    }
+/// One load of a diagram: the document before layout, and what to say when it is empty or failed.
+struct IDEDiagramLoad: Sendable {
+    var document: IDEDiagramDocument
+    var notice: String?
+    var emptyMessage: String
+    var failure: String?
 
-    var isGradleDiagram: Bool {
-        switch self {
-        case .gradleModules, .gradleLibraries: true
-        case .classes, .jsonPreview: false
-        }
-    }
-
-    var isJSONPreview: Bool {
-        if case .jsonPreview = self { return true }
-        return false
+    init(document: IDEDiagramDocument, notice: String? = nil, emptyMessage: String = "", failure: String? = nil) {
+        self.document = document
+        self.notice = notice
+        self.emptyMessage = emptyMessage
+        self.failure = failure
     }
 }

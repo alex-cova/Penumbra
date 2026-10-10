@@ -119,4 +119,36 @@ final class IDEProjectConsoleViewTests: XCTestCase {
         XCTAssertEqual(shown[1], "line 40")
         XCTAssertEqual(shown.last, "line \(IDEProjectConsoleLog.maxLines + 39)")
     }
+
+    func testCommandCCopiesTheSelectionAndCommandASelectsAll() {
+        let view = IDEReadOnlyLogTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+        view.string = "hello npm"
+        let window = NSWindow(
+            contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        view.setSelectedRange(NSRange(location: 6, length: 3))
+
+        let pasteboard = NSPasteboard.general
+        let previous = pasteboard.string(forType: .string)
+        defer {
+            pasteboard.clearContents()
+            if let previous { pasteboard.setString(previous, forType: .string) }
+        }
+
+        let copy = keyEvent(keyCode: 8, characters: "c", flags: .command)
+        XCTAssertTrue(view.performKeyEquivalent(with: copy))
+        XCTAssertEqual(pasteboard.string(forType: .string), "npm")
+
+        let selectAll = keyEvent(keyCode: 0, characters: "a", flags: .command)
+        XCTAssertTrue(view.performKeyEquivalent(with: selectAll))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: (view.string as NSString).length))
+
+        window.makeFirstResponder(nil)
+        pasteboard.clearContents()
+        XCTAssertFalse(view.performKeyEquivalent(with: copy))
+        XCTAssertNil(pasteboard.string(forType: .string))
+    }
 }

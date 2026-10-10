@@ -3,7 +3,7 @@ import JavaIntelligence
 
 /// The stores and services that belong to the app, not to a window. Each window's workspace used to
 /// build its own copy of these, each loading its file once and later rewriting all of it, so two
-/// windows overwrote each other's breakpoints, run configurations, JDK choices and Gradle trust
+/// windows overwrote each other's breakpoints, run configurations, JDK choices and trust
 /// decisions, and a decision made in one was not seen by the other. There is one instance of each
 /// now, created here once and handed to every window.
 ///
@@ -17,6 +17,9 @@ final class IDESharedServices {
     /// Which Gradle projects the user trusted to run build scripts. A decision in one window counts
     /// in all of them immediately.
     let gradleTrust: GradleTrustStore
+    /// Which folders the user trusted to run npm scripts. Separate from Gradle trust: agreeing to
+    /// one does not agree to the other.
+    let npmTrust: GradleTrustStore
     let jdkSelection: JDKSelectionStore
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
@@ -29,6 +32,7 @@ final class IDESharedServices {
 
     private init() {
         gradleTrust = GradleTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
+        npmTrust = GradleTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
         runConfigurations = JavaRunConfigurationCatalog(
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)

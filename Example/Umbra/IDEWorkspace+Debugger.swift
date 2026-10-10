@@ -4,13 +4,11 @@ import JavaIntelligence
 import Penumbra
 import SwiftUI
 
-/// What a Java file's gutter shows besides breakpoints, from one refresh.
+/// What a Java file's gutter shows besides breakpoints, from one refresh. The run buttons are the
+/// active provider's ``IDERunnableLocation``s, the same lines a `main` or a test used to occupy.
 struct JavaGutterContent {
     let fileURL: URL
-    let testClass: JavaTestClass?
-    /// The line of the test class's declaration, for its Run / Debug all button.
-    let classLine: Int?
-    let mains: [JavaMainMethodLocation]
+    let locations: [IDERunnableLocation]
 }
 
 /// The debugger's side of the workspace: the Java gutter (breakpoints, run buttons), breakpoint
@@ -32,31 +30,7 @@ extension IDEWorkspace {
         applyExecutionLineBackground(to: textView, shownFile: gutter.fileURL)
         let fileBreakpoints = breakpointStore.breakpoints(forFile: gutter.fileURL, project: project.rootURL)
         var decorations = fileBreakpoints.map(breakpointDecoration)
-        // One run button per line. A breakpoint's line keeps its run button: the breakpoint is
-        // drawn in the line number and the button right of it.
-        var occupied = Set<Int>()
-        let green = NSColor.systemGreen.cgColor
-        if let testClass = gutter.testClass, !testClass.methods.isEmpty {
-            if let line = gutter.classLine, occupied.insert(line).inserted {
-                decorations.append(GutterDecoration(
-                    line: line, symbolName: "play.circle.fill",
-                    accessibilityLabel: "Run the tests in \(Self.simpleName(testClass.qualifiedName))", tintColor: green,
-                    placement: .lineMarkerColumn
-                ))
-            }
-            for method in testClass.methods where occupied.insert(method.line).inserted {
-                decorations.append(GutterDecoration(
-                    line: method.line, symbolName: "play.circle", accessibilityLabel: "Run \(method.displayName)", tintColor: green,
-                    placement: .lineMarkerColumn
-                ))
-            }
-        }
-        for main in gutter.mains where occupied.insert(main.line).inserted {
-            decorations.append(GutterDecoration(
-                line: main.line, symbolName: "play.fill", accessibilityLabel: "Run \(main.simpleClassName).main()", tintColor: green,
-                placement: .lineMarkerColumn
-            ))
-        }
+        decorations.append(contentsOf: runDecorations(gutter.locations))
         textView.setGutterDecorations(decorations)
         textView.gutterDecorationHandler = { [weak self, weak textView] line in
             guard let self, let textView else { return }
@@ -101,26 +75,85 @@ extension IDEWorkspace {
         )
     }
 
+    /// One run button per line. A breakpoint's line keeps its run button: the breakpoint is drawn
+    /// in the line number and the button right of it. The first location on a line wins.
+    private func runDecorations(_ locations: [IDERunnableLocation]) -> [GutterDecoration] {
+        var occupied = Set<Int>()
+        let green = NSColor.systemGreen.cgColor
+        var decorations: [GutterDecoration] = []
+        for location in locations where occupied.insert(location.line).inserted {
+            let symbol: String
+            let label: String
+            switch location.kind {
+            case .entryPoint:
+                symbol = "play.fill"
+                label = "Run \(location.title)"
+            case .test:
+                symbol = "play.circle"
+                label = "Run \(location.title)"
+            case .testGroup:
+                symbol = "play.circle.fill"
+                label = "Run the tests in \(location.title)"
+            }
+            decorations.append(GutterDecoration(
+                line: location.line, symbolName: symbol, accessibilityLabel: label, tintColor: green,
+                placement: .lineMarkerColumn
+            ))
+        }
+        return decorations
+    }
+
+    /// Run buttons for a file that is not Java: no breakpoints, no line-number clicks.
+    func applyRunLocationGutter(fileURL: URL, locations: [IDERunnableLocation], to textView: TextView) {
+        guard documentURL(shownIn: textView) == fileURL.standardizedFileURL else { return }
+        let gutter = JavaGutterContent(fileURL: fileURL, locations: locations)
+        textView.setGutterDecorations(runDecorations(locations))
+        textView.gutterDecorationHandler = { [weak self, weak textView] line in
+            guard let self, let textView else { return }
+            guard let location = gutter.locations.first(where: { $0.line == line }) else { return }
+            self.showRunnableLocationMenu(location, file: fileURL, in: textView)
+        }
+        textView.gutterLineClickHandler = nil
+        textView.gutterDecorationsDidMove = nil
+        textView.alwaysShowGutterDecorationColumn = false
+    }
+
     /// A click on a decoration: a run button opens its Run / Debug menu, a breakpoint goes. The
     /// run button wins on a line with both; a breakpoint only lands here without line numbers.
     private func javaGutterDecorationClicked(line: Int, gutter: JavaGutterContent, textView: TextView) {
-        if let testClass = gutter.testClass {
-            if gutter.classLine == line {
-                showTestRunMenu(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName), in: textView)
-                return
-            }
-            if let method = testClass.methods.first(where: { $0.line == line }) {
-                showTestRunMenu(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: "\(method.methodName)()", in: textView)
-                return
-            }
-        }
-        if gutter.mains.contains(where: { $0.line == line }) {
-            showMainRunMenu(atLine: line, file: gutter.fileURL, in: textView)
+        if let location = gutter.locations.first(where: { $0.line == line }) {
+            showRunnableLocationMenu(location, file: gutter.fileURL, in: textView)
             return
         }
         if let breakpoint = lineBreakpoint(at: line, file: gutter.fileURL) {
             removeBreakpoint(breakpoint)
         }
+    }
+
+    /// The Run / Debug menu for a provider location. Modify Run Configuration is offered when the
+    /// provider has a configuration for it, which Java does for a `main`.
+    private func showRunnableLocationMenu(_ location: IDERunnableLocation, file: URL, in textView: TextView) {
+        guard let provider = activeRunProvider else { return }
+        let document = gutterRunDocument(file: file, textView: textView)
+        let modify: (() -> Void)? = provider.canEditRunConfiguration(location)
+            ? { provider.editRunConfiguration(document, location: location) }
+            : nil
+        let menu = IDERunGutterMenu.make(
+            title: location.title,
+            keymapPreset: preferences.keymapPreset,
+            run: { provider.run(document, location: location, mode: .run) },
+            debug: { provider.run(document, location: location, mode: .debug) },
+            modify: modify
+        )
+        IDERunGutterMenu.popUp(menu, in: textView)
+    }
+
+    private func gutterRunDocument(file: URL, textView: TextView) -> IDERunDocument {
+        let language = workbench.panes.first { hostCache.peek($0.id)?.textView === textView }?.selectedDocument?.languageIdentifier
+        return IDERunDocument(
+            url: file, languageIdentifier: language,
+            caretUTF16Offset: textView.selectedRange.location, text: textView.text
+        )
     }
 
     /// A click on a line number or an empty part of the decoration column adds or removes a
@@ -163,23 +196,19 @@ extension IDEWorkspace {
             self.showBreakpointPopover(breakpoint, in: textView, focusCondition: true)
         })
         var runItems: [NSMenuItem] = []
-        if let testClass = gutter.testClass {
-            if gutter.classLine == click.line {
-                runItems = testRunItems(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName))
-            } else if let method = testClass.methods.first(where: { $0.line == click.line }) {
-                runItems = testRunItems(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: "\(method.methodName)()")
-            }
-        }
-        if runItems.isEmpty, gutter.mains.contains(where: { $0.line == click.line }) {
-            let text = textView.text
-            if let location = JavaMainMethod.locations(in: text, fileName: gutter.fileURL.lastPathComponent).first(where: { $0.line == click.line }),
-               let configuration = mainRunConfiguration(for: location, file: gutter.fileURL, source: text) {
-                runItems = IDERunGutterMenu.items(
-                    title: "\(location.simpleClassName).main()",
-                    keymapPreset: preferences.keymapPreset,
-                    run: { [weak self] in self?.launch(configuration, mode: .run) },
-                    debug: { [weak self] in self?.launch(configuration, mode: .debug) }
-                )
+        if let location = gutter.locations.first(where: { $0.line == click.line }), let provider = activeRunProvider {
+            let document = gutterRunDocument(file: gutter.fileURL, textView: textView)
+            runItems = IDERunGutterMenu.items(
+                title: location.title,
+                keymapPreset: preferences.keymapPreset,
+                run: { provider.run(document, location: location, mode: .run) },
+                debug: { provider.run(document, location: location, mode: .debug) }
+            )
+            if provider.canEditRunConfiguration(location) {
+                runItems.append(.separator())
+                runItems.append(IDEClosureMenuItem(title: "Modify Run Configuration…") {
+                    provider.editRunConfiguration(document, location: location)
+                })
             }
         }
         if !runItems.isEmpty {
@@ -384,23 +413,6 @@ extension IDEWorkspace {
     }
 
     // MARK: - Running and debugging tests
-
-    private func testRunItems(scope: JavaTestRunScope, title: String) -> [NSMenuItem] {
-        IDERunGutterMenu.items(
-            title: title,
-            keymapPreset: preferences.keymapPreset,
-            run: { [weak self] in self?.runTests(scope: scope, title: title) },
-            debug: { [weak self] in self?.debugTests(scope: scope, title: title) }
-        )
-    }
-
-    /// The Run / Debug menu of a test button (IntelliJ's popup on a test's gutter icon).
-    private func showTestRunMenu(scope: JavaTestRunScope, title: String, in textView: TextView) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        testRunItems(scope: scope, title: title).forEach(menu.addItem)
-        IDERunGutterMenu.popUp(menu, in: textView)
-    }
 
     func runTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
         javaRun.runTests(scope: scope, title: title, recording: recording)

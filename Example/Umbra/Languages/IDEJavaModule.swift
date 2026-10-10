@@ -40,29 +40,9 @@ struct IDEJavaModule: IDELanguageModule {
 
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
         typealias Order = IDEToolbarItem.Order
+        // Run, Debug and Stop belong to the window (`IDEWorkspace.toolbarItems`): they follow the
+        // active file's run provider. The picker and the test flask stay Java's.
         var items = [IDEToolbarItem(id: "java.runConfigurations", order: Order.runConfigurations, content: .custom(AnyView(IDERunConfigurationMenu())))]
-        let canRun = workspace.runFileCanRun
-        let isRunActive = workspace.isRunActive
-        if canRun {
-            items.append(.button(
-                id: "java.run", order: Order.run, systemImage: "play.fill", help: workspace.runHelp,
-                tint: IDEAppearance.ColorToken.run, action: { [weak workspace] in workspace?.runActiveFile() }
-            ))
-            let canDebug = workspace.runFileCanDebug
-            items.append(.button(
-                id: "java.debug", order: Order.debug, systemImage: "ladybug.fill", help: workspace.debugHelp,
-                tint: canDebug ? IDEAppearance.ColorToken.run : nil, isEnabled: canDebug,
-                action: { [weak workspace] in workspace?.debugActiveFile() }
-            ))
-        }
-        // Stays up while something runs, even after switching to a file that can't run.
-        if canRun || isRunActive {
-            items.append(.button(
-                id: "java.stop", order: Order.stop, systemImage: "stop.fill", help: "Stop",
-                tint: isRunActive ? IDEAppearance.ColorToken.error : nil, isEnabled: isRunActive,
-                action: { [weak workspace] in workspace?.stopRunning() }
-            ))
-        }
         if workspace.javaFileCanTest {
             items.append(.button(
                 id: "java.runTests", order: Order.tests, systemImage: "flask", help: "Run Tests",
