@@ -28,6 +28,8 @@ struct InlayHintAppearance: Equatable {
     var backgroundColor: NSColor
 
     /// The look before a theme is applied: system UI font, system label colors.
+    /// Main-actor only: `NSFont` and `NSColor` are not `Sendable`, and this value only seeds UI state.
+    @MainActor
     static let standard = InlayHintAppearance(
         font: .systemFont(ofSize: 11),
         textColor: .secondaryLabelColor,
