@@ -1,0 +1,14 @@
+https://github.com/alex-pinkus/tree-sitter-swift
+171fa3bc343233fe07f5e17205aaada33d778825
+0.7.4
+generated with tree-sitter-cli 0.26.12 (ABI 15)
+local patches in grammar.js and src/scanner.c, on top of that commit:
+- a custom operator is only the scanner token, so a `///**` comment after an expression stays a comment
+- `await` of a property or prefix expression can leave the following brace to `if` / `while` / `for`
+- `@available` may precede a freestanding macro such as `#Preview`
+- `()` is an empty tuple
+- a newline before `*` does not end the statement
+- a `/` operator run yields to a regex when a later `/` on the line closes it, and `\/` is allowed in a regex body
+- `/*` and `*/` inside a line string stay string text (`line_str_text` is scanned externally)
+- a raw string may nest inside another raw string's interpolation
+- `(T?, Array<U>).self` is a metatype of a tuple type

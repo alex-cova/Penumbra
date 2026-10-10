@@ -78,24 +78,22 @@ public extension LanguageConfiguration {
         "catch_clause", "finally_clause"
     ]))
 
-    /// Swift. Node type names follow tree-sitter-swift. Data-only until a host registers the grammar.
+    /// Swift. Node type names follow tree-sitter-swift 0.7.4, which has no
+    /// `struct_declaration`, `enum_declaration` or `actor_declaration`: `class_declaration` covers
+    /// class, struct, enum, actor and extension (its `declaration_kind` field says which).
+    /// An `init` is an `init_declaration` whose name is the `init` keyword token. An extension's
+    /// name is a `user_type`.
     static let swift = LanguageConfiguration(declarations: [
         DeclarationRule(
-            nodeTypes: [
-                "function_declaration", "init_declaration", "deinit_declaration",
-                "subscript_declaration"
-            ],
+            nodeTypes: ["function_declaration", "init_declaration", "deinit_declaration", "subscript_declaration"],
             kind: .function,
-            nameNodeTypes: ["simple_identifier", "identifier"],
+            nameNodeTypes: ["simple_identifier", "identifier", "init", "deinit", "subscript"],
             isMethodSeparatorAnchor: true
         ),
         DeclarationRule(
-            nodeTypes: [
-                "class_declaration", "protocol_declaration", "typealias_declaration",
-                "enum_declaration", "struct_declaration", "actor_declaration"
-            ],
+            nodeTypes: ["class_declaration", "protocol_declaration", "typealias_declaration"],
             kind: .type,
-            nameNodeTypes: ["type_identifier", "simple_identifier", "identifier"],
+            nameNodeTypes: ["type_identifier", "user_type", "simple_identifier", "identifier"],
             isMethodSeparatorAnchor: true
         ),
         DeclarationRule(
@@ -109,7 +107,9 @@ public extension LanguageConfiguration {
             kind: .function,
             nameNodeTypes: ["simple_identifier"]
         )
-    ])
+    ], stickyNodeTypes: LanguageConfiguration.commonStickyNodeTypes.union([
+        "repeat_while_statement", "catch_block"
+    ]))
 
     /// Substring-matched fallback for languages without a dedicated table (Python, GraphQL,
     /// Markdown, …). Mirrors the heuristic already used by `TreeSitterLineFoldProvider.isFoldable`.

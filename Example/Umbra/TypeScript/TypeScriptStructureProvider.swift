@@ -33,7 +33,7 @@ struct TypeScriptStructureProvider: StructureProviding, BreadcrumbProviding {
     }
 
     private func innermostType(
-        in declarations: [TypeScriptFileModel.Declaration], offset: Int, text: TypeScriptText
+        in declarations: [TypeScriptFileModel.Declaration], offset: Int, text: SourceTextMap
     ) -> TypeScriptFileModel.Declaration? {
         var best: TypeScriptFileModel.Declaration?
         func visit(_ declaration: TypeScriptFileModel.Declaration) {
@@ -50,7 +50,7 @@ struct TypeScriptStructureProvider: StructureProviding, BreadcrumbProviding {
         return best
     }
 
-    private func node(for declaration: TypeScriptFileModel.Declaration, text: TypeScriptText) -> StructureNode {
+    private func node(for declaration: TypeScriptFileModel.Declaration, text: SourceTextMap) -> StructureNode {
         StructureNode(
             id: "\(declaration.kind)-\(declaration.nameBytes.lowerBound)-\(declaration.name)",
             title: declaration.name,

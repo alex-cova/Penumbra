@@ -60,7 +60,14 @@ final class LanguageConfigurationTests: XCTestCase {
         let config = LanguageConfiguration.swift
         XCTAssertEqual(config.rule(forNodeType: "function_declaration")?.kind, .function)
         XCTAssertEqual(config.rule(forNodeType: "init_declaration")?.kind, .function)
+        XCTAssertEqual(config.rule(forNodeType: "deinit_declaration")?.kind, .function)
         XCTAssertEqual(config.rule(forNodeType: "protocol_declaration")?.kind, .type)
+        // `class_declaration` covers these; the grammar has no separate node for them.
+        for missing in ["struct_declaration", "enum_declaration", "actor_declaration"] {
+            XCTAssertNil(config.rule(forNodeType: missing), missing)
+        }
+        XCTAssertTrue(config.stickyNodeTypes.contains("repeat_while_statement"))
+        XCTAssertTrue(config.stickyNodeTypes.contains("catch_block"))
         let typeRule = config.rule(forNodeType: "class_declaration")
         XCTAssertEqual(typeRule?.kind, .type)
         XCTAssertTrue(typeRule?.nameNodeTypes.contains("type_identifier") ?? false)

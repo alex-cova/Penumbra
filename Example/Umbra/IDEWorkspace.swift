@@ -169,8 +169,12 @@ public final class IDEWorkspace {
     var gradle: IDEGradleProjectSystem { intelligenceServices.gradle }
     /// npm, registered after Gradle. A folder with both keeps Gradle as `projectSystems.active`.
     var npm: IDENpmProjectSystem { intelligenceServices.npm }
+    /// SwiftPM, registered after npm.
+    var swiftPM: IDESwiftPMProjectSystem { intelligenceServices.swiftPM }
     /// The window's TypeScript index. The symbol palette reads it; the language service holds it weakly.
     var typescriptSupport: IDETypeScriptSupport { intelligenceServices.typescriptSupport }
+    /// The window's Swift index. The symbol palette and the SwiftPM project system use it.
+    var swiftSupport: IDESwiftSupport { intelligenceServices.swiftSupport }
     /// The run providers language modules contributed, one per window, made on first use.
     var runProviders: IDERunProviders {
         if let runProvidersStorage { return runProvidersStorage }
@@ -641,6 +645,33 @@ public final class IDEWorkspace {
         }
         npm.onActivity = { [weak self] in
             self?.showBottomTab(.npm)
+        }
+        // SwiftPM is the same: its own trust, its own words. Compiler problems go to Problems
+        // under their own source, so a Gradle build does not replace them or the reverse.
+        swiftPM.trustPrompt = { [weak self] url in
+            guard let self else { return false }
+            let name = url.lastPathComponent
+            return await self.promptProjectTrust(
+                message: "Trust and run SwiftPM for “\(name)”?",
+                detail: "Package.swift and build plugins run code when SwiftPM evaluates or builds the package. "
+                    + "Trust this folder only if you trust its contents."
+            )
+        }
+        swiftPM.onActivity = { [weak self] in
+            self?.showBottomTab(.swiftPM)
+        }
+        swiftPM.bufferText = { [weak self] url in self?.openBufferText(for: url) }
+        swiftPM.onBuildDiagnostics = { [weak self] diagnostics in
+            guard let self else { return }
+            self.problems.setBuildDiagnostics(diagnostics, source: IDEProblemsStore.swiftPMBuildSource)
+            if diagnostics.values.contains(where: { $0.contains { $0.severity == .error } }) {
+                self.showProblems()
+            }
+        }
+        swiftPM.onModelChanged = { [weak self] manifest, root in
+            guard let self else { return }
+            let resolver = manifest.flatMap { manifest in root.map { manifest.moduleResolver(root: $0) } }
+            self.swiftSupport.setModuleResolver(resolver)
         }
         gitStatus.onActionReport = { [weak self] message, isFailure in
             self?.notifications.post(

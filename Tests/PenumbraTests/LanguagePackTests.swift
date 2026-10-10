@@ -291,6 +291,32 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertTrue(captures.contains("keyword"), "Expected keyword, got \(captures)")
     }
 
+    func testSwiftDeclarationsAreNamedIncludingInitAndExtensions() {
+        let text = """
+        struct Point {
+            var x: Int
+            init(x: Int) { self.x = x }
+            func move() {}
+        }
+
+        extension Point: Equatable {
+            subscript(i: Int) -> Int { x }
+        }
+
+        protocol Shape { func area() -> Double }
+        enum Color { case red }
+        """
+        let mode = makeLanguageMode(language: .swift, text: text)
+        guard let root = mode.rootSyntaxNode else { return XCTFail("No root node") }
+        let scanned = DeclarationScanner.scan(root: root, configuration: .swift, text: text as NSString)
+        let names = scanned.map(\.name)
+        for expected in ["Point", "init", "move", "subscript", "Shape", "area", "Color"] {
+            XCTAssertTrue(names.contains(expected), "Missing \(expected) in \(names)")
+        }
+        // The extension's name is its extended type, so Point appears twice.
+        XCTAssertEqual(names.filter { $0 == "Point" }.count, 2, "\(names)")
+    }
+
     private func captureNames(language: TreeSitterLanguage, text: String) -> Set<String> {
         let languageMode = makeLanguageMode(language: language, text: text)
         let byteRange = ByteRange(from: 0, to: (text as NSString).byteCount)

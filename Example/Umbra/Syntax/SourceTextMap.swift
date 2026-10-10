@@ -1,9 +1,9 @@
 import EditorIntelligence
 import Foundation
 
-/// UTF-8 bytes of one TypeScript buffer and the line starts that turn tree-sitter's byte offsets
+/// UTF-8 bytes of one source buffer and the line starts that turn tree-sitter's byte offsets
 /// into UTF-16 positions. Built in one pass so a later lookup is a binary search plus one line.
-struct TypeScriptText: Sendable {
+struct SourceTextMap: Sendable {
     let source: String
     let utf8: [UInt8]
     let utf16Length: Int
@@ -58,6 +58,15 @@ struct TypeScriptText: Sendable {
         let line = lineStarts[lineIndex]
         let utf16 = utf16Offset(onLine: line, byte: byte)
         return TextPosition(line: lineIndex, column: utf16 - line.utf16, utf16Offset: utf16)
+    }
+
+    /// The byte at `column` UTF-8 bytes into the zero-based `line`, clamped to that line. This is
+    /// the column a Swift compiler diagnostic names.
+    func byteOffset(line: Int, utf8Column column: Int) -> Int? {
+        guard line >= 0, line < lineStarts.count else { return nil }
+        let start = lineStarts[line].byte
+        let end = line + 1 < lineStarts.count ? lineStarts[line + 1].byte : utf8.count
+        return min(start + max(0, column), end)
     }
 
     func position(utf16: Int) -> TextPosition {

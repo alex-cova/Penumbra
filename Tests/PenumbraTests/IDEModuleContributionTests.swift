@@ -313,7 +313,8 @@ final class IDEModuleContributionTests: XCTestCase {
         XCTAssertTrue(workspace.viewMenuContributions().contains { $0.id == "ruby.rdoc" })
         // Run.
         XCTAssertTrue(workspace.runProviders.provider(forLanguage: "ruby") is RubyRunProvider)
-        XCTAssertNil(workspace.runProviders.provider(forLanguage: "swift"))
+        XCTAssertNil(workspace.runProviders.provider(forLanguage: "rust"))
+        XCTAssertNotNil(workspace.runProviders.provider(forLanguage: "swift"), "Swift's own provider is still there")
     }
 
     func testAnUnregisteredModuleLeavesNothingBehind() {
@@ -323,7 +324,9 @@ final class IDEModuleContributionTests: XCTestCase {
         let workspace = IDEWorkspace()
         defer { workspace.teardown() }
         workspace.statusLanguage = "ruby"
-        XCTAssertEqual(IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript"])
+        XCTAssertEqual(
+            IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript", "swift"]
+        )
         XCTAssertNil(IDESidebarTabs.descriptor(for: FakeRubyModule.sidebar))
         XCTAssertFalse(workspace.languageModuleBottomTabs().contains { $0.tab == FakeRubyModule.tab })
         XCTAssertEqual(ids(workspace.toolbarItems()), ["java.runConfigurations"])

@@ -17,6 +17,8 @@ final class IDEIntelligenceServices {
     let javaSupport: IDEJavaSupport
     /// Syntactic TypeScript indexing and providers. Retained here: the language service holds it weakly.
     let typescriptSupport: IDETypeScriptSupport
+    /// Syntactic Swift indexing and providers, the same way. Retained here for the same reason.
+    let swiftSupport: IDESwiftSupport
     /// The window's background status line ("Indexing JDK 24…", "Resolving Gradle project…"), written
     /// by the project systems and Java's indexing.
     let projectStatus = IDEProjectStatus()
@@ -24,6 +26,8 @@ final class IDEIntelligenceServices {
     let gradle: IDEGradleProjectSystem
     /// npm, registered after Gradle. A folder with both keeps Gradle first.
     let npm: IDENpmProjectSystem
+    /// SwiftPM, registered after npm: a folder with a `gradlew` or a package.json keeps those first.
+    let swiftPM: IDESwiftPMProjectSystem
     /// The window's project systems, in the order they claim a folder.
     let projectSystems: IDEProjectSystems
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
@@ -31,7 +35,7 @@ final class IDEIntelligenceServices {
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
 
-    /// Every language's intelligence, routed by the document's language: Java, TypeScript, the app's
+    /// Every language's intelligence, routed by the document's language: Java, TypeScript, Swift, the app's
     /// Run actions for Java files, `@file` mentions in Markdown, `.http` completion and JSON
     /// formatting. The order is the order each engine asks its providers, and the order services that
     /// share a language are combined in (Java's code actions come before the Run ones).
@@ -43,14 +47,18 @@ final class IDEIntelligenceServices {
         self.gradle = gradle
         javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, status: projectStatus)
         typescriptSupport = IDETypeScriptSupport()
+        swiftSupport = IDESwiftSupport()
         let npm = IDENpmProjectSystem(status: projectStatus)
         self.npm = npm
-        projectSystems = IDEProjectSystems([gradle, npm])
+        let swiftPM = IDESwiftPMProjectSystem(status: projectStatus)
+        self.swiftPM = swiftPM
+        projectSystems = IDEProjectSystems([gradle, npm, swiftPM])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let languages = LanguageServiceRegistry(services: [
             javaSupport.languageService,
             typescriptSupport.languageService,
+            swiftSupport.languageService,
             BasicLanguageService(
                 name: "umbra.run", languageIdentifiers: ["java"],
                 providers: LanguageProviders(codeActions: IDERunCodeActionProvider())

@@ -170,14 +170,14 @@ struct TypeScriptFileModel: Sendable {
         }
     }
 
-    static func build(tree: JavaSyntaxTree, text: TypeScriptText) -> TypeScriptFileModel {
+    static func build(tree: JavaSyntaxTree, text: SourceTextMap) -> TypeScriptFileModel {
         TypeScriptWalker(text: text).build(tree.rootNode)
     }
 }
 
 struct TypeScriptParsed: Sendable {
     var tree: JavaSyntaxTree
-    var text: TypeScriptText
+    var text: SourceTextMap
     var model: TypeScriptFileModel
 }
 
@@ -316,7 +316,7 @@ private struct TypeScriptFrame {
 
 private final class TypeScriptWalker {
     typealias Model = TypeScriptFileModel
-    let text: TypeScriptText
+    let text: SourceTextMap
     private var stack: [[Model.Declaration]] = [[]]
     private var imports: [Model.Import] = []
     private var reexports: [Model.Reexport] = []
@@ -325,7 +325,7 @@ private final class TypeScriptWalker {
     private var uses: [Model.Use] = []
     private var errors: [Model.SyntaxError] = []
 
-    init(text: TypeScriptText) {
+    init(text: SourceTextMap) {
         self.text = text
     }
 

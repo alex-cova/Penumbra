@@ -472,6 +472,11 @@ extension IDEWorkspace {
 
     /// Rerun (⌃⌥R in the Test Results tab): the last test run again, debugged if it was.
     func rerunTests(failedOnly: Bool, debug: Bool? = nil) {
+        // A run another build system began (SwiftPM) repeats itself; it has no Gradle scope.
+        if testResults.lastScope == nil, let handler = testResults.rerunHandler {
+            handler(failedOnly)
+            return
+        }
         guard let last = testResults.lastScope else { return }
         let scope = failedOnly ? (testResults.failedScope ?? last) : last
         let title = testResults.title(for: scope)

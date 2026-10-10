@@ -39,6 +39,7 @@ struct IDEToolWindow: Identifiable {
         static let gradleSidebar = 400
         static let gradleConsole = 410
         static let npmConsole = 415
+        static let swiftPMConsole = 416
         static let httpResponse = 420
     }
 }

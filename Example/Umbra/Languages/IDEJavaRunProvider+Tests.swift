@@ -149,7 +149,7 @@ extension IDEJavaRunProvider {
         for (url, diagnostics) in gradleByFile {
             merged[url, default: []].append(contentsOf: diagnostics)
         }
-        host.problems.setBuildDiagnostics(merged)
+        host.problems.setBuildDiagnostics(merged, source: IDEProblemsStore.gradleBuildSource)
         if merged.values.contains(where: { $0.contains { $0.severity == .error } }) {
             host.showProblems()
         }

@@ -23,7 +23,7 @@ enum TypeScriptAnalysis {
     static func parse(_ source: String) -> TypeScriptParsed? {
         let parser = JavaSyntaxParser(language: language)
         guard let tree = parser.parse(source) else { return nil }
-        let text = TypeScriptText(source)
+        let text = SourceTextMap(source)
         return TypeScriptParsed(tree: tree, text: text, model: TypeScriptFileModel.build(tree: tree, text: text))
     }
 
@@ -39,7 +39,7 @@ enum TypeScriptAnalysis {
             tree = JavaSyntaxParser(language: language).parse(source)
         }
         guard let tree else { return nil }
-        let text = TypeScriptText(source)
+        let text = SourceTextMap(source)
         return TypeScriptParsed(tree: tree, text: text, model: TypeScriptFileModel.build(tree: tree, text: text))
     }
 }

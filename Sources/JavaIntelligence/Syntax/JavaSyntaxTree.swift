@@ -177,6 +177,27 @@ public struct SyntaxNode {
         (0..<namedChildCount).compactMap { namedChild(at: $0) }
     }
 
+    /// Every direct child, anonymous tokens included, in order, with the grammar field it fills
+    /// (`nil` when it fills none). One cursor walk: linear in the child count, where calling
+    /// ``child(at:)`` per index is not. Needed for grammars that reuse one field name for several
+    /// children (tree-sitter-swift's `name:` is both a declaration's name and its types).
+    public func enumerateChildren(_ body: (_ child: SyntaxNode, _ field: String?) -> Void) {
+        var cursor = ts_tree_cursor_new(raw)
+        defer { ts_tree_cursor_delete(&cursor) }
+        guard ts_tree_cursor_goto_first_child(&cursor) else { return }
+        repeat {
+            let field = ts_tree_cursor_current_field_name(&cursor).map { String(cString: $0) }
+            body(SyntaxNode(raw: ts_tree_cursor_current_node(&cursor), tree: tree), field)
+        } while ts_tree_cursor_goto_next_sibling(&cursor)
+    }
+
+    /// The children collected by ``enumerateChildren(_:)``.
+    public var childrenWithFields: [(node: SyntaxNode, field: String?)] {
+        var result: [(node: SyntaxNode, field: String?)] = []
+        enumerateChildren { result.append(($0, $1)) }
+        return result
+    }
+
     /// The child bound to a grammar field name, e.g. `name:` in `class_declaration name: (identifier)`.
     public func child(byFieldName fieldName: String) -> SyntaxNode? {
         let node = fieldName.withCString { cName in

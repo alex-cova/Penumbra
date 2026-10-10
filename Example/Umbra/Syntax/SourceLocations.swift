@@ -1,10 +1,10 @@
 import EditorIntelligence
 import Foundation
 
-enum TypeScriptLocations {
+enum SourceLocations {
     static func make(
         bytes: Range<Int>,
-        text: TypeScriptText,
+        text: SourceTextMap,
         document: Document,
         file: URL?,
         name: String,
@@ -31,7 +31,7 @@ enum TypeScriptLocations {
         )
     }
 
-    static func edit(bytes: Range<Int>, text: TypeScriptText, url: URL, oldName: String, newName: String) -> WorkspaceEditPlanEntry {
+    static func edit(bytes: Range<Int>, text: SourceTextMap, url: URL, oldName: String, newName: String) -> WorkspaceEditPlanEntry {
         let range = text.range(bytes: bytes)
         let line = text.lineContents(containingUTF16: range.start.utf16Offset)
         return WorkspaceEditPlanEntry(

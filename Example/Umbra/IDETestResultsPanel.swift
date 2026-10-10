@@ -39,19 +39,33 @@ final class IDETestResultsStore {
     /// What ran last, for Rerun; and whether it ran under the debugger.
     private(set) var lastScope: JavaTestRunScope?
     private(set) var lastRunWasDebug = false
+    /// How a run that is not a Gradle one (SwiftPM) is repeated: `failedOnly` asks for just the
+    /// cases that failed. Set by whoever began the run; a Gradle run replaces it with a scope.
+    private(set) var rerunHandler: (@MainActor (_ failedOnly: Bool) -> Void)?
     var selectedID: String?
     var showsPassed = true
     var showsSkipped = true
     var sort: Sort = .name
     var collapsedClasses: Set<String> = []
 
-    func beginRun(label: String, scope: JavaTestRunScope? = nil, debug: Bool = false) {
+    func beginRun(
+        label: String,
+        scope: JavaTestRunScope? = nil,
+        debug: Bool = false,
+        rerunHandler: (@MainActor (_ failedOnly: Bool) -> Void)? = nil
+    ) {
         isRunning = true
         hasContent = true
         summaryMessage = label
         if let scope {
             lastScope = scope
             lastRunWasDebug = debug
+            self.rerunHandler = nil
+        } else if let rerunHandler {
+            // The newest run owns Rerun, whichever build system it came from.
+            lastScope = nil
+            lastRunWasDebug = false
+            self.rerunHandler = rerunHandler
         }
         // The last results stay readable until the new ones arrive.
     }
@@ -117,6 +131,14 @@ final class IDETestResultsStore {
         case .name: return cases.sorted { $0.name < $1.name }
         case .duration: return cases.sorted { $0.duration > $1.duration }
         }
+    }
+
+    /// Rerun is available for a Gradle scope or a handler the run left.
+    var canRerun: Bool { lastScope != nil || rerunHandler != nil }
+
+    /// Rerun Failed needs a Gradle scope for the failures, or a handler and at least one failure.
+    var canRerunFailed: Bool {
+        failedScope != nil || (rerunHandler != nil && cases.contains { $0.status == .failed || $0.status == .aborted })
     }
 
     var selectedCase: JavaTestCaseResult? {
@@ -192,11 +214,11 @@ struct IDETestResultsPanel: View {
             IDEExplorerToolbarButton(systemImage: "arrow.clockwise", help: "Rerun") {
                 workspace.rerunTests(failedOnly: false)
             }
-            .disabled(store.lastScope == nil || store.isRunning)
+            .disabled(!store.canRerun || store.isRunning)
             IDEExplorerToolbarButton(systemImage: "arrow.clockwise.circle", help: "Rerun Failed Tests") {
                 workspace.rerunTests(failedOnly: true, debug: false)
             }
-            .disabled(store.failedScope == nil || store.isRunning)
+            .disabled(!store.canRerunFailed || store.isRunning)
             IDEExplorerToolbarButton(systemImage: "ladybug", help: "Debug Failed Tests") {
                 workspace.rerunTests(failedOnly: true, debug: true)
             }

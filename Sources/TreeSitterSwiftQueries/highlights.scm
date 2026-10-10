@@ -46,8 +46,8 @@
 (protocol_function_declaration
   name: (simple_identifier) @function.method)
 
-(function_declaration
-  ["init" @constructor])
+(init_declaration
+  "init" @constructor)
 
 (parameter
   external_name: (simple_identifier) @variable.parameter)
@@ -78,6 +78,8 @@
   "any"
   "weak"
   "unowned"
+  "didSet"
+  "willSet"
   "subscript"
   "let"
   "var"
@@ -101,6 +103,9 @@
   "async"
   "await"
 ] @keyword.coroutine
+
+(unsafe_expression
+  "unsafe" @keyword)
 
 (shebang_line) @keyword.directive
 
@@ -157,9 +162,13 @@
 [
   (diagnostic)
   (availability_condition)
+  (playground_literal)
   (key_path_string_expression)
   (selector_expression)
+  (external_macro_definition)
 ] @function.macro
+
+(special_literal) @constant.macro
 
 ; Statements
 (for_statement
@@ -202,9 +211,7 @@
   ] @keyword.conditional.ternary)
 
 [
-  "try"
-  "try?"
-  "try!"
+  (try_operator)
   "do"
   (throw_keyword)
   (catch_keyword)
@@ -277,7 +284,7 @@
 
 (boolean_literal) @boolean
 
-"nil" @constant.builtin
+(nil_literal) @constant.builtin
 
 (wildcard_pattern) @character.special
 

@@ -16,10 +16,26 @@ final class IDEProblemsStore {
     private(set) var editorDiagnostics: [URL: [Diagnostic]] = [:]
     private(set) var compilerDiagnostics: [URL: [Diagnostic]] = [:]
     private(set) var inspectionDiagnostics: [URL: [Diagnostic]] = [:]
-    /// Errors and warnings parsed from the last Gradle task run, kept apart from
+    /// Build-system sources `setBuildDiagnostics(_:source:)` is called with. Each project system
+    /// owns its own bucket, so a SwiftPM build never replaces Gradle's results or the reverse.
+    static let gradleBuildSource = "gradle"
+    static let swiftPMBuildSource = "swiftpm"
+
+    /// Errors and warnings parsed from the last task run of each build system, kept apart from
     /// `compilerDiagnostics` because an editor report rewrites a file's `javac` entry. A file's
     /// entry is dropped once the file is saved, when the in-editor compile takes over.
-    private(set) var buildDiagnostics: [URL: [Diagnostic]] = [:]
+    private var buildBySource: [String: [URL: [Diagnostic]]] = [:]
+
+    /// Every source's build problems, merged per file (sources in name order, so it is stable).
+    var buildDiagnostics: [URL: [Diagnostic]] {
+        var merged: [URL: [Diagnostic]] = [:]
+        for source in buildBySource.keys.sorted() {
+            for (url, diagnostics) in buildBySource[source] ?? [:] {
+                merged[url, default: []].append(contentsOf: diagnostics)
+            }
+        }
+        return merged
+    }
     var visibleSeverities: Set<DiagnosticSeverity> = [.error, .warning, .information, .hint]
 
     /// Every file with problems, ignoring the severity filter -- the basis for the badge counts.
@@ -38,7 +54,7 @@ final class IDEProblemsStore {
     var errorCount: Int { DiagnosticGrouping.counts(in: allFiles).errors }
     var warningCount: Int { DiagnosticGrouping.counts(in: allFiles).warnings }
     var isEmpty: Bool {
-        editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && inspectionDiagnostics.isEmpty && buildDiagnostics.isEmpty
+        editorDiagnostics.isEmpty && compilerDiagnostics.isEmpty && inspectionDiagnostics.isEmpty && buildBySource.isEmpty
     }
 
     /// Takes an active editor's report. Compiler results in it are the service's cached ones for
@@ -68,18 +84,26 @@ final class IDEProblemsStore {
         inspectionDiagnostics[key] = diagnostics.isEmpty ? nil : diagnostics
     }
 
-    /// Replaces the listed build problems with the ones from the run that just finished.
-    func setBuildDiagnostics(_ diagnostics: [URL: [Diagnostic]]) {
-        buildDiagnostics = Dictionary(
-            uniqueKeysWithValues: diagnostics.filter { !$0.value.isEmpty }.map { ($0.key.standardizedFileURL, $0.value) }
-        )
+    /// Replaces `source`'s listed build problems with the ones from the run that just finished.
+    /// Other sources' problems stay.
+    func setBuildDiagnostics(_ diagnostics: [URL: [Diagnostic]], source: String) {
+        var bucket: [URL: [Diagnostic]] = [:]
+        for (url, list) in diagnostics where !list.isEmpty {
+            bucket[url.standardizedFileURL, default: []].append(contentsOf: list)
+        }
+        buildBySource[source] = bucket.isEmpty ? nil : bucket
     }
 
+    /// Drops a file's build problems from every source, or all of them with no URL.
     func clearBuildDiagnostics(for url: URL? = nil) {
         if let url {
-            buildDiagnostics[url.standardizedFileURL] = nil
+            let key = url.standardizedFileURL
+            for source in Array(buildBySource.keys) {
+                buildBySource[source]?[key] = nil
+                if buildBySource[source]?.isEmpty == true { buildBySource[source] = nil }
+            }
         } else {
-            buildDiagnostics = [:]
+            buildBySource = [:]
         }
     }
 

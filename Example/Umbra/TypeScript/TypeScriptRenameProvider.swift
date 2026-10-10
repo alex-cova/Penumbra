@@ -28,10 +28,10 @@ struct TypeScriptRenameProvider: RenameProviding {
         }
         var entries: [WorkspaceEditPlanEntry] = []
         var seen = Set<String>()
-        func add(_ bytes: Range<Int>, text: TypeScriptText, url: URL) {
+        func add(_ bytes: Range<Int>, text: SourceTextMap, url: URL) {
             let key = url.standardizedFileURL.path + ":\(bytes.lowerBound)"
             guard seen.insert(key).inserted else { return }
-            entries.append(TypeScriptLocations.edit(
+            entries.append(SourceLocations.edit(
                 bytes: bytes, text: text, url: url, oldName: target.name, newName: newName
             ))
         }
@@ -44,7 +44,7 @@ struct TypeScriptRenameProvider: RenameProviding {
         if !target.exportNames.isEmpty, let file = context.document.url {
             let external = await index.externalUses(of: target.exportNames, definingFile: file)
             for fileUses in external {
-                let text = TypeScriptText(fileUses.source)
+                let text = SourceTextMap(fileUses.source)
                 for range in fileUses.ranges {
                     add(range, text: text, url: fileUses.url)
                 }

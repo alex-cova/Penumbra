@@ -162,6 +162,7 @@ let package = Package(
                 "TreeSitter",
                 "TreeSitterHTTP",
                 "TreeSitterTypeScript",
+                "TreeSitterSwift",
                 "GitIntelligence",
                 "SubprocessKit",
                 .product(name: "AgentKit", package: "AgentKit"),
@@ -244,7 +245,11 @@ let package = Package(
             dependencies: ["Penumbra", "TreeSitterSQL", "TreeSitterSQLQueries"],
             swiftSettings: swift6
         ),
-        .target(name: "TreeSitterSwift", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterSwift",
+            exclude: ["LICENSE", "VERSION", "grammar.js", "src/node-types.json"],
+            cSettings: [.headerSearchPath("src")]
+        ),
         .target(
             name: "TreeSitterSwiftQueries",
             resources: [.copy("highlights.scm"), .copy("highlights-swiftui.scm"), .copy("locals.scm")]

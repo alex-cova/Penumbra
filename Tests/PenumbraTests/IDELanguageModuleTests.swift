@@ -11,10 +11,13 @@ final class IDELanguageModuleTests: XCTestCase {
         return IDEWorkspace()
     }
 
-    func testTheShippedModulesAreJavaHTTPAndTheThreePreviewLanguages() {
-        XCTAssertEqual(IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript"])
+    func testTheShippedModulesAreJavaHTTPThePreviewLanguagesTypeScriptAndSwift() {
+        XCTAssertEqual(
+            IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript", "swift"]
+        )
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
-        XCTAssertNil(IDELanguageModules.module(id: "swift"))
+        XCTAssertNotNil(IDELanguageModules.module(id: "swift"))
+        XCTAssertNil(IDELanguageModules.module(id: "rust"))
     }
 
     func testJavaContributesTheElevenCommandsItAlwaysHad() {
