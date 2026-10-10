@@ -11,14 +11,40 @@ extension IDEJavaRunProvider {
     func runTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
         guard let host else { return }
         recordTestRun(scope: scope, debug: false, from: recording)
-        host.testResults.beginRun(label: "Running \(title)…", scope: scope)
-        host.showTestResults()
-        startGradleTests(scope: scope)
+        guard let reason = gradleTestBlockReason() else {
+            host.testResults.beginRun(label: "Running \(title)…", scope: scope)
+            host.showTestResults()
+            startGradleTests(scope: scope)
+            return
+        }
+        // A run that cannot start must not leave the Test Results tab on "Running…".
+        host.reportRunProblem(reason)
     }
 
+    /// The open test class when the editor is showing one. Otherwise every test task in the
+    /// Gradle project: the Actions command is available as soon as a project is open, and a
+    /// project with no test file focused still has tests to run.
     func runActiveTests() {
-        guard let testClass = host?.activeJavaTestClass else { return }
-        runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName))
+        if let testClass = host?.activeJavaTestClass, !testClass.methods.isEmpty {
+            runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName))
+            return
+        }
+        guard gradle.isActive, gradle.rootURL != nil else {
+            host?.reportRunProblem("Running tests needs a Gradle project.")
+            return
+        }
+        runTests(scope: .allInModule(gradleTaskPath: "test"), title: "all tests")
+    }
+
+    /// Why a Gradle test task cannot start, or nil when it can.
+    private func gradleTestBlockReason() -> String? {
+        guard gradle.isActive, gradle.rootURL != nil else {
+            return "Running tests needs a Gradle project."
+        }
+        guard !gradle.isBusy else {
+            return "Gradle is busy. Stop the running task first, then run tests again."
+        }
+        return nil
     }
 
     func runTestMethod(_ method: JavaTestMethod, taskPath: String) {
@@ -46,10 +72,32 @@ extension IDEJavaRunProvider {
     /// JDWP port (`--debug-jvm`), and Gradle's run is not timed out.
     func startGradleTests(scope: JavaTestRunScope, debug: Bool = false) {
         guard let url = gradle.rootURL else { return }
-        guard let request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradle.model) else { return }
+        guard var request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradle.model) else { return }
+        let taskPaths = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
+        let reports = JavaTestRunner.reportDirectories(forTaskPaths: taskPaths, model: gradle.model)
+        if !reports.isEmpty {
+            request = JavaTestRunRequest(
+                gradleTaskPath: request.gradleTaskPath,
+                testFilter: request.testFilter,
+                additionalTestFilters: request.additionalTestFilters,
+                projectRoot: request.projectRoot,
+                reportDirectories: reports
+            )
+        }
         pendingTestRunRequest = request
         let args = JavaTestRunner.gradleArguments(for: request, debug: debug)
-        gradle.runGradleTasks(JavaTestRunner.taskPaths(for: request, debug: debug), extraArguments: args, runsApplication: debug)
+        gradle.runGradleTasks(taskPaths, extraArguments: args, runsApplication: debug) { [weak self] outcome in
+            guard let self, let host = self.host else { return }
+            switch outcome {
+            case .notStarted(let reason), .failed(let reason):
+                // A declined trust prompt or a missing Gradle never produces results. Leave the
+                // Test Results tab on that reason instead of "Running…" with no run behind it.
+                host.testResults.stopRun(message: reason)
+                host.reportRunProblem(reason)
+            case .finished, .timedOut, .cancelled:
+                break
+            }
+        }
     }
 
     // MARK: - A Gradle task ended

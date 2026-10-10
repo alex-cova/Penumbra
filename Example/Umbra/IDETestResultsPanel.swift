@@ -56,6 +56,13 @@ final class IDETestResultsStore {
         // The last results stay readable until the new ones arrive.
     }
 
+    /// Gradle never started (the project is busy, untrusted, or not Gradle). The tab keeps the reason.
+    func stopRun(message: String) {
+        isRunning = false
+        hasContent = true
+        summaryMessage = message
+    }
+
     func finishRun(_ result: JavaTestRunResult) {
         isRunning = false
         cases = result.cases
@@ -163,7 +170,7 @@ struct IDETestResultsPanel: View {
                     if store.isRunning {
                         ProgressView().controlSize(.small)
                     }
-                    Text(store.isRunning ? (store.summaryMessage ?? "Running tests…") : "No test results")
+                    Text(store.summaryMessage ?? (store.isRunning ? "Running tests…" : "No test results"))
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }

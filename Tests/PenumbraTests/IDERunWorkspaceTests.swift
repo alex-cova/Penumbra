@@ -214,6 +214,74 @@ final class IDERunWorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.lastRunConfiguration?.displayName, "All tests (:)")
     }
 
+    /// Actions › Java: Run Tests with a project open and no test file focused.
+    func testRunTestsWithNoOpenTestClassRunsTheProject() async throws {
+        let savedAutoSync = IDEPreferences.shared.javaGradleAutoSync
+        IDEPreferences.shared.javaGradleAutoSync = false
+        defer { IDEPreferences.shared.javaGradleAutoSync = savedAutoSync }
+        try "plugins { id 'java' }\n".write(to: project.appendingPathComponent("build.gradle"), atomically: true, encoding: .utf8)
+        workspace.projectSystems.projectDidChange(root: project)
+        XCTAssertTrue(workspace.gradle.isActive)
+        XCTAssertNil(workspace.activeJavaTestClass)
+
+        workspace.runActiveJavaTests()
+
+        XCTAssertEqual(workspace.testResults.summaryMessage, "Running all tests…")
+        XCTAssertTrue(workspace.testResults.isRunning)
+        XCTAssertTrue(workspace.isTerminalVisible)
+        XCTAssertEqual(
+            workspace.lastRunConfiguration?.target,
+            .gradleTest(taskPath: "test", filters: [], sourceFile: nil)
+        )
+        // No trust prompt is wired in this test, so Gradle declines and the tab must say so
+        // instead of staying on "Running…".
+        let settled = await waitUntil { !workspace.testResults.isRunning }
+        XCTAssertTrue(settled, workspace.gradle.console.lines.map(\.text).joined(separator: "\n"))
+        XCTAssertTrue(
+            workspace.gradle.console.lines.contains { $0.text.contains("Tasks: test") },
+            workspace.gradle.console.lines.map(\.text).joined(separator: "\n")
+        )
+        XCTAssertFalse(workspace.testResults.summaryMessage?.hasPrefix("Running") ?? true)
+    }
+
+    func testRunTestsWithAnOpenTestClassRunsThatClass() async throws {
+        let savedAutoSync = IDEPreferences.shared.javaGradleAutoSync
+        IDEPreferences.shared.javaGradleAutoSync = false
+        defer { IDEPreferences.shared.javaGradleAutoSync = savedAutoSync }
+        try "plugins { id 'java' }\n".write(to: project.appendingPathComponent("build.gradle"), atomically: true, encoding: .utf8)
+        workspace.projectSystems.projectDidChange(root: project)
+        let file = project.appendingPathComponent("src/test/java/FooTest.java")
+        let method = JavaTestMethod(
+            className: "app.FooTest", methodName: "testAdds", displayName: "testAdds()", sourceFile: file,
+            line: 7, column: 9, framework: .junit5
+        )
+        workspace.activeJavaTestClass = JavaTestClass(
+            qualifiedName: "app.FooTest", sourceFile: file, methods: [method],
+            gradleProjectPath: ":app", gradleTaskPath: ":app:test"
+        )
+
+        workspace.runActiveJavaTests()
+
+        XCTAssertEqual(workspace.testResults.summaryMessage, "Running FooTest…")
+        XCTAssertEqual(
+            workspace.lastRunConfiguration?.target,
+            .gradleTest(taskPath: ":app:test", filters: ["app.FooTest"], sourceFile: file.path)
+        )
+        _ = await waitUntil { !workspace.testResults.isRunning }
+    }
+
+    func testRunTestsOutsideAGradleProjectSaysWhy() {
+        workspace.projectSystems.projectDidChange(root: project)
+        XCTAssertFalse(workspace.gradle.isActive)
+        workspace.runActiveJavaTests()
+        XCTAssertFalse(workspace.testResults.isRunning)
+        XCTAssertNil(workspace.lastRunConfiguration)
+        XCTAssertTrue(
+            workspace.gradle.console.lines.contains { $0.text == "Running tests needs a Gradle project." },
+            workspace.gradle.console.lines.map(\.text).joined(separator: "\n")
+        )
+    }
+
     func testSavingFromTheDialogKeepsATemporaryConfiguration() {
         let temporary = JavaRunConfiguration(target: .gradleRun(projectPath: ":"))
         XCTAssertTrue(temporary.isTemporary)
