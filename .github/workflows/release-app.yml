@@ -2,19 +2,12 @@ name: Release Umbra
 
 on:
   push:
-    branches:
-      - main
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
   actions: write
-
-# A newer push to main supersedes an in-flight nightly; version tags always finish.
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
   release:
@@ -25,7 +18,6 @@ jobs:
       # Hand-made tags once shipped Umbra-1.6.8-macOS.zip as 1.6.9/1.6.10, which generate_appcast then
       # treated as a duplicate version. A release tag must match VERSION.
       - name: Verify VERSION matches tag
-        if: github.ref_type == 'tag'
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
           if [[ "$VERSION" != "$GITHUB_REF_NAME" ]]; then
@@ -50,20 +42,17 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      # build-app.sh notarizes only when the APPLE_* variables are set, so nightlies
-      # (pushes to main) are signed but not notarized; version tags are both.
       - name: Build, sign, and notarize
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
-          APPLE_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_ID || '' }}
-          APPLE_NOTARIZATION_PASSWORD: ${{ github.ref_type == 'tag' && secrets.APPLE_NOTARIZATION_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_NOTARIZATION_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           chmod +x Scripts/build-app.sh
           ./Scripts/build-app.sh
 
       - name: Create GitHub Release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -75,7 +64,6 @@ jobs:
             "dist/Umbra-${VERSION}-macOS.zip"
 
       - name: Update Sparkle appcast
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
@@ -128,22 +116,3 @@ jobs:
           # Pushes made with GITHUB_TOKEN do not trigger other workflows, so deploy Pages explicitly;
           # otherwise the published appcast never changes and Sparkle reports "newest version".
           gh workflow run pages.yml --ref main
-
-      - name: Publish nightly
-        if: github.ref_type == 'branch'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          SHORT_SHA="${GITHUB_SHA::7}"
-          NIGHTLY_ZIP="dist/Umbra-nightly-${SHORT_SHA}-macOS.zip"
-          cp "dist/Umbra-${VERSION}-macOS.zip" "$NIGHTLY_ZIP"
-          # One rolling `nightly` prerelease: replace the previous one and move its tag to this commit.
-          gh release delete nightly --cleanup-tag --yes || true
-          gh release create nightly \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "Umbra Nightly (${SHORT_SHA})" \
-            --notes "Unreleased build of \`main\` at ${GITHUB_SHA} (based on ${VERSION}). Download \`$(basename "$NIGHTLY_ZIP")\` and unzip it. Nightlies are signed but not notarized: if macOS blocks the first launch, allow it under System Settings › Privacy & Security › Open Anyway (or run \`xattr -dr com.apple.quarantine Umbra.app\`)." \
-            "$NIGHTLY_ZIP"
