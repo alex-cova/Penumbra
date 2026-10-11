@@ -7,7 +7,8 @@ import SwiftIntelligence
 /// A program is built through the project system first, so the compiler's problems reach Problems
 /// and the SwiftPM console, and then started with `swift run --skip-build` as a Run-tab session
 /// (interactive input, Stop, Rerun). Tests run as `swift test --filter …` with an xunit file the
-/// Java report parser reads, so they land in Test Results. Debugging is not available.
+/// Java report parser reads, so they land in Test Results. An executable target debugs through
+/// `lldb-dap` in the Debug tool window. Tests do not.
 @MainActor
 final class IDESwiftRunProvider: IDERunProvider {
     let id = "swiftpm"
@@ -61,7 +62,10 @@ final class IDESwiftRunProvider: IDERunProvider {
         return context(for: document.url) != nil
     }
 
-    func canDebug(fileURL _: URL?) -> Bool { false }
+    func canDebug(fileURL: URL?) -> Bool {
+        if case .executable = context(for: fileURL) { return true }
+        return false
+    }
 
     func runHelp(fileURL: URL?) -> String {
         switch context(for: fileURL) {
@@ -71,8 +75,9 @@ final class IDESwiftRunProvider: IDERunProvider {
         }
     }
 
-    func debugHelp(fileURL _: URL?, canRun _: Bool) -> String {
-        "Debugging is not available for Swift"
+    func debugHelp(fileURL: URL?, canRun _: Bool) -> String {
+        if case .executable(let name) = context(for: fileURL) { return "Debug \(name)" }
+        return "Debugging is not available for Swift tests"
     }
 
     // MARK: Runnable locations
@@ -124,32 +129,39 @@ final class IDESwiftRunProvider: IDERunProvider {
     // MARK: Running
 
     func run(_ document: IDERunDocument, mode: IDERunMode) {
-        guard mode == .run, workspace != nil else { return }
+        guard workspace != nil else { return }
         switch context(for: document.url) {
-        case .executable(let name)?: runExecutable(name)
-        case .tests(let target)?: runTests(title: target, filters: ["\(target)."])
+        case .executable(let name)?:
+            if mode == .debug { debugExecutable(name) } else { runExecutable(name) }
+        case .tests(let target)?:
+            guard mode == .run else { return }
+            runTests(title: target, filters: ["\(target)."])
         case nil: break
         }
     }
 
     func run(_ document: IDERunDocument, location: IDERunnableLocation, mode: IDERunMode) {
-        guard mode == .run, workspace != nil else { return }
+        guard workspace != nil else { return }
         switch location.kind {
         case .entryPoint:
-            if case .executable(let name)? = context(for: document.url) { runExecutable(name) }
+            if case .executable(let name)? = context(for: document.url) {
+                if mode == .debug { debugExecutable(name) } else { runExecutable(name) }
+            }
         case .test, .testGroup:
+            guard mode == .run else { return }
             let filter = testFilter(for: location, in: document)
             runTests(title: location.title, filters: [filter])
         }
     }
 
     func runInContext(_ document: IDERunDocument, mode: IDERunMode) async -> Bool {
-        guard mode == .run, workspace != nil else { return false }
+        guard workspace != nil else { return false }
         let locations = await runnableLocations(in: document)
         guard let parsed = SwiftAnalysis.parse(document.text) else { return false }
         let caretLine = parsed.text.position(utf16: document.caretUTF16Offset).line + 1
         // The nearest place at or above the caret: a test method inside a class beats the class.
         if let location = locations.last(where: { $0.line <= caretLine }) {
+            if mode == .debug, location.kind != .entryPoint { return false }
             run(document, location: location, mode: mode)
             return true
         }
@@ -205,6 +217,56 @@ final class IDESwiftRunProvider: IDERunProvider {
             }
         ))
         workspace.showRunTab()
+    }
+
+    /// Builds the executable and attaches `lldb-dap`. The binary is the product in `swift build --show-bin-path`.
+    private func debugExecutable(_ name: String) {
+        guard let workspace else { return }
+        if swiftPM.isRunningTasks {
+            workspace.reportRunProblem("SwiftPM is busy; wait for it or stop it first.")
+            return
+        }
+        workspace.configureDebugSession()
+        workspace.dapDebugSession.beginLaunch(of: name)
+        workspace.showBottomTab(.debug)
+        let build = IDESwiftPMInvocation(title: "swift build --product \(name)", arguments: ["build", "--product", name])
+        let locate = IDESwiftPMInvocation(
+            title: "swift build --show-bin-path",
+            arguments: ["build", "--product", name, "--show-bin-path"],
+            collectsDiagnostics: false
+        )
+        swiftPM.run([build, locate]) { [weak self] outcomes in
+            guard let self, let workspace = self.workspace else { return }
+            guard outcomes.count == 2, outcomes[0].succeeded, outcomes[1].succeeded,
+                  let directory = Self.binDirectory(in: outcomes[1].output) else {
+                workspace.dapDebugSession.noteFailure("The debug build did not produce a binary.")
+                return
+            }
+            let binary = URL(fileURLWithPath: directory).appendingPathComponent(name)
+            guard FileManager.default.isExecutableFile(atPath: binary.path) else {
+                workspace.dapDebugSession.noteFailure("No executable at \(binary.path).")
+                return
+            }
+            let lines = workspace.enabledLineBreakpointsByPath()
+            let root = self.swiftPM.rootURL ?? binary.deletingLastPathComponent()
+            let userPath = UserDefaults.standard.string(forKey: "umbra.lldbDapPath")
+                ?? ProcessInfo.processInfo.environment["UMBRA_LLDB_DAP_PATH"]
+            Task {
+                guard let adapter = await LLDBDAPSpike.discover(userPath: userPath) else {
+                    workspace.dapDebugSession.noteFailure("lldb-dap was not found.")
+                    return
+                }
+                await workspace.dapDebugSession.launch(
+                    adapterPath: adapter, program: binary, workingDirectory: root, lineBreakpoints: lines
+                )
+            }
+        }
+    }
+
+    private static func binDirectory(in output: String) -> String? {
+        output.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .last { $0.hasPrefix("/") }
     }
 
     // MARK: Tests

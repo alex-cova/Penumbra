@@ -19,6 +19,15 @@ struct IDEDebugPanel: View {
     }
 
     var body: some View {
+        if workspace.dapDebugSession.presentsDebugger, !workspace.debugSession.isActive {
+            IDESwiftDebugPane()
+        } else {
+            javaBody
+        }
+    }
+
+    @ViewBuilder
+    private var javaBody: some View {
         let session = workspace.debugSession
         VStack(spacing: 0) {
             toolbar(session)

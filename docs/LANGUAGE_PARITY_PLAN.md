@@ -15,20 +15,21 @@ Status, as of Oct 10, 2026. Finished items match the plan todos. Continue from `
 - `.tsx` and `.jsx` highlight with `tree_sitter_tsx()`. The language identifier stays `typescript` or `javascript`, so the mapping tests are unchanged. Parsing already used that grammar.
 - `enter-session` at 20k and 120k lines was re-measured against `20fad79`. Enter stays ~0.9 ms at the top and ~11.7 ms in the middle. Numbers are in `docs/EDITOR_PERF_PLAN.md`. One run is not a gate.
 - `SourceFileIndex<Model>` owns enumeration, the 1 MB cap, the fan-out of 8, generation, pending edits, and the open-buffer lookup. `SwiftIndex` and `TypeScriptIndex` keep their public methods and their own lookup tables.
+- Phase 9's lldb-dap session stops on a breakpoint. `IDEDebugSession`, `DAPDebugSession` and `JavaDebugSessionBridge` are in Umbra. A Swift executable debugs in the existing Debug tool window. js-debug (`dapDebugServer.js`) debugs a JavaScript or TypeScript file through the same session: breakpoint, variables, step and evaluate (`JSDebugSessionTests`, gated on `UMBRA_JS_DEBUG=1`).
 
 **Still open**
-- Phase 9 stops after the lldb-dap spike below. Launch never reached a stop, so `IDEDebugSession` was not added. Phase 10 stays gated.
+- Phase 10 stays gated.
 - The full suite (`caffeinate -u -d -i -s swift test`) has not been run for this work.
 
 ## lldb-dap spike (phase 9, Oct 10 2026)
 
-Adapter: `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` (LLVM 21.0.0, liblldb 2103.0.34.103, Apple Swift 6.4). Discovery is `UMBRA_LLDB_DAP_PATH`, then `xcrun --find lldb-dap`. The probe is `LLDBDAPSpike` in the Umbra target, launched through SubprocessKit, gated by `UMBRA_LLDB_DAP=1` (`LLDBDAPSpikeTests`). It is skipped when the binary is absent.
+Adapter: `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` (LLVM 21.0.0, liblldb 2103.0.34.103, Apple Swift 6.4). Discovery is `UMBRA_LLDB_DAP_PATH` or the `umbra.lldbDapPath` default, then `xcrun --find lldb-dap`. The probe is `LLDBDAPSpike` and the product session is `DAPDebugSession`, both launched through SubprocessKit. Tests are gated by `UMBRA_LLDB_DAP=1` (`LLDBDAPSpikeTests`, `DAPDebugSessionTests`) and skipped when the binary is absent.
 
-What succeeded: `swiftc -g -Onone` of a three-line program; Content-Length `initialize` and its response; `lldb` `target create` and `breakpoint set --file main.swift --line 2` (the breakpoint binds at `main + 24`). This adapter does not send an `initialized` event after `initialize`.
+What succeeded, outside the agent sandbox that had blocked debugserver: `swiftc -g -Onone` of a three-line program (via `xcrun --sdk macosx`, so the stdlib loads); Content-Length `initialize`; `launch` with `stopOnEntry` (the response returns, then `initialized`); `setBreakpoints` verified on line 2; `configurationDone`; continue past the entry `SIGSTOP` (DAP reason `exception`); `stopped` with reason `breakpoint`; stack frame `main`; variable `value` = `21` (a top-level Swift binding, listed under Globals, not Locals); `next`; `evaluate` of `answer` containing `42`.
 
-What failed: `launch`, even with `setBreakpoints` and `configurationDone` already written to the pipe, produces no further DAP message. `lldb -b` stops at `run` the same way: debugserver starts and the private-state thread waits forever. Running the binary directly exits. A pseudo-terminal does not unblock it. The agent shell's sandbox sentinel is `.sb-56ca21c4`. Stop, variables, step, and evaluate were not reached.
+What this adapter requires: it does not send `initialized` in reply to `initialize` alone. `configurationDone` before `launch` fails. `stopOnEntry: false` lets a three-line program exit while Swift modules are still loading, so the breakpoint never hits. An earlier run under the agent sandbox hung in debugserver the same way `lldb` `run` did; that hang is not the protocol.
 
-`IDEDebugSession` and a `JavaDebugSession` wrapper are not added until a Swift session stops on a breakpoint.
+`IDEDebugSession` is breakpoints, threads, frames, variables, evaluate and step. `DAPDebugSession` speaks this sequence for `lldb-dap`, and the js-debug sequence (a listening `dapDebugServer.js`, then the `startDebugging` child connection) for JavaScript and TypeScript. `JavaDebugSessionBridge` adapts `JavaDebugSession` and leaves that session's API and tests unchanged.
 
 Decisions recorded in the source plan: TypeScript's semantic tier is LSP (typescript-language-server or vtsls driving the project's tsserver), and direct distribution comes first (external servers are first-class; the App Sandbox spike is phase 10).
 

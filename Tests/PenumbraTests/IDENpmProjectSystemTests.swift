@@ -388,9 +388,10 @@ final class IDENpmProjectSystemTests: XCTestCase {
         XCTAssertTrue(typescript === javascript)
         let document = IDERunDocument(url: directory.appendingPathComponent("main.ts"), languageIdentifier: "typescript", text: "")
         XCTAssertTrue(typescript.canRun(document))
-        XCTAssertFalse(typescript.canDebug(fileURL: document.url))
+        XCTAssertTrue(typescript.canDebug(fileURL: document.url))
+        XCTAssertFalse(typescript.canDebug(fileURL: nil))
         XCTAssertEqual(typescript.runHelp(fileURL: document.url), "Run npm start")
-        XCTAssertEqual(typescript.debugHelp(fileURL: document.url, canRun: true), "Debugging is not available for this language")
+        XCTAssertEqual(typescript.debugHelp(fileURL: document.url, canRun: true), "Debug this file")
         let markdown = IDERunDocument(url: nil, languageIdentifier: "markdown", text: "")
         XCTAssertFalse(typescript.canRun(markdown))
     }

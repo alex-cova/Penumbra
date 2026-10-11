@@ -118,7 +118,9 @@ final class IDESwiftRunProviderTests: XCTestCase {
         defer { tearDown(fixture) }
         XCTAssertTrue(fixture.provider.canRun(try document(fixture.mainFile)))
         XCTAssertTrue(fixture.provider.canRun(try document(fixture.testFile)))
-        XCTAssertFalse(fixture.provider.canDebug(fileURL: fixture.mainFile))
+        XCTAssertTrue(fixture.provider.canDebug(fileURL: fixture.mainFile))
+        XCTAssertFalse(fixture.provider.canDebug(fileURL: fixture.testFile))
+        XCTAssertEqual(fixture.provider.debugHelp(fileURL: fixture.mainFile, canRun: true), "Debug App")
         XCTAssertEqual(fixture.provider.runHelp(fileURL: fixture.mainFile), "Run App")
         XCTAssertEqual(fixture.provider.runHelp(fileURL: fixture.testFile), "Run tests of AppTests")
         let elsewhere = IDERunDocument(url: fixture.root.appendingPathComponent("x.rs"), languageIdentifier: "rust", text: "")

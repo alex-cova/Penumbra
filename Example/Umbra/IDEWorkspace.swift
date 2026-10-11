@@ -146,6 +146,8 @@ public final class IDEWorkspace {
     let structureStore = IDEStructureStore()
     let callHierarchy = IDECallHierarchyStore()
     let debugSession = JavaDebugSession()
+    /// Swift debugging through `lldb-dap`. The Debug tool window shows this while it is active.
+    let dapDebugSession = DAPDebugSession()
     /// The Usages tab's content (Find Usages results); empty until a search runs.
     let usages = IDEUsagesStore()
     /// The Test Results tab's content; empty until a test run finishes.
@@ -616,6 +618,7 @@ public final class IDEWorkspace {
 
     func bootstrap() {
         applyLaunchConfiguration()
+        configureDebugSession()
         intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
@@ -1617,7 +1620,7 @@ public final class IDEWorkspace {
     }
 
     var isRunActive: Bool {
-        runProviders.hasActiveWork || debugSession.isActive || runs.isAnyActive
+        runProviders.hasActiveWork || debugSession.isActive || dapDebugSession.isActive || runs.isAnyActive
     }
 
     public func buildGradleProject() {
@@ -1644,7 +1647,7 @@ public final class IDEWorkspace {
     func stopRunning() {
         runProviders.stopAll()
         runs.stopAll()
-        if debugSession.isActive || gradleDebugActive {
+        if debugSession.isActive || dapDebugSession.isActive || gradleDebugActive {
             stopDebugging()
         }
     }
@@ -1783,6 +1786,10 @@ public final class IDEWorkspace {
             self?.refreshExecutionLineBackgrounds()
             self?.refreshInlineDebugValues()
         }
+        dapDebugSession.onStopped = { [weak self] file, line in
+            self?.revealDebugStop(file: file, line: line, selectsLine: false)
+            self?.refreshExecutionLineBackgrounds()
+        }
     }
 
     /// Opens the file the program stopped in and selects the stopped line. The execution point
@@ -1809,27 +1816,61 @@ public final class IDEWorkspace {
 
     /// True while a debug session is stopped at a line, so stepping and Resume mean something.
     var isDebuggerStopped: Bool {
+        if dapDebugSession.isStopped { return true }
         if case .stopped = debugSession.state { return true }
         return false
     }
 
     var isDebuggerRunning: Bool {
+        if dapDebugSession.state == .running { return true }
         if case .running = debugSession.state { return true }
         return false
     }
 
-    func debugResume() { debugSession.resume() }
-    func debugPause() { debugSession.pause() }
-    func debugStepOver() { debugSession.stepOver() }
-    func debugStepInto() { debugSession.stepInto() }
-    func debugStepOut() { debugSession.stepOut() }
+    private var swiftDebugIsCurrent: Bool { dapDebugSession.isActive }
+
+    func debugResume() {
+        if swiftDebugIsCurrent { dapDebugSession.resume(); return }
+        debugSession.resume()
+    }
+
+    func debugPause() {
+        if swiftDebugIsCurrent { dapDebugSession.pause(); return }
+        debugSession.pause()
+    }
+
+    func debugStepOver() {
+        if swiftDebugIsCurrent { dapDebugSession.stepOver(); return }
+        debugSession.stepOver()
+    }
+
+    func debugStepInto() {
+        if swiftDebugIsCurrent { dapDebugSession.stepInto(); return }
+        debugSession.stepInto()
+    }
+
+    func debugStepOut() {
+        if swiftDebugIsCurrent { dapDebugSession.stepOut(); return }
+        debugSession.stepOut()
+    }
 
     func stopDebugging() {
         if gradleDebugActive || debugSession.isGradleAttachSession {
             gradleDebugActive = false
             gradle.cancelTasks()
         }
+        if dapDebugSession.isActive { dapDebugSession.stop() }
         debugSession.stop()
+    }
+
+    /// Enabled line breakpoints, keyed by file path. Empty while breakpoints are muted.
+    func enabledLineBreakpointsByPath() -> [String: [Int]] {
+        guard !breakpointsMuted else { return [:] }
+        var lines: [String: [Int]] = [:]
+        for breakpoint in breakpoints where breakpoint.isEnabled && breakpoint.kind == .line && !breakpoint.filePath.isEmpty {
+            lines[breakpoint.filePath, default: []].append(breakpoint.line)
+        }
+        return lines
     }
 
     func toggleBreakpoint(atLine line: Int, file url: URL) {
@@ -1865,12 +1906,14 @@ public final class IDEWorkspace {
         revealDebugStop(file: URL(fileURLWithPath: breakpoint.filePath), line: breakpoint.line)
     }
 
-    /// Redraws the breakpoint dots of every open Java file after the Breakpoints tab changed them.
+    /// Redraws the breakpoint dots of every open Java or Swift file after the Breakpoints tab changed them.
     func refreshBreakpointGutters() {
         for pane in workbench.panes {
-            guard let url = pane.selectedDocument?.url, url.pathExtension.lowercased() == "java",
+            guard let url = pane.selectedDocument?.url,
                   let textView = hostCache.peek(pane.id)?.textView else { continue }
-            Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: true) }
+            let ext = url.pathExtension.lowercased()
+            guard ["java", "swift", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"].contains(ext) else { continue }
+            Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: ext == "java") }
         }
     }
 
@@ -5415,7 +5458,8 @@ public final class IDEWorkspace {
         )
         let provider = runProviders.provider(forLanguage: language)
         let locations = await provider?.runnableLocations(in: runDocument) ?? []
-        guard isJava, let fileURL else {
+        let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
+        guard wantsBreakpoints, let fileURL else {
             javaFileCanTest = false
             activeJavaTestClass = nil
             guard let fileURL, !locations.isEmpty else {
@@ -5427,6 +5471,12 @@ public final class IDEWorkspace {
                 return
             }
             applyRunLocationGutter(fileURL: fileURL, locations: locations, to: textView)
+            return
+        }
+        guard isJava else {
+            javaFileCanTest = false
+            activeJavaTestClass = nil
+            applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
             return
         }
         if await javaSupport.isTestSource(file: fileURL) {

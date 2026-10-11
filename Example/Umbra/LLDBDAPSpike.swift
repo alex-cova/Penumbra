@@ -51,12 +51,8 @@ enum LLDBDAPSpike {
             let sourceURL = root.appendingPathComponent("main.swift")
             try Data(programSource.utf8).write(to: sourceURL)
             let binary = root.appendingPathComponent("spike")
-            guard let swiftc = await xcrunFind("swiftc") else {
-                report.failure = "swiftc was not found"
-                return report
-            }
-            try await compile(swiftc: swiftc, source: sourceURL, binary: binary)
-            let session = try LLDBDAPSession.make(adapterPath: adapterPath, workingDirectory: root)
+            try await compile(source: sourceURL, binary: binary)
+            let session = try DAPClient.make(adapterPath: adapterPath, workingDirectory: root)
             defer { session.stop() }
             try await session.initialize()
             let stopped = try await session.runUntilStop(
@@ -80,7 +76,8 @@ enum LLDBDAPSpike {
             }
             try await session.stepOver(threadID: threadID)
             report.stepped = true
-            report.evaluated = try await session.evaluate("answer", frameID: frame.id)
+            let stepped = try await session.topFrame(threadID: threadID)
+            report.evaluated = try await session.evaluate("answer", frameID: stepped.id)
             try await session.disconnect()
         } catch {
             report.failure = String(describing: error)
@@ -117,10 +114,16 @@ enum LLDBDAPSpike {
         return path
     }
 
-    private static func compile(swiftc: String, source: URL, binary: URL) async throws {
+    /// Compiles `source` with debug info. Tests use this so they do not link SubprocessKit themselves.
+    static func compileExecutable(source: URL, binary: URL) async throws {
+        try await compile(source: source, binary: binary)
+    }
+
+    /// `xcrun --sdk macosx` selects the SDK. A bare `swiftc` path misses it and cannot load the stdlib.
+    private static func compile(source: URL, binary: URL) async throws {
         var request = SubprocessRequest(
-            executable: swiftc,
-            arguments: ["-g", "-Onone", "-o", binary.path, source.path]
+            executable: "/usr/bin/xcrun",
+            arguments: ["--sdk", "macosx", "swiftc", "-g", "-Onone", "-o", binary.path, source.path]
         )
         request.stdoutCapture = .bounded(head: 8_000, tail: 2_000)
         request.stderrCapture = .bounded(head: 8_000, tail: 4_000)
@@ -146,9 +149,15 @@ enum LLDBDAPSpikeError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-/// One Content-Length session with `lldb-dap`. Messages that arrive before a waiter are queued.
-private final class LLDBDAPSession: @unchecked Sendable {
-    private let handle: SubprocessHandle
+protocol DAPTransport: AnyObject, Sendable {
+    func write(_ data: Data)
+    func stop()
+    var isFinished: Bool { get }
+}
+
+/// One Content-Length session. `lldb-dap` is a subprocess; js-debug is a TCP socket.
+final class DAPClient: @unchecked Sendable {
+    private let transport: any DAPTransport
     private let lock = NSLock()
     private var buffer = Data()
     private var nextSeq = 1
@@ -157,7 +166,7 @@ private final class LLDBDAPSession: @unchecked Sendable {
     private var stderr = Data()
     private var trace: [String] = []
 
-    static func make(adapterPath: String, workingDirectory: URL) throws -> LLDBDAPSession {
+    static func make(adapterPath: String, workingDirectory: URL) throws -> DAPClient {
         let box = CallbackBox()
         var request = SubprocessRequest(executable: adapterPath)
         request.standardInput = .interactive
@@ -170,19 +179,32 @@ private final class LLDBDAPSession: @unchecked Sendable {
         let handle = try SubprocessRunner.start(request) { data, source in
             box.accept(data, source: source)
         }
-        let session = LLDBDAPSession(handle: handle)
+        let session = DAPClient(transport: ProcessDAPTransport(handle: handle))
         box.setHandler { [weak session] data, source in
             session?.accept(data, source: source)
         }
         return session
     }
 
-    private init(handle: SubprocessHandle) {
-        self.handle = handle
+    /// A session on a TCP socket. js-debug's `dapDebugServer.js` listens, it does not speak on stdio.
+    static func connect(host: String, port: UInt16) throws -> DAPClient {
+        let box = CallbackBox()
+        let transport = try SocketDAPTransport.connect(host: host, port: port) { data in
+            box.accept(data, source: .stdout)
+        }
+        let session = DAPClient(transport: transport)
+        box.setHandler { [weak session] data, source in
+            session?.accept(data, source: source)
+        }
+        return session
+    }
+
+    private init(transport: any DAPTransport) {
+        self.transport = transport
     }
 
     func stop() {
-        handle.terminate()
+        transport.stop()
     }
 
     func initialize() async throws {
@@ -196,34 +218,40 @@ private final class LLDBDAPSession: @unchecked Sendable {
             "supportsVariableType": true,
             "supportsRunInTerminalRequest": false
         ], seconds: 20)
-        // LLVM 21's lldb-dap answers initialize and does not send `initialized`.
-        _ = try? await event("initialized", seconds: 0.5)
     }
 
-    /// Writes launch, the breakpoint, and configurationDone before waiting, so a launch
-    /// handler that blocks still has the later requests sitting in the pipe.
-    func runUntilStop(program: URL, cwd: URL, file: URL, line: Int) async throws -> Stop {
+    /// LLVM 21's lldb-dap answers `initialize` and sends `initialized` only after `launch`.
+    /// `configurationDone` before `launch` fails. The process is stopped on entry (a `SIGSTOP`
+    /// reported as `exception`) so the breakpoint is bound before `continue`; a three-line
+    /// program otherwise runs to exit while Swift modules are still loading.
+    fileprivate func runUntilStop(program: URL, cwd: URL, file: URL, line: Int) async throws -> Stop {
         let launchSeq = send(command: "launch", arguments: [
             "program": program.path,
             "cwd": cwd.path,
-            "stopOnEntry": false,
+            "stopOnEntry": true,
             "args": [String]()
         ])
-        let breakSeq = send(command: "setBreakpoints", arguments: [
+        _ = try await event("initialized", seconds: 10)
+        let breakpoints = try await request("setBreakpoints", [
             "source": ["path": file.path],
             "breakpoints": [["line": line]]
-        ])
-        let doneSeq = send(command: "configurationDone", arguments: [:])
-        let stopped = try await event("stopped", seconds: 12)
-        let breakpoints = try await finish(breakSeq, command: "setBreakpoints", seconds: 5)
+        ], seconds: 10)
         let verified = (breakpoints.body?.array("breakpoints") ?? []).contains { $0.bool("verified") == true }
         guard verified else { throw LLDBDAPSpikeError.failed("the breakpoint on line \(line) was not verified") }
-        _ = try await finish(doneSeq, command: "configurationDone", seconds: 5)
+        let doneSeq = send(command: "configurationDone", arguments: [:])
+        let entry = try await event("stopped", seconds: 15)
+        _ = try await finish(doneSeq, command: "configurationDone", seconds: 10)
         _ = try await finish(launchSeq, command: "launch", seconds: 5)
+        guard let threadID = entry.body?.int("threadId") else {
+            throw LLDBDAPSpikeError.failed("entry stop had no thread id. \(debugDump())")
+        }
+        let continueSeq = send(command: "continue", arguments: ["threadId": threadID])
+        let stopped = try await event("stopped", seconds: 20)
+        _ = try await finish(continueSeq, command: "continue", seconds: 10)
         return Stop(reason: stopped.body?.string("reason"), threadID: stopped.body?.int("threadId"))
     }
 
-    func topFrame(threadID: Int) async throws -> Frame {
+    fileprivate func topFrame(threadID: Int) async throws -> Frame {
         let response = try await request("stackTrace", [
             "threadId": threadID,
             "startFrame": 0,
@@ -266,12 +294,12 @@ private final class LLDBDAPSession: @unchecked Sendable {
         _ = try await request("disconnect", ["terminateDebuggee": true], seconds: 10)
     }
 
-    private func request(_ command: String, _ arguments: [String: Any], seconds: Double) async throws -> DAPValue {
+    func request(_ command: String, _ arguments: [String: Any], seconds: Double) async throws -> DAPValue {
         let seq = send(command: command, arguments: arguments)
         return try await finish(seq, command: command, seconds: seconds)
     }
 
-    private func finish(_ seq: Int, command: String, seconds: Double) async throws -> DAPValue {
+    func finish(_ seq: Int, command: String, seconds: Double) async throws -> DAPValue {
         let response = try await receive(seconds: seconds, label: command) { $0.isResponse(seq) }
         if response.bool("success") == false {
             throw LLDBDAPSpikeError.failed("\(command) failed: \(response.string("message") ?? command). \(stderrText)")
@@ -279,7 +307,7 @@ private final class LLDBDAPSession: @unchecked Sendable {
         return response
     }
 
-    private func event(_ name: String, seconds: Double) async throws -> DAPValue {
+    func event(_ name: String, seconds: Double) async throws -> DAPValue {
         try await receive(seconds: seconds, label: name) { $0.isEvent(name) }
     }
 
@@ -297,7 +325,48 @@ private final class LLDBDAPSession: @unchecked Sendable {
         return "trace=\(traced) leftover=\(leftover) stderr=\(errors)"
     }
 
-    private func send(command: String, arguments: [String: Any]) -> Int {
+    /// The next DAP event, including ones that arrived while a request was in flight.
+    func nextEvent(seconds: Double) async throws -> DAPValue {
+        try await receive(seconds: seconds, label: "event") { value in
+            guard case .object(let fields) = value else { return false }
+            if case .string("event") = fields["type"] { return true }
+            return false
+        }
+    }
+
+    var adapterIsFinished: Bool { transport.isFinished }
+
+    /// Answers a reverse request, such as js-debug's `startDebugging`.
+    func respond(requestSeq: Int, command: String) {
+        let seq: Int = lock.withLock {
+            let value = nextSeq
+            nextSeq += 1
+            return value
+        }
+        let payload: [String: Any] = [
+            "seq": seq,
+            "type": "response",
+            "request_seq": requestSeq,
+            "success": true,
+            "command": command
+        ]
+        writePayload(payload)
+    }
+
+    func reverseRequest(_ command: String, seconds: Double) async throws -> DAPValue {
+        try await receive(seconds: seconds, label: command) { value in
+            guard case .object(let fields) = value,
+                  case .string("request") = fields["type"],
+                  case .string(let name) = fields["command"] else { return false }
+            return name == command
+        }
+    }
+
+    func nextMessage(seconds: Double) async throws -> DAPValue {
+        try await receive(seconds: seconds, label: "message") { _ in true }
+    }
+
+    func send(command: String, arguments: [String: Any]) -> Int {
         let seq: Int = lock.withLock {
             let value = nextSeq
             nextSeq += 1
@@ -309,11 +378,15 @@ private final class LLDBDAPSession: @unchecked Sendable {
             "command": command,
             "arguments": arguments
         ]
-        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return seq }
+        writePayload(payload)
+        return seq
+    }
+
+    private func writePayload(_ payload: [String: Any]) {
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
         var frame = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         frame.append(body)
-        handle.write(frame)
-        return seq
+        transport.write(frame)
     }
 
     private func receive(
@@ -513,7 +586,7 @@ private final class ContinuationSlot: @unchecked Sendable {
     }
 }
 
-private enum DAPValue: Sendable {
+enum DAPValue: Sendable {
     case null
     case bool(Bool)
     case int(Int)
@@ -542,6 +615,23 @@ private enum DAPValue: Sendable {
             self = .object(value.mapValues(DAPValue.init))
         } else {
             self = .null
+        }
+    }
+
+    func object(_ key: String) -> DAPValue? {
+        guard case .object(let fields) = self else { return nil }
+        return fields[key]
+    }
+
+    func jsonObject() -> Any {
+        switch self {
+        case .null: NSNull()
+        case .bool(let value): value
+        case .int(let value): value
+        case .double(let value): value
+        case .string(let value): value
+        case .array(let values): values.map { $0.jsonObject() }
+        case .object(let fields): fields.mapValues { $0.jsonObject() }
         }
     }
 
@@ -594,5 +684,117 @@ private enum DAPValue: Sendable {
         let type = string("type") ?? "?"
         let name = string("command") ?? string("event") ?? ""
         return "\(type) \(name)"
+    }
+}
+
+private final class ProcessDAPTransport: DAPTransport, @unchecked Sendable {
+    private let handle: SubprocessHandle
+
+    init(handle: SubprocessHandle) {
+        self.handle = handle
+    }
+
+    func write(_ data: Data) { handle.write(data) }
+    func stop() { handle.terminate() }
+    var isFinished: Bool { handle.isFinished }
+}
+
+private final class SocketDAPTransport: DAPTransport, @unchecked Sendable {
+    private let fd: Int32
+    private let source: DispatchSourceRead
+    private let lock = NSLock()
+    private var finished = false
+
+    static func connect(host: String, port: UInt16, onRead: @escaping @Sendable (Data) -> Void) throws -> SocketDAPTransport {
+        let fd = try openSocket(host: host, port: port)
+        let transport = SocketDAPTransport(fd: fd, onRead: onRead)
+        return transport
+    }
+
+    private init(fd: Int32, onRead: @escaping @Sendable (Data) -> Void) {
+        self.fd = fd
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "umbra.dap.socket"))
+        self.source = source
+        source.setEventHandler { [weak self] in
+            var buffer = [UInt8](repeating: 0, count: 65_536)
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count > 0 {
+                onRead(Data(buffer.prefix(count)))
+            } else if count == 0 {
+                self?.source.cancel()
+            }
+        }
+        source.setCancelHandler { [weak self] in
+            self?.markFinished()
+            close(fd)
+        }
+        source.resume()
+    }
+
+    func write(_ data: Data) {
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var sent = 0
+            while sent < raw.count {
+                let count = Darwin.write(fd, base.advanced(by: sent), raw.count - sent)
+                if count > 0 { sent += count; continue }
+                if errno == EINTR { continue }
+                return
+            }
+        }
+    }
+
+    func stop() {
+        shutdown(fd, SHUT_RDWR)
+        source.cancel()
+    }
+
+    var isFinished: Bool { lock.withLock { finished } }
+
+    private func markFinished() {
+        lock.withLock { finished = true }
+    }
+
+    private static func openSocket(host: String, port: UInt16) throws -> Int32 {
+        let ipv6 = host.contains(":")
+        let fd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw LLDBDAPSpikeError.failed("could not open a socket") }
+        var result: Int32 = -1
+        if ipv6 {
+            var address = sockaddr_in6()
+            address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            address.sin6_family = sa_family_t(AF_INET6)
+            address.sin6_port = port.bigEndian
+            guard host.withCString({ inet_pton(AF_INET6, $0, &address.sin6_addr) }) == 1 else {
+                close(fd)
+                throw LLDBDAPSpikeError.failed("could not read the debug server address \(host)")
+            }
+            result = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                }
+            }
+        } else {
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
+                close(fd)
+                throw LLDBDAPSpikeError.failed("could not read the debug server address \(host)")
+            }
+            result = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        }
+        guard result == 0 else {
+            close(fd)
+            throw LLDBDAPSpikeError.failed("could not connect to the debug server at \(host):\(port)")
+        }
+        let flags = fcntl(fd, F_GETFL)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        return fd
     }
 }

@@ -2,9 +2,7 @@
 
 ## Spike result (Oct 10 2026)
 
-Phase 8's `SourceFileIndex<Model>` is in `Sources/EditorIntelligence/Indexing/SourceFileIndex.swift`. Phase 9 did not add `IDEDebugSession`.
-
-`lldb-dap` is `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` (LLVM 21.0.0, liblldb 2103.0.34.103). Through SubprocessKit, `initialize` succeeds and no `initialized` event follows. `launch` (with the breakpoint and `configurationDone` already queued) never returns a message, and `lldb` `run` hangs in debugserver the same way. The detail is in `docs/LANGUAGE_PARITY_PLAN.md` under "lldb-dap spike".
+Phase 8's `SourceFileIndex<Model>` is in `Sources/EditorIntelligence/Indexing/SourceFileIndex.swift`. Phase 9 added `IDEDebugSession`, `DAPDebugSession` and `JavaDebugSessionBridge`. The lldb-dap spike passes, and js-debug debugs a JavaScript or TypeScript file through the same session. Phase 10 stays gated. The detail is in `docs/LANGUAGE_PARITY_PLAN.md` under "lldb-dap spike".
 
 Read `docs/LANGUAGE_PARITY_PLAN.md` (the status block, then phases 8 and 9) and `docs/LANGUAGE_PARITY_HANDOFF.md`. Phases 0–7 are done. Do not redo them. Phase 10 stays gated. Do not start phase 9's types before the lldb-dap spike below has a written result.
 
@@ -55,7 +53,7 @@ Write the result down (a short section in `docs/LANGUAGE_PARITY_PLAN.md` or a no
 
 Then a thin wrapper so `JavaDebugSession` conforms. The Debug panel today is built on `JavaDebugStackFrame`, `JavaDebugThread`, `JavaDebugValue`, and `JavaDebugSessionState` (`Example/Umbra/JavaDebugSession.swift`, `IDEWorkspace+Debugger.swift`). Shape the protocol from what the Swift session actually did, then adapt Java to it. Java's debugger tests stay unchanged.
 
-js-debug is plan item T7, after this phase. It is not part of the spike and not part of the first `DAPDebugSession` landing.
+js-debug (T7) landed on `DAPDebugSession` after the lldb-dap spike: `node dapDebugServer.js`, then the `startDebugging` child connection. It is gated on `UMBRA_JS_DEBUG=1` and `UMBRA_JS_DEBUG_PATH`.
 
 ### Accept
 

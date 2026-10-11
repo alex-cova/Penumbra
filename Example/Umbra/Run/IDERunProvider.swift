@@ -112,7 +112,7 @@ struct IDERunRequest {
 
 /// What a language adds so Run, Debug, Run in Context and Stop work on its files. Supplies the
 /// runnable places in a document and the process launch; the sessions, the Run tool window and the
-/// toolbar belong to Umbra. Debugging stays with the one language that has a debugger (Java).
+/// toolbar belong to Umbra. Java debugs through JDI. Swift debugs an executable through `lldb-dap`.
 ///
 /// One instance per window, made by the language module (`IDELanguageModule.makeRunProvider`). A
 /// provider holds its window weakly, so it never keeps the window alive.

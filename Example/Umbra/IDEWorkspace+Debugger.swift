@@ -332,10 +332,15 @@ extension IDEWorkspace {
     /// Sends the breakpoints to a running debug session: added, changed, removed and disabled
     /// ones reach the program without restarting it.
     func syncBreakpointsToDebugger() {
-        guard debugSession.isActive else { return }
-        let breakpoints = breakpoints
-        let muted = breakpointsMuted
-        Task { await debugSession.sync(breakpoints, muted: muted) }
+        if debugSession.isActive {
+            let breakpoints = breakpoints
+            let muted = breakpointsMuted
+            Task { await debugSession.sync(breakpoints, muted: muted) }
+        }
+        if dapDebugSession.isActive {
+            let lines = enabledLineBreakpointsByPath()
+            Task { await dapDebugSession.setLineBreakpoints(lines) }
+        }
     }
 
     /// View Breakpoints (⇧⌘F8): the Breakpoints tab, on the caret line's breakpoint when it has one.
@@ -453,6 +458,7 @@ extension IDEWorkspace {
                 return
             }
             gradleDebugActive = true
+            dapDebugSession.retire()
             configureDebugSession()
             testResults.beginRun(label: "Debugging \(title)…", scope: scope, debug: true)
             let roots = debugSourceRoots()
@@ -652,6 +658,11 @@ extension IDEWorkspace {
     /// The selected frame's file and line while the program is stopped. Frames only, not the
     /// session state: a teardown reports empty frames before the state changes.
     private var executionPoint: (file: URL, line: Int)? {
+        if dapDebugSession.isStopped,
+           let frame = dapDebugSession.frames.first(where: { $0.id == dapDebugSession.selectedFrameID }),
+           let file = frame.file {
+            return (file, frame.line)
+        }
         guard isDebuggerStopped,
               let frame = debugSession.stackFrames.first(where: { $0.index == debugSession.selectedFrameIndex }),
               frame.filePath.hasPrefix("/") else { return nil }
@@ -865,6 +876,7 @@ extension IDEWorkspace {
                     return
                 }
                 gradleDebugActive = true
+                dapDebugSession.retire()
                 configureDebugSession()
                 let roots = debugSourceRoots()
                 Task {
@@ -931,6 +943,7 @@ extension IDEWorkspace {
                 refreshLastRunConfiguration()
                 let breakpoints = breakpointStore.breakpoints(forProject: root)
                 showBottomTab(.debug)
+                dapDebugSession.retire()
                 configureDebugSession()
                 await debugSession.start(launch: launch, breakpoints: breakpoints, muted: breakpointsMuted, sourceRoots: debugSourceRoots())
             }
