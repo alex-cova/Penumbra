@@ -47,7 +47,13 @@ final class LineControllerEvictionTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         textView.setState(TextViewState(text: lines.joined(separator: "\n")))
         textView.layoutIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        // The content size is applied on a later main-queue turn. A fixed 0.2 s wait was too short
+        // when the whole suite runs; wait for the size itself instead.
+        let deadline = Date().addingTimeInterval(5)
+        while textView.contentSize.height <= textView.bounds.height * 50, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            textView.layoutIfNeeded()
+        }
         textView.selectedRange = NSRange(location: 2, length: 0)
         textView.layoutIfNeeded()
         let contentWidth = textView.contentSize.width
