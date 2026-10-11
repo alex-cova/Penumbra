@@ -2731,7 +2731,7 @@ private extension TextView {
                         self.contentSize = preferred
                         self.contentOffset = oldContentOffset
                     }
-                    self.clampVerticalContentOffsetToContent()
+                    self.clampContentOffsetToContent(includingHorizontal: !isScrolling)
                     self.setNeedsLayout()
                 }
             }
@@ -2741,13 +2741,20 @@ private extension TextView {
     /// Pulls `contentOffset` back inside the scrollable range once the size is known. A caret
     /// reveal made while the view is still short (a restored session applies its selection before
     /// the window has its final height) scrolls the last line to the top; nothing moved it back
-    /// when the view grew, so a short file opened blank until the first scroll.
-    private func clampVerticalContentOffsetToContent() {
+    /// when the view grew, so a short file opened blank until the first scroll. The same happens
+    /// sideways: a reveal in a view narrower than the gutter plus a few characters (a pane before
+    /// its first real layout) scrolls the text under the gutter, where it stayed once every line
+    /// fit. `includingHorizontal` is false during a scroll gesture, so a horizontal bounce is not
+    /// cut short; the content width only shrinks when the longest line does.
+    private func clampContentOffsetToContent(includingHorizontal: Bool) {
+        let clampedX = includingHorizontal
+            ? min(max(contentOffset.x, minimumContentOffset.x), maximumContentOffset.x)
+            : contentOffset.x
         let clampedY = min(max(contentOffset.y, minimumContentOffset.y), maximumContentOffset.y)
-        guard clampedY != contentOffset.y else {
+        guard clampedX != contentOffset.x || clampedY != contentOffset.y else {
             return
         }
-        contentOffset = CGPoint(x: contentOffset.x, y: clampedY)
+        contentOffset = CGPoint(x: clampedX, y: clampedY)
     }
 
     private func syncContentSizeIfNeeded() {
