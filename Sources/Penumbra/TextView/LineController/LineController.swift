@@ -435,9 +435,11 @@ private extension LineController {
                 // Highlighters deliver on the main queue. A `Task` hop here queued every visible
                 // line's completion behind the next runloop turn (~100 ms under a scroll).
                 MainActor.assumeIsolated {
-                    if case .failure(TreeSitterSyntaxHighlighterError.syntaxTreeNotReady) = result, let self {
+                    if case .failure(let error as TreeSitterSyntaxHighlighterError) = result,
+                       error == .syntaxTreeNotReady || error == .textChanged, let self {
                         // The parse that made the tree unavailable may already have run its
-                        // layout, which skipped this line while the query was in flight.
+                        // layout, which skipped this line while the query was in flight. A result
+                        // dropped because the text moved needs the same retry.
                         if self.syntaxHighlighter?.canHighlight == true {
                             self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
                         }

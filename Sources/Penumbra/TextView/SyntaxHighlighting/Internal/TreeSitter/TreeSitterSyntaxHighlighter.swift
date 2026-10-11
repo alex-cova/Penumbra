@@ -5,6 +5,8 @@ enum TreeSitterSyntaxHighlighterError: LocalizedError {
     case cancelled
     case operationDeallocated
     case syntaxTreeNotReady
+    /// The buffer changed after the request was made, so the line's byte range no longer matches it.
+    case textChanged
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +16,8 @@ enum TreeSitterSyntaxHighlighterError: LocalizedError {
             return "The operation was deallocated"
         case .syntaxTreeNotReady:
             return "The syntax tree was being reparsed"
+        case .textChanged:
+            return "The text changed while the line was being highlighted"
         }
     }
 }
@@ -107,6 +111,10 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     }
 
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback) {
+        // `input.byteRange` is where the line was now. An edit elsewhere (an undo above the line)
+        // moves it without changing the line's text, so nothing cancels this request; its tokens
+        // would then be placed against the old range and land shifted. Checked again on main.
+        let generation = stringView.contentGeneration
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation, weak self] in
             guard let operation = operation, let self = self else {
@@ -131,7 +139,9 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
             let tokens = self.tokens(for: captures, localTo: input.byteRange)
             if !operation.isCancelled {
                 DispatchQueue.main.async {
-                    if !operation.isCancelled {
+                    if self.stringView.contentGeneration != generation {
+                        completion(.failure(TreeSitterSyntaxHighlighterError.textChanged))
+                    } else if !operation.isCancelled {
                         self.lastHighlightChangedAttributes = self.applyHighlights(tokens, to: input)
                         completion(.success(()))
                     } else {
