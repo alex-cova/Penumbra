@@ -163,7 +163,13 @@ public final class IDEWorkspace {
     /// Bumped by the Run tab's "Scroll to End" so the console jumps to the bottom.
     var runScrollToEndRequest = 0
     private var nameIndexOverlayTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
-    private let projectWatcher = IDEProjectWatcher()
+    /// Umbra's one file-watching engine for this window; everything that reacts to disk changes
+    /// subscribes to its batches.
+    let projectWatcher = IDEProjectWatcher()
+    /// Open text buffers against their files: reload, banner, save conflicts.
+    let diskSync = IDEOpenDocumentDiskSync()
+    /// Asks what to do when a save would write over a newer file. Tests replace it.
+    @ObservationIgnored var saveConflictResolver: @MainActor (WorkbenchDocument) -> SaveConflictChoice = IDEWorkspace.askAboutSaveConflict
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
     /// Revisions of the project's files: saves, opens, agent writes.
@@ -636,6 +642,8 @@ public final class IDEWorkspace {
 
     func bootstrap() {
         applyLaunchConfiguration()
+        configureDiskSync()
+        subscribeToProjectWatcher()
         configureDebugSession()
         intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
@@ -1227,6 +1235,7 @@ public final class IDEWorkspace {
             guard panel.runModal() == .OK, let url = panel.url else { return false }
             destination = url
         }
+        if destination == document.url, !(await confirmOverwriteIfDiskChanged(document)) { return false }
         if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
         do {
             _ = try await document.save(from: textView, to: destination)
@@ -1266,6 +1275,7 @@ public final class IDEWorkspace {
         guard let (_, document) = paneAndDocument(matching: url), document.isDirty, document.contentKind == .text,
               case .live(let textView) = await editTarget(for: url)
         else { return false }
+        guard await confirmOverwriteIfDiskChanged(document, interactive: false) else { return false }
         do {
             _ = try await document.save(from: textView, to: url)
             localHistory.recordSaved(url)
@@ -2421,31 +2431,7 @@ public final class IDEWorkspace {
                     continue
                 }
                 guard document.contentKind == .text, !document.isDirty || discarded else { continue }
-                let showing = workbench.panes.filter { $0.selectedDocument === document }
-                if showing.isEmpty {
-                    do {
-                        let loaded = try await loadDocument(from: url, preferring: document.encoding)
-                        installReloaded(loaded, onto: document)
-                        document.contentGeneration &+= 1
-                    } catch {
-                        continue
-                    }
-                } else {
-                    var bumped = false
-                    for pane in showing {
-                        do {
-                            let loaded = try await loadDocument(from: url, preferring: document.encoding)
-                            installReloaded(loaded, onto: document)
-                            if !bumped {
-                                document.contentGeneration &+= 1
-                                bumped = true
-                            }
-                            showDocument(in: pane, host: host(for: pane.id))
-                        } catch {
-                            continue
-                        }
-                    }
-                }
+                try? await reloadDocumentFromDisk(document)
             }
             for (pane, document) in missing {
                 guard workbench.panes.contains(where: { $0.id == pane.id }),
@@ -3597,7 +3583,7 @@ public final class IDEWorkspace {
     func reloadTabFromDisk(_ id: UUID, in paneID: UUID, encoding: TextFileEncoding? = nil) {
         guard let pane = workbench.layout.findPane(id: paneID),
               let document = pane.documents.first(where: { $0.id == id }),
-              let url = document.url else { return }
+              document.url != nil else { return }
         if document.contentKind == .binary {
             if document.isDirty {
                 let alert = NSAlert()
@@ -3627,15 +3613,7 @@ public final class IDEWorkspace {
         }
         Task {
             do {
-                let loaded = try await loadDocument(from: url, encoding: encoding, preferring: document.encoding)
-                guard workbench.panes.contains(where: { $0.documents.contains { $0 === document } }) else { return }
-                installReloaded(loaded, onto: document)
-                document.contentGeneration &+= 1
-                for showing in workbench.panes where showing.selectedDocument === document {
-                    showDocument(in: showing, host: host(for: showing.id))
-                }
-                if workbench.activePane.selectedDocument === document { statusEncoding = document.encoding }
-                refreshPresentation()
+                try await reloadDocumentFromDisk(document, encoding: encoding)
             } catch DocumentLoadError.invalidEncoding where encoding != nil {
                 presentError(IDEEncodingError.cannotDecode(document.displayName, encoding?.displayName ?? ""))
             } catch {
@@ -4235,6 +4213,8 @@ public final class IDEWorkspace {
         case .showAgentChat(let id):
             agent.select(id)
             agent.showPanel()
+        case .openFile(let path):
+            Task { await openDocument(from: URL(fileURLWithPath: path)) }
         case nil: break
         }
     }
@@ -4303,7 +4283,10 @@ public final class IDEWorkspace {
     /// A save drops that file's build-output problems (the in-editor check takes over) and tells
     /// every language service. Java recompiles the open Java files from ``documentsDidSave``.
     private func noteDocumentSaved(_ url: URL?) {
-        if let url { problems.clearBuildDiagnostics(for: url) }
+        if let url {
+            problems.clearBuildDiagnostics(for: url)
+            diskSync.noteSaved(path: url.standardizedFileURL.path)
+        }
         languages.documentsDidSave(url.map { [$0] } ?? [])
     }
 
@@ -4864,6 +4847,31 @@ public final class IDEWorkspace {
         projectSystems.pendingReload?.dismissConfigurationChanges()
     }
 
+    /// Everything in the window that reacts to disk changes, as one subscriber list of the one
+    /// watcher. Installed at bootstrap (a window with no folder still watches its open files) and
+    /// again whenever the folder changes.
+    private func subscribeToProjectWatcher() {
+        projectWatcher.onBatch = [{ [weak self] batch in
+            guard let self else { return }
+            // Open files: text tabs and hex tabs, inside the folder or not.
+            let openFiles = batch.paths.union(batch.openFilePaths)
+            self.diskSync.handle(paths: openFiles)
+            self.noteExternalChange(of: Array(openFiles))
+            // The rest is about the folder; a batch of open files outside it leaves it alone.
+            guard !batch.paths.isEmpty || batch.gitMetadataChanged else { return }
+            self.project.applyChanges(in: batch.affectedDirectories)
+            self.localHistory.recordExternalChanges(batch.paths)
+            self.gitStatus.refresh()
+            self.fileIndexer.handle(batch)
+            self.languages.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
+            self.projectSystems.filesDidChange(batch.paths)
+            // A teammate's change (a pull) or a hand edit of a shared run configuration.
+            if batch.paths.contains(where: { $0.contains("/\(JavaProjectRunConfigurationFolder.relativePath)/") }) {
+                self.refreshLastRunConfiguration()
+            }
+        }]
+    }
+
     private func applyProjectRoot(_ url: URL?) {
         // One held access per window, released when the project changes or the window closes.
         projectAccess.begin(url)
@@ -4871,25 +4879,9 @@ public final class IDEWorkspace {
         localHistory.setRoot(url)
         gitStatus.setRoot(url)
         fileIndexer.setRoot(url)
-        projectWatcher.onBatch = [{ [weak self] batch in
-            guard let self else { return }
-            self.project.applyChanges(in: batch.affectedDirectories)
-            self.localHistory.recordExternalChanges(batch.paths)
-            self.gitStatus.refresh()
-            self.fileIndexer.handle(batch)
-            self.languages.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
-            self.noteExternalChange(of: Array(batch.paths))
-            // A teammate's change (a pull) or a hand edit of a shared run configuration.
-            if batch.paths.contains(where: { $0.contains("/\(JavaProjectRunConfigurationFolder.relativePath)/") }) {
-                self.refreshLastRunConfiguration()
-            }
-        }]
-        if let url {
-            recordRecentProject(url)
-            projectWatcher.start(root: url)
-        } else {
-            projectWatcher.stop()
-        }
+        subscribeToProjectWatcher()
+        if let url { recordRecentProject(url) }
+        projectWatcher.setRoot(url)
         syncTerminalWorkingDirectory()
         // The project systems first: a language reads what they decided (Java skips its whole-tree
         // index when Gradle starts from a cached model). Both are synchronous, so what follows sees them.
@@ -4954,6 +4946,7 @@ public final class IDEWorkspace {
         tabsByPane = tabs
         let openPaths = Set(workbench.panes.flatMap(\.documents).compactMap { $0.url?.standardizedFileURL.path })
         if openPaths != openDocumentPaths { openDocumentPaths = openPaths }
+        syncOpenFileRegistrations(openPaths: openPaths)
         autoRevealActiveDocumentIfNeeded()
         let activeHost = hostCache.peek(workbench.activePaneID)
         isMarkdownPreviewVisible = activeHost?.markdownPreviewController.isVisible ?? false

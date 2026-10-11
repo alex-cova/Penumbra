@@ -406,6 +406,8 @@ struct IDEEditorPaneView: View {
             IDEEditorTabsBar(paneID: paneID)
                 .opacity(workspace.chromeOpacity)
 
+            IDEExternalChangeBanner(paneID: paneID)
+
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
                 .overlay {
                     if workspace.activePaneID != paneID {

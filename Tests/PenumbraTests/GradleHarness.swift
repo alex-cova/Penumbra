@@ -38,6 +38,8 @@ final class GradleHarness {
     private let java: IDEJavaSupport
     private let trustStore: GradleTrustStore
     private let cacheRoot: URL
+    /// The window's one watcher, feeding the system as `IDEWorkspace` does.
+    private let watcher = IDEProjectWatcher()
 
     private(set) var asked: [String] = []
     private(set) var outcomes: [Outcome] = []
@@ -73,12 +75,14 @@ final class GradleHarness {
             }
         }
         gradle.environment.syncFailed = { [weak self] in self?.failures += 1 }
+        watcher.onBatch = [{ [weak gradle] batch in gradle?.filesDidChange(batch.paths) }]
         gradle.environment.tasksFinished = { [weak self] report in
             self?.finishedTasks.append(FinishedTasks(tasks: report.tasks, root: report.root, exitCode: report.exitCode))
         }
     }
 
     func teardown() {
+        watcher.stop()
         gradle.stop()
         java.teardown()
     }
@@ -87,6 +91,7 @@ final class GradleHarness {
 
     /// The order `IDEWorkspace` uses: the project system first, then the language.
     func setRoot(_ url: URL?) {
+        watcher.setRoot(url)
         gradle.projectDidChange(root: url)
         java.projectDidChange(root: url)
     }

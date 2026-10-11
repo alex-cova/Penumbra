@@ -74,6 +74,7 @@ public final class IDEPreferences {
         static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
         static let highlightsCurrentScope = "com.umbra.editor.highlightsCurrentScope"
         static let showStickyLines = "com.umbra.editor.showStickyLines"
+        static let externalChangePolicy = "com.umbra.editor.externalChangePolicy"
         static let maximumStickyLines = "com.umbra.editor.maximumStickyLines"
         static let runTemporaryConfigurationLimit = "com.umbra.editor.runTemporaryConfigurationLimit"
         static let stickyLinesDisabledLanguages = "com.umbra.editor.stickyLinesDisabledLanguages"
@@ -283,6 +284,12 @@ public final class IDEPreferences {
     /// A bar in the fold ribbon beside the block the caret is in.
     var highlightsCurrentScope: Bool {
         didSet { UserDefaults.standard.set(highlightsCurrentScope, forKey: Keys.highlightsCurrentScope) }
+    }
+
+    /// What a text tab does when its file changes on disk (Settings ▸ Editor ▸ External Changes).
+    /// Kept on this Mac.
+    var externalChangePolicy: IDEExternalChangePolicy {
+        didSet { UserDefaults.standard.set(externalChangePolicy.rawValue, forKey: Keys.externalChangePolicy) }
     }
 
     /// Pins the headers of the blocks around the first visible line (class, method, `if`, loop) to
@@ -666,6 +673,8 @@ public final class IDEPreferences {
         errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
         highlightsCurrentScope = defaults.object(forKey: Keys.highlightsCurrentScope) as? Bool ?? true
         showStickyLines = defaults.object(forKey: Keys.showStickyLines) as? Bool ?? true
+        externalChangePolicy = defaults.string(forKey: Keys.externalChangePolicy)
+            .flatMap(IDEExternalChangePolicy.init(rawValue:)) ?? .always
         maximumStickyLines = min(max(defaults.object(forKey: Keys.maximumStickyLines) as? Int ?? 5, 1), 10)
         let temporaryLimit = min(max(
             defaults.object(forKey: Keys.runTemporaryConfigurationLimit) as? Int ?? JavaRunConfigurationStore.defaultTemporaryLimit, 1

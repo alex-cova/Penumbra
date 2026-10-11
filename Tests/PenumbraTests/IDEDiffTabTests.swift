@@ -106,6 +106,52 @@ final class IDEDiffTabTests: XCTestCase {
         viewer.detach(session)
     }
 
+    /// The editable side was loaded, then someone else rewrote the file: saving asks first.
+    func testSavingTheEditableSideOverANewerFileAsks() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diff-tab-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("a.txt")
+        try "one\nTWO\nthree\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let viewer = IDEDiffViewerView(frame: CGRect(x: 0, y: 0, width: 900, height: 500))
+        let session = IDEDiffSession(
+            request: IDEDiffRequest(
+                left: IDEDiffSide(source: .text("one\ntwo\nthree\n"), title: "HEAD"),
+                right: IDEDiffSide(source: .workingTree(path: file.path), title: "Your Version"),
+                filePath: file.path,
+                title: "a.txt"
+            ),
+            siblings: []
+        )
+        session.loadContent = { source in
+            switch source {
+            case .text(let text): return .text(text)
+            case .workingTree(let path): return .text((try? String(contentsOfFile: path, encoding: .utf8)) ?? "")
+            case .revision: return .failed("no git")
+            }
+        }
+        var asked = 0
+        var answer = false
+        session.confirmOverwrite = { _ in asked += 1; return answer }
+        viewer.show(session, preferences: IDEPreferences.shared)
+        defer { viewer.detach(session) }
+        try await waitUntil { session.chunks.count == 1 }
+
+        viewer.applyLeftToRight(chunk: 0, append: false)
+        try "someone else\n".write(to: file, atomically: true, encoding: .utf8)
+        session.save()
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "someone else\n", "Cancel wrote anyway")
+        XCTAssertTrue(session.isRightDirty)
+
+        answer = true
+        session.save()
+        XCTAssertEqual(asked, 2)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "one\ntwo\nthree\n")
+        XCTAssertFalse(session.isRightDirty)
+    }
+
     func testMappingLinesAcrossAChange() async throws {
         let session = IDEDiffSession(request: request("a\nb\nc\nd\n", "a\nx\ny\nz\nc\nd\n"), siblings: [])
         session.loadContent = { source in

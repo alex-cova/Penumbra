@@ -157,6 +157,17 @@ struct IDEPreferencesEditorPane: View {
         }
 
         IDESettingsSection(
+            "External Changes",
+            footer: "When an open file changes on disk. Unsaved edits are never replaced without asking, and saving over a newer file always asks first."
+        ) {
+            IDESettingsPicker("Changed Files", selection: $preferences.externalChangePolicy) {
+                ForEach(IDEExternalChangePolicy.allCases) { policy in
+                    Text(policy.displayName).tag(policy)
+                }
+            }
+        }
+
+        IDESettingsSection(
             "Sticky Lines",
             footer: "While you scroll, the headers of the classes, methods and blocks around the top line stay pinned. Click one to jump to it; right-click for these settings."
         ) {
