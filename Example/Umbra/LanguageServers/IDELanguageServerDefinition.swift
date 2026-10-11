@@ -24,6 +24,8 @@ struct IDEServerDiscoveryContext: Sendable {
 struct IDELanguageServerDefinition: Sendable {
     var id: String
     var configuration: LSPLanguageConfiguration
+    /// When false for the opened folder, the host does not ask for trust, show status, or launch.
+    var isRelevantToProject: @Sendable (URL) -> Bool
     var discover: @Sendable (IDEServerDiscoveryContext) async -> IDEServerExecutable?
     var arguments: @Sendable (URL) -> [String]
     var initializationOptions: @Sendable (URL) -> Data?
@@ -32,6 +34,7 @@ struct IDELanguageServerDefinition: Sendable {
     init(
         id: String,
         configuration: LSPLanguageConfiguration,
+        isRelevantToProject: @escaping @Sendable (URL) -> Bool = { _ in true },
         discover: @escaping @Sendable (IDEServerDiscoveryContext) async -> IDEServerExecutable?,
         arguments: @escaping @Sendable (URL) -> [String] = { _ in [] },
         initializationOptions: @escaping @Sendable (URL) -> Data? = { _ in nil },
@@ -39,6 +42,7 @@ struct IDELanguageServerDefinition: Sendable {
     ) {
         self.id = id
         self.configuration = configuration
+        self.isRelevantToProject = isRelevantToProject
         self.discover = discover
         self.arguments = arguments
         self.initializationOptions = initializationOptions

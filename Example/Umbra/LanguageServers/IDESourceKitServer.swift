@@ -25,9 +25,15 @@ enum IDESourceKitServer {
                 enabledFeatures: features,
                 diagnosticSource: .sourceKitLSP
             ),
+            isRelevantToProject: isRelevantToProject,
             discover: { await executable(in: $0) },
             trustFile: "sourcekit-lsp-trust.json"
         )
+    }
+
+    /// A SwiftPM package at the project root, the same signal as ``IDESwiftPMProjectSystem``.
+    static func isRelevantToProject(root: URL) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent("Package.swift").path)
     }
 
     static func executable(in context: IDEServerDiscoveryContext) async -> IDEServerExecutable? {

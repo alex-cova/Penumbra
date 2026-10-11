@@ -33,6 +33,7 @@ enum IDETypeScriptServer {
                 enabledFeatures: features,
                 diagnosticSource: .typeScriptLSP
             ),
+            isRelevantToProject: isRelevantToProject,
             discover: { context in
                 guard let launch = launch(root: context.root) else { return nil }
                 return IDEServerExecutable(url: launch.executable, environment: context.environment)
@@ -42,7 +43,16 @@ enum IDETypeScriptServer {
         )
     }
 
+    /// Root `package.json` or a TypeScript/JavaScript config, aligned with ``IDENpmProjectSystem``.
+    static func isRelevantToProject(root: URL) -> Bool {
+        let names = ["package.json", "tsconfig.json", "jsconfig.json"]
+        return names.contains { name in
+            FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path)
+        }
+    }
+
     static func launch(root: URL) -> (executable: URL, arguments: [String])? {
+        guard isRelevantToProject(root: root) else { return nil }
         if let override = UserDefaults.standard.string(forKey: pathKey),
            FileManager.default.isExecutableFile(atPath: override) {
             return (URL(fileURLWithPath: override), ["--stdio"])

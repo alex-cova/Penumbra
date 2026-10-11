@@ -68,7 +68,7 @@ final class IDELanguageServerHost {
         guard let root, isEnabled else { return }
         let definitions = IDELanguageModules.all.flatMap(\.languageServers)
         for definition in definitions {
-            guard let box = connections[definition.id] else { continue }
+            guard definition.isRelevantToProject(root), let box = connections[definition.id] else { continue }
             Task { await self.launch(definition, connection: box, root: root, attempt: 0) }
         }
     }
@@ -95,6 +95,7 @@ final class IDELanguageServerHost {
     private func launch(
         _ definition: IDELanguageServerDefinition, connection: LSPConnectionBox, root: URL, attempt: Int
     ) async {
+        guard definition.isRelevantToProject(root) else { return }
         let token = generation
         if !isTrusted(definition, root: root) {
             let allowed = await requestTrust?(definition, root) ?? false
