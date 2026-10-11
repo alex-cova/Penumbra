@@ -1,19 +1,43 @@
 import CryptoKit
 import Foundation
 
+/// How to write one inspector row back over the bytes it decoded.
+public struct HexInspectorEdit: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable {
+        case signedInteger
+        case unsignedInteger
+        case float32
+        case float64
+    }
+
+    public var kind: Kind
+    public var width: Int
+    public var littleEndian: Bool
+
+    public init(kind: Kind, width: Int, littleEndian: Bool) {
+        self.kind = kind
+        self.width = width
+        self.littleEndian = littleEndian
+    }
+}
+
 public struct HexInspectorField: Sendable, Equatable {
     public var name: String
     public var text: String
     public var available: Bool
+    /// Set for integer and float rows that `HexInspector.encode` can write back.
+    public var edit: HexInspectorEdit?
 
-    public init(name: String, text: String, available: Bool) {
+    public init(name: String, text: String, available: Bool, edit: HexInspectorEdit? = nil) {
         self.name = name
         self.text = text
         self.available = available
+        self.edit = edit
     }
 }
 
 /// Interprets the bytes at the caret. Both byte orders are always present.
+/// Integer and float rows carry an edit descriptor; ``encode(_:edit:)`` turns a typed value back into bytes.
 public enum HexInspector {
     public static let notEnough = "not enough bytes"
 
@@ -24,17 +48,17 @@ public enum HexInspector {
         for width in [2, 4, 8] {
             let signedName = "Int\(width * 8)"
             let unsignedName = "UInt\(width * 8)"
-            rows.append(contentsOf: endianPair(bytes, name: signedName, width: width, littleFirst: littleEndianFirst) { ordered, little in
+            rows.append(contentsOf: endianPair(bytes, name: signedName, width: width, littleFirst: littleEndianFirst, editKind: .signedInteger) { ordered, little in
                 integer(ordered, name: "", width: width, signed: true, little: little).text
             })
-            rows.append(contentsOf: endianPair(bytes, name: unsignedName, width: width, littleFirst: littleEndianFirst) { ordered, little in
+            rows.append(contentsOf: endianPair(bytes, name: unsignedName, width: width, littleFirst: littleEndianFirst, editKind: .unsignedInteger) { ordered, little in
                 integer(ordered, name: "", width: width, signed: false, little: little).text
             })
         }
-        rows.append(contentsOf: endianPair(bytes, name: "Float", width: 4, littleFirst: littleEndianFirst) { ordered, little in
+        rows.append(contentsOf: endianPair(bytes, name: "Float", width: 4, littleFirst: littleEndianFirst, editKind: .float32) { ordered, little in
             floatText(ordered, little: little)
         })
-        rows.append(contentsOf: endianPair(bytes, name: "Double", width: 8, littleFirst: littleEndianFirst) { ordered, little in
+        rows.append(contentsOf: endianPair(bytes, name: "Double", width: 8, littleFirst: littleEndianFirst, editKind: .float64) { ordered, little in
             doubleText(ordered, little: little)
         })
         rows.append(character(bytes))
@@ -64,6 +88,7 @@ public enum HexInspector {
         name: String,
         width: Int,
         littleFirst: Bool,
+        editKind: HexInspectorEdit.Kind? = nil,
         value: ([UInt8], Bool) -> String
     ) -> [HexInspectorField] {
         let order: [Bool] = littleFirst ? [true, false] : [false, true]
@@ -73,7 +98,8 @@ public enum HexInspector {
                 return HexInspectorField(name: name + suffix, text: notEnough, available: false)
             }
             let slice = Array(bytes.prefix(width))
-            return HexInspectorField(name: name + suffix, text: value(slice, little), available: true)
+            let edit = editKind.map { HexInspectorEdit(kind: $0, width: width, littleEndian: little) }
+            return HexInspectorField(name: name + suffix, text: value(slice, little), available: true, edit: edit)
         }
     }
 
@@ -88,7 +114,105 @@ public enum HexInspector {
         } else {
             text = String(unsignedValue(slice, little: little))
         }
-        return HexInspectorField(name: name, text: text, available: true)
+        let kind: HexInspectorEdit.Kind = signed ? .signedInteger : .unsignedInteger
+        return HexInspectorField(
+            name: name,
+            text: text,
+            available: true,
+            edit: HexInspectorEdit(kind: kind, width: width, littleEndian: little)
+        )
+    }
+
+    /// Bytes to write for a typed inspector value. `nil` when the text is empty, not a number, or does not fit.
+    /// Decimal is the displayed form. `0x` and `0b` are the raw bit pattern. A float in hex is its IEEE-754 bits.
+    public static func encode(_ text: String, edit: HexInspectorEdit) -> [UInt8]? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, (1...8).contains(edit.width) else { return nil }
+        let raw: UInt64
+        switch edit.kind {
+        case .float32:
+            guard edit.width == 4, let bits = float32Bits(trimmed) else { return nil }
+            raw = bits
+        case .float64:
+            guard edit.width == 8, let bits = float64Bits(trimmed) else { return nil }
+            raw = bits
+        case .signedInteger:
+            guard let bits = integerBits(trimmed, signed: true, width: edit.width) else { return nil }
+            raw = bits
+        case .unsignedInteger:
+            guard let bits = integerBits(trimmed, signed: false, width: edit.width) else { return nil }
+            raw = bits
+        }
+        var out = [UInt8](repeating: 0, count: edit.width)
+        for index in 0..<edit.width {
+            let byte = UInt8(truncatingIfNeeded: raw >> UInt64(index * 8))
+            if edit.littleEndian {
+                out[index] = byte
+            } else {
+                out[edit.width - 1 - index] = byte
+            }
+        }
+        return out
+    }
+
+    private static func integerBits(_ text: String, signed: Bool, width: Int) -> UInt64? {
+        var body = text.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
+        let lower = body.lowercased()
+        if lower.hasPrefix("0x") {
+            guard let value = UInt64(body.dropFirst(2), radix: 16) else { return nil }
+            return mask(value, width: width)
+        }
+        if lower.hasPrefix("0b") {
+            guard let value = UInt64(body.dropFirst(2), radix: 2) else { return nil }
+            return mask(value, width: width)
+        }
+        var negative = false
+        if body.hasPrefix("-") {
+            guard signed else { return nil }
+            negative = true
+            body.removeFirst()
+        }
+        guard let magnitude = UInt64(body, radix: 10) else { return nil }
+        let bits = width * 8
+        if negative {
+            let limit: UInt64 = bits >= 64 ? UInt64(Int64.max) &+ 1 : 1 << UInt64(bits - 1)
+            guard magnitude <= limit else { return nil }
+            let wrapped = (~magnitude &+ 1)
+            if bits >= 64 { return wrapped }
+            return wrapped & ((UInt64(1) << UInt64(bits)) - 1)
+        }
+        if signed {
+            let maxMagnitude: UInt64 = bits >= 64 ? UInt64(Int64.max) : (1 << UInt64(bits - 1)) - 1
+            guard magnitude <= maxMagnitude else { return nil }
+        }
+        return mask(magnitude, width: width)
+    }
+
+    private static func mask(_ value: UInt64, width: Int) -> UInt64? {
+        let bits = width * 8
+        if bits >= 64 { return value }
+        let limit = (UInt64(1) << UInt64(bits)) - 1
+        guard value <= limit else { return nil }
+        return value & limit
+    }
+
+    private static func float32Bits(_ text: String) -> UInt64? {
+        if looksRadixPrefixed(text) { return integerBits(text, signed: false, width: 4) }
+        guard let parsed = Double(text) else { return nil }
+        let narrowed = Float(parsed)
+        if !narrowed.isFinite && parsed.isFinite { return nil }
+        return UInt64(narrowed.bitPattern)
+    }
+
+    private static func float64Bits(_ text: String) -> UInt64? {
+        if looksRadixPrefixed(text) { return integerBits(text, signed: false, width: 8) }
+        guard let parsed = Double(text) else { return nil }
+        return parsed.bitPattern
+    }
+
+    private static func looksRadixPrefixed(_ text: String) -> Bool {
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("0x") || lower.hasPrefix("0b")
     }
 
     private static func unsignedValue(_ bytes: [UInt8], little: Bool) -> UInt64 {

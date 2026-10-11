@@ -49,6 +49,37 @@ final class HexInspectorTests: XCTestCase {
         XCTAssertFalse(try HexDigest.sha1(source, range: 0..<3).isEmpty)
     }
 
+    func testEncodeWritesTheDisplayedValueBack() throws {
+        let bytes: [UInt8] = [0x78, 0x56, 0x34, 0x12]
+        let fields = HexInspector.fields(bytes: bytes, littleEndianFirst: true)
+        let int32 = try XCTUnwrap(fields.first { $0.name == "Int32 LE" })
+        let edit = try XCTUnwrap(int32.edit)
+        XCTAssertEqual(HexInspector.encode(int32.text, edit: edit), bytes)
+        XCTAssertEqual(
+            HexInspector.encode("0x12345678", edit: HexInspectorEdit(kind: .unsignedInteger, width: 4, littleEndian: false)),
+            [0x12, 0x34, 0x56, 0x78]
+        )
+        XCTAssertNil(HexInspector.encode("nope", edit: edit))
+        XCTAssertNil(HexInspector.encode("", edit: edit))
+
+        let oneByte = HexInspector.fields(bytes: [0xFF], littleEndianFirst: true)
+        let signedByte = try XCTUnwrap(oneByte.first { $0.name == "Int8" })
+        XCTAssertEqual(signedByte.text, "-1")
+        XCTAssertEqual(HexInspector.encode("-1", edit: try XCTUnwrap(signedByte.edit)), [0xFF])
+        XCTAssertNil(HexInspector.encode("128", edit: try XCTUnwrap(signedByte.edit)))
+        XCTAssertNil(oneByte.first { $0.name == "Int16 LE" }?.edit)
+        let unsigned = try XCTUnwrap(oneByte.first { $0.name == "UInt8" }?.edit)
+        XCTAssertEqual(HexInspector.encode("255", edit: unsigned), [0xFF])
+
+        var floatBytes = [UInt8](repeating: 0, count: 4)
+        withUnsafeBytes(of: Float(1).bitPattern.littleEndian) { floatBytes = Array($0) }
+        let floatFields = HexInspector.fields(bytes: floatBytes, littleEndianFirst: true)
+        let floatLE = try XCTUnwrap(floatFields.first { $0.name == "Float LE" })
+        XCTAssertEqual(floatLE.text, "1")
+        XCTAssertEqual(HexInspector.encode(floatLE.text, edit: try XCTUnwrap(floatLE.edit)), floatBytes)
+        XCTAssertNil(HexInspector.encode("1e40", edit: try XCTUnwrap(floatLE.edit)))
+    }
+
     func testFormatLabels() {
         let machO: [UInt8] = [0xCF, 0xFA, 0xED, 0xFE, 0x0C, 0x00, 0x00, 0x01]
         XCTAssertEqual(HexFormatDescriber.label(head: machO), "Mach-O 64-bit arm64")

@@ -154,11 +154,14 @@ extension IDEWorkspace {
         refreshPresentation()
     }
 
+    func toggleHexPane() {
+        activeHexSession()?.togglePane()
+        refreshPresentation()
+    }
+
     func toggleHexInspector() {
         guard let session = activeHexSession() else { return }
-        session.inspectorVisible.toggle()
-        IDEHexSettings.shared.inspectorVisible = session.inspectorVisible
-        refreshPresentation()
+        session.setInspectorVisible(!session.inspectorVisible)
     }
 
     func zeroHexSelection() {

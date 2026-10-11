@@ -15,6 +15,7 @@ final class HexWorkspaceTests: XCTestCase {
     private var savedThreshold: Int64 = 0
     private var savedUppercase = true
     private var savedGroupSize = 8
+    private var savedInspector = true
 
     override func setUp() async throws {
         IDEWorkspace.isSessionPersistenceEnabled = false
@@ -23,6 +24,7 @@ final class HexWorkspaceTests: XCTestCase {
         savedThreshold = settings.largeFileEditThreshold
         savedUppercase = settings.uppercaseDigits
         savedGroupSize = settings.groupSize
+        savedInspector = settings.inspectorVisible
         settings.largeFileEditThreshold = 256 * 1024 * 1024
         settings.groupSize = 8
         workspace = IDEWorkspace()
@@ -33,6 +35,7 @@ final class HexWorkspaceTests: XCTestCase {
         settings.largeFileEditThreshold = savedThreshold
         settings.uppercaseDigits = savedUppercase
         settings.groupSize = savedGroupSize
+        settings.inspectorVisible = savedInspector
         workspace?.teardown()
         IDEWorkspace.isSessionPersistenceEnabled = true
         if let directory { try? FileManager.default.removeItem(at: directory) }
@@ -51,7 +54,7 @@ final class HexWorkspaceTests: XCTestCase {
         XCTAssertEqual(session.caret, 2)
         XCTAssertTrue(session.lowNibble)
         session.shiftClick(byte: 6)
-        XCTAssertEqual(session.selection, 2..<6)
+        XCTAssertEqual(session.selection, 2..<7)
         session.selectGroup(at: 10)
         XCTAssertEqual(session.selection, 8..<16)
         session.selectAll()
@@ -103,9 +106,9 @@ final class HexWorkspaceTests: XCTestCase {
         session.click(byte: 4, pane: .hex(lowNibble: false))
         session.shiftClick(byte: 8)
         session.fillSelection(with: 0x7F)
-        XCTAssertEqual(session.document.bytes(in: 4..<8), [0x7F, 0x7F, 0x7F, 0x7F])
+        XCTAssertEqual(session.document.bytes(in: 4..<9), [UInt8](repeating: 0x7F, count: 5))
         session.zeroSelection()
-        XCTAssertEqual(session.document.bytes(in: 4..<8), [0, 0, 0, 0])
+        XCTAssertEqual(session.document.bytes(in: 4..<9), [UInt8](repeating: 0, count: 5))
 
         session.click(byte: 0, pane: .text)
         XCTAssertTrue(session.typeCharacter("Z"))
@@ -609,6 +612,169 @@ final class HexWorkspaceTests: XCTestCase {
         XCTAssertEqual(session.document.byte(at: keystroke), 0xAB)
     }
 
+    func testIntegerFindEditableInspectorCaretAndPaneSwitch() async throws {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        bytes.replaceSubrange(4..<8, with: [0x78, 0x56, 0x34, 0x12])
+        bytes.replaceSubrange(16..<18, with: [0x41, 0x00])
+        let url = try write("numbers.bin", bytes)
+        let session = try await openHex(url)
+        session.useFixedBytesPerRow(16)
+        session.littleEndianFirst = true
+
+        session.findMode = .integer
+        session.findIntegerWidth = 4
+        session.findText = "305419896"
+        session.beginFind()
+        session.updateFind()
+        try await waitUntil { !session.findRunning }
+        XCTAssertEqual(session.matches, [4..<8])
+        session.replaceCurrent(with: "1")
+        XCTAssertEqual(session.document.bytes(in: 4..<8), [1, 0, 0, 0])
+
+        session.goTo("0")
+        let spec = try XCTUnwrap(session.inspectorFields().first { $0.name == "Int16 LE" }?.edit)
+        XCTAssertTrue(session.commitInspector("513", as: spec))
+        XCTAssertEqual(session.document.bytes(in: 0..<2), [0x01, 0x02])
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.document.bytes(in: 0..<2), [0, 0])
+        XCTAssertFalse(session.commitInspector("nope", as: spec))
+        session.readOnly = true
+        XCTAssertFalse(session.commitInspector("1", as: spec))
+        session.readOnly = false
+
+        session.findMode = .text
+        session.findEncoding = .utf16LE
+        session.findText = "A"
+        session.updateFind()
+        try await waitUntil { !session.findRunning }
+        XCTAssertEqual(session.matches.first, 16..<18)
+
+        session.click(byte: 0, pane: .hex(lowNibble: false))
+        XCTAssertEqual(session.paneStatus, "Hex")
+        let canvas = IDEHexCanvasView(frame: NSRect(x: 0, y: 0, width: 900, height: 400))
+        canvas.session = session
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = canvas
+        window.layoutIfNeeded()
+        canvas.layoutSubtreeIfNeeded()
+
+        let high = canvas.caretRectsForTesting()
+        XCTAssertEqual(high.count, 2)
+        session.click(byte: 0, pane: .hex(lowNibble: true))
+        let low = canvas.caretRectsForTesting()
+        XCTAssertGreaterThan(low[0].minX, high[0].minX)
+        session.click(byte: 0, pane: .hex(lowNibble: false))
+        session.toggleInsertMode()
+        let bar = canvas.caretRectsForTesting()
+        XCTAssertLessThan(bar[0].width, high[0].width)
+        session.toggleInsertMode()
+
+        canvas.keyDown(with: try keyDown(48, in: window))
+        XCTAssertTrue(session.textPaneFocused)
+        XCTAssertEqual(session.paneStatus, "Text")
+        canvas.keyDown(with: try keyDown(48, in: window))
+        XCTAssertFalse(session.textPaneFocused)
+
+        session.matches = [4..<8, 16..<18]
+        session.matchIndex = 0
+        session.shiftClick(byte: 2)
+        window.displayIfNeeded()
+        session.click(byte: 0, pane: .hex(lowNibble: false))
+        window.displayIfNeeded()
+    }
+
+    func testInspectorCollapseIsRemembered() async throws {
+        let url = try write("inspect.bin", [UInt8](repeating: 1, count: 16))
+        let session = try await openHex(url)
+        session.setInspectorVisible(false)
+        XCTAssertFalse(session.inspectorVisible)
+        XCTAssertFalse(settings.inspectorVisible)
+        session.setInspectorVisible(true)
+        XCTAssertTrue(session.inspectorVisible)
+        XCTAssertTrue(settings.inspectorVisible)
+    }
+
+    func testDragAndShiftSelectTheBytesUnderThePointer() async throws {
+        let url = try write("select.bin", [UInt8](repeating: 0x11, count: 64))
+        let session = try await openHex(url)
+
+        session.click(byte: 8, pane: .hex(lowNibble: false))
+        XCTAssertEqual(session.selection, 8..<8)
+        session.shiftClick(byte: 3)
+        XCTAssertEqual(session.selection, 3..<9)
+        session.shiftClick(byte: 1)
+        XCTAssertEqual(session.selection, 1..<9)
+        session.move(by: -1, extend: true)
+        XCTAssertEqual(session.selection, 0..<9)
+        session.move(by: 1, extend: true)
+        XCTAssertEqual(session.selection, 1..<9)
+
+        session.click(byte: 4, pane: .hex(lowNibble: false))
+        session.shiftClick(byte: 4)
+        XCTAssertEqual(session.selection, 4..<5)
+        session.move(by: 1, extend: false)
+        XCTAssertEqual(session.caret, 5)
+        session.click(byte: 4, pane: .hex(lowNibble: false))
+        session.shiftClick(byte: 7)
+        session.move(by: -1, extend: false)
+        XCTAssertEqual(session.caret, 4)
+
+        session.click(byte: 10, pane: .hex(lowNibble: false))
+        session.move(by: -1, extend: true)
+        XCTAssertEqual(session.selection, 9..<10)
+        session.move(by: -1, extend: true)
+        XCTAssertEqual(session.selection, 8..<10)
+        session.move(by: -Int64(session.bytesPerRow), extend: true)
+        XCTAssertEqual(session.selection, 0..<10)
+
+        session.selectBytes(from: 8, through: 3)
+        XCTAssertEqual(session.selection, 3..<9)
+        session.selectBytes(from: 8, through: 12)
+        XCTAssertEqual(session.selection, 8..<13)
+        session.selectBytes(from: 60, through: 80)
+        XCTAssertEqual(session.selection, 60..<64)
+        session.click(byte: 64, pane: .hex(lowNibble: false))
+        session.selectBytes(from: session.anchor, through: 58)
+        XCTAssertEqual(session.selection, 58..<64)
+
+        session.click(byte: 0, pane: .hex(lowNibble: false))
+        session.useFixedBytesPerRow(16)
+        let canvas = IDEHexCanvasView(frame: NSRect(x: 0, y: 0, width: 900, height: 400))
+        canvas.session = session
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = canvas
+        window.layoutIfNeeded()
+        canvas.layoutSubtreeIfNeeded()
+
+        let origin = try hitPoint(forByte: 8, in: canvas, session: session)
+        let backward = try hitPoint(forByte: 3, in: canvas, session: session)
+        let forward = try hitPoint(forByte: 12, in: canvas, session: session)
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: origin, in: canvas))
+        XCTAssertEqual(session.selection, 8..<8)
+        canvas.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: backward, in: canvas))
+        XCTAssertEqual(session.selection, 3..<9)
+        canvas.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: forward, in: canvas))
+        XCTAssertEqual(session.selection, 8..<13)
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: forward, in: canvas))
+
+        let lineTwo = try hitPoint(forByte: 4, viewRow: 2, in: canvas, session: session)
+        let lineTwoEnd = try hitPoint(forByte: 7, viewRow: 2, in: canvas, session: session)
+        let lineThree = try hitPoint(forByte: 1, viewRow: 3, in: canvas, session: session)
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: lineTwo, in: canvas))
+        XCTAssertEqual(session.caret, 2 * 16 + 4)
+        canvas.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: lineTwoEnd, in: canvas))
+        XCTAssertEqual(session.selection, (2 * 16 + 4)..<(2 * 16 + 8))
+        canvas.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: lineThree, in: canvas))
+        XCTAssertEqual(session.selection, (2 * 16 + 4)..<(3 * 16 + 2))
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: lineThree, in: canvas))
+
+        session.topRow = 1
+        let scrolled = try hitPoint(forByte: 2, viewRow: 0, in: canvas, session: session)
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: scrolled, in: canvas))
+        XCTAssertEqual(session.caret, 16 + 2)
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: scrolled, in: canvas))
+    }
+
     private func assertCaretRowVisible(_ session: IDEHexSession, rows: Int64, file: StaticString = #filePath, line: UInt = #line) {
         let row = session.caret / Int64(max(1, session.bytesPerRow))
         XCTAssertGreaterThanOrEqual(row, session.topRow, "row \(row) top \(session.topRow)", file: file, line: line)
@@ -621,6 +787,40 @@ final class HexWorkspaceTests: XCTestCase {
             if let canvas = findCanvas(in: subview) { return canvas }
         }
         return nil
+    }
+
+    private func hitPoint(
+        forByte column: Int,
+        viewRow: Int = 0,
+        in canvas: IDEHexCanvasView,
+        session: IDEHexSession
+    ) throws -> NSPoint {
+        let font = IDEEditorTheme.shared.current.font
+        let charWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
+        let metrics = session.metrics(charWidth: charWidth)
+        let rowHeight = ceil(font.ascender - font.descender + font.leading) + 2
+        let point = NSPoint(
+            x: 8 + metrics.hexX(byte: column) + charWidth * 0.5,
+            y: rowHeight * CGFloat(viewRow + 1) + rowHeight * 0.5
+        )
+        let hit = try XCTUnwrap(canvas.hitForTesting(at: point))
+        XCTAssertEqual(hit.byteIndex, column)
+        return point
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, at viewPoint: NSPoint, in view: NSView) throws -> NSEvent {
+        let window = try XCTUnwrap(view.window)
+        return try XCTUnwrap(NSEvent.mouseEvent(
+            with: type,
+            location: view.convert(viewPoint, to: nil),
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
     }
 
     private func keyDown(_ code: UInt16, in window: NSWindow) throws -> NSEvent {

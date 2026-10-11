@@ -40,17 +40,22 @@ struct IDEHexRootView: View {
             if session.findBarVisible {
                 IDEHexFindBar(session: session)
             }
-            SplitPanes(
-                minPrimary: 200,
-                minSecondary: session.inspectorVisible ? 180 : 0,
-                idealSecondary: 240,
-                storageKey: "umbra.hex.inspector",
-                priority: .secondary,
-                hiddenSide: session.inspectorVisible ? nil : .secondary
-            ) {
-                IDEHexCanvasRepresentable(session: session)
-            } secondary: {
-                IDEHexInspectorView(session: session)
+            HStack(spacing: 0) {
+                SplitPanes(
+                    minPrimary: 200,
+                    minSecondary: session.inspectorVisible ? 180 : 0,
+                    idealSecondary: 240,
+                    storageKey: "umbra.hex.inspector",
+                    priority: .secondary,
+                    hiddenSide: session.inspectorVisible ? nil : .secondary
+                ) {
+                    IDEHexCanvasRepresentable(session: session, stamp: canvasStamp)
+                } secondary: {
+                    IDEHexInspectorView(session: session)
+                }
+                if !session.inspectorVisible {
+                    inspectorRail
+                }
             }
             if session.showsDiskCompare, let differences = session.diskDifferences {
                 diskCompare(differences)
@@ -82,6 +87,51 @@ struct IDEHexRootView: View {
         .background(IDEAppearance.ColorToken.editor)
         .sheet(isPresented: $session.showsGoToOffset) {
             IDEHexGoToOffsetSheet(session: session)
+        }
+    }
+
+    /// Read by the canvas representable so a caret, match, or mode change outside the view still repaints.
+    private var canvasStamp: HexCanvasStamp {
+        HexCanvasStamp(
+            generation: session.renderGeneration,
+            textPane: session.textPaneFocused,
+            insert: session.insertMode,
+            lowNibble: session.lowNibble,
+            matchIndex: session.matchIndex,
+            matchCount: session.matches.count,
+            firstMatch: session.matches.first?.lowerBound,
+            selection: session.selection
+        )
+    }
+
+    /// Slim strip left behind when the inspector is collapsed. Clicking it opens the pane again.
+    private var inspectorRail: some View {
+        Button {
+            session.setInspectorVisible(true)
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Data Inspector")
+                    .font(.caption2)
+                    .fixedSize()
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 14, height: 96)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 8)
+            .frame(width: 22)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show Data Inspector")
+        .accessibilityLabel("Show Data Inspector")
+        .background(IDEAppearance.ColorToken.sidebar)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.panelBorder)
+                .frame(width: 1)
         }
     }
 
@@ -123,17 +173,37 @@ struct IDEHexRootView: View {
     }
 }
 
+struct HexCanvasStamp: Equatable {
+    var generation: Int
+    var textPane: Bool
+    var insert: Bool
+    var lowNibble: Bool
+    var matchIndex: Int?
+    var matchCount: Int
+    var firstMatch: Int64?
+    var selection: Range<Int64>
+}
+
 struct IDEHexCanvasRepresentable: NSViewRepresentable {
     var session: IDEHexSession
+    var stamp: HexCanvasStamp
 
     func makeNSView(context: Context) -> IDEHexCanvasView {
         let view = IDEHexCanvasView()
         view.session = session
+        context.coordinator.stamp = stamp
         return view
     }
 
     func updateNSView(_ view: IDEHexCanvasView, context: Context) {
         view.session = session
+        context.coordinator.stamp = stamp
         view.needsDisplay = true
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var stamp: HexCanvasStamp?
     }
 }

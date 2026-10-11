@@ -11,6 +11,8 @@ final class IDEHexCanvasView: NSView {
 
     private let scroller = NSScroller()
     private var wheelRows: CGFloat = 0
+    /// Byte where the current drag started. Kept stable so a backward drag still covers that byte.
+    private var dragOriginByte: Int64?
     private let rowCacheLimit = 256
     private var rowCache: [Int64: NSAttributedString] = [:]
     private var cacheGeneration: Int = -1
@@ -56,7 +58,7 @@ final class IDEHexCanvasView: NSView {
             rowCache.removeAll(keepingCapacity: true)
             cacheGeneration = generation
         }
-        drawSelection(session: session, metrics: metrics, rowHeight: line, rows: rows)
+        drawUnderlays(session: session, metrics: metrics, rowHeight: line, rows: rows)
         for index in 0..<rows {
             let row = session.topRow + Int64(index)
             guard row < session.rowCount || (session.document.count == 0 && index == 0) else { break }
@@ -64,6 +66,7 @@ final class IDEHexCanvasView: NSView {
             if y > dirtyRect.maxY || y + line < dirtyRect.minY { continue }
             lineString(row: row, session: session, metrics: metrics, font: font).draw(at: NSPoint(x: 8, y: y))
         }
+        drawCaret(session: session, metrics: metrics, rowHeight: line, rows: rows)
         if rowCache.count > rowCacheLimit { rowCache.removeAll(keepingCapacity: true) }
     }
 
@@ -71,14 +74,23 @@ final class IDEHexCanvasView: NSView {
         guard let session else { return }
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
-        guard let hit = hit(at: point, session: session) else { return }
-        let byte = session.topRow * Int64(session.bytesPerRow) + Int64(hit.byteIndex)
+        guard let hit = locatedByte(at: point, session: session) else {
+            dragOriginByte = nil
+            return
+        }
+        let byte = hit.offset
         if event.clickCount >= 2 {
+            dragOriginByte = nil
             session.selectGroup(at: byte)
-        } else if event.modifierFlags.contains(.shift) {
+        } else if event.modifierFlags.contains(.shift), !session.selection.isEmpty {
+            dragOriginByte = nil
             session.shiftClick(byte: byte)
+        } else if event.modifierFlags.contains(.shift) {
+            dragOriginByte = session.anchor
+            session.selectBytes(from: session.anchor, through: byte)
         } else {
             session.click(byte: byte, pane: hit.pane)
+            dragOriginByte = session.anchor
         }
         needsDisplay = true
     }
@@ -86,9 +98,13 @@ final class IDEHexCanvasView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let session else { return }
         let point = convert(event.locationInWindow, from: nil)
-        if let hit = hit(at: point, session: session) {
-            let byte = session.topRow * Int64(session.bytesPerRow) + Int64(hit.byteIndex)
-            session.shiftClick(byte: byte)
+        if let hit = locatedByte(at: point, session: session) {
+            let byte = hit.offset
+            if let origin = dragOriginByte {
+                session.selectBytes(from: origin, through: byte)
+            } else {
+                session.shiftClick(byte: byte)
+            }
             needsDisplay = true
         }
         if point.y < 0 || point.y > bounds.height {
@@ -98,6 +114,10 @@ final class IDEHexCanvasView: NSView {
             updateScroller()
             needsDisplay = true
         }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragOriginByte = nil
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -120,6 +140,11 @@ final class IDEHexCanvasView: NSView {
         let chars = event.charactersIgnoringModifiers ?? ""
         if flags.contains(.command), chars.lowercased() == "a" {
             session.selectAll()
+            needsDisplay = true
+            return
+        }
+        if event.keyCode == 48, !flags.contains(.command), !flags.contains(.control), !flags.contains(.option) {
+            session.togglePane()
             needsDisplay = true
             return
         }
@@ -163,6 +188,16 @@ final class IDEHexCanvasView: NSView {
 
     override func accessibilityLabel() -> String? { session?.accessibilitySummary }
 
+    func caretRectsForTesting() -> [NSRect] {
+        guard let session else { return [] }
+        return caretMarks(
+            session: session,
+            metrics: session.metrics(charWidth: charWidth),
+            rowHeight: rowHeight,
+            rows: visibleRowCount
+        ).map(\.rect)
+    }
+
     func hitForTesting(at point: NSPoint) -> HexHit? {
         guard let session else { return nil }
         return hit(at: point, session: session)
@@ -184,6 +219,23 @@ final class IDEHexCanvasView: NSView {
     private var contentWidth: Double { Double(max(0, bounds.width - 22)) }
     private var visibleRowCount: Int { max(1, Int((bounds.height - rowHeight) / rowHeight)) }
 
+    private struct LocatedByte {
+        var offset: Int64
+        var pane: HexHit.Pane
+    }
+
+    /// File offset under the pointer. `HexHit.byteIndex` is only the column in that row.
+    private func locatedByte(at point: NSPoint, session: IDEHexSession) -> LocatedByte? {
+        let line = rowHeight
+        guard point.y >= line else { return nil }
+        let row = Int((point.y - line) / line)
+        guard row >= 0, row < visibleRowCount else { return nil }
+        guard let hit = session.metrics(charWidth: charWidth).hitTest(x: Double(point.x - 8)) else { return nil }
+        let width = Int64(max(1, session.bytesPerRow))
+        let offset = (session.topRow + Int64(row)) * width + Int64(hit.byteIndex)
+        return LocatedByte(offset: offset, pane: hit.pane)
+    }
+
     private func hit(at point: NSPoint, session: IDEHexSession) -> HexHit? {
         let line = rowHeight
         guard point.y >= line else { return nil }
@@ -203,19 +255,152 @@ final class IDEHexCanvasView: NSView {
         }
     }
 
-    private func drawSelection(session: IDEHexSession, metrics: HexRowMetrics, rowHeight: CGFloat, rows: Int) {
+    /// Row tint, edited bytes, search hits, then the selection. Glyphs paint on top of these fills.
+    private func drawUnderlays(session: IDEHexSession, metrics: HexRowMetrics, rowHeight: CGFloat, rows: Int) {
+        let width = Int64(max(1, session.bytesPerRow))
+        let origin = session.topRow * width
+        let visibleEnd = min(session.document.count, origin + Int64(rows * session.bytesPerRow))
+        let visible = origin..<max(origin, visibleEnd)
+
+        if session.selection.isEmpty {
+            let caretRow = session.caret / width
+            let viewRow = Int(caretRow - session.topRow)
+            if viewRow >= 0, viewRow < rows {
+                IDEAppearance.NSToken.accent.withAlphaComponent(0.06).setFill()
+                NSRect(x: 8, y: rowHeight * CGFloat(viewRow + 1), width: metrics.rowWidth, height: rowHeight).fill()
+            }
+        }
+
+        if session.document.isModified {
+            IDEAppearance.NSToken.accent.withAlphaComponent(0.22).setFill()
+            for range in session.document.modifiedRanges() {
+                fill(
+                    range.overlapping(visible),
+                    session: session, metrics: metrics, rowHeight: rowHeight, width: width
+                )
+            }
+        }
+
+        if !session.matches.isEmpty {
+            let other = NSColor.systemYellow.withAlphaComponent(0.30)
+            let current = NSColor.systemOrange.withAlphaComponent(0.48)
+            var index = firstMatch(in: session.matches, endingAfter: visible.lowerBound)
+            while index < session.matches.count {
+                let match = session.matches[index]
+                if match.lowerBound >= visible.upperBound { break }
+                let tint = index == session.matchIndex ? current : other
+                tint.setFill()
+                fill(match.overlapping(visible), session: session, metrics: metrics, rowHeight: rowHeight, width: width)
+                index += 1
+            }
+        }
+
         guard !session.selection.isEmpty else { return }
         IDEAppearance.NSToken.selection.setFill()
-        let width = Int64(session.bytesPerRow)
-        for index in 0..<rows {
-            let row = session.topRow + Int64(index)
-            let rowStart = row * width
-            let y = rowHeight * CGFloat(index + 1)
-            for byteIndex in 0..<session.bytesPerRow {
-                let absolute = rowStart + Int64(byteIndex)
-                guard session.selection.contains(absolute) else { continue }
-                NSRect(x: 8 + metrics.hexX(byte: byteIndex), y: y, width: metrics.charWidth * 2, height: rowHeight).fill()
-                NSRect(x: 8 + metrics.textX(byte: byteIndex), y: y, width: metrics.charWidth, height: rowHeight).fill()
+        fill(session.selection.overlapping(visible), session: session, metrics: metrics, rowHeight: rowHeight, width: width)
+    }
+
+    private func fill(
+        _ range: Range<Int64>,
+        session: IDEHexSession,
+        metrics: HexRowMetrics,
+        rowHeight: CGFloat,
+        width: Int64
+    ) {
+        guard !range.isEmpty else { return }
+        var cursor = range.lowerBound
+        while cursor < range.upperBound {
+            let row = cursor / width
+            let rowEnd = min(range.upperBound, (row + 1) * width)
+            let viewRow = Int(row - session.topRow)
+            if viewRow >= 0 {
+                let y = rowHeight * CGFloat(viewRow + 1)
+                var column = cursor
+                while column < rowEnd {
+                    let byteIndex = Int(column % width)
+                    NSRect(x: 8 + metrics.hexX(byte: byteIndex), y: y, width: metrics.charWidth * 2, height: rowHeight).fill()
+                    NSRect(x: 8 + metrics.textX(byte: byteIndex), y: y, width: metrics.charWidth, height: rowHeight).fill()
+                    column += 1
+                }
+            }
+            cursor = rowEnd
+        }
+    }
+
+    /// First match whose end is past `offset`. Matches are in ascending order.
+    private func firstMatch(in matches: [Range<Int64>], endingAfter offset: Int64) -> Int {
+        var low = 0
+        var high = matches.count
+        while low < high {
+            let mid = (low + high) / 2
+            if matches[mid].upperBound <= offset {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
+    }
+
+    private struct CaretMark {
+        var rect: NSRect
+        var active: Bool
+        var bar: Bool
+    }
+
+    /// Overwrite draws a box on the byte (or the low nibble). Insert draws a bar between bytes.
+    private func caretMarks(session: IDEHexSession, metrics: HexRowMetrics, rowHeight: CGFloat, rows: Int) -> [CaretMark] {
+        guard session.selection.isEmpty else { return [] }
+        let width = Int64(max(1, session.bytesPerRow))
+        let caret = session.caret
+        let row = caret / width
+        let viewRow = Int(row - session.topRow)
+        guard viewRow >= 0, viewRow < rows else { return [] }
+        let column = Int(caret % width)
+        let y = rowHeight * CGFloat(viewRow + 1)
+        // A bar sits between bytes. Overwrite boxes the byte, and a half-typed nibble boxes that digit.
+        let bar = caret >= session.document.count || (session.insertMode && !session.lowNibble)
+        let hexActive = !session.textPaneFocused
+        return [
+            mark(x: 8 + metrics.hexX(byte: column), y: y, metrics: metrics, rowHeight: rowHeight, hex: true, lowNibble: session.lowNibble && !bar, bar: bar, active: hexActive),
+            mark(x: 8 + metrics.textX(byte: column), y: y, metrics: metrics, rowHeight: rowHeight, hex: false, lowNibble: false, bar: bar, active: !hexActive),
+        ]
+    }
+
+    private func mark(
+        x: Double,
+        y: CGFloat,
+        metrics: HexRowMetrics,
+        rowHeight: CGFloat,
+        hex: Bool,
+        lowNibble: Bool,
+        bar: Bool,
+        active: Bool
+    ) -> CaretMark {
+        if bar {
+            return CaretMark(
+                rect: NSRect(x: x - 1, y: y + 1, width: 2, height: max(1, rowHeight - 2)),
+                active: active,
+                bar: true
+            )
+        }
+        let origin = lowNibble ? x + metrics.charWidth : x
+        let cell = hex ? (lowNibble ? metrics.charWidth : metrics.charWidth * 2) : metrics.charWidth
+        let rect = NSRect(x: origin, y: y, width: cell, height: rowHeight).insetBy(dx: 0.5, dy: 1)
+        return CaretMark(rect: rect, active: active, bar: false)
+    }
+
+    private func drawCaret(session: IDEHexSession, metrics: HexRowMetrics, rowHeight: CGFloat, rows: Int) {
+        for mark in caretMarks(session: session, metrics: metrics, rowHeight: rowHeight, rows: rows) {
+            let color = IDEAppearance.NSToken.accent.withAlphaComponent(mark.active ? 0.95 : 0.35)
+            if mark.bar {
+                color.setFill()
+                mark.rect.fill()
+            } else {
+                let path = NSBezierPath(roundedRect: mark.rect, xRadius: 2, yRadius: 2)
+                color.setStroke()
+                path.lineWidth = mark.active ? 1.5 : 1
+                path.stroke()
             }
         }
     }
@@ -299,6 +484,15 @@ final class IDEHexCanvasView: NSView {
         case "A"..."F": return UInt8(character.asciiValue! - Character("A").asciiValue!) + 10
         default: return nil
         }
+    }
+}
+
+private extension Range where Bound == Int64 {
+    /// The overlap, or an empty range when the two do not meet. Never walks a span larger than `other`.
+    func overlapping(_ other: Range<Int64>) -> Range<Int64> {
+        let lower = Swift.max(lowerBound, other.lowerBound)
+        let upper = Swift.min(upperBound, other.upperBound)
+        return lower..<Swift.max(lower, upper)
     }
 }
 

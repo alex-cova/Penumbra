@@ -21,6 +21,19 @@ final class HexSearchTests: XCTestCase {
         XCTAssertEqual(back.matches.map(\.lowerBound), [1, 0])
     }
 
+    func testIntegerNeedles() throws {
+        let little = try XCTUnwrap(HexPattern.integer("305419896", width: 4, littleEndian: true))
+        XCTAssertEqual(little.bytes, [0x78, 0x56, 0x34, 0x12])
+        let source = MemoryByteSource([0x00] + little.bytes + [0x00])
+        XCTAssertEqual(try HexSearch.scan(in: source, pattern: little).matches, [1..<5])
+        XCTAssertEqual(HexPattern.integer("-1", width: 1, littleEndian: true)?.bytes, [0xFF])
+        XCTAssertEqual(HexPattern.integer("255", width: 1, littleEndian: true)?.bytes, [0xFF])
+        XCTAssertNil(HexPattern.integer("256", width: 1, littleEndian: true))
+        XCTAssertEqual(HexPattern.integer("0x1234", width: 2, littleEndian: false)?.bytes, [0x12, 0x34])
+        XCTAssertNil(HexPattern.integer("nope", width: 4, littleEndian: true))
+        XCTAssertNil(HexPattern.integer("1", width: 3, littleEndian: true))
+    }
+
     func testASCIICaseAndUTF16() throws {
         let source = MemoryByteSource(Array("AbC def".utf8))
         let pattern = try XCTUnwrap(HexPattern.text("abc", encoding: .ascii, caseInsensitive: true))

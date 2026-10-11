@@ -12,6 +12,7 @@ enum HexPasteChoice: Sendable {
 enum IDEHexFindMode: String, Sendable {
     case hex
     case text
+    case integer
 }
 
 /// One hex tab: the piece-table document, the caret, and the find/inspector state.
@@ -50,6 +51,8 @@ final class IDEHexSession {
     var findMode: IDEHexFindMode = .hex
     var findEncoding: HexSearchTextEncoding = .utf8
     var findCaseInsensitive = false
+    /// Width, in bytes, of an integer find. 1, 2, 4, or 8. Byte order is `littleEndianFirst`.
+    var findIntegerWidth = 4
     var matches: [Range<Int64>] = []
     var matchIndex: Int?
     var matchCapped = false
@@ -137,6 +140,7 @@ final class IDEHexSession {
 
     var selectionStatus: String { "Sel \(max(0, selection.upperBound - selection.lowerBound)) B" }
     var modeStatus: String { insertMode ? "INS" : "OVR" }
+    var paneStatus: String { textPaneFocused ? "Text" : "Hex" }
     var encodingStatus: String { encoding.displayName }
 
     var saveProgressText: String? {
@@ -146,7 +150,7 @@ final class IDEHexSession {
 
     var accessibilitySummary: String {
         let byte = document.byte(at: caret).map { String(format: "0x%02X", $0) } ?? "none"
-        var text = "\(offsetStatus), \(selectionStatus), byte \(byte), \(modeStatus)"
+        var text = "\(offsetStatus), \(selectionStatus), byte \(byte), \(modeStatus), \(paneStatus) pane"
         if let saveProgressText { text += ", \(saveProgressText)" }
         return text
     }
@@ -215,11 +219,39 @@ final class IDEHexSession {
         onChange?()
     }
 
+    /// Shift-click includes the byte under the pointer. The anchor stays the fixed edge.
     func shiftClick(byte: Int64) {
         let index = clampIndex(byte)
-        selection = range(from: anchor, to: index)
+        if selection.isEmpty {
+            selectBytes(from: anchor, through: index)
+            return
+        }
+        let end: Int64
+        if index < anchor {
+            end = index
+        } else if index < document.count {
+            end = index + 1
+        } else {
+            end = document.count
+        }
+        selection = range(from: anchor, to: end)
         pendingHighNibble = nil
         reveal(index)
+        onChange?()
+    }
+
+    /// Every byte from `originByte` through `focusByte`. A drag passes the mouse-down byte as the origin on each move.
+    func selectBytes(from originByte: Int64, through focusByte: Int64) {
+        let count = document.count
+        let origin = min(max(0, originByte), count)
+        let focus = min(max(0, focusByte), count)
+        let lower = min(origin, focus)
+        let higher = max(origin, focus)
+        let upper = higher < count ? higher + 1 : count
+        selection = lower..<upper
+        anchor = focus >= origin ? lower : upper
+        pendingHighNibble = nil
+        reveal(focus)
         onChange?()
     }
 
@@ -241,11 +273,14 @@ final class IDEHexSession {
     }
 
     func move(by delta: Int64, extend: Bool) {
-        let end = extend ? selection.upperBound : caret
-        let next = clampIndex(end + delta)
+        let next: Int64
         if extend {
+            next = clampIndex(movingEdge + delta)
             selection = range(from: anchor, to: next)
         } else {
+            let base = selection.isEmpty ? caret : (delta < 0 ? selection.lowerBound : selection.upperBound)
+            let step: Int64 = selection.isEmpty || delta.magnitude != 1 ? delta : 0
+            next = clampIndex(base + step)
             selection = next..<next
             anchor = next
         }
@@ -385,6 +420,35 @@ final class IDEHexSession {
         onChange?()
     }
 
+    /// Shows or hides the data inspector and remembers the choice for the next launch.
+    func setInspectorVisible(_ visible: Bool) {
+        guard inspectorVisible != visible else { return }
+        inspectorVisible = visible
+        IDEHexSettings.shared.inspectorVisible = visible
+        onChange?()
+    }
+
+    /// Hex and text panes. Tab in the grid calls this. A half-typed nibble is finished as it stands.
+    func togglePane() {
+        textPaneFocused.toggle()
+        pendingHighNibble = nil
+        lowNibble = false
+        onChange?()
+    }
+
+    /// Writes an inspector value over the bytes at the caret. The caret stays put.
+    @discardableResult
+    func commitInspector(_ text: String, as spec: HexInspectorEdit) -> Bool {
+        guard !readOnly, let bytes = HexInspector.encode(text, edit: spec) else { return false }
+        let start = selection.lowerBound
+        let end = start + Int64(bytes.count)
+        guard start >= 0, end <= document.count else { return false }
+        if document.bytes(in: start..<end) == bytes { return true }
+        edit { $0.overwrite(at: start, bytes: bytes) }
+        onChange?()
+        return true
+    }
+
     func toggleBookmark() {
         bookmarks.toggle(caret)
         onChange?()
@@ -449,6 +513,8 @@ final class IDEHexSession {
         switch findMode {
         case .hex: pattern = HexPattern.hex(text)
         case .text: pattern = HexPattern.text(text, encoding: findEncoding, caseInsensitive: findCaseInsensitive)
+        case .integer:
+            pattern = HexPattern.integer(text, width: findIntegerWidth, littleEndian: littleEndianFirst)
         }
         guard let pattern, !pattern.isEmpty else {
             matches = []
@@ -517,6 +583,11 @@ final class IDEHexSession {
         case .text:
             guard let pattern = HexPattern.text(replacement, encoding: findEncoding, caseInsensitive: false) else { return }
             bytes = pattern.bytes
+        case .integer:
+            guard let pattern = HexPattern.integer(replacement, width: findIntegerWidth, littleEndian: littleEndianFirst) else {
+                return
+            }
+            bytes = pattern.bytes
         }
         edit { $0.replace(at: match.lowerBound, removing: match.count, with: bytes) }
         let end = match.lowerBound + Int64(bytes.count)
@@ -540,6 +611,7 @@ final class IDEHexSession {
     }
 
     var matchStatus: String {
+        if findRunning { return "Searching…" }
         guard let index = matchIndex, !matches.isEmpty else {
             return matches.isEmpty ? "No matches" : ""
         }
@@ -734,6 +806,14 @@ final class IDEHexSession {
         let lower = min(anchor, end)
         let upper = max(anchor, end)
         return clampIndex(lower)..<clampIndex(upper)
+    }
+
+    /// Exclusive offset that shift-arrows move. The anchor stays put, including when it is the right edge.
+    private var movingEdge: Int64 {
+        if anchor <= selection.lowerBound {
+            return selection.upperBound
+        }
+        return selection.lowerBound
     }
 
     private func clampViewport() {

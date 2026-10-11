@@ -106,6 +106,12 @@ struct IDEHexModule: IDELanguageModule {
             IDEStatusItem(id: "hex.encoding", placement: .trailing, order: 13, content: AnyView(
                 Text(session.encodingStatus).font(.caption)
             )),
+            IDEStatusItem(id: "hex.pane", placement: .trailing, order: 15, content: AnyView(
+                Button(session.paneStatus) { [weak workspace] in workspace?.toggleHexPane() }
+                    .buttonStyle(.plain)
+                    .font(.caption.monospaced())
+                    .help("Tab switches between the hex and text panes")
+            )),
         ]
         if let progress = session.saveProgressText {
             items.append(IDEStatusItem(id: "hex.save", placement: .trailing, order: 14, content: AnyView(

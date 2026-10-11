@@ -52,6 +52,18 @@ public struct HexPattern: Sendable, Equatable {
         guard let bytes = encoding.encode(string), !bytes.isEmpty else { return nil }
         return HexPattern(bytes: bytes, wildcard: nil, caseInsensitive: caseInsensitive)
     }
+
+    /// A signed or unsigned integer of 1, 2, 4, or 8 bytes. Decimal is the value; `0x` and `0b` are the raw bits.
+    /// A positive decimal that does not fit the signed range is accepted as unsigned.
+    public static func integer(_ text: String, width: Int, littleEndian: Bool) -> HexPattern? {
+        guard [1, 2, 4, 8].contains(width) else { return nil }
+        let signed = HexInspectorEdit(kind: .signedInteger, width: width, littleEndian: littleEndian)
+        let unsigned = HexInspectorEdit(kind: .unsignedInteger, width: width, littleEndian: littleEndian)
+        guard let bytes = HexInspector.encode(text, edit: signed) ?? HexInspector.encode(text, edit: unsigned) else {
+            return nil
+        }
+        return HexPattern(bytes: bytes)
+    }
 }
 
 public enum HexSearchTextEncoding: String, Sendable, CaseIterable {
@@ -60,6 +72,16 @@ public enum HexSearchTextEncoding: String, Sendable, CaseIterable {
     case utf16LE
     case utf16BE
     case latin1
+
+    public var displayName: String {
+        switch self {
+        case .ascii: return "ASCII"
+        case .utf8: return "UTF-8"
+        case .utf16LE: return "UTF-16 LE"
+        case .utf16BE: return "UTF-16 BE"
+        case .latin1: return "Latin-1"
+        }
+    }
 
     public func encode(_ string: String) -> [UInt8]? {
         switch self {
