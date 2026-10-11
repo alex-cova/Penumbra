@@ -3,13 +3,28 @@ import EditorIntelligence
 import Foundation
 
 /// How a ``WorkbenchDocument`` is presented in the editor pane.
-public enum WorkbenchDocumentContentKind: String, Codable, Sendable, Equatable {
+public enum WorkbenchDocumentContentKind: String, Sendable, Equatable {
     case text
     case image
     /// A host-drawn comparison of two texts (Umbra's diff viewer). Not restored with the session.
     case diff
     /// A host-drawn class or dependency diagram (Umbra's diagram viewer). Not restored with the session.
     case diagram
+    /// A host-drawn hex view of a file's bytes. Restored with the session.
+    case binary
+}
+
+extension WorkbenchDocumentContentKind: Codable {
+    /// An unknown raw value decodes as text, so a session from a newer build still opens.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .text
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// In-memory document tracked by an ``EditorPane``.
@@ -41,6 +56,8 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     /// from "same document, edited elsewhere."
     public var contentGeneration: UInt64 = 0
     public var contentKind: WorkbenchDocumentContentKind = .text
+    /// Byte offsets bookmarked in a hex tab. Empty for every other kind.
+    public var hexBookmarks: [Int64] = []
     /// The encoding of the file on disk. The buffer is always UTF-8; ``save(from:to:options:progress:)``
     /// converts to this on the way out.
     public var encoding: TextFileEncoding = .utf8
@@ -166,6 +183,19 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             languageIdentifier: nil
         )
         document.contentKind = .image
+        return document
+    }
+
+    /// Creates a hex tab backed by a file URL. The bytes stay on disk until a hex session reads them.
+    public static func loadBinary(from url: URL) -> WorkbenchDocument {
+        let document = WorkbenchDocument(
+            url: url,
+            displayName: url.lastPathComponent,
+            text: "",
+            language: nil,
+            languageIdentifier: nil
+        )
+        document.contentKind = .binary
         return document
     }
 

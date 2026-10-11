@@ -50,6 +50,18 @@ public final class CommandRegistry {
         }
     }
 
+    /// Drops the command with `id`, if one is registered.
+    public func remove(id: String) {
+        commands.removeAll { $0.id == id }
+    }
+
+    /// Drops every command whose id is in `ids`.
+    public func remove(ids: some Sequence<String>) {
+        let dropping = Set(ids)
+        guard !dropping.isEmpty else { return }
+        commands.removeAll { dropping.contains($0.id) }
+    }
+
     public func command(id: String) -> EditorCommand? {
         commands.first { $0.id == id }
     }

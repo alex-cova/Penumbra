@@ -12,6 +12,7 @@
 		00000000000000000000006E /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006D /* PenumbraLanguages */; };
 		000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006F /* PenumbraMarkdownLanguage */; };
 		000000000000000000000072 /* JavaIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000071 /* JavaIntelligence */; };
+		00000000000000000000008E /* HexKit in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000008F /* HexKit */; };
 		000000000000000000000084 /* SwiftIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000083 /* SwiftIntelligence */; };
 		000000000000000000000088 /* LanguageSyntax in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000087 /* LanguageSyntax */; };
 		000000000000000000000086 /* TypeScriptIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000085 /* TypeScriptIntelligence */; };
@@ -123,6 +124,7 @@
 				00000000000000000000006E /* PenumbraLanguages in Frameworks */,
 				000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */,
 				000000000000000000000072 /* JavaIntelligence in Frameworks */,
+				00000000000000000000008E /* HexKit in Frameworks */,
 				000000000000000000000084 /* SwiftIntelligence in Frameworks */,
 				000000000000000000000088 /* LanguageSyntax in Frameworks */,
 				000000000000000000000086 /* TypeScriptIntelligence in Frameworks */,
@@ -193,6 +195,7 @@
 				00000000000000000000006D /* PenumbraLanguages */,
 				00000000000000000000006F /* PenumbraMarkdownLanguage */,
 				000000000000000000000071 /* JavaIntelligence */,
+				00000000000000000000008F /* HexKit */,
 				000000000000000000000083 /* SwiftIntelligence */,
 				000000000000000000000087 /* LanguageSyntax */,
 				000000000000000000000085 /* TypeScriptIntelligence */,
@@ -453,6 +456,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = JavaIntelligence;
+		};
+		00000000000000000000008F /* HexKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = HexKit;
 		};
 		000000000000000000000083 /* SwiftIntelligence */ = {
 			isa = XCSwiftPackageProductDependency;

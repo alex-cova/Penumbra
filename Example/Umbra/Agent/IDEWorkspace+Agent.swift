@@ -129,7 +129,7 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     func agentInsertAtCaret(_ text: String) -> Bool {
-        guard let document = workbench.activePane.selectedDocument, document.contentKind != .diff, document.contentKind != .diagram else { return false }
+        guard let document = workbench.activePane.selectedDocument, document.contentKind == .text else { return false }
         let textView = host(for: workbench.activePaneID).textView
         textView.replace(textView.selectedRange, withText: text)
         focusActiveEditor()
@@ -138,7 +138,11 @@ extension IDEWorkspace: IDEAgentHost {
 
     func agentOpenFilePaths() -> [String] {
         var seen = Set<String>()
-        return workbench.allDocuments().compactMap(\.url).map(agentRelativePath).filter { seen.insert($0).inserted }
+        return workbench.allDocuments()
+            .filter { $0.contentKind == .text }
+            .compactMap(\.url)
+            .map(agentRelativePath)
+            .filter { seen.insert($0).inserted }
     }
 
     func agentTerminalTail(lines: Int) -> String? {
@@ -174,6 +178,11 @@ extension IDEWorkspace: IDEAgentHost {
 
     func agentReplaceText(relativePath: String, expecting: String, edits: [AgentTextEdit]) async throws {
         let url = try agentURL(relativePath)
+        if workbench.allDocuments().contains(where: {
+            $0.url?.standardizedFileURL.path == url.path && $0.contentKind != .text
+        }) {
+            throw AgentWorkspaceError.notText(relativePath)
+        }
         // What the model based its edit on must still be what is in the editor (or on disk).
         let current = openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
         guard current == expecting else { throw AgentWorkspaceError.changedSinceRead(relativePath) }

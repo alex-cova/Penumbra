@@ -167,7 +167,7 @@ extension IDELanguageModule {
 enum IDELanguageModules {
     static let shipped: [any IDELanguageModule] = [
         IDEJavaModule(), IDEHTTPModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule(),
-        IDETypeScriptModule(), IDESwiftModule()
+        IDETypeScriptModule(), IDESwiftModule(), IDEHexModule()
     ]
 
     private(set) static var all: [any IDELanguageModule] = shipped

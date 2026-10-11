@@ -17,6 +17,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
     public var scrollOffsetY: CGFloat
     public var isFileBacked: Bool
     public var contentKind: WorkbenchDocumentContentKind
+    public var hexBookmarks: [Int64]
 
     public init(
         id: UUID,
@@ -31,7 +32,8 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         scrollOffsetX: CGFloat = 0,
         scrollOffsetY: CGFloat = 0,
         isFileBacked: Bool = false,
-        contentKind: WorkbenchDocumentContentKind = .text
+        contentKind: WorkbenchDocumentContentKind = .text,
+        hexBookmarks: [Int64] = []
     ) {
         self.id = id
         self.documentID = documentID
@@ -46,6 +48,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.scrollOffsetY = scrollOffsetY
         self.isFileBacked = isFileBacked
         self.contentKind = contentKind
+        self.hexBookmarks = hexBookmarks
     }
 
     public init(document: WorkbenchDocument) {
@@ -62,6 +65,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.scrollOffsetY = document.scrollOffset.y
         self.isFileBacked = document.isFileBacked
         self.contentKind = document.contentKind
+        self.hexBookmarks = document.hexBookmarks
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,6 +83,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         scrollOffsetY = try container.decode(CGFloat.self, forKey: .scrollOffsetY)
         isFileBacked = try container.decodeIfPresent(Bool.self, forKey: .isFileBacked) ?? false
         contentKind = try container.decodeIfPresent(WorkbenchDocumentContentKind.self, forKey: .contentKind) ?? .text
+        hexBookmarks = try container.decodeIfPresent([Int64].self, forKey: .hexBookmarks) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -96,6 +101,9 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         try container.encode(scrollOffsetY, forKey: .scrollOffsetY)
         try container.encode(isFileBacked, forKey: .isFileBacked)
         try container.encode(contentKind, forKey: .contentKind)
+        if !hexBookmarks.isEmpty {
+            try container.encode(hexBookmarks, forKey: .hexBookmarks)
+        }
     }
 
     public func makeDocument(language: TreeSitterLanguage? = nil) -> WorkbenchDocument {
@@ -113,6 +121,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         )
         document.isFileBacked = isFileBacked
         document.contentKind = contentKind
+        document.hexBookmarks = hexBookmarks
         return document
     }
 
@@ -130,6 +139,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         case scrollOffsetY
         case isFileBacked
         case contentKind
+        case hexBookmarks
     }
 }
 

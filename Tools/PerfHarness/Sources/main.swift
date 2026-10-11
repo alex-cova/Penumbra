@@ -64,6 +64,15 @@ func hasFlag(_ name: String, in args: [String]) -> Bool {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+if let command = arguments.first, command == "hex-scroll" || command == "hex-search" {
+    do {
+        try HexPerf.run(command: command, arguments: Array(arguments.dropFirst()))
+    } catch {
+        FileHandle.standardError.write("hex-perf: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    exit(0)
+}
 guard arguments.count >= 2 else { printUsageAndExit() }
 
 let command = arguments[0]

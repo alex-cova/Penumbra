@@ -9,6 +9,7 @@ Penumbra is a Swift Package Manager library: a high-performance plain text/code 
 - **`Penumbra`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
 - **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Penumbra`**. The two are connected only through `Sources/Penumbra/EditorIntelligenceAdapter/PenumbraEditorAdapter.swift`.
 - **`JavaIntelligence`** — native Java indexing, completion, navigation, diagnostics, refactoring, with **no dependency on `Penumbra`**. Umbra wires it through `Example/Umbra/IDEJavaSupport.swift` (the index), `Example/Umbra/Projects/IDEGradleProjectSystem.swift` (the Gradle model) and `Example/Umbra/Languages/IDEJavaRunProvider.swift` (Run and Test). Details: `Sources/JavaIntelligence/CLAUDE.md`.
+- **`HexKit`** — the hex editor's byte model (page cache, piece table, search, save, inspector), with **no dependency on `Penumbra` or AppKit**. Umbra's view is `Example/Umbra/HexEditor/`. Details: `Sources/HexKit/CLAUDE.md`. Plan: `docs/HEX_EDITOR_PLAN.md`.
 - **Adding a language** — how to add syntax, intelligence or IDE features today: `docs/ADDING_A_LANGUAGE.md`. Plan to replace the manual wiring with one registration (language definitions, a `LanguageService` router, Umbra language modules): `docs/LANGUAGE_SUPPORT_PLAN.md`.
 - **HTTP client** — `.http` parsing and sending live in the Umbra target (`Example/Umbra/HTTP/`), not a library; JavaIntelligence does not depend on it.
 - **`GitIntelligence`** (`Packages/GitIntelligence`) — its own Swift package wrapping the git CLI, depending only on `SubprocessKit`; Umbra wires it through `IDEGitStatus`.
@@ -46,7 +47,7 @@ The feature catalog lives next to the code and loads when you work there:
 - `Sources/Penumbra/CLAUDE.md` — `TextView` engine (editing, selection, keymap, layout, highlighting, folding, search, navigation, command palette).
 - `Sources/EditorIntelligence/CLAUDE.md` — completion, hover, navigation, diagnostics, refactoring, LSP/AI, chrome.
 - `Sources/Penumbra/Workbench/CLAUDE.md` — panes, tabs, session restoration.
-- `Sources/JavaIntelligence/CLAUDE.md`, `Example/Umbra/CLAUDE.md`, `Packages/GitIntelligence/CLAUDE.md`, `Packages/AgentKit/CLAUDE.md`, `Tools/AgentEval/CLAUDE.md`.
+- `Sources/JavaIntelligence/CLAUDE.md`, `Sources/HexKit/CLAUDE.md`, `Example/Umbra/CLAUDE.md`, `Packages/GitIntelligence/CLAUDE.md`, `Packages/AgentKit/CLAUDE.md`, `Tools/AgentEval/CLAUDE.md`.
 
 ## Common commands
 

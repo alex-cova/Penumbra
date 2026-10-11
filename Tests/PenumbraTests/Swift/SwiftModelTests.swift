@@ -317,7 +317,8 @@ final class SwiftModelTests: XCTestCase {
     /// Fails when a `.swift` file outside `grammarGapAllowlist` starts producing a syntax problem.
     func testRepositorySwiftFilesStayWithinTheSyntaxProblemCeiling() throws {
         let root = repositoryRoot()
-        let skip: Set<String> = [".build", ".git", "checkouts", ".swiftpm", "DerivedData", "node_modules"]
+        // SwiftCorpus files are completion probes and stop mid-expression (`name./*|*/`).
+        let skip: Set<String> = [".build", ".git", "checkouts", ".swiftpm", "DerivedData", "node_modules", "SwiftCorpus"]
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],

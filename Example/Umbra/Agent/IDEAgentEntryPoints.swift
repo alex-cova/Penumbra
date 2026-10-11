@@ -90,7 +90,7 @@ extension IDEWorkspace {
     /// Whether the active tab is a Markdown text file that "Run with Agent" can send.
     var canRunMarkdownWithAgent: Bool {
         guard hasOpenProject, let document = workbench.activePane.selectedDocument else { return false }
-        return document.languageIdentifier == "markdown" && document.contentKind != .diff && document.contentKind != .diagram
+        return document.languageIdentifier == "markdown" && document.contentKind == .text
     }
 
     /// "Run with Agent": sends the selection, or the whole Markdown file, to the Agent chat. The live

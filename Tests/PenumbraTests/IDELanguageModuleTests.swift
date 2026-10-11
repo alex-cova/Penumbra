@@ -13,7 +13,7 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testTheShippedModulesAreJavaHTTPThePreviewLanguagesTypeScriptAndSwift() {
         XCTAssertEqual(
-            IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript", "swift"]
+            IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript", "swift", "hex"]
         )
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
         XCTAssertNotNil(IDELanguageModules.module(id: "swift"))
@@ -85,10 +85,10 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testSettingsPagesKeepTheirOrderWithTheJavaOnesBetweenProjectAndAgent() {
         let modulePages = IDELanguageModules.preferencePanes.map(\.domain)
-        XCTAssertEqual(modulePages.map(\.id), ["java", "inspections"])
+        XCTAssertEqual(modulePages.map(\.id), ["java", "inspections", "typescript", "swift", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "appearance", "focus", "project", "java", "inspections", "agent"]
+            ["general", "editor", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "hex", "agent"]
         )
         XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "appearance", "focus", "project", "agent"])
     }

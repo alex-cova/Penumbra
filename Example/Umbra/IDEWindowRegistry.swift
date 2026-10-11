@@ -285,7 +285,10 @@ final class IDEWindowRegistry {
     /// Quitting with unsaved editors in any window asks once for all of them, where closing each
     /// window would ask per window. Nothing to ask when everything is saved.
     func confirmQuit() -> Bool {
-        guard let text = Self.quitPromptText(unsavedPerWindow: workspaces.map(\.unsavedDocumentCount)) else {
+        let details = workspaces.flatMap { $0.unsavedChangeLines() }.filter { $0.contains("changed bytes") }
+        guard let text = Self.quitPromptText(
+            unsavedPerWindow: workspaces.map(\.unsavedDocumentCount), details: details
+        ) else {
             return true
         }
         let alert = NSAlert()
@@ -299,13 +302,15 @@ final class IDEWindowRegistry {
 
     /// What the quit prompt says, or nil when no window has unsaved editors. `unsavedPerWindow` holds
     /// each open window's count of editors with unsaved changes.
-    static func quitPromptText(unsavedPerWindow: [Int]) -> String? {
+    static func quitPromptText(unsavedPerWindow: [Int], details: [String] = []) -> String? {
         let unsaved = unsavedPerWindow.filter { $0 > 0 }
         let total = unsaved.reduce(0, +)
         guard total > 0 else { return nil }
         let editors = "\(total) open editor\(total == 1 ? " has" : "s have")"
         let windows = unsaved.count > 1 ? " in \(unsaved.count) windows" : ""
-        return "\(editors) unsaved changes\(windows) that will be lost."
+        let base = "\(editors) unsaved changes\(windows) that will be lost."
+        guard !details.isEmpty else { return base }
+        return ([base] + details).joined(separator: "\n")
     }
 
     /// Quitting: stop what every window started (debug sessions, Gradle runs, watchers), so nothing

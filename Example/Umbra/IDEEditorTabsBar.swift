@@ -84,6 +84,11 @@ private struct IDEEditorTabItem: View {
                let url = document.url {
                 if document.contentKind == .text {
                     Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
+                    Button("Reopen as Hex") { workspace.reopenDocumentAsHex(tab.id) }
+                }
+                if document.contentKind == .binary {
+                    Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
+                    Button("Reopen as Text") { workspace.reopenDocumentAsText(tab.id) }
                 }
                 Button("Show History") { workspace.showLocalHistory(for: url) }
             }

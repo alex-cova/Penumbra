@@ -20,9 +20,9 @@ final class LanguageCapabilityMatrixTests: XCTestCase {
         XCTAssertEqual(report.features[.typeHierarchy]?.service, "swift")
         XCTAssertEqual(report.features[.callHierarchy]?.service, "swift")
         XCTAssertEqual(report.features[.codeGeneration]?.service, "swift")
+        XCTAssertEqual(report.features[.codeActions], LanguageFeatureOwner(service: "swift", fidelity: .syntactic))
         XCTAssertNil(report.features[.formatting])
         XCTAssertNil(report.features[.inlayHints])
-        XCTAssertNil(report.features[.codeActions])
     }
 
     func testTypeScriptSyntacticTierHasNoSignatureHelpOrHierarchies() {

@@ -25,7 +25,8 @@ let package = Package(
         .library(name: "LanguageSyntax", targets: ["LanguageSyntax"]),
         .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
         .library(name: "SwiftIntelligence", targets: ["SwiftIntelligence"]),
-        .library(name: "TypeScriptIntelligence", targets: ["TypeScriptIntelligence"])
+        .library(name: "TypeScriptIntelligence", targets: ["TypeScriptIntelligence"]),
+        .library(name: "HexKit", targets: ["HexKit"])
     ],
     dependencies: [
         .package(path: "Packages/AgentKit"),
@@ -153,6 +154,12 @@ let package = Package(
             ],
             swiftSettings: swift6
         ),
+        // Byte model for the hex editor. No Penumbra, no AppKit. Umbra owns the view.
+        .target(
+            name: "HexKit",
+            exclude: ["CLAUDE.md"],
+            swiftSettings: swift6
+        ),
         .executableTarget(name: "SmokeTest", dependencies: ["Penumbra", "PenumbraMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
@@ -164,7 +171,8 @@ let package = Package(
                 "TypeScriptIntelligence",
                 "LanguageSyntax",
                 "PenumbraMarkdownLanguage",
-                "PenumbraLanguages"
+                "PenumbraLanguages",
+                "HexKit"
             ],
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
@@ -217,7 +225,8 @@ let package = Package(
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "DiagramKit", package: "DiagramKit"),
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "Sparkle", package: "Sparkle"),
+                "HexKit"
             ],
             path: "Example/Umbra",
             exclude: [
@@ -453,6 +462,7 @@ let package = Package(
             "JavaIntelligence",
             "SwiftIntelligence",
             "TypeScriptIntelligence",
+            "HexKit",
             "Umbra",
             "GitIntelligence",
             .product(name: "AgentKit", package: "AgentKit"),

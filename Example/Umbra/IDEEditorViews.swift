@@ -22,6 +22,8 @@ final class IDEEditorPaneHost: NSView {
     private var editorWasSelectableBeforeJSONDiagram = true
     /// Laid over the editor while a CSV or TSV file's table preview is showing.
     let csvTableView = IDECSVTableView()
+    /// Laid over the editor while a hex tab is selected.
+    let hexViewer = IDEHexViewerView()
     /// True while this pane's CSV/TSV file is covered by its table.
     private(set) var isCSVTableVisible = false
     private var csvRefreshTask: Task<Void, Never>?
@@ -101,6 +103,15 @@ final class IDEEditorPaneHost: NSView {
             csvTableView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
         csvTableView.onRevealLine = { [weak self] line in self?.revealCSVSourceLine(line) }
+
+        hexViewer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hexViewer)
+        NSLayoutConstraint.activate([
+            hexViewer.topAnchor.constraint(equalTo: topAnchor),
+            hexViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hexViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hexViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))
         click.delaysPrimaryMouseButtonEvents = false

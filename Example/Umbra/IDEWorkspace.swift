@@ -82,7 +82,7 @@ private final class NavigationBufferBridge: @unchecked Sendable {
 @MainActor
 @Observable
 public final class IDEWorkspace {
-    private static let languageProvider = BundledLanguageProvider()
+    static let languageProvider = BundledLanguageProvider()
 
     let workbench = EditorWorkbench()
     private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
@@ -90,6 +90,12 @@ public final class IDEWorkspace {
     /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
     @ObservationIgnored
     var diffSessions: [UUID: IDEDiffSession] = [:]
+    /// Each hex tab's session, by its document's id (see `IDEWorkspace+Hex.swift`).
+    @ObservationIgnored
+    var hexSessions: [UUID: IDEHexSession] = [:]
+    /// Paths opened as hex because the first 8 KB did not look like text. Consumed when the session starts.
+    @ObservationIgnored
+    var hexSniffedPaths: Set<String> = []
     var diagramSessions: [UUID: IDEDiagramSession] = [:]
     private let intelligenceServices = IDEIntelligenceServices()
     /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
@@ -97,7 +103,7 @@ public final class IDEWorkspace {
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
     @ObservationIgnored
-    private var paletteController: CommandPaletteController?
+    var paletteController: CommandPaletteController?
     @ObservationIgnored
     private weak var paletteOverlayContainer: NSView?
     @ObservationIgnored
@@ -585,6 +591,10 @@ public final class IDEWorkspace {
 
     func focusActiveEditor() {
         let host = host(for: workbench.activePaneID)
+        if workbench.activePane.selectedDocument?.contentKind == .binary {
+            host.hexViewer.focus()
+            return
+        }
         if workbench.activePane.selectedDocument?.contentKind == .diff {
             host.diffViewer.focus()
             return
@@ -603,10 +613,18 @@ public final class IDEWorkspace {
     /// Used when ⌘Z / ⌘⇧Z is not delivered to the focused control (a SwiftUI host with no
     /// `undo:` implementation). The editor's own undo manager is the stack those shortcuts edit.
     func undoActiveEditor() {
+        if workbench.activePane.selectedDocument?.contentKind == .binary {
+            activeHexSession()?.undo()
+            return
+        }
         activeEditingTextView.undoManager?.undo()
     }
 
     func redoActiveEditor() {
+        if workbench.activePane.selectedDocument?.contentKind == .binary {
+            activeHexSession()?.redo()
+            return
+        }
         activeEditingTextView.undoManager?.redo()
     }
 
@@ -826,6 +844,7 @@ public final class IDEWorkspace {
         agent.teardown()
         closeAllDiffSessions()
         closeAllDiagramSessions()
+        closeAllHexSessions()
         notifications.dismissToast()
         projectAccess.end()
         window = nil
@@ -1196,6 +1215,9 @@ public final class IDEWorkspace {
             return false
         }
         if document.contentKind == .diagram { return false }
+        if document.contentKind == .binary {
+            return await saveHexDocument(document)
+        }
         let textView = host(for: pane.id).textView
         var destination = document.url
         if destination == nil {
@@ -1517,10 +1539,18 @@ public final class IDEWorkspace {
     }
 
     public func showGoToLine() {
+        if workbench.activePane.selectedDocument?.contentKind == .binary {
+            showHexGoToOffset()
+            return
+        }
         sharedPalette(for: host(for: workbench.activePaneID)).presentGoToLine()
     }
 
     public func showFind() {
+        if workbench.activePane.selectedDocument?.contentKind == .binary {
+            showHexFind()
+            return
+        }
         // A read-only log with focus (the HTTP response) has its own find bar; the editor's
         // would open on a view the user is not looking at.
         if let log = NSApp.keyWindow?.firstResponder as? NSTextView, log.usesFindBar, !log.isEditable {
@@ -2346,7 +2376,8 @@ public final class IDEWorkspace {
         guard let root = gitStatus.repositoryRootPath else { return false }
         return workbench.panes.contains { pane in
             pane.documents.contains { document in
-                guard document.isDirty, document.contentKind == .text,
+                guard document.isDirty,
+                      document.contentKind == .text || document.contentKind == .binary,
                       let path = document.url?.standardizedFileURL.path else { return false }
                 return path == root || path.hasPrefix(root + "/")
             }
@@ -2380,6 +2411,15 @@ public final class IDEWorkspace {
                     continue
                 }
                 let discarded = forced.contains(url.standardizedFileURL.path)
+                if document.contentKind == .binary {
+                    guard !document.isDirty || discarded else { continue }
+                    if let session = hexSessions[document.id], (try? session.refreshCleanKeepingViewport()) != nil {
+                        session.publish(to: document)
+                    } else {
+                        await reloadHexFromDisk(document)
+                    }
+                    continue
+                }
                 guard document.contentKind == .text, !document.isDirty || discarded else { continue }
                 let showing = workbench.panes.filter { $0.selectedDocument === document }
                 if showing.isEmpty {
@@ -2416,7 +2456,7 @@ public final class IDEWorkspace {
         }
     }
 
-    private func installReloaded(_ loaded: WorkbenchDocument, onto document: WorkbenchDocument) {
+    func installReloaded(_ loaded: WorkbenchDocument, onto document: WorkbenchDocument) {
         document.pendingState = loaded.pendingState
         document.isFileBacked = loaded.isFileBacked
         document.rangeReader = loaded.rangeReader
@@ -3002,6 +3042,7 @@ public final class IDEWorkspace {
         guard let document = workbench.allDocuments().first(where: { $0.url?.standardizedFileURL.path == path }) else {
             return nil
         }
+        guard document.contentKind == .text else { return nil }
         let text = sourceText(for: document)
         return text.isEmpty ? nil : text
     }
@@ -3556,7 +3597,22 @@ public final class IDEWorkspace {
     func reloadTabFromDisk(_ id: UUID, in paneID: UUID, encoding: TextFileEncoding? = nil) {
         guard let pane = workbench.layout.findPane(id: paneID),
               let document = pane.documents.first(where: { $0.id == id }),
-              document.contentKind == .text, let url = document.url else { return }
+              let url = document.url else { return }
+        if document.contentKind == .binary {
+            if document.isDirty {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Reload \(document.displayName) from disk?"
+                alert.informativeText = "This discards your unsaved changes to \(document.displayName). It cannot be undone."
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Reload")
+                alert.buttons[1].hasDestructiveAction = true
+                guard alert.runModal() == .alertSecondButtonReturn else { return }
+            }
+            Task { await reloadHexFromDisk(document) }
+            return
+        }
+        guard document.contentKind == .text else { return }
         if document.isDirty {
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -3755,7 +3811,9 @@ public final class IDEWorkspace {
         if let restoration = session.restoration {
             workbench.restore(from: restoration, languageResolver: IDELanguageSupport.languageResolver)
             // Restored files were not opened through `openDocument`, so give each its starting point too.
-            for url in workbench.allDocuments().compactMap(\.url) { localHistory.recordBaseline(url) }
+            for document in workbench.allDocuments() where document.contentKind == .text {
+                if let url = document.url { localHistory.recordBaseline(url) }
+            }
             Task {
                 try? await workbench.reloadFileBackedDocuments(languageResolver: IDELanguageSupport.fileBackedLanguageResolver)
                 rebuildLayoutHosts()
@@ -3915,47 +3973,69 @@ public final class IDEWorkspace {
         return controller
     }
 
-    /// Loads `url` as an image or text document, not yet attached to any pane.
+    /// Loads `url` as an image, a hex document, or a text document, not yet attached to any pane.
     ///
     /// - Parameters:
     ///   - encoding: Read the file in exactly this encoding; bytes that do not fit are an error.
     ///   - preferredEncoding: The encoding the file was last read in. It is tried first, and a file
     ///     that no longer fits it (changed on disk) is detected afresh.
-    private func loadDocument(
+    ///   - openAsHex: Skip classification and open the bytes.
+    ///   - openAsText: Skip classification and open as text, falling back to Latin-1.
+    func loadDocument(
         from url: URL,
         encoding: TextFileEncoding? = nil,
-        preferring preferredEncoding: TextFileEncoding? = nil
+        preferring preferredEncoding: TextFileEncoding? = nil,
+        openAsHex: Bool = false,
+        openAsText: Bool = false
     ) async throws -> WorkbenchDocument {
-        if ImageContentDetector.isImageFile(url) {
+        let settings = IDEHexSettings.shared
+        let classification = BinaryContentDetector.classify(url)
+        let needsHead = !openAsHex && !openAsText
+            && !ImageContentDetector.isImageFile(url)
+            && classification == .unknown
+            && settings.sniffUnknownFiles
+        let head: Data? = needsHead ? IDEHexRouting.readHead(url) : nil
+        switch IDEHexRouting.route(
+            url: url, head: head, settings: settings, openAsHex: openAsHex, openAsText: openAsText
+        ) {
+        case .image:
             return WorkbenchDocument.loadImage(from: url)
-        }
-        let identifier = LanguageIdentifier.identifier(for: url)
-        let language = IDELanguageSupport.language(forIdentifier: identifier, fileURL: url)
-        // A remembered non-UTF-8 encoding is tried first; if the file no longer fits it, detect afresh.
-        var attempts: [TextFileEncoding?] = [encoding]
-        if encoding == nil, let preferredEncoding, preferredEncoding != .utf8 {
-            attempts = [preferredEncoding, nil]
-        }
-        var loaded: WorkbenchDocument?
-        for (index, attempt) in attempts.enumerated() {
+        case .hex(let sniffed):
+            if sniffed { hexSniffedPaths.insert(url.path) }
+            return WorkbenchDocument.loadBinary(from: url)
+        case .text:
             do {
-                loaded = try await WorkbenchDocument.load(
-                    contentsOf: url,
-                    theme: IDEEditorTheme.shared.current,
-                    lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
-                    language: language,
-                    languageIdentifier: identifier,
-                    languageProvider: Self.languageProvider,
-                    encoding: attempt
-                )
-                break
-            } catch DocumentLoadError.invalidEncoding where index < attempts.count - 1 {
-                continue
+                return try await loadTextDocument(from: url, encoding: encoding, preferring: preferredEncoding)
+            } catch DocumentLoadError.invalidEncoding {
+                if encoding != nil { throw DocumentLoadError.invalidEncoding }
+                if openAsText {
+                    guard let latin1 = TextFileEncoding.named("latin1") else { throw DocumentLoadError.invalidEncoding }
+                    return try await loadTextDocument(from: url, encoding: latin1, preferring: nil)
+                }
+                let ext = url.pathExtension.lowercased()
+                if !ext.isEmpty, settings.forceTextExtensions.contains(ext) {
+                    throw DocumentLoadError.invalidEncoding
+                }
+                if classification == .binary, !settings.openBinaryAsHex {
+                    throw DocumentLoadError.invalidEncoding
+                }
+                if classification == .unknown, !settings.sniffUnknownFiles {
+                    throw DocumentLoadError.invalidEncoding
+                }
+                if classification == .unknown {
+                    // The head looked like text (a BOM or low-control bytes) but the text loader
+                    // still refused it. Keep the tab text, via Latin-1, which accepts every byte.
+                    if let head, !BinaryContentDetector.looksBinary(head),
+                       let latin1 = TextFileEncoding.named("latin1") {
+                        return try await loadTextDocument(from: url, encoding: latin1, preferring: nil)
+                    }
+                    hexSniffedPaths.insert(url.path)
+                }
+                // A known text type that cannot be decoded opens as hex. No sniff banner: the
+                // name already said text, and the bytes are what failed.
+                return WorkbenchDocument.loadBinary(from: url)
             }
         }
-        guard let document = loaded else { throw DocumentLoadError.invalidEncoding }
-        document.language = language
-        return document
     }
 
     /// Makes the pane to the right of the active one active, splitting the active pane first when
@@ -4109,6 +4189,8 @@ public final class IDEWorkspace {
                 host.imageViewerController.focusForInteraction()
             } else if pane.selectedDocument?.contentKind == .diagram {
                 host.diagramViewer.focus()
+            } else if pane.selectedDocument?.contentKind == .binary {
+                host.hexViewer.focus()
             } else {
                 host.diffViewer.focus()
             }
@@ -4391,6 +4473,10 @@ public final class IDEWorkspace {
         closeDiagramSession(documentID, in: pane)
         let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
         pane.closeDocument(documentID)
+        let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
+        if !stillOpen {
+            closeHexSession(documentID)
+        }
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
             problems.clearEditorDiagnostics(for: closingURL)
             if closingURL.pathExtension == "java" {
@@ -4757,6 +4843,7 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.debug.stop", title: "Debug: Stop", group: "Run",
                           action: { [weak self] in self?.stopDebugging() })
         ])
+        syncHexPaletteCommands()
     }
 
     func reloadProject() {
@@ -4791,6 +4878,7 @@ public final class IDEWorkspace {
             self.gitStatus.refresh()
             self.fileIndexer.handle(batch)
             self.languages.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
+            self.noteExternalChange(of: Array(batch.paths))
             // A teammate's change (a pull) or a hand edit of a shared run configuration.
             if batch.paths.contains(where: { $0.contains("/\(JavaProjectRunConfigurationFolder.relativePath)/") }) {
                 self.refreshLastRunConfiguration()
@@ -4839,15 +4927,17 @@ public final class IDEWorkspace {
         paletteController?.workspaceRoot = project.rootURL
         showDocument(in: workbench.activePane, host: host)
         adapter.refreshCachedDocuments()
-        host.intelligenceController?.refreshDiagnostics()
-        host.intelligenceController?.refreshBreadcrumbs()
+        if workbench.activePane.selectedDocument?.contentKind != .binary {
+            host.intelligenceController?.refreshDiagnostics()
+            host.intelligenceController?.refreshBreadcrumbs()
+        }
         refreshStructure()
         updateStatus(from: host.textView)
         refreshPresentation()
         Task { await workspaceBridge.syncPane(workbench.activePane) }
     }
 
-    private func refreshPresentation() {
+    func refreshPresentation() {
         activePaneID = workbench.activePaneID
         var tabs: [UUID: [IDETabRow]] = [:]
         for pane in workbench.panes {
@@ -4872,6 +4962,7 @@ public final class IDEWorkspace {
         if let document = workbench.activePane.selectedDocument, document.contentKind == .text {
             statusEncoding = document.encoding
         }
+        syncHexPaletteCommands()
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · \(projectTitle)"
             let pathItems = pathBreadcrumbItems(for: document)
@@ -5345,10 +5436,16 @@ public final class IDEWorkspace {
     }
 
     private func updateStatus(from textView: TextView) {
-        if let kind = workbench.activePane.selectedDocument?.contentKind, kind != .text {
+        if let document = workbench.activePane.selectedDocument, document.contentKind != .text {
             statusLine = 1
             statusColumn = 1
-            statusLanguage = kind == .image ? "Image" : (kind == .diagram ? "Diagram" : "Diff")
+            switch document.contentKind {
+            case .image: statusLanguage = "Image"
+            case .diagram: statusLanguage = "Diagram"
+            case .binary: statusLanguage = "Hex"
+            case .diff: statusLanguage = "Diff"
+            case .text: break
+            }
             statusSelectionLength = 0
             runFileCanRun = false
             runFileURL = nil
@@ -5510,7 +5607,7 @@ public final class IDEWorkspace {
     /// when the content actually changed, so another pane showing the same document (from a split)
     /// can tell its own loaded content is now stale. `host` is the pane host `textView` belongs to:
     /// its own content already reflects this generation, so it needs no reload for itself.
-    private func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument, from host: IDEEditorPaneHost) {
+    func syncTextViewToDocument(_ textView: TextView, document: WorkbenchDocument, from host: IDEEditorPaneHost) {
         var changed = false
         if document.isFileBacked {
             // File-backed `document.text` is empty by design, so compare the live buffer's
@@ -5580,7 +5677,7 @@ public final class IDEWorkspace {
     /// document (its buffer is valid even if a sibling just bumped generation), then
     /// `document.text`. File-backed documents keep `text` empty, so the host fallbacks are what
     /// stop a tab/split switch from rebuilding an empty editor.
-    private func sourceText(for document: WorkbenchDocument) -> String {
+    func sourceText(for document: WorkbenchDocument) -> String {
         var staleHostText: String?
         for pane in workbench.panes {
             guard let host = hostCache.peek(pane.id),
@@ -5597,11 +5694,16 @@ public final class IDEWorkspace {
         return staleHostText ?? document.text
     }
 
-    private func showDocument(
+    func showDocument(
         in pane: EditorPane,
         host: IDEEditorPaneHost
     ) {
         guard let document = pane.selectedDocument else { return }
+        if document.contentKind == .binary {
+            showHexDocument(document, in: pane, host: host)
+            return
+        }
+        host.hexViewer.hide()
         if document.contentKind == .image {
             host.diffViewer.hide()
             host.diagramViewer.hide()
@@ -5868,14 +5970,13 @@ public final class IDEWorkspace {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = messageText
-        alert.informativeText =
-            "\(dirtyCount) open editor\(dirtyCount == 1 ? " has" : "s have") unsaved changes that will be lost."
+        alert.informativeText = unsavedPromptText()
         alert.addButton(withTitle: confirmButtonTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func presentError(_ error: Error) {
+    func presentError(_ error: Error) {
         NSAlert(error: error).runModal()
     }
 
