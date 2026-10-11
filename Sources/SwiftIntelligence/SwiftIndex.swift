@@ -45,15 +45,10 @@ public actor SwiftIndex {
         public var ranges: [Range<Int>]
     }
 
-    private var root: URL?
-    private var generation = 0
-    private var buildingToken: Int?
-    private var pendingEdits: [URL: SwiftFileModel?] = [:]
-    private var files: [URL: SwiftFileModel] = [:]
+    private var storage = SourceFileIndex<SwiftFileModel>(configuration: .swiftFiles)
     private var moduleByFile: [URL: String] = [:]
     private var moduleResolver: (@Sendable (URL) -> String?)?
     private var bufferHashes: [URL: Int] = [:]
-    private var openBuffer: (@Sendable (URL) async -> String?)?
 
     private var typesByName: [String: [TypeRef]] = [:]
     private var extensionsByName: [String: [TypeRef]] = [:]
@@ -65,14 +60,14 @@ public actor SwiftIndex {
     // MARK: Configuration
 
     public func setOpenBufferLookup(_ lookup: (@Sendable (URL) async -> String?)?) {
-        openBuffer = lookup
+        storage.setOpenBufferLookup(lookup)
     }
 
     /// Tells the index which module a file belongs to (SwiftPM target directories). Applies to
     /// every file at once and to the ones indexed afterwards.
     public func setModuleResolver(_ resolver: (@Sendable (URL) -> String?)?) {
         moduleResolver = resolver
-        let snapshot = files
+        let snapshot = storage.storedFiles
         clearTables()
         for (url, model) in snapshot { add(url, model) }
     }
@@ -86,34 +81,28 @@ public actor SwiftIndex {
     /// Rebuilds the index for `root` (or clears it). A newer call wins; a cancelled one does not publish.
     public func setRoot(_ root: URL?) async {
         if Task.isCancelled { return }
-        generation += 1
-        let token = generation
-        buildingToken = token
-        pendingEdits = [:]
-        let standardized = root?.standardizedFileURL
-        self.root = standardized
-        guard let standardized else {
+        let walk = storage.beginWalk(root: root)
+        guard let standardized = walk.root else {
             replaceAll([:])
-            buildingToken = nil
+            storage.finishWalk(walk.token)
             return
         }
-        let urls = await Task.detached { SwiftIndex.enumerate(standardized) }.value
-        guard token == generation, !Task.isCancelled else {
-            if buildingToken == token { buildingToken = nil }
+        let configuration = storage.configuration
+        let urls = await Task.detached {
+            SourceFileIndex<SwiftFileModel>.enumerate(root: standardized, configuration: configuration)
+        }.value
+        guard storage.isCurrent(walk.token), !Task.isCancelled else {
+            storage.cancelWalk(walk.token)
             return
         }
-        let parsed = await parseAll(urls)
-        guard token == generation, !Task.isCancelled else {
-            if buildingToken == token { buildingToken = nil }
+        let parsed = await SourceFileIndex<SwiftFileModel>.parseAll(urls, configuration: configuration)
+        guard storage.isCurrent(walk.token), !Task.isCancelled else {
+            storage.cancelWalk(walk.token)
             return
         }
-        var merged = parsed
-        for (url, edit) in pendingEdits {
-            if let edit { merged[url] = edit } else { merged.removeValue(forKey: url) }
-        }
+        let merged = storage.mergingPending(into: parsed)
         replaceAll(merged)
-        pendingEdits = [:]
-        buildingToken = nil
+        storage.finishWalk(walk.token)
     }
 
     public func applyFileChanges(_ urls: [URL]) {
@@ -121,12 +110,13 @@ public actor SwiftIndex {
             let standardized = url.standardizedFileURL
             guard SwiftPaths.isSourceFile(standardized), !SwiftPaths.isSkipped(standardized) else { continue }
             let model: SwiftFileModel?
-            if FileManager.default.fileExists(atPath: standardized.path), let source = Self.readDisk(standardized) {
-                model = SwiftAnalysis.parseModel(source)
+            if FileManager.default.fileExists(atPath: standardized.path),
+               let source = SourceFileIndex<SwiftFileModel>.readDisk(standardized, maxBytes: storage.configuration.maxBytes) {
+                model = storage.parse(source, url: standardized)
             } else {
                 model = nil
             }
-            if buildingToken != nil { pendingEdits[standardized] = model }
+            storage.recordPending(standardized, model)
             bufferHashes[standardized] = nil
             remove(standardized)
             if let model { add(standardized, model) }
@@ -139,7 +129,7 @@ public actor SwiftIndex {
         let standardized = url.standardizedFileURL
         guard SwiftPaths.isSourceFile(standardized), !SwiftPaths.isSkipped(standardized) else { return }
         let key = text.hashValue
-        if bufferHashes[standardized] == key, files[standardized] != nil { return }
+        if bufferHashes[standardized] == key, storage.file(at: standardized) != nil { return }
         guard let parsed = SwiftAnalysis.parse(text) else { return }
         bufferHashes[standardized] = key
         remove(standardized)
@@ -147,29 +137,31 @@ public actor SwiftIndex {
     }
 
     public func contains(_ url: URL) -> Bool {
-        files[url.standardizedFileURL] != nil
+        storage.contains(url)
     }
 
-    public var fileCount: Int { files.count }
+    public var fileCount: Int { storage.fileCount }
 
     public func model(for url: URL) async -> SwiftFileModel? {
         let standardized = url.standardizedFileURL
         await refresh(standardized)
-        return files[standardized]
+        return storage.file(at: standardized)
     }
 
     /// The text the editor shows for `url`, else the file on disk when it is indexed.
+    /// The open buffer is tried at the standardized URL, then at `url` itself.
     public func source(for url: URL) async -> String? {
         let standardized = url.standardizedFileURL
-        if let openBuffer {
+        if let openBuffer = storage.openBuffer {
             if let text = await openBuffer(standardized) { return text }
             if standardized != url, let text = await openBuffer(url) { return text }
         }
-        return files[standardized] == nil ? nil : Self.readDisk(standardized)
+        guard storage.contains(standardized) else { return nil }
+        return SourceFileIndex<SwiftFileModel>.readDisk(standardized, maxBytes: storage.configuration.maxBytes)
     }
 
     private func refresh(_ url: URL) async {
-        guard let openBuffer, SwiftPaths.isSourceFile(url) else { return }
+        guard let openBuffer = storage.openBuffer, SwiftPaths.isSourceFile(url) else { return }
         guard let text = await openBuffer(url) else { return }
         noteOpenDocument(url: url, text: text)
     }
@@ -345,7 +337,7 @@ public actor SwiftIndex {
         guard let file else { return refs }
         let standardized = file.standardizedFileURL
         let own = moduleByFile[standardized]
-        let imported = Set((files[standardized]?.imports ?? []).map(\.module))
+        let imported = Set((storage.file(at: standardized)?.imports ?? []).map(\.module))
         return refs.filter { ref in
             guard let module = ref.module, let own else { return true }
             return module == own || imported.contains(module)
@@ -365,7 +357,7 @@ public actor SwiftIndex {
     }
 
     private func replaceAll(_ models: [URL: SwiftFileModel]) {
-        files = [:]
+        storage.removeAll()
         bufferHashes = [:]
         clearTables()
         for (url, model) in models { add(url, model) }
@@ -373,7 +365,7 @@ public actor SwiftIndex {
 
     private func add(_ url: URL, _ full: SwiftFileModel) {
         let model = full.indexed()
-        files[url] = model
+        storage.insert(url, model)
         let module = moduleResolver?(url)
         moduleByFile[url] = module
         for declaration in model.declarations {
@@ -388,7 +380,7 @@ public actor SwiftIndex {
     }
 
     private func remove(_ url: URL) {
-        guard let old = files.removeValue(forKey: url) else { return }
+        guard case .removed(_, let old)? = storage.remove(url) else { return }
         moduleByFile[url] = nil
         symbolsByFile[url] = nil
         for name in old.identifiers {
@@ -459,60 +451,16 @@ public actor SwiftIndex {
         }
     }
 
-    // MARK: Disk
+}
 
-    private func parseAll(_ urls: [URL]) async -> [URL: SwiftFileModel] {
-        let limit = 8
-        return await withTaskGroup(of: (URL, SwiftFileModel)?.self) { group in
-            var next = 0
-            func add(_ url: URL) {
-                group.addTask {
-                    if Task.isCancelled { return nil }
-                    guard let source = SwiftIndex.readDisk(url) else { return nil }
-                    guard let model = SwiftAnalysis.parseModel(source) else { return nil }
-                    return (url, model)
-                }
-            }
-            while next < urls.count && next < limit {
-                add(urls[next])
-                next += 1
-            }
-            var result: [URL: SwiftFileModel] = [:]
-            for await item in group {
-                if let (url, model) = item { result[url] = model }
-                if next < urls.count {
-                    add(urls[next])
-                    next += 1
-                }
-            }
-            return result
-        }
-    }
-
-    private static func enumerate(_ root: URL) -> [URL] {
-        let fileManager = FileManager.default
-        guard let enumerator = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-        var urls: [URL] = []
-        while let url = enumerator.nextObject() as? URL {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if values?.isDirectory == true {
-                if SwiftPaths.skipDirectories.contains(url.lastPathComponent) { enumerator.skipDescendants() }
-                continue
-            }
-            guard SwiftPaths.isSourceFile(url), !SwiftPaths.isSkipped(url) else { continue }
-            if let size = values?.fileSize, size > SwiftPaths.maxBytes { continue }
-            urls.append(url.standardizedFileURL)
-        }
-        return urls
-    }
-
-    private static func readDisk(_ url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
-        guard data.count <= SwiftPaths.maxBytes else { return nil }
-        return String(data: data, encoding: .utf8)
+private extension SourceFileIndex.Configuration where Model == SwiftFileModel {
+    static var swiftFiles: Self {
+        Self(
+            skipDirectories: SwiftPaths.skipDirectories,
+            maxBytes: SwiftPaths.maxBytes,
+            isSourceFile: { SwiftPaths.isSourceFile($0) },
+            isSkipped: { SwiftPaths.isSkipped($0) },
+            parse: { source, _ in SwiftAnalysis.parseModel(source) }
+        )
     }
 }

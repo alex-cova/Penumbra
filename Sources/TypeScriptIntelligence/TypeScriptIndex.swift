@@ -19,11 +19,7 @@ public actor TypeScriptIndex {
         public var ranges: [Range<Int>]
     }
 
-    private var root: URL?
-    private var generation = 0
-    private var buildingToken: Int?
-    private var pendingEdits: [URL: TypeScriptFileModel?] = [:]
-    private var files: [URL: TypeScriptFileModel] = [:]
+    private var storage = SourceFileIndex<TypeScriptFileModel>(configuration: .typeScriptFiles)
     public struct PaletteSymbol: Sendable, Equatable {
         public var name: String
         public var container: String
@@ -35,49 +31,37 @@ public actor TypeScriptIndex {
     private var names: [String: Set<URL>] = [:]
     private var exportsByName: [String: [ExportRef]] = [:]
     private var paletteSymbols: [PaletteSymbol] = []
-    private var openBuffer: (@Sendable (URL) async -> String?)?
-
     public func setOpenBufferLookup(_ lookup: (@Sendable (URL) async -> String?)?) {
-        openBuffer = lookup
+        storage.setOpenBufferLookup(lookup)
     }
 
-    public var fileCount: Int { files.count }
+    public var fileCount: Int { storage.fileCount }
 
     /// Rebuilds the index for `root` (or clears it). A newer call wins; a cancelled one does not publish.
     public func setRoot(_ root: URL?) async {
         if Task.isCancelled { return }
-        generation += 1
-        let token = generation
-        buildingToken = token
-        pendingEdits = [:]
-        let standardized = root?.standardizedFileURL
-        self.root = standardized
-        guard let standardized else {
+        let walk = storage.beginWalk(root: root)
+        guard let standardized = walk.root else {
             publish([:])
-            buildingToken = nil
+            storage.finishWalk(walk.token)
             return
         }
-        let urls = await Task.detached { TypeScriptIndex.enumerate(standardized) }.value
-        guard token == generation, !Task.isCancelled else {
-            if buildingToken == token { buildingToken = nil }
+        let configuration = storage.configuration
+        let urls = await Task.detached {
+            SourceFileIndex<TypeScriptFileModel>.enumerate(root: standardized, configuration: configuration)
+        }.value
+        guard storage.isCurrent(walk.token), !Task.isCancelled else {
+            storage.cancelWalk(walk.token)
             return
         }
-        let parsed = await parseAll(urls)
-        guard token == generation, !Task.isCancelled else {
-            if buildingToken == token { buildingToken = nil }
+        let parsed = await SourceFileIndex<TypeScriptFileModel>.parseAll(urls, configuration: configuration)
+        guard storage.isCurrent(walk.token), !Task.isCancelled else {
+            storage.cancelWalk(walk.token)
             return
         }
-        var merged = parsed
-        for (url, edit) in pendingEdits {
-            if let edit {
-                merged[url] = edit
-            } else {
-                merged.removeValue(forKey: url)
-            }
-        }
+        let merged = storage.mergingPending(into: parsed)
         publish(merged)
-        pendingEdits = [:]
-        buildingToken = nil
+        storage.finishWalk(walk.token)
     }
 
     public func applyFileChanges(_ urls: [URL]) async {
@@ -85,43 +69,45 @@ public actor TypeScriptIndex {
             let standardized = url.standardizedFileURL
             guard TypeScriptPaths.isSourceFile(standardized), !TypeScriptPaths.isSkipped(standardized) else { continue }
             let model: TypeScriptFileModel?
-            if FileManager.default.fileExists(atPath: standardized.path), let source = Self.readDisk(standardized) {
-                model = TypeScriptAnalysis.parse(source, fileURL: standardized)?.model
+            if FileManager.default.fileExists(atPath: standardized.path),
+               let source = SourceFileIndex<TypeScriptFileModel>.readDisk(standardized, maxBytes: storage.configuration.maxBytes) {
+                model = storage.parse(source, url: standardized)
             } else {
                 model = nil
             }
-            if buildingToken != nil {
-                pendingEdits[standardized] = model
-            }
+            storage.recordPending(standardized, model)
             if let model {
-                files[standardized] = model
+                storage.insert(standardized, model)
             } else {
-                files.removeValue(forKey: standardized)
+                _ = storage.remove(standardized)
             }
         }
-        if buildingToken == nil {
-            publish(files)
+        if !storage.isBuilding {
+            publish(storage.storedFiles)
         }
     }
 
     public func contains(_ url: URL) -> Bool {
-        files[url.standardizedFileURL] != nil
+        storage.contains(url)
     }
 
     public func model(for url: URL) async -> TypeScriptFileModel? {
         if let source = await source(for: url) {
             return TypeScriptAnalysis.parse(source, fileURL: url)?.model
         }
-        return files[url.standardizedFileURL]
+        return storage.file(at: url)
     }
 
+    /// The text the editor shows for `url`, else the file on disk when it is indexed.
+    /// The open buffer is tried at the standardized URL, then at `url` itself.
     public func source(for url: URL) async -> String? {
         let standardized = url.standardizedFileURL
-        if let openBuffer {
+        if let openBuffer = storage.openBuffer {
             if let text = await openBuffer(standardized) { return text }
             if standardized != url, let text = await openBuffer(url) { return text }
         }
-        return files[standardized] == nil ? nil : Self.readDisk(standardized)
+        guard storage.contains(standardized) else { return nil }
+        return SourceFileIndex<TypeScriptFileModel>.readDisk(standardized, maxBytes: storage.configuration.maxBytes)
     }
 
     /// Relative specifiers only (`.` or `..`). Matches an indexed file, then an extension, then `index.ts`.
@@ -138,7 +124,7 @@ public actor TypeScriptIndex {
         }
         for candidate in candidates {
             let standardized = candidate.standardizedFileURL
-            if files[standardized] != nil { return standardized }
+            if storage.contains(standardized) { return standardized }
         }
         return nil
     }
@@ -226,34 +212,6 @@ public actor TypeScriptIndex {
         return nil
     }
 
-    private func parseAll(_ urls: [URL]) async -> [URL: TypeScriptFileModel] {
-        let limit = 8
-        return await withTaskGroup(of: (URL, TypeScriptFileModel)?.self) { group in
-            var next = 0
-            func add(_ url: URL) {
-                group.addTask {
-                    if Task.isCancelled { return nil }
-                    guard let source = TypeScriptIndex.readDisk(url) else { return nil }
-                    guard let model = TypeScriptAnalysis.parse(source, fileURL: url)?.model else { return nil }
-                    return (url, model)
-                }
-            }
-            while next < urls.count && next < limit {
-                add(urls[next])
-                next += 1
-            }
-            var result: [URL: TypeScriptFileModel] = [:]
-            for await item in group {
-                if let (url, model) = item { result[url] = model }
-                if next < urls.count {
-                    add(urls[next])
-                    next += 1
-                }
-            }
-            return result
-        }
-    }
-
     /// Types and members whose names match `query`, in index order, up to `limit`. An empty query matches nothing.
     public func symbols(matching query: String, limit: Int) -> [PaletteSymbol] {
         guard limit > 0, !query.isEmpty else { return [] }
@@ -269,7 +227,7 @@ public actor TypeScriptIndex {
     }
 
     private func publish(_ models: [URL: TypeScriptFileModel]) {
-        files = models
+        storage.replaceFiles(with: models)
         var names: [String: Set<URL>] = [:]
         var exports: [String: [ExportRef]] = [:]
         var symbols: [PaletteSymbol] = []
@@ -317,32 +275,16 @@ public actor TypeScriptIndex {
         }
     }
 
-    private static func enumerate(_ root: URL) -> [URL] {
-        let fileManager = FileManager.default
-        guard let enumerator = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-        var urls: [URL] = []
-        while let url = enumerator.nextObject() as? URL {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if values?.isDirectory == true {
-                if TypeScriptPaths.skipDirectories.contains(url.lastPathComponent) {
-                    enumerator.skipDescendants()
-                }
-                continue
-            }
-            guard TypeScriptPaths.isSourceFile(url), !TypeScriptPaths.isSkipped(url) else { continue }
-            if let size = values?.fileSize, size > TypeScriptPaths.maxBytes { continue }
-            urls.append(url.standardizedFileURL)
-        }
-        return urls
-    }
+}
 
-    private static func readDisk(_ url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
-        guard data.count <= TypeScriptPaths.maxBytes else { return nil }
-        return String(data: data, encoding: .utf8)
+private extension SourceFileIndex.Configuration where Model == TypeScriptFileModel {
+    static var typeScriptFiles: Self {
+        Self(
+            skipDirectories: TypeScriptPaths.skipDirectories,
+            maxBytes: TypeScriptPaths.maxBytes,
+            isSourceFile: { TypeScriptPaths.isSourceFile($0) },
+            isSkipped: { TypeScriptPaths.isSkipped($0) },
+            parse: { source, url in TypeScriptAnalysis.parse(source, fileURL: url)?.model }
+        )
     }
 }

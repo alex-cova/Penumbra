@@ -14,10 +14,21 @@ Status, as of Oct 10, 2026. Finished items match the plan todos. Continue from `
 - Swift organize imports sorts, drops duplicate lines, and groups `@testable` imports (`SwiftImportOrganizer`). It does not remove an import the file never spells: that needs the compiler. SourceKit-LSP does not provide this action.
 - `.tsx` and `.jsx` highlight with `tree_sitter_tsx()`. The language identifier stays `typescript` or `javascript`, so the mapping tests are unchanged. Parsing already used that grammar.
 - `enter-session` at 20k and 120k lines was re-measured against `20fad79`. Enter stays ~0.9 ms at the top and ~11.7 ms in the middle. Numbers are in `docs/EDITOR_PERF_PLAN.md`. One run is not a gate.
+- `SourceFileIndex<Model>` owns enumeration, the 1 MB cap, the fan-out of 8, generation, pending edits, and the open-buffer lookup. `SwiftIndex` and `TypeScriptIndex` keep their public methods and their own lookup tables.
 
 **Still open**
-- Phases 8 and 9 are specified in `docs/PHASE_8_9_HANDOFF.md`. Phase 8 extracts `SourceFileIndex<Model>` without changing index tests. Phase 9 starts with an lldb-dap spike and does not add `IDEDebugSession` until that spike has a written result. Phase 10 stays gated.
+- Phase 9 stops after the lldb-dap spike below. Launch never reached a stop, so `IDEDebugSession` was not added. Phase 10 stays gated.
 - The full suite (`caffeinate -u -d -i -s swift test`) has not been run for this work.
+
+## lldb-dap spike (phase 9, Oct 10 2026)
+
+Adapter: `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` (LLVM 21.0.0, liblldb 2103.0.34.103, Apple Swift 6.4). Discovery is `UMBRA_LLDB_DAP_PATH`, then `xcrun --find lldb-dap`. The probe is `LLDBDAPSpike` in the Umbra target, launched through SubprocessKit, gated by `UMBRA_LLDB_DAP=1` (`LLDBDAPSpikeTests`). It is skipped when the binary is absent.
+
+What succeeded: `swiftc -g -Onone` of a three-line program; Content-Length `initialize` and its response; `lldb` `target create` and `breakpoint set --file main.swift --line 2` (the breakpoint binds at `main + 24`). This adapter does not send an `initialized` event after `initialize`.
+
+What failed: `launch`, even with `setBreakpoints` and `configurationDone` already written to the pipe, produces no further DAP message. `lldb -b` stops at `run` the same way: debugserver starts and the private-state thread waits forever. Running the binary directly exits. A pseudo-terminal does not unblock it. The agent shell's sandbox sentinel is `.sb-56ca21c4`. Stop, variables, step, and evaluate were not reached.
+
+`IDEDebugSession` and a `JavaDebugSession` wrapper are not added until a Swift session stops on a breakpoint.
 
 Decisions recorded in the source plan: TypeScript's semantic tier is LSP (typescript-language-server or vtsls driving the project's tsserver), and direct distribution comes first (external servers are first-class; the App Sandbox spike is phase 10).
 

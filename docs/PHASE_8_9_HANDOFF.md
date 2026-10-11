@@ -1,5 +1,11 @@
 # Handoff: phase 8 and phase 9
 
+## Spike result (Oct 10 2026)
+
+Phase 8's `SourceFileIndex<Model>` is in `Sources/EditorIntelligence/Indexing/SourceFileIndex.swift`. Phase 9 did not add `IDEDebugSession`.
+
+`lldb-dap` is `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` (LLVM 21.0.0, liblldb 2103.0.34.103). Through SubprocessKit, `initialize` succeeds and no `initialized` event follows. `launch` (with the breakpoint and `configurationDone` already queued) never returns a message, and `lldb` `run` hangs in debugserver the same way. The detail is in `docs/LANGUAGE_PARITY_PLAN.md` under "lldb-dap spike".
+
 Read `docs/LANGUAGE_PARITY_PLAN.md` (the status block, then phases 8 and 9) and `docs/LANGUAGE_PARITY_HANDOFF.md`. Phases 0–7 are done. Do not redo them. Phase 10 stays gated. Do not start phase 9's types before the lldb-dap spike below has a written result.
 
 Decisions already made: TypeScript's semantic tier is LSP. External servers are first-class. The App Sandbox spike stays in phase 10. Do not grow the native Swift or TypeScript engines into type checkers. Do not wrap `JavaDebugSession` until a Swift DAP session has stopped on a breakpoint.
