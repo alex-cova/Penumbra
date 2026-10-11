@@ -1235,6 +1235,7 @@ public final class EditorIntelligenceController {
                 let start = min(max(0, top), length)
                 let end = min(max(start, bottom), length)
                 // Line and column come from the line index, not from scanning the text.
+                @MainActor
                 func position(_ offset: Int) -> TextPosition {
                     let location = textView.textLocation(at: offset)
                     return TextPosition(line: location?.lineNumber ?? 0, column: location?.column ?? offset, utf16Offset: offset)
