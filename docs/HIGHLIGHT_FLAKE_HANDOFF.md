@@ -1,101 +1,39 @@
-# Handoff: stale heading colour after typing at several carets (Markdown)
+# Stale heading colour after typing at several carets (Markdown)
 
-Status: **open, not reproduced on demand.** Written 2026-10-11 on branch `external-file-changes`, after `87f3210` (drop a stale asynchronous line highlight) fixed a different flake in the same suite.
+Status: **fixed** on branch `external-file-changes` (2026-10-11).
 
 ## The symptom
 
-`IncrementalHighlightConsistencyTests.testTypingHeadingMarkersAtSeveralCarets` failed once:
+`IncrementalHighlightConsistencyTests.testTypingHeadingMarkersAtSeveralCarets` failed once under a heavy test mix: after `## ` was typed at three carets in `"one\n\ntwo\n\nthree\n"`, the empty row 3 kept the heading's bold colour on its line break (`Menlo-Bold #9B2292` vs `Menlo-Regular #000000`). `testUndoingHeadingMarkerDeletion` failed once the same way.
 
-```
-[settled] incremental rendering differs from a fresh open:
-row 3 "" col 0 "\n": Menlo-Bold 14.0 #9B2292 vs Menlo-Regular 14.0 #000000
-```
+## Cause
 
-The fixture is `"one\n\ntwo\n\nthree\n"`. `## ` is typed one character at a time, with carets at the start of `one`, `two` and `three` (`Edit.typeAtCarets`). Expected result:
+The painting paths were not at fault. The **tree** was wrong.
 
-```
-row 0  ## one
-row 1  (empty)
-row 2  ## two
-row 3  (empty)     ← its line break kept the heading's bold colour
-row 4  ## three
-```
+A buffer edit reaches the language mode in two steps: `TextEditHelper.replaceText` changes `StringView` and `LineManager`, and only afterwards does `TextInputView.replaceText` call `TreeSitterInternalLanguageMode.textDidChange` (epoch bump and `ts_tree_edit`). A background parse that **publishes between the two** stores a tree built from the new text with the old, unedited tree as its base. `textDidChange` then applies the edit a second time on top of it, and every later incremental parse trusts the result. The published tree had heading nodes ending past their own line (`markup.heading.2@16..<32`, `@32..<52` in a 50-byte document), so a heading's capture reached the first byte of the empty line below it.
 
-After everything settled, the empty line under `## two` still carried the heading style (bold, `markup.heading` colour) on its only character, the line break. A freshly opened view of the same text shows it plain. Only colour and font differ; text, line heights, folds and method separators matched.
+The window is a few instructions wide on the main thread, so it only opened when the machine was loaded. It was easy to hit with three carets because each caret is its own edit and its own parse restart.
 
-The failure was in **settled** mode: `settle(_:)` runs between keystrokes, so each keystroke waited for its parse and for the async highlights after it. Burst mode, which doesn't wait, passed in that run.
+A second defect in the same area made the stress run trap (`Negative value is not representable`, `PackedLineIndex.row(containingUTF16:)` out of range, two crash reports on 2026-10-11): `parse(completion:)` passed `NSRange(0, stringView.length)` and then `setRootIncludedUTF16Range` read the length again, so an edit in between made the whole-document request look like a viewport window and the background thread walked `LineManager` while the main thread edited it.
 
-## How often
+## Fix
 
-| Run | Failures |
-| --- | --- |
-| The suite alone (`--filter IncrementalHighlightConsistencyTests`), 4 runs after `87f3210` | 0 |
-| The 168-test combination below, 4 runs | 1 |
-| The full suite (4,755 tests), 1 run after `87f3210` | 0 |
+- `TreeSitterInternalLanguageMode.syncedContentGeneration`: the `StringView.contentGeneration` the tree was last brought in step with (`textDidChange`, `invalidateSyntaxTree`, `parseFromBuffer`). A parse whose buffer generation is ahead of it when it publishes is dropped like one whose epoch moved on; `textDidChange` then sees `tree == nil` and the caller restarts the parse after the edit. Cost: one locked 64-bit read per parse.
+- `StringView.contentGenerationSnapshot`: the locked read that makes the above safe off the main thread.
+- A whole-document parse passes `nil` instead of a length (`parseUsingReader(coveringUTF16Range:)`).
 
-The combination that failed:
+## Tests
 
-```
-caffeinate -u -d -i -s swift test --filter 'IncrementalHighlightConsistencyTests|StaleAsyncHighlightTests|SyntaxHighlight|Highlight|MarkdownLanguageTests|TextViewStateParsePolicyTests'
-```
+- `MultiCaretIncrementalParseTests.testAParsePublishedBetweenTheBufferChangeAndTheEditNoticeMatchesAFreshParse`: the deterministic regression test (a background parse between the buffer change and the edit notice, for each of the nine edits). Fails on the parent commit with the extra heading ranges above, passes with the fix.
+- `MultiCaretIncrementalParseTests.testEveryInterleavingOfParsesMatchesAFreshParse`: parse / no parse / invalidate between the nine edits. All 6,561 combinations matched a fresh parse (set `combinationStride` to 1 to run them); the suite runs every 97th.
+- `IncrementalHighlightConsistencyTests.testStressSettledMultiCaretHeadings`: skipped unless `PENUMBRA_HIGHLIGHT_STRESS=<iterations>` is set. Reruns the settled-mode fixtures until one differs; run it under CPU load (`for i in 1 2 3 4; do yes > /dev/null & done`, then `pkill yes`).
 
-A related one-off: in another run of that combination, `testUndoingHeadingMarkerDeletion` (Markdown, backspace `## ` then undo three times) also failed. Its diff was not captured. It may be the same family, since both involve a heading forming or dissolving next to an empty line.
+## Verification
 
-**Not caused by:** the stale-position bug fixed in `87f3210`. That bug shifted every token on a line by the length of an edit made above it. Here a single character on a line nobody edited has a style it never legitimately had. No intermediate state of this edit makes row 3 a heading.
+- Stress, 100 iterations of both fixtures under 4× CPU load: 0 diffs, no crash (the parent crashed about 7 minutes in at 200).
+- Highlight/tree-sitter/Markdown suite combination (195 tests), 10 runs: 0 real failures.
+- `PerfHarness enter-session synthetic --lines 20000` (release), parent vs change: `enter_fresh_top` 1.86/1.96 vs 1.86/1.88 ms, `enter_fresh_middle` 21.2/21.5 vs 21.2/21.1 ms, `scroll_step` 4.0 vs 4.0 ms. No change.
 
-## What is known about the code paths
+## Still open (not part of this fix)
 
-A line can be painted by five paths. Any of them could have left this colour behind.
-
-1. **Synchronous highlight on a keystroke.** `LineController.updateSyntaxHighlightingIfNecessary(async: false)` → `TreeSitterSyntaxHighlighter.syntaxHighlight(_:)` → `TreeSitterInternalLanguageMode.capturesIfReady(in:)`. This reads the *edited* tree (`ts_tree_edit` applied, not yet reparsed) with the line's current byte range.
-2. **Asynchronous highlight** (`syntaxHighlight(_:completion:)`). Since `87f3210` it is dropped when `StringView.contentGeneration` moved, so a shifted result can no longer land through it.
-3. **Capture-window cache.** `syntaxHighlightFromCache` → `cachedCapturesIfReady(in:)` / `captureWindows`, cleared in `textDidChange`.
-4. **Colour shift on a one-line edit.** `TextInputView` (~line 3484) → `LayoutManager.redisplayLines(withIDs:colorShift:)`. This only applies when a single line changed. A multi-caret edit touches three lines, so in principle it shouldn't run here; confirm that it doesn't.
-5. **Recolour after a parse.** `runBackgroundParse` records `pendingRootSyntaxRows` / `pendingSyntaxRows` from `changedRowRanges(old edited tree → new tree)`. Markdown has an inline child layer, so `pendingSyntaxRows` is nil and the caller recolours what is on screen. Check that this really reaches row 3, and that colour-only refreshes (`invalidateSyntaxColorsOnly`, `colorsStale`) reset the line before painting: `applyHighlights` resets unless `hasOnlyDefaultAttributes`.
-
-Relevant query: `Sources/PenumbraMarkdownLanguage/Queries/Block/highlights.scm` captures the **whole `atx_heading` node** (`(atx_heading (atx_h2_marker)) @markup.heading.2`). If that node's range ever reaches the first byte of the next line, path 1 or 3 paints row 3 col 0. In tree-sitter-markdown the node ends after its line break, which is the exclusive start of the next line, so a correct tree should never do this.
-
-## Hypotheses (unverified, in the order I would test them)
-
-1. **An edited-but-not-reparsed tree briefly extends the heading over the empty line.**
-   - Three insertions per keystroke mean three `ts_tree_edit`s on one tree before the parse. Edit arithmetic can leave a node ending in the wrong place until the reparse.
-   - A synchronous highlight of row 3 in that window paints it. The recolour after the parse then has to reach row 3.
-   - The flake would follow if, under load, the recolour sees row 3 as already highlighted (`isSyntaxHighlightingInvalid == false`), or the parse publishes after `settle` stopped looking.
-2. **The recolour after a parse skips row 3.** The paths decide which rows to recolour (`pendingRootSyntaxRows` vs "everything on screen") and which lines are marked `colorsStale`. A row whose text did not change might be left out under a timing-dependent ordering, for example while a parse is in flight during the next keystroke (the `textDidChange` branch that bumps `parseEpoch` and returns an empty `LineChangeSet`).
-3. **The inline (injected) layer is out of step with the block tree** after a multi-caret edit, and paints bold (`**`/heading inline content) from a stale child-layer range.
-
-## Plan
-
-1. **Make it reproduce.**
-   - **Stress test:** add a temporary stress variant that runs `assertConsistent` for this fixture 200 times in one process, settled mode only, stopping at the first diff.
-   - **Load:** run it alongside CPU load (`for i in 1 2 3 4; do yes > /dev/null & done`, kill afterwards), since the failure only appeared under a heavier test mix.
-   - **Shuffle:** also try the 168-test combination in a loop.
-   - **Goal:** a rate high enough to bisect, at least 1 in 20.
-2. **Instrument (test-only, not on hot paths).** Record per line controller which path last painted it (sync / async / cache / colour shift / parse recolour), the `contentGeneration` and parse epoch at that moment, and the captures returned for its byte range. On a diff, dump that for the differing row together with the current tree's `atx_heading` ranges. A `#if DEBUG` hook or a `ForTesting` property on `LineController`, like `displayedLineForTesting`, is enough.
-3. **Narrow by switching paths off:**
-   - turn on `PenumbraSyncKeystrokeParse` (the `withSyncKeystrokeParse` helper in the test file);
-   - bypass the capture-window cache;
-   - force every highlight async;
-   - force a full-viewport recolour after each parse.
-
-   Whichever change makes the flake vanish names the path.
-4. **Write a deterministic test** for that path once found, in the style of `StaleAsyncHighlightTests`: drive the language mode and highlighter directly, hold the parse or highlight queue (`OperationQueue.isSuspended`), and apply the three-caret edit between steps.
-5. **Fix, then verify.**
-   - **Stress:** the stress loop passes 0 failures in 500 iterations, under load.
-   - **Suites:** the combination passes 10 times in a row, and the full suite passes.
-   - **Performance:** `swift run -c release PerfHarness enter-session synthetic --lines 20000` shows no regression, measured on the parent commit and on the change, per `docs/PERFORMANCE_RULES.md`.
-
-## Constraints
-
-- Follow `docs/PERFORMANCE_RULES.md`: no work per keystroke that grows with document size, and don't wait for a parse on a keystroke. A fix that "reparses synchronously before highlighting" is not acceptable on the typing path.
-- Follow the threading rules in the root `CLAUDE.md`: main-thread code must not read a `TreeSitterLanguageLayer`'s `tree` directly (use `rootSyntaxNode`), and every `StringView` read takes its lock.
-- Remove the stress test and the instrumentation before merging, or gate them behind an environment variable so the normal suite stays fast.
-
-## Pointers
-
-- **Test and harness:** `Tests/PenumbraTests/IncrementalHighlightConsistencyTests.swift` (`assertConsistent`, `settle`, `differences`, `minimapDifferences`).
-- **Line painting:** `Sources/Penumbra/TextView/LineController/LineController.swift` (`prepareString`, `updateSyntaxHighlightingIfNecessary`, `invalidateSyntaxColorsOnly`).
-- **Highlighter:** `Sources/Penumbra/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterSyntaxHighlighter.swift`.
-- **Parsing, captures, recolour rows:** `Sources/Penumbra/TextView/SyntaxHighlighting/Internal/TreeSitter/TreeSitterInternalLanguageMode.swift` (`textDidChange`, `runBackgroundParse`, `capturesIfReady`, `cachedCapturesIfReady`).
-- **Colour shift:** `Sources/Penumbra/TextView/Core/TextInputView.swift` (~3484) and `LayoutManager.redisplayLines(withIDs:colorShift:)`.
-- **Previous fix, as a model for the deterministic test:** `87f3210`, `Tests/PenumbraTests/StaleAsyncHighlightTests.swift`.
+The viewport parse policy (`parse(coveringUTF16Range:)`) still converts its window to line/column points on the parse's background thread (`ViewportParseWindow.textRange` → `LineManager`), which is the same class of off-main read the whole-document path had. Converting the window on the main thread before the operation is queued would close it. Not reproduced.

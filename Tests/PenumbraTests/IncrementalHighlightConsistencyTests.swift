@@ -143,6 +143,26 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
         assertConsistent(text, .markdown, edits: [.backspace(3, at: offset(of: "Heading", in: text)), .undo, .undo, .undo])
     }
 
+    /// Hunts the flake in `docs/HIGHLIGHT_FLAKE_HANDOFF.md`: reruns the settled-mode body for the
+    /// multi-caret fixtures until one differs. Off unless `PENUMBRA_HIGHLIGHT_STRESS=<iterations>`.
+    func testStressSettledMultiCaretHeadings() throws {
+        let configured = ProcessInfo.processInfo.environment["PENUMBRA_HIGHLIGHT_STRESS"].flatMap(Int.init)
+        try XCTSkipIf(configured == nil, "set PENUMBRA_HIGHLIGHT_STRESS=<iterations> to run")
+        let raw = configured ?? 0
+        continueAfterFailure = false
+        let multi = "one\n\ntwo\n\nthree\n"
+        let undo = "intro\n\n## Heading\n\nbody\n"
+        for iteration in 0 ..< raw {
+            assertConsistent(multi, .markdown, modes: [true], edits: [
+                .typeAtCarets("## ", at: [0, offset(of: "two", in: multi), offset(of: "three", in: multi)])
+            ])
+            assertConsistent(undo, .markdown, modes: [true], edits: [
+                .backspace(3, at: offset(of: "Heading", in: undo)), .undo, .undo, .undo
+            ])
+            if iteration % 25 == 0 { print("stress iteration \(iteration)") }
+        }
+    }
+
     func testTypingHeadingMarkersAtSeveralCarets() {
         let text = "one\n\ntwo\n\nthree\n"
         assertConsistent(text, .markdown, edits: [
@@ -251,11 +271,12 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
         _ initialText: String,
         _ language: Language,
         policy: SyntaxParsePolicy = .eager,
+        modes: [Bool] = [true, false],
         edits: [Edit],
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        for settleBetweenKeystrokes in [true, false] {
+        for settleBetweenKeystrokes in modes {
             let (live, liveWindow) = makeView(text: initialText, language: language, policy: policy)
             for edit in edits {
                 apply(edit, to: live, settle: settleBetweenKeystrokes)

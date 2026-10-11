@@ -34,6 +34,12 @@ final class StringView {
     /// Bumped on storage mutation so a save can detect concurrent edits.
     private(set) var contentGeneration: UInt64 = 0
 
+    /// ``contentGeneration`` read under the lock, for a caller off the main thread (the language
+    /// mode's background parse compares it with the generation its tree was last edited for).
+    var contentGenerationSnapshot: UInt64 {
+        withLock { contentGeneration }
+    }
+
     /// UTF-16 length. Prefer this over ``string``.length so file-backed documents do not materialize.
     var length: Int {
         withLock {
