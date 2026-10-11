@@ -2784,7 +2784,8 @@ public final class IDEWorkspace {
             for url in urls {
                 if let text = openBufferText(for: url) { live[url] = text }
             }
-            let planned = await Task.detached(priority: .userInitiated) { () -> (entries: [WorkspaceEditPlanEntry], unreadable: Int) in
+            // Captured by value: `urls` and `live` are vars, which a detached task must not share.
+            let planned = await Task.detached(priority: .userInitiated) { [urls, live, query, replacement] () -> (entries: [WorkspaceEditPlanEntry], unreadable: Int) in
                 var entries: [WorkspaceEditPlanEntry] = []
                 var unreadable = 0
                 for url in urls {
