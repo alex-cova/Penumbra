@@ -615,27 +615,32 @@ struct IDESwiftPMSidebarPanel: View {
             } else if system.manifest == nil {
                 pinned("No Package.swift")
             } else {
-                ScrollView([.vertical, .horizontal]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        section("Tasks")
-                        ForEach(system.tasks, id: \.path) { task in
-                            taskRow(task, system: system)
-                        }
-                        if let manifest = system.manifest, !manifest.targets.isEmpty {
-                            section("Targets")
-                            ForEach(manifest.targets, id: \.name) { target in
-                                infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
+                GeometryReader { proxy in
+                    ScrollView([.vertical, .horizontal]) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            section("Tasks")
+                            ForEach(system.tasks, id: \.path) { task in
+                                taskRow(task, system: system)
+                            }
+                            if let manifest = system.manifest, !manifest.targets.isEmpty {
+                                section("Targets")
+                                ForEach(manifest.targets, id: \.name) { target in
+                                    infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
+                                }
+                            }
+                            if let manifest = system.manifest, !manifest.packages.isEmpty {
+                                section("Dependencies")
+                                ForEach(manifest.packages, id: \.name) { package in
+                                    infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
+                                }
                             }
                         }
-                        if let manifest = system.manifest, !manifest.packages.isEmpty {
-                            section("Dependencies")
-                            ForEach(manifest.packages, id: \.name) { package in
-                                infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
-                            }
-                        }
+                        .padding(.vertical, IDEAppearance.Spacing.xs)
+                        // A two-axis ScrollView proposes no width and centers content narrower than
+                        // the viewport, which squeezed the rows into a column; same fix as the
+                        // Gradle and npm panels.
+                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                     }
-                    .padding(.vertical, IDEAppearance.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             if case .untrusted = system.syncState {
@@ -676,6 +681,8 @@ struct IDESwiftPMSidebarPanel: View {
         Text(title.uppercased())
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
             .padding(.bottom, 2)
@@ -698,6 +705,7 @@ struct IDESwiftPMSidebarPanel: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -718,11 +726,13 @@ struct IDESwiftPMSidebarPanel: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             if !detail.isEmpty {
                 Text(detail)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             Spacer(minLength: 0)
         }
