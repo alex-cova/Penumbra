@@ -21,26 +21,79 @@ public struct GitRevertResult: Sendable, Equatable {
 /// invocations; nothing runs unless the host calls it.
 public struct GitRepository: Sendable {
     public let root: URL
-    private let runner: any GitRunning
+    /// The directory holding `HEAD`, `index` and the operation files (`MERGE_HEAD`, `rebase-merge/`).
+    /// It is `<root>/.git` for a normal work tree and `.git/worktrees/<name>` for a linked one.
+    public let gitDirectory: URL
+    let runner: any GitRunning
+    /// What network commands (fetch, pull, push, clone) run with.
+    public let network: GitNetworkEnvironment
+    /// Receives progress lines from commands that report them, when a call passes no handler of its own.
+    let progress: GitProgressHandler?
 
-    /// Fails fast instead of waiting on a prompt nobody can answer.
-    private static let nonInteractive = [
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"
-    ]
-
-    public init(root: URL, runner: any GitRunning = SystemGitRunner()) {
+    public init(
+        root: URL,
+        runner: any GitRunning = SystemGitRunner(),
+        network: GitNetworkEnvironment = .batchMode,
+        gitDirectory: URL? = nil,
+        progress: GitProgressHandler? = nil
+    ) {
         self.root = root
         self.runner = runner
+        self.network = network
+        self.gitDirectory = gitDirectory ?? root.appendingPathComponent(".git", isDirectory: true)
+        self.progress = progress
+    }
+
+    /// The same repository with another network environment (a host's credential helper).
+    public func withNetwork(_ network: GitNetworkEnvironment) -> GitRepository {
+        GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: progress)
+    }
+
+    /// The same repository reporting the progress of fetch, pull, push and clone to `handler`.
+    public func withProgress(_ handler: GitProgressHandler?) -> GitRepository {
+        GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: handler)
     }
 
     /// The repository containing `directory`, or nil when it is not inside a work tree.
-    public static func discover(from directory: URL, runner: any GitRunning = SystemGitRunner()) async -> GitRepository? {
-        guard let output = try? await runner.run(["rev-parse", "--show-toplevel"], in: directory),
-              case let path = output.text.trimmingCharacters(in: .whitespacesAndNewlines),
-              !path.isEmpty
-        else { return nil }
-        return GitRepository(root: URL(fileURLWithPath: path).standardizedFileURL, runner: runner)
+    public static func discover(
+        from directory: URL,
+        runner: any GitRunning = SystemGitRunner(),
+        network: GitNetworkEnvironment = .batchMode
+    ) async -> GitRepository? {
+        guard let output = try? await runner.run(["rev-parse", "--show-toplevel", "--absolute-git-dir"], in: directory) else {
+            return nil
+        }
+        let lines = output.text.split(separator: "\n", omittingEmptySubsequences: true).map {
+            String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let top = lines.first, !top.isEmpty else { return nil }
+        let gitDirectory = lines.count > 1
+            ? URL(fileURLWithPath: lines[1], isDirectory: true).standardizedFileURL
+            : nil
+        return GitRepository(
+            root: URL(fileURLWithPath: top).standardizedFileURL,
+            runner: runner,
+            network: network,
+            gitDirectory: gitDirectory
+        )
+    }
+
+    /// HEAD and the operation in progress, read from disk with no process.
+    public func state() -> GitRepositoryState {
+        GitRepositoryState.read(gitDirectory: gitDirectory)
+    }
+
+    /// `network`'s variables, with `-o BatchMode=yes` added to the user's own ssh command when the
+    /// host has no credential helper, so a prompt fails instead of waiting for nobody.
+    func networkEnvironment() async -> [String: String] {
+        var environment = network.variables
+        guard network.failsInsteadOfPrompting, environment["GIT_SSH_COMMAND"] == nil else { return environment }
+        var base = ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] ?? ""
+        if base.isEmpty, let out = try? await readOnly(["config", "--get", "core.sshCommand"]) {
+            base = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        environment["GIT_SSH_COMMAND"] = (base.isEmpty ? "ssh" : base) + " -o BatchMode=yes"
+        return environment
     }
 
     /// Files under `directory` that a search should open: tracked files, plus untracked files that
@@ -75,7 +128,7 @@ public struct GitRepository: Sendable {
         }
     }
 
-    private func readOnly(_ args: [String], stdin: Data? = nil) async throws -> GitOutput {
+    func readOnly(_ args: [String], stdin: Data? = nil) async throws -> GitOutput {
         try await runner.run(["--no-optional-locks"] + args, in: root, stdin: stdin, environment: nil)
     }
 
@@ -149,9 +202,16 @@ public struct GitRepository: Sendable {
 
     /// - Parameter path: a file to follow through renames, relative to the repository root. The
     ///   log then holds only the commits that touched it, so its graph lanes would dangle.
-    public func log(scope: GitLogScope = .all, grep: String? = nil, author: String? = nil, path: String? = nil, skip: Int = 0, limit: Int = 500) async throws -> [GitCommit] {
+    ///   - paths: files or folders (relative to the root) the commits must touch; no rename following.
+    ///   - since, until: the commit date window.
+    public func log(
+        scope: GitLogScope = .all, grep: String? = nil, author: String? = nil, path: String? = nil,
+        paths: [String] = [], since: Date? = nil, until: Date? = nil, skip: Int = 0, limit: Int = 500
+    ) async throws -> [GitCommit] {
         var args = ["log", "--date-order", "--format=" + GitLogParser.format, "--skip=\(skip)", "-n", "\(limit)"]
         if path != nil { args.append("--follow") }
+        if let since { args.append("--since=\(Int(since.timeIntervalSince1970))") }
+        if let until { args.append("--until=\(Int(until.timeIntervalSince1970))") }
         if let grep, !grep.isEmpty { args += ["--grep=\(grep)", "-i"] }
         if let author, !author.isEmpty { args.append("--author=\(author)") }
         switch scope {
@@ -161,6 +221,7 @@ public struct GitRepository: Sendable {
         }
         args.append("--")
         if let path { args.append(path) }
+        args += paths
         let out = try await readOnly(args)
         return GitLogParser.parse(out.text, remotes: await remotes())
     }
@@ -298,17 +359,28 @@ public struct GitRepository: Sendable {
     }
 
     /// Commits only `paths` (plus any `untrackedPaths`, which are added first), whatever else is staged.
-    public func commit(message: String, paths: [String], untrackedPaths: [String], amend: Bool) async throws -> String {
+    /// - Parameters:
+    ///   - signoff: adds a `Signed-off-by` trailer.
+    ///   - skipHooks: `--no-verify`: pre-commit and commit-msg hooks do not run.
+    ///
+    /// Signing prompts (an SSH key's passphrase) go through the repository's network environment,
+    /// so a host's credential helper answers them.
+    public func commit(
+        message: String, paths: [String], untrackedPaths: [String], amend: Bool,
+        signoff: Bool = false, skipHooks: Bool = false
+    ) async throws -> String {
         if !untrackedPaths.isEmpty {
-            _ = try await runner.run(["add", "--"] + untrackedPaths, in: root, stdin: nil, environment: nil)
+            _ = try await mutate(["add", "--"] + untrackedPaths)
         }
         // `--only` commits just `paths` and is an error without any; with none, commit what is staged.
         var args = ["commit"]
         if !paths.isEmpty { args.append("--only") }
         if amend { args.append("--amend") }
+        if signoff { args.append("--signoff") }
+        if skipHooks { args.append("--no-verify") }
         args += ["-m", message]
         if !paths.isEmpty { args += ["--"] + paths }
-        let out = try await runner.run(args, in: root, stdin: nil, environment: nil)
+        let out = try await mutate(args, network: true, extraEnvironment: ["GIT_EDITOR": "true"])
         return out.text
     }
 
@@ -340,7 +412,7 @@ public struct GitRepository: Sendable {
     public func push() async throws -> String {
         let hasUpstream = (try? await runner.run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], in: root, stdin: nil, environment: nil)) != nil
         let args = hasUpstream ? ["push"] : ["push", "-u", "origin", "HEAD"]
-        let out = try await runner.run(args, in: root, stdin: nil, environment: Self.nonInteractive)
+        let out = try await runner.run(args, in: root, stdin: nil, environment: await networkEnvironment())
         // git reports push progress on stderr.
         return out.stderr.isEmpty ? out.text : out.stderr
     }
@@ -349,6 +421,14 @@ public struct GitRepository: Sendable {
     public func switchBranch(_ name: String) async throws -> String {
         let branch = try validatedBranchName(name)
         let out = try await runner.run(["switch", "--", branch], in: root, stdin: nil, environment: nil)
+        return out.stderr.isEmpty ? out.text : out.stderr
+    }
+
+    /// Switches and throws away tracked local changes that are in the way (`switch --discard-changes`).
+    /// Untracked files stay. The caller must have asked the user.
+    public func forceSwitchBranch(_ name: String) async throws -> String {
+        let branch = try validatedBranchName(name)
+        let out = try await runner.run(["switch", "--discard-changes", "--", branch], in: root, stdin: nil, environment: nil)
         return out.stderr.isEmpty ? out.text : out.stderr
     }
 
@@ -361,11 +441,10 @@ public struct GitRepository: Sendable {
 
     /// Fast-forward only. A diverged branch fails and leaves the history unmerged.
     public func pull() async throws -> String {
-        let out = try await runner.run(["pull", "--ff-only"], in: root, stdin: nil, environment: Self.nonInteractive)
-        return out.stderr.isEmpty ? out.text : out.stderr
+        try await pull(strategy: .fastForwardOnly)
     }
 
-    private func validatedBranchName(_ name: String) throws -> String {
+    func validatedBranchName(_ name: String) throws -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("-") else { throw GitError.invalidBranchName }
         return trimmed

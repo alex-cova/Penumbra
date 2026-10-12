@@ -78,4 +78,56 @@ final class SystemGitRunnerTests: XCTestCase {
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 10)
     }
+
+    // MARK: - Observer and progress
+
+    private final class Recorder: GitCommandObserving, @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [GitCommandRecord] = []
+        var records: [GitCommandRecord] { lock.withLock { stored } }
+        func gitCommandFinished(_ record: GitCommandRecord) { lock.withLock { stored.append(record) } }
+    }
+
+    func testTheObserverSeesSuccessAndFailure() async throws {
+        let recorder = Recorder()
+        let run = SystemGitRunner(observer: recorder)
+        _ = try await run.run(["init", "-q"], in: directory)
+        _ = try? await run.run(["rev-parse", "--verify", "refs/heads/nope"], in: directory)
+
+        let records = recorder.records
+        XCTAssertEqual(records.map { $0.arguments.first }, ["init", "rev-parse"])
+        XCTAssertTrue(records[0].succeeded)
+        XCTAssertFalse(records[1].succeeded)
+        XCTAssertEqual(records[1].directory, directory)
+        XCTAssertGreaterThanOrEqual(records[1].duration, 0)
+    }
+
+    private final class ProgressBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [GitProgress] = []
+        var values: [GitProgress] { lock.withLock { stored } }
+        func add(_ value: GitProgress) { lock.withLock { stored.append(value) } }
+    }
+
+    func testProgressLinesFromStderrReachTheHandler() async throws {
+        let run = SystemGitRunner()
+        let source = directory.appendingPathComponent("source", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        _ = try await run.run(["init", "-q", "-b", "main"], in: source)
+        for (key, value) in [("user.name", "T"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+            _ = try await run.run(["config", key, value], in: source)
+        }
+        try "x\n".write(to: source.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await run.run(["add", "a.txt"], in: source)
+        _ = try await run.run(["commit", "-q", "-m", "x"], in: source)
+
+        let box = ProgressBox()
+        // `--progress` forces the lines that git hides when stderr is not a terminal.
+        _ = try await run.run(
+            ["clone", "--progress", "--no-local", source.path, directory.appendingPathComponent("copy").path],
+            in: directory, stdin: nil, environment: nil, onProgress: { box.add($0) })
+
+        XCTAssertFalse(box.values.isEmpty, "clone --progress writes to stderr")
+        XCTAssertTrue(box.values.contains { $0.text.contains("Cloning into") })
+    }
 }

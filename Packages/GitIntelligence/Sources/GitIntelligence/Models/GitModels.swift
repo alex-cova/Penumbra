@@ -125,6 +125,9 @@ public enum GitRevision: Sendable, Hashable {
     case parent(of: String)
     /// A branch, tag or any other name `git rev-parse` accepts.
     case ref(String)
+    /// One side of an unresolved conflict in the index: 1 the common base, 2 "ours" (the commit
+    /// being merged into or rebased onto), 3 "theirs" (the commit being merged or replayed).
+    case stage(Int)
 
     /// The `<rev>:<path>` object name git reads the file from.
     func objectName(path: String) -> String {
@@ -134,6 +137,7 @@ public enum GitRevision: Sendable, Hashable {
         case .commit(let hash): hash + ":" + path
         case .parent(let hash): hash + "^:" + path
         case .ref(let name): name + ":" + path
+        case .stage(let number): ":\(number):" + path
         }
     }
 }
