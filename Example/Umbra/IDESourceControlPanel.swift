@@ -12,16 +12,74 @@ struct IDESourceControlPanel: View {
         self._gitStatus = Bindable(wrappedValue: gitStatus)
     }
 
+    private enum SubTab: String, CaseIterable, Identifiable {
+        case log = "Log"
+        case stashes = "Stashes"
+        case compare = "Compare"
+        case console = "Console"
+        var id: String { rawValue }
+    }
+
+    @State private var subTab: SubTab = .log
+
     var body: some View {
-        historyContent
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(IDEAppearance.ColorToken.editor)
-            .clipped()
-            .onAppear { gitStatus.loadHistory() }
+        VStack(spacing: 0) {
+            subTabBar
+            switch subTab {
+            case .log:
+                historyContent
+            case .stashes:
+                IDEGitStashPanel(gitStatus: gitStatus)
+            case .compare:
+                IDEGitCompareView(gitStatus: gitStatus)
+            case .console:
+                IDEGitConsoleView(repositoryRoot: gitStatus.repositoryRootPath)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(IDEAppearance.ColorToken.editor)
+        .clipped()
+        .onAppear { gitStatus.loadHistory() }
+        .onChange(of: gitStatus.comparison) { _, comparison in
+            if comparison != nil { subTab = .compare }
+        }
+        .onAppear {
+            gitStatus.requestShowStashes = { subTab = .stashes }
+        }
+    }
+
+    /// Compare appears while a comparison is held; Log and Console are always there.
+    private var visibleTabs: [SubTab] {
+        SubTab.allCases.filter { $0 != .compare || gitStatus.comparison != nil }
+    }
+
+    private var subTabBar: some View {
+        HStack(spacing: IDEAppearance.Spacing.md) {
+            ForEach(visibleTabs) { tab in
+                Button { subTab = tab } label: {
+                    Text(tab.rawValue)
+                        .font(IDEAppearance.Typography.panelTab)
+                        .foregroundStyle(subTab == tab ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private var historyContent: some View {
         VStack(spacing: 0) {
+            if let lineHistory = gitStatus.lineHistory {
+                lineHistoryBar(lineHistory)
+                splitContent(
+                    list: lineHistoryList(lineHistory),
+                    text: lineHistory.entries.first { $0.commit.hash == lineHistory.selectedHash }?.patch
+                        ?? (lineHistory.entries.isEmpty ? "Loading…" : "Select a commit to see its change."),
+                    listWidth: 380
+                )
+            } else {
             if let path = gitStatus.historyFilePath {
                 fileHistoryBar(path)
             } else {
@@ -32,6 +90,60 @@ struct IDESourceControlPanel: View {
                 text: gitStatus.commitDetailText ?? "Select a commit to see its changes.",
                 listWidth: 380
             )
+            }
+        }
+    }
+
+    // MARK: Line history
+
+    private func lineHistoryBar(_ history: IDEGitLineHistory) -> some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Text("History of lines \(history.startLine)–\(history.endLine) of \((history.path as NSString).lastPathComponent)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button {
+                gitStatus.clearLineHistory()
+            } label: {
+                Label("All Commits", systemImage: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Spacer(minLength: 0)
+        }
+        .font(IDEAppearance.Typography.caption)
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+    }
+
+    private func lineHistoryList(_ history: IDEGitLineHistory) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if history.entries.isEmpty {
+                    Text("No commits touched these lines")
+                        .font(IDEAppearance.Typography.body)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .padding(IDEAppearance.Spacing.md)
+                }
+                ForEach(history.entries) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.commit.subject)
+                            .font(IDEAppearance.Typography.tabLabel)
+                            .lineLimit(1)
+                        Text("\(entry.commit.shortHash)  \(entry.commit.author)")
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+                    .padding(.horizontal, IDEAppearance.Spacing.md)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(history.selectedHash == entry.commit.hash ? IDEAppearance.ColorToken.selection : Color.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture { gitStatus.lineHistory?.selectedHash = entry.commit.hash }
+                }
+            }
+            .padding(.vertical, IDEAppearance.Spacing.xs)
         }
     }
 
@@ -86,6 +198,18 @@ struct IDESourceControlPanel: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
 
+            Menu {
+                Button("Any Date") { gitStatus.setHistoryWindow(since: nil) }
+                Divider()
+                Button("Last 24 Hours") { gitStatus.setHistoryWindow(since: Date().addingTimeInterval(-86_400)) }
+                Button("Last 7 Days") { gitStatus.setHistoryWindow(since: Date().addingTimeInterval(-7 * 86_400)) }
+                Button("Last 30 Days") { gitStatus.setHistoryWindow(since: Date().addingTimeInterval(-30 * 86_400)) }
+            } label: {
+                Label(dateTitle, systemImage: "calendar")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -128,6 +252,15 @@ struct IDESourceControlPanel: View {
                 .frame(maxHeight: .infinity)
         } secondary: {
             VStack(spacing: 0) {
+                if !gitStatus.commitBranches.isEmpty {
+                    Text("In branches: \(gitStatus.commitBranches.prefix(8).joined(separator: ", "))\(gitStatus.commitBranches.count > 8 ? " …" : "")")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, IDEAppearance.Spacing.md)
+                        .padding(.vertical, 3)
+                }
                 if !gitStatus.selectedCommitFiles.isEmpty {
                     commitFiles
                     Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
@@ -165,6 +298,63 @@ struct IDESourceControlPanel: View {
         workspace.openCommitDiff(hash: hash, shortHash: shortHash, file: file, files: files)
     }
 
+    private var dateTitle: String {
+        guard let since = gitStatus.historySince else { return "Any Date" }
+        let days = Int((Date().timeIntervalSince(since) / 86_400).rounded())
+        return days <= 1 ? "Last 24 Hours" : "Last \(days) Days"
+    }
+
+    /// Plain click selects one commit, ⌘-click toggles it, ⇧-click extends from the primary one.
+    private func selectCommitRow(_ commit: IDEGitCommit) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) {
+            gitStatus.toggleCommitSelection(commit.hash)
+        } else if flags.contains(.shift) {
+            gitStatus.extendCommitSelection(to: commit.hash)
+        } else {
+            gitStatus.selectCommit(commit.hash)
+        }
+    }
+
+    @ViewBuilder
+    private func commitMenu(_ commit: IDEGitCommit) -> some View {
+        let targets = gitStatus.commitsForAction(on: commit.hash)
+        let single = targets.count == 1
+        let isHead = commit.hash == gitStatus.headCommitHash
+        Button("Copy Revision") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(targets.map(\.hash).joined(separator: "\n"), forType: .string)
+        }
+        Divider()
+        Button("Checkout Revision") { gitStatus.checkoutCommit(commit.hash) }.disabled(!single)
+        Button("Compare with \(gitStatus.currentBranch ?? "Current")") { gitStatus.compare(with: commit.hash) }
+            .disabled(!single || gitStatus.currentBranch == nil)
+        Divider()
+        Button(single ? "Cherry-Pick" : "Cherry-Pick \(targets.count) Commits") { gitStatus.cherryPick(targets.map(\.hash)) }
+            .disabled(isHead && single)
+        Button(single ? "Revert Commit" : "Revert \(targets.count) Commits") { gitStatus.revertCommits(targets.map(\.hash)) }
+        Divider()
+        Button("New Branch from Here…") { gitStatus.requestNewBranch(from: commit) }.disabled(!single)
+        Button("New Tag Here…") { gitStatus.requestNewTag(at: commit) }.disabled(!single)
+        Divider()
+        Button("Reset Current Branch to Here…") { gitStatus.requestReset(to: commit) }.disabled(!single)
+        Button("Undo Commit") { gitStatus.undoLastCommit() }.disabled(!(isHead && single))
+        Button("Edit Commit Message…") { gitStatus.requestEditMessage(of: commit) }.disabled(!single)
+        Button("Squash \(targets.count) Commits…") { gitStatus.requestSquash(targets) }.disabled(targets.count < 2)
+        Button("Fixup Into Parent") { gitStatus.fixupIntoParent(commit) }
+            .disabled(!single || commit.parents.count != 1)
+        Button(single ? "Drop Commit…" : "Drop \(targets.count) Commits…", role: .destructive) { gitStatus.requestDrop(targets) }
+        Button("Interactively Rebase from Here…") { gitStatus.requestInteractiveRebase(from: commit) }.disabled(!single)
+        Divider()
+        Button("Push All up to Here…") { gitStatus.requestPush(upTo: commit) }.disabled(!single)
+        Button("Open on Web") { workspace.openCommitOnWeb(commit.hash) }.disabled(!single)
+        Button("Copy Web Link") { workspace.openCommitOnWeb(commit.hash, copy: true) }.disabled(!single)
+        Button("Go to Parent") { gitStatus.goToParent(of: commit) }
+            .disabled(!single || !gitStatus.commits.contains { $0.hash == commit.parents.first })
+        Button("Go to Child") { gitStatus.goToChild(of: commit) }
+            .disabled(!single || !gitStatus.commits.contains { $0.parents.contains(commit.hash) })
+    }
+
     private var historyList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -178,9 +368,17 @@ struct IDESourceControlPanel: View {
                 ForEach(gitStatus.commits) { commit in
                     IDESourceControlCommitRow(
                         commit: commit,
-                        isSelected: gitStatus.selectedCommitHash == commit.hash,
-                        onSelect: { gitStatus.selectCommit(commit.hash) }
+                        isSelected: gitStatus.selectedCommitHashes.contains(commit.hash),
+                        onSelect: { selectCommitRow(commit) }
                     )
+                    .contextMenu { commitMenu(commit) }
+                }
+                if gitStatus.hasMoreHistory {
+                    Button("Load More…") { gitStatus.loadMoreHistory() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(IDEAppearance.ColorToken.accent)
+                        .font(IDEAppearance.Typography.caption)
+                        .padding(IDEAppearance.Spacing.md)
                 }
             }
             .padding(.vertical, IDEAppearance.Spacing.xs)
@@ -204,24 +402,31 @@ struct IDEChangesPanel: View {
         self._gitStatus = Bindable(wrappedValue: gitStatus)
     }
 
+    /// Conflicted files have their own section; they are not also "staged" and "changed".
+    private var conflictedChanges: [IDEGitChange] {
+        gitStatus.conflictedChanges
+    }
+
     private var stagedChanges: [IDEGitChange] {
-        gitStatus.changes.filter { $0.staged != nil }
+        gitStatus.changes.filter { $0.staged != nil && $0.staged != .conflicted }
     }
 
     private var unstagedChanges: [IDEGitChange] {
-        gitStatus.changes.filter { $0.unstaged != nil }
+        gitStatus.changes.filter { $0.unstaged != nil && $0.unstaged != .conflicted }
     }
 
     private var canCommit: Bool {
         !gitStatus.isBusy
             && !gitStatus.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !stagedChanges.isEmpty
+            && (!stagedChanges.isEmpty || gitStatus.commitOptions.amend)
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            IDEGitOperationBanner(gitStatus: gitStatus)
             messageField
             commitRow
+            if gitStatus.isNetworkBusy { networkProgressRow }
             changedFilesHeader
             if changedFilesExpanded {
                 changesArea
@@ -290,11 +495,25 @@ struct IDEChangesPanel: View {
 
     private var commitRow: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button("Commit") { gitStatus.commit() }
+            Button(gitStatus.commitOptions.amend ? "Amend" : "Commit") { gitStatus.commit() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(!canCommit)
-                .help(stagedChanges.isEmpty ? "Stage files to commit them" : "Commit the staged files (⌘↩)")
+                .help(stagedChanges.isEmpty && !gitStatus.commitOptions.amend
+                    ? "Stage files to commit them" : "Commit the staged files (⌘↩)")
+
+            Button("Commit and Push…") {
+                var options = gitStatus.commitOptions
+                options.pushAfter = true
+                gitStatus.requestCommit(options: options)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canCommit)
+            .help("Commit, then open the push dialog (⌥⌘K)")
+            .keyboardShortcut("k", modifiers: [.command, .option])
+
+            commitOptionsMenu
 
             optionsMenu
 
@@ -302,6 +521,55 @@ struct IDEChangesPanel: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.bottom, IDEAppearance.Spacing.sm)
+    }
+
+    /// Amend, sign-off, hooks, recent messages and the fixup!/squash! prefixes.
+    private var commitOptionsMenu: some View {
+        Menu {
+            Toggle("Amend Last Commit", isOn: Binding(
+                get: { gitStatus.commitOptions.amend },
+                set: { gitStatus.setAmend($0) }
+            ))
+            Toggle("Sign Off", isOn: Binding(
+                get: { gitStatus.commitOptions.signoff },
+                set: { gitStatus.commitOptions.signoff = $0 }
+            ))
+            Toggle("Skip Hooks (--no-verify)", isOn: Binding(
+                get: { gitStatus.commitOptions.skipHooks },
+                set: { gitStatus.commitOptions.skipHooks = $0 }
+            ))
+            Divider()
+            Menu("Recent Messages") {
+                ForEach(gitStatus.recentCommitMessages, id: \.self) { message in
+                    Button(message.split(separator: "\n").first.map(String.init) ?? message) {
+                        gitStatus.commitMessage = message
+                    }
+                }
+            }
+            .disabled(gitStatus.recentCommitMessages.isEmpty)
+            Menu("Prefix with fixup!, squash! or amend!") {
+                ForEach(gitStatus.prefixCandidates) { commit in
+                    Menu("\(commit.shortHash) \(commit.subject)") {
+                        Button("fixup!") { gitStatus.applyCommitPrefix("fixup", to: commit) }
+                        Button("squash!") { gitStatus.applyCommitPrefix("squash", to: commit) }
+                        Button("amend!") { gitStatus.applyCommitPrefix("amend", to: commit) }
+                    }
+                }
+            }
+            .disabled(gitStatus.prefixCandidates.isEmpty)
+        } label: {
+            Image(systemName: "checklist")
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
+                .foregroundStyle(gitStatus.commitOptions.amend || gitStatus.commitOptions.signoff || gitStatus.commitOptions.skipHooks
+                    ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Commit options: amend, sign off, hooks, recent messages")
+        .accessibilityLabel("Commit options")
     }
 
     /// Everything that is not the common path: staging in bulk, revert, refresh and the branch.
@@ -313,6 +581,13 @@ struct IDEChangesPanel: View {
                 workspace.revertChanges(gitStatus.changes.filter { $0.unstaged != nil }.map(\.path))
             }
             .disabled(gitStatus.changes.allSatisfy { $0.unstaged == nil })
+            Divider()
+            Button("Stash Changes…") { gitStatus.requestStashChanges() }
+            Button("Unstash…") { workspace.showStashes() }
+            Divider()
+            Button("Fetch") { gitStatus.fetch() }
+            Button("Update Project…") { workspace.pullProject() }
+            Button("Push…") { workspace.pushProject() }
             Divider()
             Menu("Switch Branch") {
                 ForEach(gitStatus.localBranches, id: \.self) { branch in
@@ -346,6 +621,24 @@ struct IDEChangesPanel: View {
         .disabled(gitStatus.isBusy)
         .help("Stage, revert and branch actions")
         .accessibilityLabel("Changes options")
+    }
+
+    /// What the running fetch, pull or push is doing, with git's percentage when it reports one.
+    private var networkProgressRow: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            if let fraction = gitStatus.networkProgress?.fraction {
+                ProgressView(value: fraction).progressViewStyle(.linear).frame(width: 60)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(gitStatus.networkProgress?.phase ?? "Talking to the remote…")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.bottom, IDEAppearance.Spacing.xs)
     }
 
     private var changedFilesHeader: some View {
@@ -435,7 +728,19 @@ struct IDEChangesPanel: View {
     private var changeList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-                if stagedChanges.isEmpty && unstagedChanges.isEmpty {
+                if !conflictedChanges.isEmpty {
+                    sectionHeader("Conflicts", count: conflictedChanges.count)
+                    ForEach(conflictedChanges) { change in
+                        IDEConflictRow(
+                            change: change,
+                            onMerge: { workspace.openMergeTool(forPath: change.path) },
+                            onTakeYours: { gitStatus.resolve(paths: [change.path], taking: .ours) },
+                            onTakeTheirs: { gitStatus.resolve(paths: [change.path], taking: .theirs) },
+                            onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } }
+                        )
+                    }
+                }
+                if stagedChanges.isEmpty && unstagedChanges.isEmpty && conflictedChanges.isEmpty {
                     Text("No changes")
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)

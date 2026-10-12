@@ -12,6 +12,8 @@ struct IDEFileTreeActions {
     var copyPath: (_ url: URL, _ relative: Bool) -> Void
     var findInFiles: (_ directory: URL) -> Void
     var showHistory: (URL) -> Void
+    var openOnWeb: (_ url: URL, _ copy: Bool) -> Void
+    var addToIgnoreFile: (_ url: URL, _ localOnly: Bool) -> Void
     var showClassDiagram: (URL) -> Void
 }
 
@@ -431,6 +433,14 @@ private struct IDEFileTreeRow: View {
             Button("Copy Path") { selectAndRun { actions.copyPath(node.url, false) } }
             Button("Copy Relative Path") { selectAndRun { actions.copyPath(node.url, true) } }
             Button("Show History") { selectAndRun { actions.showHistory(node.url) } }
+            if gitStatus == .untracked || (node.isDirectory && gitStatus != .ignored && !isRoot) {
+                Button("Add to .gitignore") { selectAndRun { actions.addToIgnoreFile(node.url, false) } }
+                Button("Add to .git/info/exclude") { selectAndRun { actions.addToIgnoreFile(node.url, true) } }
+            }
+            if !node.isDirectory, gitStatus != .untracked, gitStatus != .ignored {
+                Button("Open on Web") { selectAndRun { actions.openOnWeb(node.url, false) } }
+                Button("Copy Web Link") { selectAndRun { actions.openOnWeb(node.url, true) } }
+            }
             if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
                 Button("Show Class Diagram") { selectAndRun { actions.showClassDiagram(node.url) } }
             }

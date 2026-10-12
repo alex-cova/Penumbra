@@ -27,6 +27,31 @@ enum IDEChangeMarkerPresentation {
         return coalesce(chunks.map(change(from:)))
     }
 
+    /// The edit that puts the change at `caretLine` (0-based) back to what `head` has there, with the
+    /// text it replaces. Nil when the line is not in a change, the file is new (nothing to go back
+    /// to) or binary.
+    static func rollback(
+        head: Data?, buffer: String, caretLine: Int, maximumMiddle: Int = maximumMiddleLineCount
+    ) -> (range: NSRange, replacement: String, currentText: String)? {
+        guard let head, !containsNUL(head.prefix(binaryPrefix)), !containsNUL(buffer.utf8.prefix(binaryPrefix)) else {
+            return nil
+        }
+        let headText = IDEDiffText(String(decoding: head, as: UTF8.self))
+        let bufferText = IDEDiffText(buffer)
+        let chunks = IDEDiffComputer.lineChunks(left: headText, right: bufferText, maximumMiddle: maximumMiddle)
+        guard let chunk = chunks.first(where: {
+            $0.right.contains(caretLine) || ($0.right.isEmpty && $0.right.lowerBound == caretLine)
+        }) else { return nil }
+        let range = bufferText.range(ofLines: chunk.right)
+        var replacement = (headText.string as NSString).substring(with: headText.range(ofLines: chunk.left))
+        let endsWithBreak = buffer.utf16.last.map { $0 == 10 || $0 == 13 } ?? true
+        // Lines going back after a last line that has no line break need one in front of them.
+        if range.length == 0, range.location == (buffer as NSString).length, !endsWithBreak, !replacement.isEmpty {
+            replacement = "\n" + replacement
+        }
+        return (range, replacement, (buffer as NSString).substring(with: range))
+    }
+
     private static func change(from chunk: IDEDiffChunk) -> GutterChange {
         switch chunk.kind {
         case .inserted:

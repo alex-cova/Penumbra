@@ -103,6 +103,8 @@ struct IDESidebarPanel: View {
                     copyPath: { workspace.copyExplorerPath($0, relative: $1) },
                     findInFiles: { workspace.showFindInFiles(in: $0) },
                     showHistory: { workspace.showLocalHistory(for: $0) },
+                    openOnWeb: { workspace.openFileOnWeb($0, copy: $1) },
+                    addToIgnoreFile: { workspace.addToIgnoreFile([$0], target: $1 ? .localExclude : .nearest) },
                     showClassDiagram: { workspace.showClassDiagram(forExplorerItem: $0) }
                 ),
                 collapsedWhileFiltering: $collapsedWhileFiltering

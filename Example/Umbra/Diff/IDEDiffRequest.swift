@@ -107,6 +107,32 @@ struct IDEDiffRequest: Hashable, Sendable, Identifiable {
         )
     }
 
+    /// One file of a stash against the commit it was made on; an untracked file (kept on the stash's
+    /// third parent) has nothing on the left.
+    static func stashFile(
+        hash: String, label: String, path: String, oldPath: String?, isUntracked: Bool, repositoryRoot: String
+    ) -> IDEDiffRequest {
+        let absolute = (repositoryRoot as NSString).appendingPathComponent(path)
+        let left = isUntracked
+            ? IDEDiffSide(source: .text(""), title: "Not tracked")
+            : IDEDiffSide(source: .revision(.parent(of: hash), relativePath: oldPath ?? path), title: "Base")
+        let right = isUntracked
+            ? IDEDiffSide(source: .revision(.ref(hash + "^3"), relativePath: path), title: label)
+            : IDEDiffSide(source: .revision(.commit(hash), relativePath: path), title: label)
+        return IDEDiffRequest(left: left, right: right, filePath: absolute, title: "\(fileName(path)) (\(label))")
+    }
+
+    /// One file between two branches, tags or commits: `left` on the left, `right` on the right.
+    static func revisions(left: String, right: String, path: String, oldPath: String?, repositoryRoot: String) -> IDEDiffRequest {
+        let absolute = (repositoryRoot as NSString).appendingPathComponent(path)
+        return IDEDiffRequest(
+            left: IDEDiffSide(source: .revision(.ref(left), relativePath: oldPath ?? path), title: left),
+            right: IDEDiffSide(source: .revision(.ref(right), relativePath: path), title: right),
+            filePath: absolute,
+            title: "\(fileName(path)) (\(left) ↔ \(right))"
+        )
+    }
+
     /// The file on disk against a branch, a tag or HEAD.
     static func workingTree(path: String, relativePath: String, against revision: GitRevision, revisionTitle: String) -> IDEDiffRequest {
         IDEDiffRequest(

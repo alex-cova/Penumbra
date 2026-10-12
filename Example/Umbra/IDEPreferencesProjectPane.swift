@@ -46,5 +46,6 @@ struct IDEPreferencesProjectPane: View {
                 detail: "Selects and scrolls to the active tab's file whenever the tab changes."
             )
         }
+        IDEGitSettingsSection()
     }
 }

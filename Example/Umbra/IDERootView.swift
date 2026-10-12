@@ -251,6 +251,14 @@ public struct IDERootView: View {
                 .environment(workspace)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
+        .sheet(item: Binding(
+            get: { workspace.gitStatus.sheets.current },
+            set: { if $0 == nil { workspace.gitStatus.sheets.dismissCurrent() } }
+        )) { sheet in
+            IDEGitSheetHost(sheet: sheet)
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in

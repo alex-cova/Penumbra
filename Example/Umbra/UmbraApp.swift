@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-@main
+/// The app scene. The process entry point is `UmbraMain`, which runs the git askpass helper mode
+/// before starting this.
 struct UmbraApp: App {
     @NSApplicationDelegateAdaptor(IDEAppDelegate.self) private var appDelegate
 

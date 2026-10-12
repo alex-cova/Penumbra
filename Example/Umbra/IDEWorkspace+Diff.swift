@@ -49,6 +49,16 @@ extension IDEWorkspace {
         openDiff(request(file), siblings: files.map(request))
     }
 
+    /// One file of a branch comparison, branch against branch, with the other files as siblings.
+    func openBranchDiff(left: String, right: String, file: GitChangedFile) {
+        guard let root = gitStatus.repositoryRootPath else { return }
+        func request(_ file: GitChangedFile) -> IDEDiffRequest {
+            IDEDiffRequest.revisions(left: left, right: right, path: file.path, oldPath: file.oldPath, repositoryRoot: root)
+        }
+        let siblings = gitStatus.comparison?.files.map(request) ?? []
+        openDiff(request(file), siblings: siblings)
+    }
+
     /// The active file against HEAD, a branch or a tag.
     func openWorkingTreeDiff(against revision: GitRevision, title: String) {
         guard let url = activeFileForDiff, let relative = gitStatus.repositoryRelativePath(for: url.path) else {
@@ -83,7 +93,40 @@ extension IDEWorkspace {
         items.append(IDEClosureMenuItem(title: "Compare with Clipboard") { [weak self] in
             self?.compareActiveFileWithClipboard()
         })
+        if let url, gitStatus.repositoryRelativePath(for: url.standardizedFileURL.path) != nil {
+            items.append(IDEClosureMenuItem(title: "Show History for Selection") { [weak self] in
+                self?.showSelectionHistory()
+            })
+            items.append(IDEClosureMenuItem(title: "Rollback Change at Caret") { [weak self] in
+                self?.rollbackChangeAtCaret()
+            })
+            items.append(IDEClosureMenuItem(title: "Open on Web") { [weak self] in
+                self?.openActiveFileOnWeb()
+            })
+            items.append(IDEClosureMenuItem(title: "Copy Web Link") { [weak self] in
+                self?.openActiveFileOnWeb(copy: true)
+            })
+        }
         return items
+    }
+
+    /// The Log narrowed to the commits that changed the selected lines (the caret's line when
+    /// nothing is selected) of the active file.
+    func showSelectionHistory() {
+        let pane = workbench.activePane
+        guard let document = pane.selectedDocument, document.contentKind == .text,
+              let url = document.url?.standardizedFileURL,
+              gitStatus.repositoryRelativePath(for: url.path) != nil else {
+            showGitNotice("No Line History", "The active file is not in a git repository.")
+            return
+        }
+        let textView = host(for: pane.id).textView
+        let range = textView.selectedRange
+        let first = textView.textLocation(at: range.location)?.lineNumber ?? 0
+        let lastOffset = range.length > 0 ? max(range.location, NSMaxRange(range) - 1) : range.location
+        let last = textView.textLocation(at: lastOffset)?.lineNumber ?? first
+        gitStatus.showLineHistory(path: url.path, startLine: first + 1, endLine: max(first, last) + 1)
+        showBottomTab(.sourceControl)
     }
 
     private var activeFileForDiff: URL? {
@@ -139,6 +182,11 @@ extension IDEWorkspace {
     }
 
     func closeDiffSession(_ documentID: UUID, in pane: EditorPane) {
+        if let merge = mergeSessions.removeValue(forKey: documentID) {
+            hostCache.peek(pane.id)?.diffViewer.mergeViewer.detach(merge)
+            merge.cancel()
+            return
+        }
         guard let session = diffSessions.removeValue(forKey: documentID) else { return }
         hostCache.peek(pane.id)?.diffViewer.detach(session)
         session.save()
@@ -146,6 +194,8 @@ extension IDEWorkspace {
     }
 
     func closeAllDiffSessions() {
+        for merge in mergeSessions.values { merge.cancel() }
+        mergeSessions.removeAll()
         for session in diffSessions.values {
             session.save()
             session.cancel()

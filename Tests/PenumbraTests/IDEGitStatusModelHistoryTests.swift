@@ -71,6 +71,44 @@ final class IDEGitStatusModelHistoryTests: XCTestCase {
         XCTAssertNil(model.historyFilePath)
     }
 
+    func testAStatusRefreshKeepsTheLogUntilRefsAreReported() async throws {
+        try await commit("a.txt", "1\n", "first")
+        let model = try await makeModel()
+        try await waitUntil("the first log") { model.commits.count == 1 }
+
+        // A commit made elsewhere, and a plain status refresh: saves and stages cannot change the
+        // log, so it is not reloaded (the log is a `log --all` per reload).
+        try await commit("a.txt", "2\n", "second")
+        var refreshed = false
+        model.onRefreshed = { refreshed = true }
+        model.refresh()
+        try await waitUntil("the status refresh") { refreshed }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(model.commits.count, 1, "a status refresh alone must not reload the log")
+
+        // The watcher reports `.git/refs` or `HEAD` moving: now it does.
+        model.noteRefsChanged()
+        model.refresh()
+        try await waitUntil("the reloaded log") { model.commits.count == 2 }
+    }
+
+    func testTheOperationInProgressIsReadOnEveryRefresh() async throws {
+        try await commit("a.txt", "base\n", "base")
+        _ = try await runner.run(["switch", "-q", "-c", "feature"], in: directory)
+        try await commit("a.txt", "feature\n", "feature")
+        _ = try await runner.run(["switch", "-q", "main"], in: directory)
+        try await commit("a.txt", "main\n", "main")
+        let model = try await makeModel()
+        XCTAssertNil(model.repositoryState.operation)
+
+        _ = try? await runner.run(["merge", "feature"], in: directory)
+        model.refresh()
+
+        try await waitUntil("the merge to show") { model.repositoryState.operation?.kind == .merge }
+        XCTAssertEqual(model.repositoryState.head, .branch("main"))
+        XCTAssertTrue(model.changes.contains { $0.staged == .conflicted || $0.unstaged == .conflicted })
+    }
+
     func testFileHistoryIgnoresAPathOutsideTheRepository() async throws {
         try await commit("a.txt", "1\n", "add a")
         let model = try await makeModel()

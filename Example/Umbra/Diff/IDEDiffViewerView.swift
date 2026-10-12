@@ -10,6 +10,9 @@ final class IDEDiffViewerView: NSView {
     let leftTextView = TextView()
     let rightTextView = TextView()
     let unifiedTextView = TextView()
+    /// A merge tab's content: shown in place of the comparison while `isMerging`.
+    let mergeViewer = IDEMergeViewerView()
+    private(set) var isMerging = false
     private let divider = IDEDiffDividerView()
     private let toolbarModel = IDEDiffToolbarModel()
     private lazy var toolbarHost = NSHostingView(rootView: IDEDiffToolbar(model: toolbarModel))
@@ -50,6 +53,7 @@ final class IDEDiffViewerView: NSView {
             addSubview(textView)
         }
         addSubview(divider)
+        addSubview(mergeViewer)
         divider.viewer = self
         delegateProxy.owner = self
         rightTextView.editorDelegate = delegateProxy
@@ -76,7 +80,31 @@ final class IDEDiffViewerView: NSView {
 
     // MARK: - Showing
 
+    /// Shows a three-way merge in place of the comparison.
+    func show(_ merge: IDEMergeSession, preferences: IDEPreferences) {
+        isHidden = false
+        if !isMerging {
+            isMerging = true
+            for view in [toolbarHost, leftTitle, rightTitle, placeholder, leftTextView, rightTextView, unifiedTextView, divider] as [NSView] {
+                view.isHidden = true
+            }
+        }
+        mergeViewer.frame = bounds
+        mergeViewer.show(merge, preferences: preferences)
+        needsLayout = true
+    }
+
+    /// Back to the comparison after a merge was shown.
+    private func leaveMerge() {
+        guard isMerging else { return }
+        isMerging = false
+        mergeViewer.hide()
+        for view in [toolbarHost, leftTitle, rightTitle] as [NSView] { view.isHidden = false }
+        applyPresentation()
+    }
+
     func show(_ session: IDEDiffSession, preferences: IDEPreferences) {
+        leaveMerge()
         self.preferences = preferences
         isHidden = false
         guard session !== self.session else {
@@ -106,6 +134,7 @@ final class IDEDiffViewerView: NSView {
     func hide() {
         guard !isHidden else { return }
         session?.save()
+        mergeViewer.hide()
         isHidden = true
     }
 
@@ -125,7 +154,16 @@ final class IDEDiffViewerView: NSView {
         isHidden = true
     }
 
+    /// The text view keyboard edits go to: the merge result, or the comparison's working-tree side.
+    var editingTextView: TextView {
+        isMerging ? mergeViewer.resultTextView : rightTextView
+    }
+
     func focus() {
+        if isMerging {
+            mergeViewer.focus()
+            return
+        }
         let target = session?.settings.layout == .unified ? unifiedTextView : rightTextView
         window?.makeFirstResponder(target)
     }
@@ -345,6 +383,10 @@ final class IDEDiffViewerView: NSView {
 
     override func layout() {
         super.layout()
+        if isMerging {
+            mergeViewer.frame = bounds
+            return
+        }
         let width = bounds.width
         let height = bounds.height
         toolbarHost.frame = CGRect(x: 0, y: 0, width: width, height: Self.toolbarHeight)

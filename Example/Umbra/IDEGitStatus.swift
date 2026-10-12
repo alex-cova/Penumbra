@@ -61,13 +61,48 @@ final class IDEGitStatusModel {
     private(set) var localBranches: [String] = []
     /// The current branch against its upstream; nil without one (a branch never pushed).
     private(set) var sync: GitSyncStatus?
+    /// HEAD and the merge, rebase, cherry-pick or revert in progress, read from `.git` on every refresh.
+    private(set) var repositoryState = GitRepositoryState(head: .unknown)
     private(set) var authors: [String] = []
     var historyBranch: String?
     var historyAuthor: String?
+    /// Only commits newer than this (the Log's date menu); nil lists every date.
+    var historySince: Date?
+    /// Only commits touching this folder or file (relative to the root); empty for all.
+    var historyPathFilter = ""
+    /// How many commits the log asks for; "Load more" raises it.
+    private(set) var historyLimit = 300
+    /// Every selected commit in the Log (⌘/⇧-click); `selectedCommitHash` is the primary one.
+    var selectedCommitHashes: Set<String> = []
+    /// The branches that contain the selected commit.
+    private(set) var commitBranches: [String] = []
+    /// The history of selected lines of a file, shown in place of the log while it is set.
+    var lineHistory: IDEGitLineHistory?
     /// The file whose history the History tab is showing (an absolute path), or nil for the whole repository.
     private(set) var historyFilePath: String?
     var historySearch = ""
     private(set) var isBusy = false
+    /// The progress line of the fetch, pull or push that is running (nil when none is, or git has
+    /// said nothing yet). The status bar and the Changes header show it.
+    private(set) var networkProgress: GitProgress?
+    /// True while a fetch, pull, push or clone runs. Only one runs at a time; local commands
+    /// (stage, commit) still go through meanwhile.
+    private(set) var isNetworkBusy = false
+    /// Every local and remote-tracking branch with its upstream and ahead/behind, from the last refresh.
+    private(set) var branchInfos: [GitBranch] = []
+    private(set) var tags: [GitTag] = []
+    private(set) var remoteInfos: [GitRemote] = []
+    /// The result of the last Compare with Branch; nil until one runs.
+    private(set) var comparison: GitComparison?
+    /// Set once the repository's `commit.template` was offered, so it is not put back after a commit.
+    @ObservationIgnored var templateOffered = false
+    /// The stash, newest first, reloaded when refs change.
+    var stashes: [GitStash] = []
+    /// The stash the Stashes tab has selected (by commit, since indices shift), and its files.
+    var selectedStashHash: String?
+    var stashFiles: [GitStashChange] = []
+    /// Sheets the git features present, one at a time, in the window's root view.
+    let sheets = IDEGitSheetQueue()
     private(set) var actionStatus = ""
     /// Called with each git action's outcome line (`true` when it failed), so the host can post a
     /// notification.
@@ -75,6 +110,8 @@ final class IDEGitStatusModel {
     /// False when `actionStatus` is a successful git report rather than a failure.
     private(set) var actionFailed = false
     var commitMessage = ""
+    /// Amend, sign-off and skip-hooks, kept between commits in this window.
+    var commitOptions = IDEGitCommitOptions()
     /// The row that drives the diff. It is always a member of `selectedChangePaths` when set.
     var selectedChangePath: String?
     /// Every selected row, for actions that take several files (Revert…).
@@ -89,17 +126,31 @@ final class IDEGitStatusModel {
     @ObservationIgnored var onWorkingTreeChanged: (@MainActor () -> Void)?
     /// Called after every status refresh has been applied (saves, app activation, watcher batches).
     @ObservationIgnored var onRefreshed: (@MainActor () -> Void)?
+    /// Called when `compare(with:)` has a result, so the host can show the Compare tab.
+    @ObservationIgnored var onShowComparison: (@MainActor () -> Void)?
+    /// Asks the History panel to select its Stashes sub-tab.
+    @ObservationIgnored var requestShowStashes: (@MainActor () -> Void)?
 
     private var repositoryRoot: String?
 
-    @ObservationIgnored private var rootURL: URL?
-    @ObservationIgnored private var repository: GitRepository?
+    @ObservationIgnored private(set) var rootURL: URL?
+    @ObservationIgnored private(set) var repository: GitRepository?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var needsAnotherPass = false
     @ObservationIgnored private var diffTask: Task<Void, Never>?
     @ObservationIgnored private var actionTask: Task<Void, Never>?
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     @ObservationIgnored private var commitDetailTask: Task<Void, Never>?
+    @ObservationIgnored private var networkTask: Task<Void, Never>?
+    @ObservationIgnored var autoFetchTask: Task<Void, Never>?
+    @ObservationIgnored private var busyCount = 0
+    /// Names this window's credential prompts to the askpass server.
+    @ObservationIgnored let askPassSession = UUID().uuidString
+    /// Refs changed (or may have) since the log was loaded. A status refresh alone does not reload
+    /// the log: a save or a stage cannot change it, and the log costs a `log --all` per reload.
+    @ObservationIgnored private var historyStale = true
+    /// New commits may have new authors; typing in the search box must not re-read them.
+    @ObservationIgnored private var authorsStale = true
 
     init() {
         // Lives as long as the workspace (the app), so the observer is never removed.
@@ -108,7 +159,10 @@ final class IDEGitStatusModel {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            MainActor.assumeIsolated {
+                self?.noteRefsChanged()
+                self?.refresh()
+            }
         }
     }
 
@@ -123,6 +177,14 @@ final class IDEGitStatusModel {
         historyTask = nil
         commitDetailTask?.cancel()
         commitDetailTask = nil
+        networkTask?.cancel()
+        networkTask = nil
+        autoFetchTask?.cancel()
+        autoFetchTask = nil
+        isNetworkBusy = false
+        networkProgress = nil
+        sheets.cancelAll()
+        registerAskPass(active: url != nil)
         repository = nil
         commits = []
         selectedCommitHash = nil
@@ -130,6 +192,8 @@ final class IDEGitStatusModel {
         selectedCommitFiles = []
         historyFilePath = nil
         needsAnotherPass = false
+        historyStale = true
+        authorsStale = true
         rootURL = url?.standardizedFileURL
         commitMessage = ""
         selectedChangePath = nil
@@ -140,6 +204,7 @@ final class IDEGitStatusModel {
         apply(GitSnapshot())
         guard rootURL != nil else { return }
         refresh()
+        startAutoFetch()
     }
 
     func refresh() {
@@ -162,13 +227,30 @@ final class IDEGitStatusModel {
                 self.loadDiff(for: selected)
             }
             self.refreshTask = nil
-            self.loadHistory()
+            self.offerCommitTemplate()
+            if self.historyStale {
+                self.historyStale = false
+                self.loadHistory()
+                self.loadStashes()
+            }
             self.onRefreshed?()
             if self.needsAnotherPass {
                 self.needsAnotherPass = false
                 self.refresh()
             }
         }
+    }
+
+    /// A branch, tag, HEAD or remote ref moved (the project watcher saw `.git/refs`, `packed-refs`,
+    /// `HEAD`…): the next refresh reloads the log and the author list.
+    func setHistoryLimit(_ value: Int) { historyLimit = value }
+    func setTags(_ value: [GitTag]) { tags = value }
+    func setRemotes(_ value: [GitRemote]) { remoteInfos = value }
+    func setComparison(_ value: GitComparison?) { comparison = value }
+
+    func noteRefsChanged() {
+        historyStale = true
+        authorsStale = true
     }
 
     /// Narrows the History tab to the commits that touched `path` (following renames).
@@ -212,17 +294,28 @@ final class IDEGitStatusModel {
         let search = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let filePath = historyFilePath.flatMap { relativePath(for: $0) }
         let existing = repository
+        let includeAuthors = authorsStale || authors.isEmpty
+        let since = historySince
+        let limit = historyLimit
+        let folder = historyPathFilter.trimmingCharacters(in: .whitespaces)
+        let paths = folder.isEmpty ? [] : [folder]
         historyTask = Task { [weak self] in
             if debounced { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
-            let loaded = await Self.loadHistory(root: rootURL, existing: existing, branch: branch, author: author, search: search, filePath: filePath)
+            let loaded = await Self.loadHistory(
+                root: rootURL, existing: existing, branch: branch, author: author, search: search,
+                filePath: filePath, includeAuthors: includeAuthors, since: since, paths: paths, limit: limit
+            )
             guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
             // The file changed (or was cleared) while this loaded: its commits are for another list.
             guard self.historyFilePath.flatMap({ self.relativePath(for: $0) }) == filePath else { return }
             if loaded.repository != nil { self.repository = loaded.repository }
             let commits = Self.present(loaded.history)
             if loaded.history.branches != self.branches { self.branches = loaded.history.branches }
-            if loaded.history.authors != self.authors { self.authors = loaded.history.authors }
+            if includeAuthors {
+                self.authorsStale = false
+                if loaded.history.authors != self.authors { self.authors = loaded.history.authors }
+            }
             if commits != self.commits { self.commits = commits }
             if let selected = self.selectedCommitHash, !commits.contains(where: { $0.hash == selected }) {
                 self.selectCommit(nil)
@@ -232,6 +325,8 @@ final class IDEGitStatusModel {
 
     func selectCommit(_ hash: String?) {
         selectedCommitHash = hash
+        selectedCommitHashes = hash.map { [$0] } ?? []
+        commitBranches = []
         commitDetailTask?.cancel()
         guard let hash, let rootURL else {
             commitDetailText = nil
@@ -246,6 +341,10 @@ final class IDEGitStatusModel {
             guard let self, !Task.isCancelled, self.selectedCommitHash == hash else { return }
             self.commitDetailText = text
             self.selectedCommitFiles = files
+            if let repo = try? await IDEGitSupport.repository(for: rootURL, existing: existing) {
+                let branches = await repo.branchesContaining(hash)
+                if self.selectedCommitHash == hash { self.commitBranches = branches }
+            }
         }
     }
 
@@ -299,30 +398,15 @@ final class IDEGitStatusModel {
         runGitAction { try await $0.unstageAll(); return "" }
     }
 
+    /// Commit with the options in `commitOptions`, after the pre-commit checks.
     func commit() {
-        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else {
-            fail("Enter a commit message.")
-            return
-        }
-        guard changes.contains(where: { $0.staged != nil }) else {
-            fail("Nothing staged to commit.")
-            return
-        }
-        runGitAction { _ = try await $0.commit(message: message, paths: [], untrackedPaths: [], amend: false); return "" } onSuccess: { [weak self] in
-            self?.commitMessage = ""
-            self?.selectedChangePath = nil
-            self?.selectedChangePaths = []
-            self?.diffText = nil
-        }
+        requestCommit(options: commitOptions)
     }
 
     func switchBranch(_ name: String) {
         guard name != currentBranch else { return }
         guard !refuseUnsaved(before: "switching branches") else { return }
-        runGitAction({ try await $0.switchBranch(name) }) { [weak self] in
-            self?.onWorkingTreeChanged?()
-        }
+        switchToLocal(name)
     }
 
     func createBranch(_ name: String) {
@@ -413,20 +497,16 @@ final class IDEGitStatusModel {
         if snapshot.repositoryRoot != repositoryRoot { repositoryRoot = snapshot.repositoryRoot }
         if snapshot.currentBranch != currentBranch { currentBranch = snapshot.currentBranch }
         if snapshot.localBranches != localBranches { localBranches = snapshot.localBranches }
+        if snapshot.branchInfos != branchInfos { branchInfos = snapshot.branchInfos }
         if snapshot.changes != changes { changes = snapshot.changes }
         if snapshot.sync != sync { sync = snapshot.sync }
+        if snapshot.state != repositoryState { repositoryState = snapshot.state }
     }
 
-    private func refuseUnsaved(before action: String) -> Bool {
+    func refuseUnsaved(before action: String) -> Bool {
         guard hasUnsavedEditors?() == true else { return false }
         fail("Save unsaved changes before \(action).")
         return true
-    }
-
-    private func fail(_ message: String) {
-        actionStatus = message
-        actionFailed = true
-        onActionReport?(message, true)
     }
 
     private func loadDiff(for path: String?) {
@@ -466,12 +546,12 @@ final class IDEGitStatusModel {
     func applyHunk(_ patch: String, reverse: Bool) async -> String? {
         guard let rootURL else { return "This folder is not a git repository." }
         do {
-            let repo = try await Self.repository(for: rootURL, existing: repository)
+            let repo = try await IDEGitSupport.repository(for: rootURL, existing: repository)
             try await repo.applyPatch(patch, toIndex: true, reverse: reverse)
             refresh()
             return nil
         } catch {
-            return Self.describe(error)
+            return IDEGitSupport.describe(error)
         }
     }
 
@@ -481,17 +561,17 @@ final class IDEGitStatusModel {
     }
 
     nonisolated private static func loadCommitFiles(root: URL, existing: GitRepository?, hash: String) async -> [GitChangedFile] {
-        guard let repo = try? await repository(for: root, existing: existing) else { return [] }
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else { return [] }
         return (try? await repo.commitChanges(hash: hash)) ?? []
     }
 
     nonisolated private static func loadRevision(root: URL, existing: GitRepository?, revision: GitRevision, path: String) async -> IDEDiffContent {
         do {
-            let repo = try await repository(for: root, existing: existing)
+            let repo = try await IDEGitSupport.repository(for: root, existing: existing)
             guard let data = try await repo.fileContents(at: revision, path: path) else { return .text("") }
             return diffContent(of: data)
         } catch {
-            return .failed(describe(error))
+            return .failed(IDEGitSupport.describe(error))
         }
     }
 
@@ -501,26 +581,59 @@ final class IDEGitStatusModel {
         return .text(String(decoding: data, as: UTF8.self))
     }
 
-    private func runGitAction(
+    /// Runs `action` against the repository off the main actor and reports its one-line outcome.
+    /// A `network` action (fetch, pull, push) runs with the askpass credential helper and reports
+    /// progress; only one runs at a time, and it is not cancelled by a local command.
+    func runGitAction(
         _ action: @escaping @Sendable (GitRepository) async throws -> String,
+        network: Bool = false,
+        credentials: Bool = false,
         onSuccess: (@MainActor () -> Void)? = nil,
         onFailure: (@MainActor (String) -> Void)? = nil
     ) {
         guard let rootURL else { return }
-        actionTask?.cancel()
+        if network {
+            guard networkTask == nil else {
+                fail("Another remote operation is still running.")
+                return
+            }
+            isNetworkBusy = true
+        } else {
+            actionTask?.cancel()
+        }
+        busyCount += 1
         isBusy = true
         actionStatus = ""
         actionFailed = false
         let existing = repository
-        actionTask = Task { [weak self] in
+        let environment = (network || credentials) ? IDEGitAskPassServer.shared.environment(session: askPassSession) : nil
+        var progress: GitProgressHandler?
+        if network {
+            progress = { [weak self] value in
+                Task { @MainActor in self?.networkProgress = value }
+            }
+        }
+        let task = Task { [weak self] in
             guard let self else { return }
-            defer { self.isBusy = false }
+            defer {
+                self.busyCount -= 1
+                self.isBusy = self.busyCount > 0
+                if network {
+                    self.networkTask = nil
+                    self.isNetworkBusy = false
+                    self.networkProgress = nil
+                }
+            }
             do {
-                let repo = try await Self.repository(for: rootURL, existing: existing)
-                let reported = try await action(repo)
+                let repo = try await IDEGitSupport.repository(for: rootURL, existing: existing)
+                var configured = repo
+                if let environment { configured = configured.withNetwork(environment) }
+                if let progress { configured = configured.withProgress(progress) }
+                let reported = try await action(configured)
                 guard !Task.isCancelled else { return }
                 self.repository = repo
-                let line = Self.statusLine(reported)
+                self.noteRefsChanged()
+                let line = IDEGitSupport.statusLine(reported)
                 if !line.isEmpty {
                     self.actionStatus = line
                     self.actionFailed = false
@@ -530,12 +643,40 @@ final class IDEGitStatusModel {
                 self.refresh()
             } catch {
                 guard !Task.isCancelled else { return }
-                self.actionStatus = Self.describe(error)
+                // A rebase or merge that stopped on a conflict moved refs and left state behind.
+                self.noteRefsChanged()
+                self.refresh()
+                self.actionStatus = IDEGitSupport.describe(error)
                 self.actionFailed = true
                 onActionReport?(self.actionStatus, true)
                 onFailure?(self.actionStatus)
             }
         }
+        if network { networkTask = task } else { actionTask = task }
+    }
+
+    /// What a successful commit leaves behind in the panel.
+    func resetAfterCommit() {
+        commitMessage = ""
+        selectedChangePath = nil
+        selectedChangePaths = []
+        diffText = nil
+        commitOptions.amend = false
+        commitOptions.pushAfter = false
+    }
+
+    /// Reports a result the model decided itself (nothing to do, for instance) like an action's outcome.
+    func succeed(_ message: String) {
+        actionStatus = message
+        actionFailed = false
+        onActionReport?(message, false)
+    }
+
+    /// Puts `message` where a failed action's message goes, for refusals the model decides itself.
+    func fail(_ message: String) {
+        actionStatus = message
+        actionFailed = true
+        onActionReport?(message, true)
     }
 
     private func relativePath(for absolutePath: String) -> String? {
@@ -553,8 +694,10 @@ final class IDEGitStatusModel {
         var repositoryRoot: String?
         var currentBranch: String?
         var localBranches: [String] = []
+        var branchInfos: [GitBranch] = []
         var changes: [IDEGitChange] = []
         var sync: GitSyncStatus?
+        var state = GitRepositoryState(head: .unknown)
     }
 
     struct HistoryLoad: Sendable {
@@ -585,33 +728,21 @@ final class IDEGitStatusModel {
         }
     }
 
-    nonisolated private static func repository(for root: URL, existing: GitRepository?) async throws -> GitRepository {
-        let standardized = root.standardizedFileURL
-        if let existing {
-            let repoRoot = existing.root.standardizedFileURL.path
-            let path = standardized.path
-            if path == repoRoot || path.hasPrefix(repoRoot + "/") {
-                return existing
-            }
-        }
-        guard let discovered = await GitRepository.discover(from: standardized) else {
-            throw GitError.notARepository
-        }
-        return discovered
-    }
-
     nonisolated private static func loadSnapshot(root: URL, existing: GitRepository?) async -> (repository: GitRepository?, snapshot: GitSnapshot) {
-        guard let repo = try? await repository(for: root, existing: existing),
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing),
               let entries = try? await repo.status(includingIgnored: true)
         else {
             return (nil, GitSnapshot())
         }
         let branch = await repo.currentBranch()
         var snapshot = parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch)
-        snapshot.localBranches = ((try? await repo.branches()) ?? [])
-            .compactMap { $0.kind == .localBranch ? $0.name : nil }
+        let infos = (try? await repo.branchList()) ?? []
+        snapshot.branchInfos = infos
+        snapshot.localBranches = infos
+            .compactMap { $0.kind == .local ? $0.name : nil }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         snapshot.sync = await repo.syncStatus()
+        snapshot.state = repo.state()
         return (repo, snapshot)
     }
 
@@ -621,18 +752,24 @@ final class IDEGitStatusModel {
         branch: String?,
         author: String?,
         search: String,
-        filePath: String? = nil
+        filePath: String? = nil,
+        includeAuthors: Bool = true,
+        since: Date? = nil,
+        paths: [String] = [],
+        limit: Int = 300
     ) async -> (repository: GitRepository?, history: HistoryLoad) {
-        guard let repo = try? await repository(for: root, existing: existing) else {
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else {
             return (nil, HistoryLoad())
         }
         var history = HistoryLoad()
         let scope: GitLogScope = if let branch, !branch.isEmpty { .branch(branch) } else { .all }
         let grep = search.isEmpty ? nil : search
-        if let commits = try? await repo.log(scope: scope, grep: grep, author: author, path: filePath, limit: 300) {
+        if let commits = try? await repo.log(
+            scope: scope, grep: grep, author: author, path: filePath, paths: paths, since: since, limit: limit
+        ) {
             history.commits = commits
             // Filtered logs drop ancestors, so their lanes would dangle; show plain rows instead.
-            if author == nil && search.isEmpty && filePath == nil {
+            if author == nil && search.isEmpty && filePath == nil && since == nil && paths.isEmpty {
                 var layout = GitGraphLayout()
                 history.graphs = layout.append(commits)
             }
@@ -640,19 +777,21 @@ final class IDEGitStatusModel {
         if let refs = try? await repo.branches() {
             history.branches = refs.map(\.name)
         }
-        history.authors = (try? await repo.authors()) ?? []
+        if includeAuthors {
+            history.authors = (try? await repo.authors()) ?? []
+        }
         return (repo, history)
     }
 
     /// The commit, or with `filePath` just that file's change in it. A file's diff can be empty
     /// for a commit that changed it under an older name; the whole commit is shown then.
     nonisolated private static func loadBlame(root: URL, existing: GitRepository?, relativePath: String, contents: Data) async -> [GitBlameLine]? {
-        guard let repo = try? await repository(for: root, existing: existing) else { return nil }
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else { return nil }
         return try? await repo.blame(relativePath: relativePath, contents: contents)
     }
 
     nonisolated private static func loadHead(root: URL, existing: GitRepository?, relativePath: String) async -> (found: Bool, data: Data?) {
-        guard let repo = try? await repository(for: root, existing: existing) else { return (false, nil) }
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else { return (false, nil) }
         do {
             return (true, try await repo.fileContents(at: .head, path: relativePath))
         } catch {
@@ -661,7 +800,7 @@ final class IDEGitStatusModel {
     }
 
     nonisolated private static func loadShow(root: URL, existing: GitRepository?, hash: String, filePath: String?) async -> String {
-        guard let repo = try? await repository(for: root, existing: existing) else {
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else {
             return "Could not load commit."
         }
         if let filePath, let diff = try? await repo.commitDiff(hash: hash, path: filePath), !diff.isEmpty {
@@ -671,11 +810,11 @@ final class IDEGitStatusModel {
     }
 
     nonisolated private static func loadDiff(root: URL, existing: GitRepository?, path: String, change: IDEGitChange?) async -> String {
-        guard let repo = try? await repository(for: root, existing: existing) else {
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else {
             return "Could not resolve path for diff."
         }
         let toplevel = repo.root.standardizedFileURL.path
-        guard let relative = relativePath(for: path, repositoryRoot: toplevel) else {
+        guard let relative = IDEGitSupport.relativePath(for: path, repositoryRoot: toplevel) else {
             return "Could not resolve path for diff."
         }
         var sections: [String] = []
@@ -691,27 +830,6 @@ final class IDEGitStatusModel {
         return sections.joined(separator: "\n\n")
     }
 
-    nonisolated private static func relativePath(for absolutePath: String, repositoryRoot: String) -> String? {
-        guard absolutePath == repositoryRoot || absolutePath.hasPrefix(repositoryRoot + "/") else { return nil }
-        if absolutePath == repositoryRoot { return "." }
-        return String(absolutePath.dropFirst(repositoryRoot.count + 1))
-    }
-
-    nonisolated private static func statusLine(_ text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline).first.map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if line.count <= 200 { return line }
-        return String(line.prefix(200))
-    }
-
-    nonisolated private static func describe(_ error: Error) -> String {
-        if let git = error as? GitError, let message = git.errorDescription, !message.isEmpty {
-            return message
-        }
-        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        return message.isEmpty ? "Git command failed." : message
-    }
-
     nonisolated static func parse(entries: [GitStatusEntry], toplevel: String, branch: String?) -> GitSnapshot {
         var snapshot = GitSnapshot(repositoryRoot: toplevel, currentBranch: branch)
         var changeMap: [String: IDEGitChange] = [:]
@@ -723,8 +841,9 @@ final class IDEGitStatusModel {
                 snapshot.statuses[path] = .ignored
                 continue
             }
-            let staged = statusFromIndexChar(entry.indexCode)
-            let unstaged = statusFromWorkTreeChar(entry.worktreeCode)
+            // `AA`, `DD`, `AU`, `UD`…: git's unmerged pairs, whatever letters they carry.
+            let staged = entry.isConflicted ? IDEGitFileStatus.conflicted : statusFromIndexChar(entry.indexCode)
+            let unstaged = entry.isConflicted ? IDEGitFileStatus.conflicted : statusFromWorkTreeChar(entry.worktreeCode)
             let combined = combinedStatus(staged: staged, unstaged: unstaged)
             if let combined {
                 snapshot.statuses[path] = combined

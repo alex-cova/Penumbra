@@ -89,6 +89,7 @@ struct IDEWelcomeView: View {
                 IDEWelcomeActionList(
                     openFile: workspace.openFile,
                     openFolder: workspace.openFolder,
+                    cloneRepository: workspace.promptClone,
                     newFile: workspace.newFile
                 )
                 if !workspace.recentProjectURLs.isEmpty {
@@ -278,12 +279,14 @@ private struct IDEWelcomeProjectHeader: View {
 private struct IDEWelcomeActionList: View {
     let openFile: () -> Void
     let openFolder: () -> Void
+    let cloneRepository: () -> Void
     let newFile: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             IDEWelcomeActionRow(title: "Open File…", systemImage: "doc", shortcut: "⌘O", action: openFile)
             IDEWelcomeActionRow(title: "Open Folder…", systemImage: "folder", shortcut: "⌘⇧O", action: openFolder)
+            IDEWelcomeActionRow(title: "Clone Repository…", systemImage: "arrow.down.circle", shortcut: nil, action: cloneRepository)
             IDEWelcomeActionRow(title: "New File", systemImage: "doc.badge.plus", shortcut: "⌘N", action: newFile)
         }
     }

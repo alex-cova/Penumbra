@@ -11,6 +11,11 @@ final class IDEProjectWatcher {
         var paths: Set<String> = []
         /// `.git/index` or `.git/HEAD` changed: a stage, commit, or checkout.
         var gitMetadataChanged = false
+        /// A ref moved: `HEAD`, `refs/**` (branches, tags, remotes, the stash), `packed-refs`,
+        /// `ORIG_HEAD` or `FETCH_HEAD`. The log and the branch lists are stale.
+        var gitRefsChanged = false
+        /// A merge, rebase, cherry-pick or revert started, advanced or ended.
+        var gitOperationChanged = false
 
         /// Directories whose listing may have changed. Hidden entries never appear in the tree.
         var affectedDirectories: Set<String> {
@@ -72,6 +77,8 @@ final class IDEProjectWatcher {
         if let range = path.range(of: "/.git/") {
             let tail = path[range.upperBound...]
             pending.gitMetadataChanged = pending.gitMetadataChanged || tail == "index" || tail == "HEAD"
+            pending.gitRefsChanged = pending.gitRefsChanged || Self.isRefsFile(tail)
+            pending.gitOperationChanged = pending.gitOperationChanged || Self.isOperationFile(tail)
         } else {
             pending.paths.insert(path)
         }
@@ -91,13 +98,27 @@ final class IDEProjectWatcher {
     nonisolated private static func isRelevant(_ path: String) -> Bool {
         if let range = path.range(of: "/.git/") {
             let tail = path[range.upperBound...]
-            return tail == "index" || tail == "HEAD"
+            return tail == "index" || isRefsFile(tail) || isOperationFile(tail)
         }
         if path.hasSuffix("/.git") { return false }
         for component in path.split(separator: "/") where IDEProjectModel.ignoredDirectoryNames.contains(String(component)) {
             return false
         }
         return true
+    }
+
+    /// What can move a branch, tag or remote ref. `HEAD` is here too: a checkout changes which
+    /// branch is current and so the log's decorations.
+    nonisolated static func isRefsFile(_ tail: Substring) -> Bool {
+        tail == "HEAD" || tail == "packed-refs" || tail == "ORIG_HEAD" || tail == "FETCH_HEAD"
+            || tail.hasPrefix("refs/")
+    }
+
+    /// The files git writes while a multi-step command is in progress, and removes when it ends.
+    nonisolated static func isOperationFile(_ tail: Substring) -> Bool {
+        tail == "MERGE_HEAD" || tail == "MERGE_MSG" || tail == "CHERRY_PICK_HEAD" || tail == "REVERT_HEAD"
+            || tail == "BISECT_LOG" || tail.hasPrefix("rebase-merge/") || tail.hasPrefix("rebase-apply/")
+            || tail.hasPrefix("sequencer/")
     }
 
     nonisolated private static func remap(_ path: String, from resolved: String, to root: String) -> String {

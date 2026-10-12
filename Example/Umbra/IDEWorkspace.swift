@@ -90,6 +90,8 @@ public final class IDEWorkspace {
     /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
     @ObservationIgnored
     var diffSessions: [UUID: IDEDiffSession] = [:]
+    /// Three-way merge tabs (a diff-kind document whose viewer is `IDEMergeViewerView`), by document.
+    var mergeSessions: [UUID: IDEMergeSession] = [:]
     /// Each hex tab's session, by its document's id (see `IDEWorkspace+Hex.swift`).
     @ObservationIgnored
     var hexSessions: [UUID: IDEHexSession] = [:]
@@ -284,6 +286,9 @@ public final class IDEWorkspace {
         }
         gitStatus.onWorkingTreeChanged = { [weak self] in
             self?.reloadOpenEditorsAfterGitChange()
+        }
+        gitStatus.onShowComparison = { [weak self] in
+            self?.showBottomTab(.sourceControl)
         }
         gitStatus.onRefreshed = { [weak self] in
             self?.refreshBlameInOpenEditors()
@@ -631,7 +636,7 @@ public final class IDEWorkspace {
     /// The text view keyboard edits go to: a diff tab's working-tree side, else the pane's editor.
     private var activeEditingTextView: TextView {
         let host = host(for: workbench.activePaneID)
-        return workbench.activePane.selectedDocument?.contentKind == .diff ? host.diffViewer.rightTextView : host.textView
+        return workbench.activePane.selectedDocument?.contentKind == .diff ? host.diffViewer.editingTextView : host.textView
     }
 
     func bootstrap() {
@@ -2355,18 +2360,25 @@ public final class IDEWorkspace {
         return lines.joined(separator: "\n")
     }
 
-    /// Fast-forwards the current branch from its remote (⌘T in the IntelliJ keymap). The outcome
-    /// shows in the sidebar's Changes tab.
+    /// Update Project (⌘T in the IntelliJ keymap): fetches and merges or rebases the current branch
+    /// from its upstream, after asking how unless the user chose not to be asked. The outcome shows
+    /// in the sidebar's Changes tab.
     func pullProject() {
         guard gitStatus.isRepository else { return }
-        gitStatus.pull()
+        gitStatus.requestUpdate()
         showSourceControl()
     }
 
-    /// Pushes the current branch (⇧⌘K in the IntelliJ keymap). The outcome shows in the sidebar's Changes tab.
+    /// Opens the push dialog for the current branch (⇧⌘K in the IntelliJ keymap).
     func pushProject() {
         guard gitStatus.isRepository else { return }
-        gitStatus.push()
+        gitStatus.requestPush()
+    }
+
+    /// Fetches every remote (Git ▸ Fetch). Progress and the outcome show in the Changes tab.
+    func fetchProject() {
+        guard gitStatus.isRepository else { return }
+        gitStatus.fetch()
         showSourceControl()
     }
 
@@ -4666,6 +4678,7 @@ public final class IDEWorkspace {
             for source in sources {
                 items.append(contentsOf: await source.items(matching: query, limit: limit))
             }
+            items.append(contentsOf: await MainActor.run { workspace.gitPaletteItems(matching: query, limit: limit) })
             return items
         }
         palette.symbolsExcludedDocuments = { [weak self] in await MainActor.run { self?.openJavaDocumentIDs() ?? [] } }
@@ -4875,6 +4888,7 @@ public final class IDEWorkspace {
             guard let self else { return }
             self.project.applyChanges(in: batch.affectedDirectories)
             self.localHistory.recordExternalChanges(batch.paths)
+            if batch.gitRefsChanged || batch.gitOperationChanged { self.gitStatus.noteRefsChanged() }
             self.gitStatus.refresh()
             self.fileIndexer.handle(batch)
             self.languages.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
@@ -5798,6 +5812,10 @@ public final class IDEWorkspace {
         in pane: EditorPane,
         host: IDEEditorPaneHost
     ) {
+        if let merge = mergeSessions[document.id] {
+            showMergeDocument(merge, document: document, in: pane, host: host)
+            return
+        }
         guard let session = diffSessions[document.id] else { return }
         changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
@@ -5814,6 +5832,33 @@ public final class IDEWorkspace {
         host.diffViewer.onJumpToSource = { [weak self] path, line in
             self?.openDiffSource(path: path, line: line)
         }
+        host.diffViewer.show(session, preferences: preferences)
+        host.loadedDocumentID = document.id
+        host.loadedGeneration = document.contentGeneration
+        if pane.id == workbench.activePaneID {
+            host.diffViewer.focus()
+        }
+    }
+
+    /// Puts a merge tab's viewer over the pane's editor, keeping the text document it replaces.
+    private func showMergeDocument(
+        _ session: IDEMergeSession,
+        document: WorkbenchDocument,
+        in pane: EditorPane,
+        host: IDEEditorPaneHost
+    ) {
+        changeMarkers.hide(on: host.textView)
+        if let previousID = host.loadedDocumentID,
+           previousID != document.id,
+           let previous = pane.documents.first(where: { $0.id == previousID }),
+           previous.contentKind == .text {
+            syncTextViewToDocument(host.textView, document: previous, from: host)
+            previous.pendingState = host.textView.makeCapturedState()
+        }
+        host.markdownPreviewController.closeIfNotMarkdown()
+        host.hideJSONDiagram()
+        host.hideCSVTable()
+        host.imageViewerController.hide()
         host.diffViewer.show(session, preferences: preferences)
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration

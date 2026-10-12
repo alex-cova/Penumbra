@@ -28,6 +28,7 @@ struct IDEToolbarPanel: View {
             IDETitlebarProjectTitle(
                 title: workspace.project.rootURL?.lastPathComponent ?? "Umbra",
                 branch: workspace.gitStatus.currentBranch,
+                operation: workspace.gitStatus.operationPresentation?.badge,
                 showSourceControl: workspace.showSourceControl
             )
             .fixedSize()
@@ -99,13 +100,16 @@ private struct IDETitlebarPanelToggles: View {
     }
 }
 
-/// Centered `project ⑂ branch` title; the branch opens Source Control.
+/// Centered `project ⑂ branch` title; the branch opens the branch popup.
 private struct IDETitlebarProjectTitle: View {
     let title: String
     let branch: String?
+    /// "Merging", "Rebasing"…: shown beside the branch while one is in progress.
+    var operation: String?
     let showSourceControl: () -> Void
 
     @State private var isHoveringBranch = false
+    @State private var showsBranches = false
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
@@ -115,7 +119,7 @@ private struct IDETitlebarProjectTitle: View {
                 .lineLimit(1)
 
             if let branch {
-                Button(action: showSourceControl) {
+                Button { showsBranches.toggle() } label: {
                     HStack(spacing: IDEAppearance.Spacing.xs + 2) {
                         Image(systemName: "arrow.triangle.branch")
                             .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
@@ -133,10 +137,26 @@ private struct IDETitlebarProjectTitle: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { isHoveringBranch = $0 }
-                .help("Show Source Control")
+                .popover(isPresented: $showsBranches, arrowEdge: .bottom) {
+                    IDEGitBranchPopup(isPresented: $showsBranches)
+                }
+                .help("Branches: switch, create, update and push")
                 .accessibilityLabel("Git branch \(branch)")
-                .accessibilityHint("Show Source Control")
+                .accessibilityHint("Show branches")
                 .focusable(false)
+            }
+
+            if let operation {
+                Button(action: showSourceControl) {
+                    Text(operation)
+                        .font(IDEAppearance.Typography.caption.weight(.semibold))
+                        .foregroundStyle(IDEAppearance.ColorToken.gitConflict)
+                        .padding(.horizontal, IDEAppearance.Spacing.sm)
+                        .padding(.vertical, 2)
+                        .background(IDEAppearance.ColorToken.gitConflict.opacity(0.15), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("\(operation) is in progress: open Changes to continue or abort")
             }
         }
     }

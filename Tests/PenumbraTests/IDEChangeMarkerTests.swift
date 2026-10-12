@@ -96,4 +96,44 @@ final class IDEChangeMarkerTests: XCTestCase {
         restored.refresh(textView: textView, url: URL(fileURLWithPath: "/tmp/File.java"), git: IDEGitStatusModel(), force: true, delay: .zero)
         XCTAssertFalse(textView.showsGutterChangeStripe)
     }
+
+    // MARK: - Rollback
+
+    func testRollbackPutsAModifiedBlockBack() throws {
+        let head = Data("a\nb\nc\n".utf8)
+        let edit = try XCTUnwrap(IDEChangeMarkerPresentation.rollback(head: head, buffer: "a\nB\nc\n", caretLine: 1))
+        XCTAssertEqual(edit.replacement, "b\n")
+        XCTAssertEqual(edit.currentText, "B\n")
+        var text = "a\nB\nc\n" as NSString
+        text = text.replacingCharacters(in: edit.range, with: edit.replacement) as NSString
+        XCTAssertEqual(text as String, "a\nb\nc\n")
+    }
+
+    func testRollbackRemovesAnAddedBlockAndRestoresADeletedOne() throws {
+        let added = try XCTUnwrap(IDEChangeMarkerPresentation.rollback(
+            head: Data("a\nc\n".utf8), buffer: "a\nnew\nc\n", caretLine: 1))
+        XCTAssertEqual(added.replacement, "")
+        XCTAssertEqual(added.currentText, "new\n")
+
+        let deleted = try XCTUnwrap(IDEChangeMarkerPresentation.rollback(
+            head: Data("a\nb\nc\n".utf8), buffer: "a\nc\n", caretLine: 1))
+        XCTAssertEqual(deleted.range.length, 0)
+        XCTAssertEqual(deleted.replacement, "b\n")
+    }
+
+    func testRollbackNeedsTheCaretInAChangeAndACommittedVersion() {
+        let head = Data("a\nb\nc\n".utf8)
+        XCTAssertNil(IDEChangeMarkerPresentation.rollback(head: head, buffer: "a\nB\nc\n", caretLine: 0))
+        XCTAssertNil(IDEChangeMarkerPresentation.rollback(head: nil, buffer: "a\n", caretLine: 0), "a new file has nothing to go back to")
+        XCTAssertNil(IDEChangeMarkerPresentation.rollback(head: Data([0, 1, 2]), buffer: "x", caretLine: 0))
+    }
+
+    func testRollbackAfterALastLineWithoutABreakAddsOne() throws {
+        let edit = try XCTUnwrap(IDEChangeMarkerPresentation.rollback(
+            head: Data("a\nb\n".utf8), buffer: "a", caretLine: 1))
+        var text = "a" as NSString
+        text = text.replacingCharacters(in: edit.range, with: edit.replacement) as NSString
+        XCTAssertEqual(text as String, "a\nb\n")
+    }
 }
+
