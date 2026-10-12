@@ -655,6 +655,9 @@ public final class IDEWorkspace {
         configureDiskSync()
         subscribeToProjectWatcher()
         configureDebugSession()
+        problems.onShowTestResults = { [weak self] in
+            self?.showBottomTab(.testResults)
+        }
         intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
@@ -4306,6 +4309,21 @@ public final class IDEWorkspace {
 
     func runTestMethod(_ method: JavaTestMethod, taskPath: String) {
         javaRun.runTestMethod(method, taskPath: taskPath)
+    }
+
+    /// A project-level Problems row was clicked: the test summary shows the results, a message
+    /// with a file opens it at its line.
+    func openBuildMessage(_ message: GradleProblem) {
+        if message.kind == .testFailures { problems.onShowTestResults?() }
+        guard let url = message.file else { return }
+        let position = TextPosition(line: max(0, (message.line ?? 1) - 1), column: 0, utf16Offset: 0)
+        let document = workbench.allDocuments().first { $0.url?.standardizedFileURL == url.standardizedFileURL }
+        _ = openNavigationLocation(Location(
+            documentID: document?.documentID ?? DocumentID(),
+            url: url,
+            range: EditorIntelligence.TextRange(start: position, end: position),
+            displayName: url.lastPathComponent
+        ))
     }
 
     /// The compiler was pointed at a project (or turned off): earlier results no longer apply, so
