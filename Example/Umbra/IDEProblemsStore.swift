@@ -27,6 +27,8 @@ final class IDEProblemsStore {
     static let gradleBuildSource = "gradle"
     static let swiftPMBuildSource = "swiftpm"
     static let xcodeBuildSource = "xcode"
+    /// The builds a SwiftUI preview runs: their own bucket, so a preview never replaces a package build's problems.
+    static let swiftUIPreviewBuildSource = "swiftui-preview"
 
     /// Every source's build problems, merged per file (sources in name order, so it is stable).
     /// Editor, javac and inspection buckets are not build output.

@@ -87,6 +87,20 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
 
     var isBusy: Bool { isRunningTasks }
 
+    /// True when the folder is trusted, asking first when it is not; a yes is remembered. A SwiftUI
+    /// preview builds the target (its build phases run scripts) outside `run(_:)`, so it asks here.
+    func ensureTrusted() async -> Bool {
+        guard let root = rootURL else { return false }
+        if trustStore.isTrusted(root) { return true }
+        let token = projectGeneration
+        guard let prompt = trustPrompt, await prompt(root), projectGeneration == token else { return false }
+        trustStore.setTrusted(true, for: root)
+        if case .untrusted = syncState, let model {
+            syncState = .synced(modules: model.targets.count, dependencies: model.packageCount)
+        }
+        return true
+    }
+
     var sourceRootPaths: Set<String> {
         Set(model?.sourceDirectories.map(\.path) ?? [])
     }

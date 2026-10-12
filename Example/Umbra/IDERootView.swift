@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 public struct IDERootView: View {
     @State private var agentPanelWidth: Double
+    @State private var swiftUIPreviewWidth: Double = 380
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth: Double
     @State private var projectSidebarWidth: Double
@@ -137,6 +138,17 @@ public struct IDERootView: View {
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
+                }
+
+                if workspace.isSwiftUIPreviewVisible, let preview = workspace.swiftUIPreview {
+                    IDESidebarResizeHandle(width: $swiftUIPreviewWidth, edge: .trailing)
+
+                    IDESwiftUIPreviewPanel(session: preview, onClose: workspace.hideSwiftUIPreview)
+                        .frame(width: swiftUIPreviewWidth)
+                        .idePanel()
+                        .transition(.opacity)
+                        .opacity(workspace.chromeOpacity)
+                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
 
                 if isAgentDocked {
