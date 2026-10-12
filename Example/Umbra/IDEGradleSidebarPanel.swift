@@ -346,7 +346,6 @@ struct IDEGradleTreeView: View {
                                     isSelected: selectedID == row.id,
                                     isRunning: runningPath(of: row.node).map(runningTaskPaths.contains) ?? false,
                                     isRunDisabled: isBusy,
-                                    onToggle: { toggle(row) },
                                     onSelect: {
                                         selectedID = row.id
                                         if row.canDisclose { toggle(row) }
@@ -521,7 +520,6 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
     let isSelected: Bool
     let isRunning: Bool
     let isRunDisabled: Bool
-    let onToggle: () -> Void
     let onSelect: () -> Void
     let onActivate: () -> Void
     @ViewBuilder let menu: () -> Menu
@@ -538,15 +536,13 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             if row.canDisclose {
-                Button(action: onToggle) {
-                    Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 12, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(row.isExpanded ? "Collapse" : "Expand")
+                // Not a Button: the row's simultaneous tap (`onSelect`) already toggles disclosure
+                // rows, so a Button here fired both and the row collapsed as it expanded.
+                Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(width: 12, height: 16)
+                    .contentShape(Rectangle())
             } else {
                 Spacer().frame(width: 12)
             }
@@ -595,6 +591,7 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
         .help(node.help ?? node.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(node.title)
+        .accessibilityValue(row.canDisclose ? (row.isExpanded ? "Expanded" : "Collapsed") : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .contextMenu { menu() }
     }
