@@ -124,7 +124,7 @@ final class IDESwiftRunProvider: IDERunProvider {
             locations.append(IDERunnableLocation(kind: .test, line: line(of: declaration.nameBytes), title: "\(declaration.name)()"))
         }
         // SwiftUI previews of a file in a code target: the gutter opens the canvas on one.
-        if let url = document.url, await workspace.canPreviewSwiftUI(file: url) {
+        if let url = document.url, workspace.canPreviewSwiftUI(file: url) {
             for block in SwiftPreviewExtractor.extract(from: parsed) {
                 locations.append(IDERunnableLocation(kind: .preview(index: block.index), line: block.line, title: block.displayName))
             }
