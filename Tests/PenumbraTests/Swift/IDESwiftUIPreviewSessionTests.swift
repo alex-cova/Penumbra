@@ -214,6 +214,121 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         XCTAssertEqual(IDESwiftUIPreviewToolchain.beside(swift: "/nowhere/swift").swiftc, "/usr/bin/swiftc")
     }
 
+    // MARK: Artifacts
+
+    private func touch(_ path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: path, contents: Data())
+    }
+
+    func testALibraryTargetLinksItsMergedObjectAndNotTheIntermediates() throws {
+        let out = directory.appendingPathComponent("scratch/out").path
+        let bin = out + "/Products/Debug"
+        try touch(bin + "/ToyUI.o")
+        try touch(bin + "/ToyCore.o")
+        try touch(out + "/Intermediates.noindex/ToyUI.build/Debug/ToyUI-t.build/Objects-normal/arm64/A.o")
+        try touch(out + "/Intermediates.noindex/ToyUI.build/Debug/ToyUI-t.build/Objects-normal/arm64/ToyUI.swiftmodule/x")
+        let located = IDESwiftUIPreviewArtifacts.locate(binPath: bin, module: "ToyUI")
+        XCTAssertEqual(located.objects.map { ($0 as NSString).lastPathComponent }, ["ToyCore.o", "ToyUI.o"])
+    }
+
+    func testAnExecutableTargetLinksItsPerFileObjectsFromTheIntermediates() throws {
+        let out = directory.appendingPathComponent("scratch/out").path
+        let bin = out + "/Products/Debug"
+        let arm = out + "/Intermediates.noindex/MyApp.build/Debug/MyApp-p.build/Objects-normal/arm64"
+        try touch(bin + "/MyApp")
+        try touch(bin + "/Dep.o")
+        try touch(arm + "/App.o")
+        try touch(arm + "/ContentView.o")
+        try touch(arm + "/MyApp_lto.o")
+        try touch(arm + "/MyApp.swiftmodule")
+        let located = IDESwiftUIPreviewArtifacts.locate(binPath: bin, module: "MyApp")
+        XCTAssertEqual(located.objects.map { ($0 as NSString).lastPathComponent }.sorted(), ["App.o", "ContentView.o", "Dep.o"])
+        XCTAssertEqual(located.modulePaths, [arm])
+    }
+
+    func testAnOlderLayoutKeepsObjectsInPerModuleBuildDirectories() throws {
+        let bin = directory.appendingPathComponent(".build/arm64-apple-macosx/debug").path
+        try touch(bin + "/ToyUI.build/A.swift.o")
+        try touch(bin + "/ToyCore.build/B.swift.o")
+        try touch(bin + "/Modules/ToyUI.swiftmodule")
+        let located = IDESwiftUIPreviewArtifacts.locate(binPath: bin, module: "ToyUI")
+        XCTAssertEqual(located.objects.map { ($0 as NSString).lastPathComponent }.sorted(), ["A.swift.o", "B.swift.o"])
+        XCTAssertEqual(located.modulePaths, [bin + "/Modules"])
+    }
+
+    func testNmOutputNamesTheObjectsThatDefineMain() {
+        let output = """
+        /p/App.o:
+        0000000000000414 T _$s5MyApp0aB4MainV5$mainyyFZ
+        0000000000000520 T _main
+
+        /p/ContentView.o:
+        0000000000000000 T _$s5MyApp11ContentViewV4bodyQrvg
+        """
+        let files = ["/p/App.o", "/p/ContentView.o"]
+        XCTAssertEqual(IDESwiftUIPreviewArtifacts.objectsDefiningMain(nmOutput: output, files: files), ["/p/App.o"])
+        // One file: nm prints no header.
+        XCTAssertEqual(
+            IDESwiftUIPreviewArtifacts.objectsDefiningMain(nmOutput: "0000 T _main\n", files: ["/p/One.o"]), ["/p/One.o"]
+        )
+        XCTAssertTrue(IDESwiftUIPreviewArtifacts.objectsDefiningMain(nmOutput: "0000 T _foo\n", files: ["/p/One.o"]).isEmpty)
+    }
+
+    func testAViewInAnExecutableTargetIsPreviewedAndReloaded() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("App")
+        let sources = package.appendingPathComponent("Sources/MyApp")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "MyApp", platforms: [.macOS(.v14)], targets: [.executableTarget(name: "MyApp")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        try """
+        import SwiftUI
+        @main struct MyAppMain: App {
+            var body: some Scene { WindowGroup { ContentView() } }
+        }
+        """.write(to: sources.appendingPathComponent("App.swift"), atomically: true, encoding: .utf8)
+        func source(_ color: String) -> String {
+            """
+            import SwiftUI
+            struct ContentView: View {
+                var body: some View { Text("hello").font(.largeTitle).foregroundStyle(.\(color)) }
+            }
+            #Preview { ContentView().padding(40) }
+            """
+        }
+        let file = sources.appendingPathComponent("ContentView.swift")
+        var current = source("red")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: nil, fileProvider: { (file, current) },
+            package: (package, "MyApp"), toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 200))
+        session.refresh()
+        let built = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(built, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+        XCTAssertTrue(session.log.contains { $0.contains("App.o") && $0.contains("defines main") }, "the @main object is left out")
+        let first = try XCTUnwrap(session.frame?.tiffRepresentation)
+
+        current = source("green")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+        session.lastReloadReset()
+        session.refresh()
+        let hot = await waitUntil(seconds: 40) {
+            session.lastReload == .hotReload && session.phase == .ready && session.frame?.tiffRepresentation != first
+        }
+        XCTAssertTrue(hot, "phase \(session.phase)\n\(session.log.suffix(12).joined(separator: "\n"))")
+        session.stop()
+    }
+
     // MARK: Real pipeline
 
     func testASaveIsLoadedIntoTheRunningHostWithoutABuild() async throws {

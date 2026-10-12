@@ -94,6 +94,7 @@ final class IDESwiftUIPreviewSession {
         var packageRoot: URL
         var target: String
         var binPath: String
+        var modulePaths: [String]
         var toolchain: IDESwiftUIPreviewToolchain
         var stamps: [String: FileStamp]
     }
@@ -290,11 +291,22 @@ final class IDESwiftUIPreviewSession {
         guard binPathResult.succeeded,
               let binPath = binPathResult.output.split(whereSeparator: \.isNewline).last.map(String.init), binPath.hasPrefix("/")
         else { return fail(token, "swift could not report where it built.") }
-        let objects = ((try? fileManager.contentsOfDirectory(atPath: binPath)) ?? [])
-            .filter { $0.hasSuffix(".o") }.map { binPath + "/" + $0 }
-        guard !objects.isEmpty else {
+        let located = IDESwiftUIPreviewArtifacts.locate(binPath: binPath, module: plan.moduleName)
+        guard !located.objects.isEmpty else {
             return fail(token, "The build left no object files for \(package.target).")
         }
+        // The object of the file with `@main` defines `main`, which the host has itself.
+        var objects = located.objects
+        let symbols = await execute(plan.definedSymbolsCommand(objects: objects), toolchain: toolchain, directory: root, echo: false)
+        guard isCurrent(token) else { return }
+        if symbols.succeeded {
+            let withMain = IDESwiftUIPreviewArtifacts.objectsDefiningMain(nmOutput: symbols.output, files: objects)
+            if !withMain.isEmpty {
+                objects.removeAll { withMain.contains($0) }
+                append("Not linking \(withMain.map { ($0 as NSString).lastPathComponent }.sorted().joined(separator: ", ")): it defines main.\n")
+            }
+        }
+        modulePaths = located.modulePaths
 
         // 5. The shared support module (once), the host linked with the objects, and the thunk.
         phase = .building("Linking the preview…")
@@ -317,12 +329,13 @@ final class IDESwiftUIPreviewSession {
         } catch {
             return fail(token, "Could not write the preview sources: \(error.localizedDescription)")
         }
-        let link = await execute(plan.hostCommand(binPath: binPath, objects: objects), toolchain: toolchain, directory: root)
+        let link = await execute(plan.hostCommand(binPath: binPath, objects: objects, modulePaths: modulePaths), toolchain: toolchain, directory: root)
         guard isCurrent(token) else { return }
         guard link.succeeded else { return fail(token, Self.summary(of: link.output, fallback: "Linking the preview failed.")) }
         phase = .building("Compiling the preview…")
         let thunk = await compileThunk(
-            plan: plan, token: token, binPath: binPath, toolchain: toolchain, directory: root, modes: [.copy, .imported]
+            plan: plan, token: token, binPath: binPath, modulePaths: modulePaths, toolchain: toolchain,
+            directory: root, modes: [.copy, .imported]
         )
         guard isCurrent(token) else { return }
         guard thunk.succeeded else {
@@ -376,7 +389,7 @@ final class IDESwiftUIPreviewSession {
         }.value
         baseline = Baseline(
             url: url, packageRoot: package.root, target: package.target, binPath: binPath,
-            toolchain: toolchain, stamps: stamps
+            modulePaths: modulePaths, toolchain: toolchain, stamps: stamps
         )
         phase = .ready
         await render(counter: nextRenderCounter())
@@ -384,6 +397,7 @@ final class IDESwiftUIPreviewSession {
     }
 
     @ObservationIgnored private var framePrefix = ""
+    @ObservationIgnored private var modulePaths: [String] = []
 
     private func nextRenderCounter() -> Int {
         renderCounter += 1
@@ -405,8 +419,8 @@ final class IDESwiftUIPreviewSession {
     /// Writes and compiles the thunk, trying each mode in turn. The result is the first that
     /// compiled, or the last one's output.
     private func compileThunk(
-        plan: SwiftPreviewBuildPlan, token: Int, binPath: String, toolchain: IDESwiftUIPreviewToolchain,
-        directory: URL, modes: [SwiftPreviewBuildPlan.ThunkMode]
+        plan: SwiftPreviewBuildPlan, token: Int, binPath: String, modulePaths: [String],
+        toolchain: IDESwiftUIPreviewToolchain, directory: URL, modes: [SwiftPreviewBuildPlan.ThunkMode]
     ) async -> IDESwiftUIPreviewRunResult {
         var last = IDESwiftUIPreviewRunResult(status: 1, output: "", cancelled: false)
         for (index, mode) in modes.enumerated() {
@@ -417,7 +431,7 @@ final class IDESwiftUIPreviewSession {
                 return IDESwiftUIPreviewRunResult(status: 1, output: "Could not write the thunk: \(error)", cancelled: false)
             }
             last = await execute(
-                plan.thunkCommand(binPath: binPath, generation: token), toolchain: toolchain, directory: directory,
+                plan.thunkCommand(binPath: binPath, generation: token, modulePaths: modulePaths), toolchain: toolchain, directory: directory,
                 echo: index == modes.count - 1
             )
             if last.succeeded || last.cancelled { return last }
@@ -463,8 +477,8 @@ final class IDESwiftUIPreviewSession {
         onChange?()
         // Only the copy shows the edit; the imported thunk would show what was built.
         let compile = await compileThunk(
-            plan: plan, token: token, binPath: baseline.binPath, toolchain: baseline.toolchain,
-            directory: baseline.packageRoot, modes: [.copy]
+            plan: plan, token: token, binPath: baseline.binPath, modulePaths: baseline.modulePaths,
+            toolchain: baseline.toolchain, directory: baseline.packageRoot, modes: [.copy]
         )
         guard isCurrent(token) else { return true }
         guard compile.succeeded else {

@@ -8,7 +8,11 @@ struct IDESwiftUIPreviewToolchain: Sendable, Equatable {
     var swiftc: String
 
     func executable(for tool: SwiftPreviewCommand.Tool) -> String {
-        tool == .swift ? swift : swiftc
+        switch tool {
+        case .swift: return swift
+        case .swiftc: return swiftc
+        case .nm: return "/usr/bin/nm"
+        }
     }
 
     /// `swiftc` sits beside `swift`, in the toolchain's `bin` directory, or is the `/usr/bin` shim.

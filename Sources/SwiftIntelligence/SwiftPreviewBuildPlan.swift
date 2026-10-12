@@ -3,7 +3,7 @@ import Foundation
 /// One command the preview pipeline runs. The tool is named, not resolved: the caller finds
 /// `swift` and `swiftc` in the toolchain it uses for the project.
 public struct SwiftPreviewCommand: Sendable, Equatable {
-    public enum Tool: Sendable, Equatable { case swift, swiftc }
+    public enum Tool: Sendable, Equatable { case swift, swiftc, nm }
 
     public var tool: Tool
     public var arguments: [String]
@@ -158,7 +158,7 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
     /// The host, linked with the objects of the project. They are linked whole, so every type the
     /// thunks name is in the process, and the host sits next to them so `Bundle.module` finds the
     /// resource bundles.
-    public func hostCommand(binPath: String, objects: [String]) -> SwiftPreviewCommand {
+    public func hostCommand(binPath: String, objects: [String], modulePaths: [String] = []) -> SwiftPreviewCommand {
         var arguments = [
             "-target", targetTriple, "-swift-version", "5",
             "-I", binPath, "-L", binPath,
@@ -167,23 +167,33 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             "-Xlinker", "-rpath", "-Xlinker", supportDirectory,
             "-o", binPath + "/UmbraPreviewHost", hostSourcePath
         ]
+        for path in modulePaths { arguments.append(contentsOf: ["-I", path]) }
         arguments.append(contentsOf: objects.sorted())
         return SwiftPreviewCommand(tool: .swiftc, arguments: arguments)
+    }
+
+    /// Lists the global symbols the objects define, to find the one that has `main`.
+    public func definedSymbolsCommand(objects: [String]) -> SwiftPreviewCommand {
+        SwiftPreviewCommand(tool: .nm, arguments: ["-gU"] + objects.sorted())
     }
 
     /// The preview's view, as a dylib the host `dlopen`s. Its undefined symbols (the project's
     /// types) resolve against the host. Each generation has its own module name, so loading a
     /// second one never meets the first one's types.
-    public func thunkCommand(binPath: String, generation: Int) -> SwiftPreviewCommand {
-        SwiftPreviewCommand(tool: .swiftc, arguments: [
+    public func thunkCommand(binPath: String, generation: Int, modulePaths: [String] = []) -> SwiftPreviewCommand {
+        var arguments = [
             "-emit-library", "-module-name", "UmbraPreviewThunk\(generation)",
             "-target", targetTriple, "-swift-version", "5",
-            "-I", binPath, "-F", binPath, "-I", supportDirectory,
+            "-I", binPath, "-F", binPath, "-I", supportDirectory
+        ]
+        for path in modulePaths { arguments.append(contentsOf: ["-I", path]) }
+        arguments += [
             "-enable-testing", "-Xfrontend", "-enable-private-imports",
             "-Xfrontend", "-disable-previous-implementation-calls-in-dynamic-replacements",
             "-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup",
             "-o", thunkLibraryPath(generation: generation), thunkSourcePath(generation: generation)
-        ])
+        ]
+        return SwiftPreviewCommand(tool: .swiftc, arguments: arguments)
     }
 
     // MARK: Sources
