@@ -44,6 +44,25 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertEqual(app.compileClasspathJars.count, 1)
     }
 
+    func testDecodesTestTasksAndToleratesTheirAbsence() throws {
+        let v5 = #"{"formatVersion":5,"gradleVersion":"8.5","subprojects":[{"path":":app","directory":"file:///p/app/"}],"unresolved":[]}"#
+        let old = try JSONDecoder().decode(JavaGradleProjectModel.self, from: Data(v5.utf8))
+        XCTAssertEqual(old.subprojects.first?.testTasks, [])
+
+        let v6 = #"""
+        {"formatVersion":6,"gradleVersion":"8.5","subprojects":[{"path":":app","directory":"file:///p/app/",
+        "testTasks":[{"path":":app:test","name":"test","sourceSetName":"test","resultsDir":"file:///p/app/build/test-results/test/"},
+        {"path":":app:slow","name":"slow"}]}],"unresolved":[]}
+        """#
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: Data(v6.utf8))
+        let tasks = try XCTUnwrap(model.subprojects.first?.testTasks)
+        XCTAssertEqual(tasks.map(\.path), [":app:test", ":app:slow"])
+        XCTAssertEqual(tasks[0].sourceSetName, "test")
+        XCTAssertEqual(tasks[0].resultsDir?.path, "/p/app/build/test-results/test")
+        XCTAssertNil(tasks[1].sourceSetName)
+        XCTAssertNil(tasks[1].resultsDir)
+    }
+
     func testSourceSetContainingFilePicksTheLongestDirectoryPrefix() {
         let root = URL(fileURLWithPath: "/proj")
         let mainDir = URL(fileURLWithPath: "/proj/src/main/java")
