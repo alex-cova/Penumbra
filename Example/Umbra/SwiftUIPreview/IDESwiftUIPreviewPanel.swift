@@ -91,7 +91,7 @@ struct IDESwiftUIPreviewPanel: View {
                         Image(nsImage: image)
                             .resizable()
                             .frame(width: session.frameSize.width, height: session.frameSize.height)
-                            .onTapGesture { location in session.click(at: location) }
+                            .overlay { IDESwiftUIPreviewInput(session: session) }
                             .opacity(session.phase.isWorking ? 0.55 : 1)
                     }
                 }

@@ -154,21 +154,76 @@ final class IDESwiftUIPreviewSession {
 
     /// A click at a point of the frame, in points.
     func click(at point: CGPoint) {
-        guard let connection, phase == .ready else { return }
-        renderTask?.cancel()
-        renderCounter += 1
-        let counter = renderCounter
+        send([.mouse(type: "down", x: point.x, y: point.y), .mouse(type: "up", x: point.x, y: point.y)])
+    }
+
+    /// One mouse event (`down`, `dragged`, `up`, `moved`) at a point of the frame, in points.
+    func mouse(_ type: String, at point: CGPoint) {
+        send([.mouse(type: type, x: point.x, y: point.y)])
+    }
+
+    /// A drag from one point of the frame to another, in points.
+    func drag(from start: CGPoint, to end: CGPoint) {
+        send([
+            .mouse(type: "down", x: start.x, y: start.y),
+            .mouse(type: "dragged", x: end.x, y: end.y),
+            .mouse(type: "up", x: end.x, y: end.y)
+        ])
+    }
+
+    /// Scrolls the view under `point` by `dx`, `dy` points (positive `dy` brings later content in).
+    func scroll(at point: CGPoint, dx: Double, dy: Double) {
+        send([.scroll(x: point.x, y: point.y, dx: dx, dy: dy)])
+    }
+
+    /// Types characters into the view that has the focus.
+    func type(_ text: String) {
+        send([.key(kind: "text", value: text)])
+    }
+
+    /// An editing command (`deleteBackward:`, `insertNewline:`, `moveLeft:`…) for the focused view.
+    func perform(command selector: String) {
+        send([.key(kind: "command", value: selector)])
+    }
+
+    /// An action (`copy:`, `paste:`, `selectAll:`) down the focused view's responder chain.
+    func perform(action selector: String) {
+        send([.key(kind: "action", value: selector)])
+    }
+
+    /// Sends input to the host and draws the frame it leads to. Input that follows quickly is
+    /// ordered after what is in flight, and only the newest frame is drawn.
+    private func send(_ commands: [IDESwiftUIPreviewHostCommand]) {
+        guard connection != nil, phase == .ready else { return }
+        let counter = nextRenderCounter()
+        enqueue { [weak self] connection in
+            for command in commands { _ = try await connection.request(command) }
+            await self?.render(counter: counter)
+        }
+    }
+
+    /// Everything said to the host goes through one queue: replies are matched to requests by
+    /// order, so two tasks talking at once could swap them.
+    @discardableResult
+    private func enqueue(
+        _ body: @escaping @MainActor (IDESwiftUIPreviewHostConnection) async throws -> Void
+    ) -> Task<Void, Never>? {
+        guard let connection else { return nil }
+        let previous = hostQueue
         let task = Task { [weak self] in
+            await previous?.value
+            guard self?.connection === connection else { return }
             do {
-                _ = try await connection.request(.mouse(type: "down", x: point.x, y: point.y))
-                _ = try await connection.request(.mouse(type: "up", x: point.x, y: point.y))
-                await self?.render(counter: counter)
+                try await body(connection)
             } catch {
                 self?.hostEnded()
             }
         }
-        renderTask = task
+        hostQueue = task
+        return task
     }
+
+    @ObservationIgnored private var hostQueue: Task<Void, Never>?
 
     /// Stops the host and forgets the frame.
     func stop() {
@@ -392,7 +447,7 @@ final class IDESwiftUIPreviewSession {
             modulePaths: modulePaths, toolchain: toolchain, stamps: stamps
         )
         phase = .ready
-        await render(counter: nextRenderCounter())
+        await renderSerially()
         onChange?()
     }
 
@@ -504,7 +559,7 @@ final class IDESwiftUIPreviewSession {
         framePrefix = plan.framePath(generation: token)
         lastReload = .hotReload
         phase = .ready
-        await render(counter: nextRenderCounter())
+        await renderSerially()
         onChange?()
         return true
     }
@@ -539,13 +594,20 @@ final class IDESwiftUIPreviewSession {
     private func scheduleRender(after delay: Duration = .zero) {
         guard connection != nil, phase == .ready else { return }
         renderTask?.cancel()
-        let counter = nextRenderCounter()
         renderTask = Task { [weak self] in
             if delay > .zero {
                 do { try await Task.sleep(for: delay) } catch { return }
             }
-            await self?.render(counter: counter)
+            guard let self, self.phase == .ready else { return }
+            let counter = self.nextRenderCounter()
+            self.enqueue { [weak self] _ in await self?.render(counter: counter) }
         }
+    }
+
+    /// Draws the current state and returns when the frame is in place.
+    private func renderSerially() async {
+        let counter = nextRenderCounter()
+        await enqueue { [weak self] _ in await self?.render(counter: counter) }?.value
     }
 
     private func render(counter: Int) async {

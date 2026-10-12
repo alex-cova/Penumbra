@@ -13,6 +13,11 @@
 /// - `{"cmd":"render","generation":1,"width":400,"height":300,"scale":2,"scheme":"dark","output":"/p/f.png"}`
 ///   → `{"event":"frame","generation":1,"path":"/p/f.png","width":800,"height":600}`
 /// - `{"cmd":"mouse","type":"down|up|dragged|moved","x":10,"y":20}` → `{"event":"ack"}`
+/// - `{"cmd":"scroll","x":10,"y":20,"dx":0,"dy":120}` scrolls the innermost scroll view under the
+///   point that can move that way, by points (positive `dy`: later content comes into view)
+/// - `{"cmd":"key","kind":"text","text":"ab"}` types into the focused view;
+///   `{"cmd":"key","kind":"command","selector":"deleteBackward:"}` performs an editing command on it;
+///   `{"cmd":"key","kind":"action","selector":"copy:"}` sends an action down the responder chain
 /// - `{"cmd":"quit"}`
 ///
 /// Behaviour measured in `Tools/PreviewSpike` and recorded in `docs/SWIFTUI_PREVIEW_PLAN.md` (P0):
@@ -60,6 +65,8 @@ public enum SwiftPreviewHostSource {
             case "load": load(object)
             case "render": render(object)
             case "mouse": mouse(object)
+            case "scroll": scroll(object)
+            case "key": key(object)
             case "quit": exit(0)
             default: send(["event": "error", "message": "unknown command"])
             }
@@ -130,6 +137,59 @@ public enum SwiftPreviewHostSource {
             }
             send(["event": "frame", "generation": generation, "ok": true, "path": output,
                   "width": pixelWidth, "height": pixelHeight])
+        }
+
+        func scroll(_ object: [String: Any]) {
+            defer { send(["event": "ack"]) }
+            guard let view = window.contentView, let x = object["x"] as? Double, let y = object["y"] as? Double else { return }
+            let dx = CGFloat(object["dx"] as? Double ?? 0), dy = CGFloat(object["dy"] as? Double ?? 0)
+            guard dx != 0 || dy != 0 else { return }
+            let point = view.convert(NSPoint(x: x, y: y), to: view.superview)
+            var candidate = view.hitTest(point)
+            while let current = candidate {
+                if let scrollView = current as? NSScrollView, scroll(scrollView, dx: dx, dy: dy) { return }
+                candidate = current.superview
+            }
+        }
+
+        /// Moves one scroll view; false when it cannot move that way (the next one out is tried).
+        func scroll(_ scrollView: NSScrollView, dx: CGFloat, dy: CGFloat) -> Bool {
+            let clip = scrollView.contentView
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            let sign: CGFloat = flipped ? 1 : -1
+            let old = clip.bounds.origin
+            var target = NSRect(origin: NSPoint(x: old.x + dx, y: old.y + dy * sign), size: clip.bounds.size)
+            target.origin = clip.constrainBoundsRect(target).origin
+            guard target.origin != old else { return false }
+            clip.scroll(to: target.origin)
+            scrollView.reflectScrolledClipView(clip)
+            return true
+        }
+
+        func key(_ object: [String: Any]) {
+            defer { send(["event": "ack"]) }
+            let responder = window.firstResponder
+            switch object["kind"] as? String {
+            case "text":
+                guard let text = object["text"] as? String, !text.isEmpty else { return }
+                if let client = responder as? NSTextInputClient {
+                    client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                } else if let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text,
+                    isARepeat: false, keyCode: 0
+                ) {
+                    window.sendEvent(event)
+                }
+            case "command":
+                guard let name = object["selector"] as? String else { return }
+                if let responder { responder.doCommand(by: Selector(name)) }
+            case "action":
+                guard let name = object["selector"] as? String else { return }
+                NSApp.sendAction(Selector(name), to: responder, from: nil)
+            default:
+                break
+            }
         }
 
         func mouse(_ object: [String: Any]) {

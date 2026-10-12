@@ -447,6 +447,114 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         XCTAssertEqual(session.selectedIndex, 1)
     }
 
+    func testTypingAndScrollingReachTheView() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let nameFile = directory.appendingPathComponent("name.txt").path
+        let rowFile = directory.appendingPathComponent("row.txt").path
+        let source = """
+        import SwiftUI
+
+        struct FormView: View {
+            @State private var name = ""
+            var body: some View {
+                VStack(spacing: 0) {
+                    TextField("Name", text: $name)
+                        .padding(8)
+                        .onChange(of: name) { _, value in
+                            try? value.write(toFile: "\(nameFile)", atomically: true, encoding: .utf8)
+                        }
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(0..<80, id: \\.self) { index in
+                                Text("Row \\(index)").frame(maxWidth: .infinity, minHeight: 24).onAppear { record(index) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            private func record(_ index: Int) {
+                let current = Int((try? String(contentsOfFile: "\(rowFile)", encoding: .utf8)) ?? "") ?? 0
+                if index > current { try? "\\(index)".write(toFile: "\(rowFile)", atomically: true, encoding: .utf8) }
+            }
+        }
+
+        #Preview { FormView() }
+        """
+        let file = sources.appendingPathComponent("FormView.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: (file, source), package: (package, "ToyUI"),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 240))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+
+        func read(_ path: String) -> String? { try? String(contentsOfFile: path, encoding: .utf8) }
+        func waitFor(_ path: String, _ expected: (String?) -> Bool) async -> String? {
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                if expected(read(path)) { break }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            return read(path)
+        }
+
+        // Focus the field with a click, then type and delete.
+        session.click(at: CGPoint(x: 60, y: 20))
+        try await Task.sleep(for: .milliseconds(400))
+        session.type("hi")
+        let typed = await waitFor(nameFile) { $0 == "hi" }
+        XCTAssertEqual(typed, "hi")
+        session.perform(command: "deleteBackward:")
+        let deleted = await waitFor(nameFile) { $0 == "h" }
+        XCTAssertEqual(deleted, "h")
+        session.type("ello")
+        let word = await waitFor(nameFile) { $0 == "hello" }
+        XCTAssertEqual(word, "hello")
+
+        // Scrolling brings later rows in.
+        let initial = Int(read(rowFile) ?? "") ?? 0
+        XCTAssertLessThan(initial, 20)
+        session.scroll(at: CGPoint(x: 160, y: 150), dx: 0, dy: 600)
+        let scrolled = await waitFor(rowFile) { (Int($0 ?? "") ?? 0) > 25 }
+        XCTAssertGreaterThan(Int(scrolled ?? "") ?? 0, 25, "rows after the first screenful appeared")
+        session.stop()
+    }
+
+    // MARK: Input
+
+    func testKeysBecomeTextOrEditingCommands() {
+        typealias View = IDESwiftUIPreviewInputView
+        XCTAssertEqual(View.keyAction(keyCode: 0, modifiers: [], characters: "a"), .text("a"))
+        XCTAssertEqual(View.keyAction(keyCode: 0, modifiers: .shift, characters: "A"), .text("A"))
+        XCTAssertEqual(View.keyAction(keyCode: 0, modifiers: [], characters: "é"), .text("é"))
+        XCTAssertEqual(View.keyAction(keyCode: 51, modifiers: [], characters: "\u{7F}"), .command("deleteBackward:"))
+        XCTAssertEqual(View.keyAction(keyCode: 36, modifiers: [], characters: "\r"), .command("insertNewline:"))
+        XCTAssertEqual(View.keyAction(keyCode: 48, modifiers: [], characters: "\t"), .command("insertTab:"))
+        XCTAssertEqual(View.keyAction(keyCode: 48, modifiers: .shift, characters: "\u{19}"), .command("insertBacktab:"))
+        XCTAssertEqual(View.keyAction(keyCode: 123, modifiers: [], characters: "\u{F702}"), .command("moveLeft:"))
+        XCTAssertEqual(View.keyAction(keyCode: 123, modifiers: .shift, characters: "\u{F702}"), .command("moveLeftAndModifySelection:"))
+        // A shortcut or a key that types nothing is not the preview's.
+        XCTAssertEqual(View.keyAction(keyCode: 8, modifiers: .command, characters: "c"), .ignored)
+        XCTAssertEqual(View.keyAction(keyCode: 0, modifiers: .control, characters: "\u{01}"), .ignored)
+        XCTAssertEqual(View.keyAction(keyCode: 122, modifiers: [], characters: "\u{F704}"), .ignored)
+        XCTAssertEqual(View.keyAction(keyCode: 0, modifiers: [], characters: nil), .ignored)
+    }
+
     // MARK: Real pipeline
 
     func testASaveIsLoadedIntoTheRunningHostWithoutABuild() async throws {

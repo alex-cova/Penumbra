@@ -6,6 +6,9 @@ enum IDESwiftUIPreviewHostCommand: Sendable {
     case load(dylib: String, generation: Int)
     case render(generation: Int, width: Double, height: Double, scale: Double, scheme: String, output: String)
     case mouse(type: String, x: Double, y: Double)
+    case scroll(x: Double, y: Double, dx: Double, dy: Double)
+    /// `kind`: `text` (`value` is the characters), `command` or `action` (`value` is a selector name).
+    case key(kind: String, value: String)
     case quit
 
     var json: [String: Any] {
@@ -17,6 +20,12 @@ enum IDESwiftUIPreviewHostCommand: Sendable {
                     "scale": scale, "scheme": scheme, "output": output]
         case .mouse(let type, let x, let y):
             return ["cmd": "mouse", "type": type, "x": x, "y": y]
+        case .scroll(let x, let y, let dx, let dy):
+            return ["cmd": "scroll", "x": x, "y": y, "dx": dx, "dy": dy]
+        case .key(let kind, let value):
+            return kind == "text"
+                ? ["cmd": "key", "kind": kind, "text": value]
+                : ["cmd": "key", "kind": kind, "selector": value]
         case .quit:
             return ["cmd": "quit"]
         }
