@@ -79,18 +79,28 @@ extension TreeSitterLanguageLayer {
         self.tree = tree
     }
 
+    /// Converts a UTF-16 window to the line/column text range the parser needs. Reads
+    /// `LineManager`, so call it on the main thread only; `nil` means the whole document.
+    func rootIncludedTextRange(for range: NSRange?, stringLength: Int) -> TreeSitterTextRange? {
+        guard let range,
+              range.length > 0,
+              range != NSRange(location: 0, length: stringLength) else {
+            return nil
+        }
+        return ViewportParseWindow.textRange(for: range, lineManager: lineManager)
+    }
+
+    /// Main thread only (see ``rootIncludedTextRange(for:stringLength:)``).
     func setRootIncludedUTF16Range(_ range: NSRange?, stringLength: Int) {
+        setRootIncludedRange(rootIncludedTextRange(for: range, stringLength: stringLength))
+    }
+
+    /// Takes an already converted window, so a background parse never touches `LineManager`.
+    func setRootIncludedRange(_ textRange: TreeSitterTextRange?) {
         guard parentLanguageLayer == nil else {
             return
         }
-        guard let range,
-              range.length > 0,
-              range != NSRange(location: 0, length: stringLength),
-              let textRange = ViewportParseWindow.textRange(for: range, lineManager: lineManager) else {
-            rootIncludedRanges = []
-            return
-        }
-        rootIncludedRanges = [textRange]
+        rootIncludedRanges = textRange.map { [$0] } ?? []
     }
 
     func invalidateTree() {

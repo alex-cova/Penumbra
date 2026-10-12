@@ -178,7 +178,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             // `nil` is the whole document. Passing `NSRange(0, stringView.length)` read the length
             // twice (here and in `setRootIncludedUTF16Range`); an edit in between made the range
             // look like a window and sent this background thread into the line manager.
-            self.parseUsingReader(coveringUTF16Range: nil, isCancelled: { operation.isCancelled })
+            self.parseUsingReader(includedRange: nil, coveringUTF16Range: nil, isCancelled: { operation.isCancelled })
             DispatchQueue.main.async {
                 completion(!operation.isCancelled && self.isSyntaxTreeReady)
             }
@@ -186,8 +186,13 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         operationQueue.addOperation(operation)
     }
 
+    /// Main thread only: the window is converted to line/column points here, because the
+    /// background parse must not read `LineManager` while the main thread edits it. A buffer edit
+    /// before the parse runs cancels it (`textDidChange`) or makes its publish drop, so a window
+    /// that went stale in between is never published.
     func parse(coveringUTF16Range range: NSRange, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         operationQueue.cancelAllOperations()
+        let includedRange = rootLanguageLayer.rootIncludedTextRange(for: range, stringLength: stringView.length)
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation, weak self] in
             guard let self = self, let operation = operation, !operation.isCancelled else {
@@ -196,7 +201,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 }
                 return
             }
-            self.parseUsingReader(coveringUTF16Range: range, isCancelled: { operation.isCancelled })
+            self.parseUsingReader(includedRange: includedRange, coveringUTF16Range: range, isCancelled: { operation.isCancelled })
             DispatchQueue.main.async {
                 completion(!operation.isCancelled && self.isSyntaxTreeReady)
             }
@@ -213,10 +218,15 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
     }
 
-    /// `range == nil` parses the whole document.
-    private func parseUsingReader(coveringUTF16Range range: NSRange?, isCancelled: (() -> Bool)?) {
+    /// `range == nil` parses the whole document. `includedRange` is `range` already converted on
+    /// the main thread; this runs on a background thread and must not read `LineManager`.
+    private func parseUsingReader(
+        includedRange: TreeSitterTextRange?,
+        coveringUTF16Range range: NSRange?,
+        isCancelled: (() -> Bool)?
+    ) {
         runBackgroundParse(isCancelled: isCancelled) {
-            self.rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: self.stringView.length)
+            self.rootLanguageLayer.setRootIncludedRange(includedRange)
             self.rootLanguageLayer.parseUsingReader()
         } publish: {
             // Read under `parseLock`; an edit since the parse started drops the result instead.

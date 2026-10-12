@@ -245,6 +245,45 @@ final class TextViewStateViewportParseTests: XCTestCase {
         XCTAssertEqual(delegate.finishCount, 1)
     }
 
+    /// The window is converted to line/column points on the calling (main) thread before the
+    /// background parse is queued, so the background never reads `LineManager`. An edit right
+    /// after queueing races the parse: it is either cancelled or finishes before the edit and is
+    /// then edited incrementally. Both orderings must leave a parsed range inside the document.
+    func testAnEditAfterQueueingAViewportParseKeepsTheParsedRangeInBounds() {
+        TreeSitterPerformanceConstants.maxSyncContentLength = 80
+        TreeSitterPerformanceConstants.maxViewportParseUTF16Length = 80
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 80))
+        let delegate = ViewportParseDelegate()
+        let finished = expectation(description: "initial parse finished")
+        delegate.onFinish = { finished.fulfill() }
+        textView.editorDelegate = delegate
+
+        let text = String(repeating: "# heading with enough text\n", count: 200)
+        let state = TextViewState(text: text, language: .markdown, parsePolicy: .viewport)
+        textView.setState(state)
+        wait(for: [finished], timeout: 5)
+
+        let mode = state.languageMode as! TreeSitterInternalLanguageMode
+        let bottomWindow = ViewportParseWindow.utf16Range(
+            lineManager: state.lineManager,
+            stringLength: (text as NSString).length,
+            viewport: CGRect(x: 0, y: 10_000, width: 400, height: 80),
+            overscanScreens: 0,
+            fullParseLimit: 80,
+            maxWindowLength: 80
+        )
+        let settled = expectation(description: "queued window parse completed")
+        mode.parse(coveringUTF16Range: bottomWindow) { _ in
+            settled.fulfill()
+        }
+        textView.replace(NSRange(location: 0, length: 0), withText: "extra line\n")
+        wait(for: [settled], timeout: 5)
+        let newLength = ((text as NSString).length) + ("extra line\n" as NSString).length
+        if let parsed = mode.parsedUTF16Range {
+            XCTAssertLessThanOrEqual(NSMaxRange(parsed), newLength)
+        }
+    }
+
     /// Assigning `contentOffset` (the real scroll path) must expand the parsed window. An empty
     /// visible range at location 0 is contained by the leading window, so this uses a y-offset
     /// well past the first screen rather than `contentSize.height - frame.height`, which can be

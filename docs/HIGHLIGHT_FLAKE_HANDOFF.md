@@ -34,6 +34,8 @@ A second defect in the same area made the stress run trap (`Negative value is no
 - Highlight/tree-sitter/Markdown suite combination (195 tests), 10 runs: 0 real failures.
 - `PerfHarness enter-session synthetic --lines 20000` (release), parent vs change: `enter_fresh_top` 1.86/1.96 vs 1.86/1.88 ms, `enter_fresh_middle` 21.2/21.5 vs 21.2/21.1 ms, `scroll_step` 4.0 vs 4.0 ms. No change.
 
-## Still open (not part of this fix)
+## Viewport window (follow-up, fixed)
 
-The viewport parse policy (`parse(coveringUTF16Range:)`) still converts its window to line/column points on the parse's background thread (`ViewportParseWindow.textRange` → `LineManager`), which is the same class of off-main read the whole-document path had. Converting the window on the main thread before the operation is queued would close it. Not reproduced.
+`parse(coveringUTF16Range:)` used to convert its window to line/column points on the background thread (`ViewportParseWindow.textRange` → `LineManager`), the same class of off-main read the whole-document path had. It now converts on the calling (main) thread before the operation is queued (`TreeSitterLanguageLayer.rootIncludedTextRange`) and the background only sets the finished range (`setRootIncludedRange`). A window that goes stale before the parse runs is covered by the existing cancel (`textDidChange`) and publish checks. `ViewportParseWindow.utf16Range` and `textRange` assert `Thread.isMainThread` in Debug so a future off-main caller fails in tests.
+
+Test: `TextViewStateViewportParseTests.testAnEditAfterQueueingAViewportParseKeepsTheParsedRangeInBounds`. It checks an invariant, not the race itself: the parse can finish before the edit, so there is no deterministic "dropped" outcome to assert. The `assert` is what pins the thread rule.
