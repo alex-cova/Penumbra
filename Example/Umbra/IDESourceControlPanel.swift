@@ -1166,8 +1166,10 @@ private struct IDESourceControlChangeRow: View {
         .padding(.vertical, 3)
         .background(rowBackground)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        // Double-tap first: the earlier modifier wins, so a single tap declared before it would
+        // consume the click and the double never fired.
         .onTapGesture(count: 2, perform: onOpen)
+        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("Show Diff", action: onOpen)

@@ -185,8 +185,9 @@ struct IDECallHierarchyPanel: View {
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
-                    .onTapGesture { store.selectedID = row.node.id }
+                    // Double-tap first, or the single tap consumes the click.
                     .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node) }
+                    .onTapGesture { store.selectedID = row.node.id }
                 }
             }
         }
