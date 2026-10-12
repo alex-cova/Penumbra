@@ -592,7 +592,7 @@ struct IDESwiftPMSidebarPanel: View {
             } else if system.manifest == nil {
                 pinned("No Package.swift")
             } else {
-                ScrollView([.vertical, .horizontal]) {
+                ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         section("Tasks")
                         ForEach(system.tasks, id: \.path) { task in
