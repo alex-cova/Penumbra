@@ -110,4 +110,42 @@ extension JavaGradleProjectModel {
         let deps = sourceSet.projectDependencies.map { "\($0.projectPath):\($0.sourceSetName)" }.sorted().joined(separator: "|")
         return "\(projectPath)#\(sourceSet.name)|\(jars)|\(runtime)|\(outputs)|\(deps)"
     }
+
+    /// What an apply must do to the loaded indexes from the new model's targets and what is already
+    /// loaded (so directories that appeared on disk since the last apply are indexed).
+    public struct ApplyPlan: Sendable {
+        public typealias Target = (root: any JavaIndexableRoot, shardURL: URL)
+
+        public var sourceTargets: [Target]
+        public var jarTargets: [Target]
+        public var addedSourceTargets: [Target]
+        public var addedJarTargets: [Target]
+        public var removedShardPaths: Set<String>
+        public var nameRoots: [URL]
+        public var addedNameRoots: [URL]
+        public var removedNameRoots: [URL]
+    }
+
+    public static func applyPlan(
+        for model: JavaGradleProjectModel,
+        paths: JavaIndexPaths,
+        loadedShardPaths: Set<String>,
+        loadedNameRoots: Set<String>
+    ) -> ApplyPlan {
+        let sources = model.sourceIndexTargets(paths: paths)
+        let jars = model.jarIndexTargets(paths: paths)
+        let wanted = Set((sources + jars).map(\.shardURL.path))
+        let roots = model.existingSourceDirectories
+        let rootPaths = Set(roots.map(\.path))
+        return ApplyPlan(
+            sourceTargets: sources,
+            jarTargets: jars,
+            addedSourceTargets: sources.filter { !loadedShardPaths.contains($0.shardURL.path) },
+            addedJarTargets: jars.filter { !loadedShardPaths.contains($0.shardURL.path) },
+            removedShardPaths: loadedShardPaths.subtracting(wanted),
+            nameRoots: roots,
+            addedNameRoots: roots.filter { !loadedNameRoots.contains($0.path) },
+            removedNameRoots: loadedNameRoots.subtracting(rootPaths).sorted().map { URL(fileURLWithPath: $0) }
+        )
+    }
 }

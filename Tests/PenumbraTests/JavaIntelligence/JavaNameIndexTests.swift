@@ -287,4 +287,61 @@ final class JavaNameIndexTests: XCTestCase {
         let reader = try JavaNameIndexShardReader(url: shard)
         return Dictionary(uniqueKeysWithValues: reader.allEntries().map { ($0.relativePath, $0) })
     }
+
+    // MARK: - Root deltas
+
+    private func makeSecondRoot() throws -> URL {
+        let other = dir.appendingPathComponent("src2")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try "class Z { Widget w; }".write(to: other.appendingPathComponent("Z.java"), atomically: true, encoding: .utf8)
+        return other
+    }
+
+    private func drain(_ stream: AsyncStream<JavaIndexScheduler.Progress>) async -> [JavaIndexScheduler.Progress] {
+        var events: [JavaIndexScheduler.Progress] = []
+        for await event in stream { events.append(event) }
+        return events
+    }
+
+    func testUpdateRootsAddsRootAndKeepsExistingShard() async throws {
+        try write("A.java", "class A { Widget w; }")
+        _ = await build()
+        let other = try makeSecondRoot()
+
+        let events = await drain(await index.updateRoots(adding: [other], removing: []))
+        let started = events.filter { if case .rootStarted = $0 { return true } else { return false } }
+        XCTAssertEqual(started.count, 1, "only the added root is synced")
+        let roots = await index.rootPaths()
+        XCTAssertEqual(roots, [src.path, other.path])
+        let both = await index.candidateFiles(containing: "Widget", in: [src, other]).map(\.lastPathComponent).sorted()
+        XCTAssertEqual(both, ["A.java", "Z.java"])
+        let count = await index.indexedFileCount(in: src)
+        XCTAssertEqual(count, 1)
+    }
+
+    func testUpdateRootsRemovesRootShard() async throws {
+        try write("A.java", "class A { Widget w; }")
+        let other = try makeSecondRoot()
+        _ = await drain(await index.build(roots: [src, other]))
+
+        let events = await drain(await index.updateRoots(adding: [], removing: [other]))
+        XCTAssertEqual(events, [.allFinished])
+        let roots = await index.rootPaths()
+        XCTAssertEqual(roots, [src.path])
+        let removedCount = await index.indexedFileCount(in: other)
+        XCTAssertNil(removedCount)
+        let remaining = await index.candidateFiles(containing: "Widget", in: [src]).map(\.lastPathComponent)
+        XCTAssertEqual(remaining, ["A.java"])
+    }
+
+    func testUpdateRootsWithUnchangedRootsDoesNothing() async throws {
+        try write("A.java", "class A { Widget w; }")
+        _ = await build()
+        let events = await drain(await index.updateRoots(adding: [src], removing: []))
+        XCTAssertEqual(events, [.allFinished], "an already-loaded root is neither re-synced nor reloaded")
+        let count = await index.indexedFileCount(in: src)
+        XCTAssertEqual(count, 1)
+        let widget = await names("Widget")
+        XCTAssertEqual(widget, ["A.java"])
+    }
 }

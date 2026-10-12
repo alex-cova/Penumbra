@@ -79,6 +79,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// open) saw, outside of a sync. A save of an unchanged file, `touch` and attribute writes don't
     /// count, and reverting an edit clears it. Cleared by Reload or Dismiss.
     private(set) var hasConfigurationChanges = false
+    /// Relative paths of build files that differ from the baseline, when ``hasConfigurationChanges``.
+    var changedConfigurationFilePaths: [String] { changedBuildFiles.sorted() }
     /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
     private(set) var isRunningTasks = false
     private(set) var runningTasks: [String] = []

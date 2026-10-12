@@ -333,9 +333,23 @@ public struct IDERootView: View {
 struct IDEProjectReloadBanner: View {
     @Environment(IDEWorkspace.self) private var workspace
 
+    private var bannerText: String {
+        let reload = workspace.projectSystems.pendingReload
+        let name = reload?.displayName ?? "the"
+        if let gradle = reload as? IDEGradleProjectSystem {
+            let files = gradle.changedConfigurationFilePaths
+            if !files.isEmpty {
+                let shown = files.prefix(3).joined(separator: ", ")
+                let more = files.count > 3 ? " and \(files.count - 3) more" : ""
+                return "\(shown)\(more) changed — reload \(name) project?"
+            }
+        }
+        return "Build files changed — reload \(name) project?"
+    }
+
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            Text("Build files changed — reload \(workspace.projectSystems.pendingReload?.displayName ?? "the") project?")
+            Text(bannerText)
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)

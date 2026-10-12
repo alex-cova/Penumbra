@@ -102,6 +102,53 @@ final class GradleProjectModelCacheTests: XCTestCase {
         XCTAssertNil(cache.loadIfValid(projectRoot: projectRoot))
     }
 
+    func testOldFormatCacheIsIgnoredWithoutCrashing() throws {
+        let cacheRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let projectRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        try "v1".write(to: projectRoot.appendingPathComponent("build.gradle"), atomically: true, encoding: .utf8)
+
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: GradleFixtures.modelData("single-module"))
+        let cache = GradleProjectModelCache(cacheRoot: cacheRoot)
+        cache.store(projectRoot: projectRoot, model: model)
+        XCTAssertNotNil(cache.loadIfValid(projectRoot: projectRoot))
+
+        // Rewrite meta.json the way an older build wrote it: no `cacheFormat` key.
+        let directory = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: cacheRoot, includingPropertiesForKeys: nil).first)
+        let metaURL = directory.appendingPathComponent("meta.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
+        XCTAssertNotNil(object.removeValue(forKey: "cacheFormat"))
+        try JSONSerialization.data(withJSONObject: object).write(to: metaURL)
+
+        XCTAssertNil(cache.loadIfValid(projectRoot: projectRoot))
+        XCTAssertNil(cache.changedBuildFiles(projectRoot: projectRoot))
+
+        cache.store(projectRoot: projectRoot, model: model)
+        XCTAssertNotNil(cache.loadIfValid(projectRoot: projectRoot))
+    }
+
+    func testChangedBuildFilesNamesModifiedAddedAndRemovedFiles() throws {
+        let cacheRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let projectRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        let build = projectRoot.appendingPathComponent("build.gradle")
+        let settings = projectRoot.appendingPathComponent("settings.gradle")
+        try "v1".write(to: build, atomically: true, encoding: .utf8)
+        try "s".write(to: settings, atomically: true, encoding: .utf8)
+
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: GradleFixtures.modelData("single-module"))
+        let cache = GradleProjectModelCache(cacheRoot: cacheRoot)
+        cache.store(projectRoot: projectRoot, model: model)
+        XCTAssertEqual(cache.changedBuildFiles(projectRoot: projectRoot), [])
+
+        try "version 2, longer".write(to: build, atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(at: settings)
+        try "a=b".write(to: projectRoot.appendingPathComponent("gradle.properties"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(cache.changedBuildFiles(projectRoot: projectRoot), ["build.gradle", "gradle.properties", "settings.gradle"])
+    }
+
     private func makeTempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -117,4 +164,5 @@ final class GradleProjectModelCacheTests: XCTestCase {
 private struct TestMetadata: Codable {
     var fingerprint: GradleBuildFingerprint
     var cachedAt: Date
+    var cacheFormat: Int?
 }
