@@ -632,6 +632,85 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         session.stop()
     }
 
+    func testBundleModuleResourcesAreFoundBeforeAndAfterAReload() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        let resources = sources.appendingPathComponent("Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(
+            name: "Toy", platforms: [.macOS(.v14)],
+            targets: [.target(name: "ToyUI", resources: [.process("Resources")])]
+        )
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        try "bonjour".write(to: resources.appendingPathComponent("greeting.txt"), atomically: true, encoding: .utf8)
+        // An asset catalog with a named color: it goes through actool into the resource bundle.
+        let catalog = resources.appendingPathComponent("Assets.xcassets")
+        let colorSet = catalog.appendingPathComponent("Brand.colorset")
+        try FileManager.default.createDirectory(at: colorSet, withIntermediateDirectories: true)
+        try #"{"info":{"author":"xcode","version":1}}"#.write(
+            to: catalog.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8
+        )
+        try """
+        {"colors":[{"color":{"color-space":"srgb","components":{"red":"1.0","green":"0.0","blue":"0.0","alpha":"1.0"}},"idiom":"universal"}],"info":{"author":"xcode","version":1}}
+        """.write(to: colorSet.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
+        let seen = directory.appendingPathComponent("resource.txt").path
+        func source(_ suffix: String) -> String {
+            """
+            import SwiftUI
+
+            struct GreetingView: View {
+                var body: some View {
+                    let _ = record()
+                    Text("hi")
+                }
+
+                private func record() {
+                    let url = Bundle.module.url(forResource: "greeting", withExtension: "txt")
+                    let text = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "MISSING"
+                    let color = NSColor(named: "Brand", bundle: .module) != nil ? "+color" : "+nocolor"
+                    try? (text + color + "\(suffix)").write(toFile: "\(seen)", atomically: true, encoding: .utf8)
+                }
+            }
+
+            #Preview { GreetingView() }
+            """
+        }
+        let file = sources.appendingPathComponent("GreetingView.swift")
+        var current = source("")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: nil, fileProvider: { (file, current) },
+            package: (package, "ToyUI"), toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 240))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+        func seenText() -> String? { try? String(contentsOfFile: seen, encoding: .utf8) }
+        let firstSeen = await waitUntil(seconds: 10) { seenText() != nil }
+        XCTAssertTrue(firstSeen)
+        XCTAssertEqual(seenText(), "bonjour+color", "the built preview reads the package's resources")
+
+        // A save loads the file as a copy in a module of its own, which has no resources.
+        current = source("!")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+        session.lastReloadReset()
+        session.refresh()
+        let reloaded = await waitUntil(seconds: 60) { session.lastReload != nil && session.phase == .ready }
+        XCTAssertTrue(reloaded, "phase \(session.phase)\n\(session.log.suffix(12).joined(separator: "\n"))")
+        let updated = await waitUntil(seconds: 10) { seenText() == "bonjour+color!" }
+        XCTAssertTrue(updated, "saw \(seenText() ?? "nil"), last reload \(String(describing: session.lastReload))\n\(session.log.suffix(12).joined(separator: "\n"))")
+        XCTAssertEqual(session.lastReload, .hotReload, "the copy should compile against the module's Bundle.module")
+        session.stop()
+    }
+
     // MARK: Input
 
     func testKeysBecomeTextOrEditingCommands() {
