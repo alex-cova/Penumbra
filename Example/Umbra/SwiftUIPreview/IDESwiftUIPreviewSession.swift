@@ -50,6 +50,71 @@ final class IDESwiftUIPreviewSession {
         case light, dark
     }
 
+    /// `DynamicTypeSize`'s cases, by name (what the host's environment reads).
+    enum TextSize: String, CaseIterable, Sendable {
+        case xSmall, small, medium, large, xLarge, xxLarge, xxxLarge
+        case accessibility1, accessibility2, accessibility3, accessibility4, accessibility5
+
+        var title: String {
+            switch self {
+            case .xSmall: return "Extra Small"
+            case .small: return "Small"
+            case .medium: return "Medium"
+            case .large: return "Large (default)"
+            case .xLarge: return "Extra Large"
+            case .xxLarge: return "Extra Extra Large"
+            case .xxxLarge: return "Extra Extra Extra Large"
+            case .accessibility1: return "Accessibility 1"
+            case .accessibility2: return "Accessibility 2"
+            case .accessibility3: return "Accessibility 3"
+            case .accessibility4: return "Accessibility 4"
+            case .accessibility5: return "Accessibility 5"
+            }
+        }
+    }
+
+    /// A language the preview can be shown in; `identifier` is empty for the system's.
+    struct Language: Hashable, Sendable, Identifiable {
+        var identifier: String
+        var title: String
+        var id: String { identifier }
+        var isRightToLeft: Bool { ["ar", "he", "fa", "ur"].contains(String(identifier.prefix(2))) }
+
+        static let system = Language(identifier: "", title: "System")
+        static let all: [Language] = [
+            .system,
+            Language(identifier: "en", title: "English"), Language(identifier: "es", title: "Spanish"),
+            Language(identifier: "fr", title: "French"), Language(identifier: "de", title: "German"),
+            Language(identifier: "ja", title: "Japanese"), Language(identifier: "zh-Hans", title: "Chinese (Simplified)"),
+            Language(identifier: "ar", title: "Arabic"), Language(identifier: "he", title: "Hebrew")
+        ]
+    }
+
+    /// How big the preview's window is: the canvas (it fills the panel), or a fixed size.
+    enum SizePreset: Hashable, Sendable, Identifiable {
+        case canvas
+        case fixed(width: Int, height: Int)
+
+        var id: String {
+            switch self {
+            case .canvas: return "canvas"
+            case .fixed(let width, let height): return "\(width)x\(height)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .canvas: return "Fit the Canvas"
+            case .fixed(let width, let height): return "\(width) × \(height)"
+            }
+        }
+
+        static let all: [SizePreset] = [
+            .canvas, .fixed(width: 320, height: 240), .fixed(width: 480, height: 360),
+            .fixed(width: 640, height: 480), .fixed(width: 800, height: 600), .fixed(width: 1024, height: 768)
+        ]
+    }
+
     // MARK: State
 
     private(set) var phase: Phase = .idle
@@ -61,6 +126,10 @@ final class IDESwiftUIPreviewSession {
     private(set) var fileName: String?
     private(set) var log: [String] = []
     private(set) var colorScheme: ColorScheme = .light
+    private(set) var textSize: TextSize = .large
+    private(set) var language: Language = .system
+    private(set) var isRightToLeft = false
+    private(set) var sizePreset: SizePreset = .canvas
     /// How the frame on the canvas was produced: a build, or the file loaded into the running host.
     private(set) var lastReload: ReloadKind?
 
@@ -140,6 +209,32 @@ final class IDESwiftUIPreviewSession {
     func setColorScheme(_ scheme: ColorScheme) {
         guard scheme != colorScheme else { return }
         colorScheme = scheme
+        scheduleRender()
+    }
+
+    func setTextSize(_ size: TextSize) {
+        guard size != textSize else { return }
+        textSize = size
+        scheduleRender()
+    }
+
+    /// Picking a right-to-left language turns the layout direction on, and the other way round.
+    func setLanguage(_ language: Language) {
+        guard language != self.language else { return }
+        self.language = language
+        isRightToLeft = language.isRightToLeft
+        scheduleRender()
+    }
+
+    func setRightToLeft(_ value: Bool) {
+        guard value != isRightToLeft else { return }
+        isRightToLeft = value
+        scheduleRender()
+    }
+
+    func setSizePreset(_ preset: SizePreset) {
+        guard preset != sizePreset else { return }
+        sizePreset = preset
         scheduleRender()
     }
 
@@ -612,12 +707,16 @@ final class IDESwiftUIPreviewSession {
 
     private func render(counter: Int) async {
         guard let connection, counter == renderCounter else { return }
-        let size = currentFixedSize ?? viewport
+        var size = viewport
+        if case .fixed(let width, let height) = sizePreset { size = CGSize(width: width, height: height) }
+        // A `.fixedLayout` trait on the preview itself wins.
+        if let currentFixedSize { size = currentFixedSize }
         let path = framePrefix.replacingOccurrences(of: ".png", with: "-\(counter).png")
         do {
             let reply = try await connection.request(.render(
                 generation: generation, width: size.width, height: size.height,
-                scale: Double(NSScreen.main?.backingScaleFactor ?? 2), scheme: colorScheme.rawValue, output: path
+                scale: Double(NSScreen.main?.backingScaleFactor ?? 2), scheme: colorScheme.rawValue,
+                dynamicType: textSize.rawValue, locale: language.identifier, rightToLeft: isRightToLeft, output: path
             ))
             // A newer render or a new run took over while this one was drawing.
             guard counter == renderCounter, self.connection === connection else { return }

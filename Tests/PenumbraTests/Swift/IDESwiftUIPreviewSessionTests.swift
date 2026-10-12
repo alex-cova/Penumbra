@@ -535,6 +535,103 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         session.stop()
     }
 
+    // MARK: Environment
+
+    func testRightToLeftLanguagesAreKnownAndSizesHaveStableIdentities() {
+        let arabic = IDESwiftUIPreviewSession.Language.all.first { $0.identifier == "ar" }
+        XCTAssertEqual(arabic?.isRightToLeft, true)
+        XCTAssertEqual(IDESwiftUIPreviewSession.Language.all.first { $0.identifier == "he" }?.isRightToLeft, true)
+        XCTAssertEqual(IDESwiftUIPreviewSession.Language.all.first { $0.identifier == "fr" }?.isRightToLeft, false)
+        XCTAssertFalse(IDESwiftUIPreviewSession.Language.system.isRightToLeft)
+        XCTAssertEqual(IDESwiftUIPreviewSession.SizePreset.fixed(width: 320, height: 240).id, "320x240")
+        XCTAssertEqual(IDESwiftUIPreviewSession.TextSize.allCases.count, 12)
+        XCTAssertEqual(IDESwiftUIPreviewSession.TextSize.large.rawValue, "large")
+    }
+
+    func testTheEnvironmentBarReachesTheView() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let seen = directory.appendingPathComponent("env.txt").path
+        let source = """
+        import SwiftUI
+
+        struct EnvironmentView: View {
+            @Environment(\\.dynamicTypeSize) private var size
+            @Environment(\\.locale) private var locale
+            @Environment(\\.layoutDirection) private var direction
+            @Environment(\\.colorScheme) private var scheme
+
+            var body: some View {
+                let _ = record()
+                Text("hello")
+            }
+
+            private func record() {
+                let line = "\\(size)|\\(locale.identifier)|\\(direction == .rightToLeft ? "rtl" : "ltr")|\\(scheme == .dark ? "dark" : "light")"
+                try? line.write(toFile: "\(seen)", atomically: true, encoding: .utf8)
+            }
+        }
+
+        #Preview { EnvironmentView() }
+        """
+        let file = sources.appendingPathComponent("EnvironmentView.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: (file, source), package: (package, "ToyUI"),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 240))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+
+        func environment(_ expected: String) async -> String? {
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                if let text = try? String(contentsOfFile: seen, encoding: .utf8), text.hasPrefix(expected) || text.contains(expected) {
+                    return text
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            return try? String(contentsOfFile: seen, encoding: .utf8)
+        }
+        let initial = await environment("large|")
+        XCTAssertTrue(initial?.hasPrefix("large|") == true, initial ?? "nil")
+        XCTAssertTrue(initial?.hasSuffix("|ltr|light") == true, initial ?? "nil")
+
+        session.setTextSize(.xxLarge)
+        let big = await environment("xxLarge|")
+        XCTAssertTrue(big?.hasPrefix("xxLarge|") == true, big ?? "nil")
+
+        session.setLanguage(IDESwiftUIPreviewSession.Language(identifier: "ar", title: "Arabic"))
+        let arabic = await environment("|rtl|")
+        XCTAssertTrue(arabic?.contains("ar") == true && arabic?.contains("|rtl|") == true, arabic ?? "nil")
+
+        session.setColorScheme(.dark)
+        let dark = await environment("|dark")
+        XCTAssertTrue(dark?.hasSuffix("|dark") == true, dark ?? "nil")
+
+        // Back to the defaults, and a fixed window size.
+        session.setLanguage(.system)
+        session.setTextSize(.large)
+        let back = await environment("large|")
+        XCTAssertTrue(back?.hasPrefix("large|") == true && back?.contains("|ltr|") == true, back ?? "nil")
+        session.setSizePreset(.fixed(width: 640, height: 480))
+        let resized = await waitUntil(seconds: 10) { session.frameSize == CGSize(width: 640, height: 480) }
+        XCTAssertTrue(resized, "frame size \(session.frameSize)")
+        session.stop()
+    }
+
     // MARK: Input
 
     func testKeysBecomeTextOrEditingCommands() {

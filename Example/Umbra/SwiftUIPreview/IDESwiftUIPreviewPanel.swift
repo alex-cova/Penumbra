@@ -62,6 +62,8 @@ struct IDESwiftUIPreviewPanel: View {
             .frame(width: 70)
             .help("Light or dark appearance")
 
+            environmentMenu
+
             Button { isLogVisible.toggle() } label: { Image(systemName: "text.alignleft") }
                 .buttonStyle(.borderless)
                 .help("Show the build log")
@@ -74,6 +76,28 @@ struct IDESwiftUIPreviewPanel: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
+    }
+
+    /// Text size, language, layout direction and window size: what the preview is shown under.
+    private var environmentMenu: some View {
+        Menu {
+            Picker("Text Size", selection: Binding(get: { session.textSize }, set: { session.setTextSize($0) })) {
+                ForEach(IDESwiftUIPreviewSession.TextSize.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Picker("Language", selection: Binding(get: { session.language }, set: { session.setLanguage($0) })) {
+                ForEach(IDESwiftUIPreviewSession.Language.all) { Text($0.title).tag($0) }
+            }
+            Toggle("Right to Left", isOn: Binding(get: { session.isRightToLeft }, set: { session.setRightToLeft($0) }))
+            Picker("Size", selection: Binding(get: { session.sizePreset }, set: { session.setSizePreset($0) })) {
+                ForEach(IDESwiftUIPreviewSession.SizePreset.all) { Text($0.title).tag($0) }
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Text size, language, layout direction and size")
     }
 
     private var title: String {

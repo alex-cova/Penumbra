@@ -11,6 +11,7 @@
 ///   the first thunk creates the view; a later one has replaced `UmbraPreview.content()`, and
 ///   `UmbraReload.reset()` makes the root create it again
 /// - `{"cmd":"render","generation":1,"width":400,"height":300,"scale":2,"scheme":"dark","output":"/p/f.png"}`
+///   (optional `dynamicType`: a `DynamicTypeSize` case name, `locale`: an identifier, `rightToLeft`: a Bool)
 ///   → `{"event":"frame","generation":1,"path":"/p/f.png","width":800,"height":600}`
 /// - `{"cmd":"mouse","type":"down|up|dragged|moved","x":10,"y":20}` → `{"event":"ack"}`
 /// - `{"cmd":"scroll","x":10,"y":20,"dx":0,"dy":120}` scrolls the innermost scroll view under the
@@ -105,6 +106,13 @@ public enum SwiftPreviewHostSource {
                 size = NSSize(width: width, height: height)
             }
             window.appearance = NSAppearance(named: (object["scheme"] as? String) == "dark" ? .darkAqua : .aqua)
+            let environment = UmbraEnvironment.shared
+            let dynamicType = object["dynamicType"] as? String ?? "large"
+            let locale = object["locale"] as? String ?? ""
+            let rightToLeft = object["rightToLeft"] as? Bool ?? false
+            if environment.dynamicTypeSize != dynamicType { environment.dynamicTypeSize = dynamicType }
+            if environment.localeIdentifier != locale { environment.localeIdentifier = locale }
+            if environment.rightToLeft != rightToLeft { environment.rightToLeft = rightToLeft }
             window.setContentSize(size)
             guard let view = window.contentView, let output = object["output"] as? String else {
                 return send(["event": "frame", "generation": generation, "ok": false, "error": "nothing loaded"])

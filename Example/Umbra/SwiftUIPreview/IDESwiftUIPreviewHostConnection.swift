@@ -4,7 +4,10 @@ import Foundation
 /// A command to the host (`SwiftPreviewHostSource` documents them).
 enum IDESwiftUIPreviewHostCommand: Sendable {
     case load(dylib: String, generation: Int)
-    case render(generation: Int, width: Double, height: Double, scale: Double, scheme: String, output: String)
+    case render(
+        generation: Int, width: Double, height: Double, scale: Double, scheme: String,
+        dynamicType: String, locale: String, rightToLeft: Bool, output: String
+    )
     case mouse(type: String, x: Double, y: Double)
     case scroll(x: Double, y: Double, dx: Double, dy: Double)
     /// `kind`: `text` (`value` is the characters), `command` or `action` (`value` is a selector name).
@@ -15,9 +18,10 @@ enum IDESwiftUIPreviewHostCommand: Sendable {
         switch self {
         case .load(let dylib, let generation):
             return ["cmd": "load", "dylib": dylib, "generation": generation]
-        case .render(let generation, let width, let height, let scale, let scheme, let output):
+        case .render(let generation, let width, let height, let scale, let scheme, let dynamicType, let locale, let rightToLeft, let output):
             return ["cmd": "render", "generation": generation, "width": width, "height": height,
-                    "scale": scale, "scheme": scheme, "output": output]
+                    "scale": scale, "scheme": scheme, "dynamicType": dynamicType, "locale": locale,
+                    "rightToLeft": rightToLeft, "output": output]
         case .mouse(let type, let x, let y):
             return ["cmd": "mouse", "type": type, "x": x, "y": y]
         case .scroll(let x, let y, let dx, let dy):
