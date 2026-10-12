@@ -12,3 +12,5 @@ dist
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
 Example/Umbra.xcodeproj/xcuserdata/
 Example/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
+# Planning notes under docs/ (AGENT_HARNESS_PLAN.md, GIT_CLIENT_PLAN.md, …)
+docs/**/*PLAN.md
