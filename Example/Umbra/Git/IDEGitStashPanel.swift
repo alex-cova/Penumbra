@@ -31,11 +31,15 @@ struct IDEGitStashPanel: View {
                 storageKey: "umbra.git.stashSplit"
             ) {
                 list
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .idePanel(fill: IDEAppearance.ColorToken.editor)
             } secondary: {
                 files
-            } divider: {
-                Splitter.rule()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .idePanel(fill: IDEAppearance.ColorToken.editor)
             }
+            .padding(.horizontal, IDEAppearance.Spacing.panelGap)
+            .padding(.bottom, IDEAppearance.Spacing.panelGap)
         }
         .onAppear { gitStatus.loadStashes() }
     }

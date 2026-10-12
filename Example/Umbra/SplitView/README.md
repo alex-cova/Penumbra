@@ -109,7 +109,8 @@ rather than fighting each other.
   *without* `defaultIsolation: MainActor` (see `Package.swift`), so the default is already
   nonisolated.
 - **`Theme` tokens → `IDEAppearance`.** `Splitter` defaults to `ColorToken.border`;
-  `Splitter.rule()` is the 1pt rule for two panes inside one island.
+  `Splitter.rule()` is the 1pt rule for two panes inside one island; a short capsule fades in over it
+  under the cursor, like `HandleSplitter`'s.
 - **`HandleSplitter` restyled for the Islands look:** the divider *is* the `islandGap`-wide
   frame-coloured gap, the capsule shows only under the cursor, the hit target is no wider than
   the gap (so the editor's gutter and overlay scroller keep their clicks), and it collapses with

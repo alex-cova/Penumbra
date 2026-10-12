@@ -76,7 +76,7 @@ struct IDESourceControlPanel: View {
                 splitContent(
                     list: lineHistoryList(lineHistory),
                     text: lineHistory.entries.first { $0.commit.hash == lineHistory.selectedHash }?.patch
-                        ?? (lineHistory.entries.isEmpty ? "Loading…" : "Select a commit to see its change."),
+                        ?? (lineHistory.entries.isEmpty || lineHistory.selectedHash != nil ? "Loading…" : nil),
                     listWidth: 380
                 )
             } else {
@@ -87,7 +87,7 @@ struct IDESourceControlPanel: View {
             }
             splitContent(
                 list: historyList,
-                text: gitStatus.commitDetailText ?? "Select a commit to see its changes.",
+                text: gitStatus.commitDetailText ?? (gitStatus.selectedCommitHashes.isEmpty ? nil : "Loading…"),
                 listWidth: 380
             )
             }
@@ -240,7 +240,12 @@ struct IDESourceControlPanel: View {
     /// List beside the diff. `SplitPanes`, not `HSplitView`: the AppKit-backed split view reports
     /// a minimum size that pushed the whole window layout when hosted in the bottom panel, while
     /// `SplitPanes` only ever takes the space it is given.
-    private func splitContent(list: some View, text: String, listWidth: CGFloat = 280) -> some View {
+    /// The two panes are separate cards with the standard `HandleSplitter` gap between them, the
+    /// way Hextech lays out its list/detail panes, rather than one island cut by a 1pt rule.
+    ///
+    /// A `nil` `text` means nothing is selected: the diff pane shows `IDEGitCommitPlaceholder`
+    /// instead of an empty text view.
+    private func splitContent(list: some View, text: String?, listWidth: CGFloat = 280) -> some View {
         SplitPanes(
             minPrimary: 180,
             maxPrimary: 560,
@@ -249,7 +254,8 @@ struct IDESourceControlPanel: View {
             storageKey: "umbra.sourceControl.listSplit"
         ) {
             list
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .idePanel(fill: IDEAppearance.ColorToken.editor)
         } secondary: {
             VStack(spacing: 0) {
                 if !gitStatus.commitBranches.isEmpty {
@@ -265,16 +271,21 @@ struct IDESourceControlPanel: View {
                     commitFiles
                     Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
                 }
-                IDESourceControlDiffView(
-                    text: text,
-                    fontName: workspace.preferences.fontName,
-                    fontSize: workspace.preferences.fontSize
-                )
+                if let text {
+                    IDESourceControlDiffView(
+                        text: text,
+                        fontName: workspace.preferences.fontName,
+                        fontSize: workspace.preferences.fontSize
+                    )
+                } else {
+                    IDEGitCommitPlaceholder()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } divider: {
-            Splitter.rule()
+            .idePanel(fill: IDEAppearance.ColorToken.editor)
         }
+        .padding(.horizontal, IDEAppearance.Spacing.panelGap)
+        .padding(.bottom, IDEAppearance.Spacing.panelGap)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

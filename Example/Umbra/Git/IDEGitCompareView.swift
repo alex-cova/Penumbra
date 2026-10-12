@@ -32,20 +32,24 @@ struct IDEGitCompareView: View {
                     storageKey: "umbra.git.compareSplit.files"
                 ) {
                     files(comparison)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .idePanel(fill: IDEAppearance.ColorToken.editor)
                 } secondary: {
                     SplitPanes(
                         minPrimary: 160, maxPrimary: 900, idealPrimary: 300, minSecondary: 160,
                         storageKey: "umbra.git.compareSplit.commits"
                     ) {
                         commits("Only in \(comparison.left)", comparison.onlyInLeft)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .idePanel(fill: IDEAppearance.ColorToken.editor)
                     } secondary: {
                         commits("Only in \(comparison.right)", comparison.onlyInRight)
-                    } divider: {
-                        Splitter.rule()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .idePanel(fill: IDEAppearance.ColorToken.editor)
                     }
-                } divider: {
-                    Splitter.rule()
                 }
+                .padding(.horizontal, IDEAppearance.Spacing.panelGap)
+                .padding(.bottom, IDEAppearance.Spacing.panelGap)
             }
         } else {
             Text("Choose Compare with Current on a branch to see what differs.")

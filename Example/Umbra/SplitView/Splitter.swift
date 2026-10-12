@@ -20,6 +20,7 @@ struct Splitter: SplitDivider {
     @Environment(LayoutHolder.self) private var layout
     let styling: SplitStyling
     @State private var dividerColor: Color  // Changes based on styling.previewHide
+    @State private var hovering = false
     private var color: Color { privateColor ?? styling.color }
     private var inset: CGFloat { privateInset ?? styling.inset }
     private var visibleThickness: CGFloat { privateVisibleThickness ?? styling.visibleThickness }
@@ -28,6 +29,11 @@ struct Splitter: SplitDivider {
     private let privateInset: CGFloat?
     private let privateVisibleThickness: CGFloat?
     private let privateInvisibleThickness: CGFloat?
+    /// Umbra: draw a short capsule over the line while the cursor is on it (`rule()`), the same
+    /// affordance `HandleSplitter` gives the gap between islands.
+    private let showsHandle: Bool
+    private static let handleLength: CGFloat = 32
+    private static let handleThickness: CGFloat = 3
 
     // Defaults
     static let defaultColor: Color = IDEAppearance.ColorToken.border
@@ -46,6 +52,7 @@ struct Splitter: SplitDivider {
                     .fill(dividerColor)
                     .frame(width: visibleThickness)
                     .padding(EdgeInsets(top: inset, leading: 0, bottom: inset, trailing: 0))
+                handle(width: Self.handleThickness, height: Self.handleLength)
             case .vertical:
                 Color.clear
                     .frame(height: invisibleThickness)
@@ -54,8 +61,10 @@ struct Splitter: SplitDivider {
                     .fill(dividerColor)
                     .frame(height: visibleThickness)
                     .padding(EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset))
+                handle(width: Self.handleLength, height: Self.handleThickness)
             }
         }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .contentShape(Rectangle())
         .task { dividerColor = color } // Otherwise, styling.color does not appear at open
         // If we are previewing hiding a side using drag-to-hide, and the splitter will be
@@ -70,6 +79,7 @@ struct Splitter: SplitDivider {
             }
         }
         .onHover { inside in
+            hovering = inside
             // With nested split views, it's possible to transition from one Splitter to another,
             // so we always need to pop the current cursor (a no-op when it's the only one). We
             // may or may not push the hover cursor depending on whether it's inside or not.
@@ -80,7 +90,28 @@ struct Splitter: SplitDivider {
         }
     }
 
-    init(color: Color? = nil, inset: CGFloat? = nil, visibleThickness: CGFloat? = nil, invisibleThickness: CGFloat? = nil) {
+    /// The grab handle: invisible at rest, so the line alone marks the seam, and fading in under the
+    /// cursor. Nothing is drawn for splitters that don't ask for one, or while a drag-to-hide
+    /// preview is making the divider disappear.
+    @ViewBuilder
+    private func handle(width: CGFloat, height: CGFloat) -> some View {
+        if showsHandle {
+            let previewing = styling.previewHide && styling.hideSplitter
+            Capsule()
+                .fill(IDEAppearance.ColorToken.muted.opacity(hovering && !previewing ? 0.45 : 0))
+                .frame(width: width, height: height)
+                .allowsHitTesting(false)
+        }
+    }
+
+    init(
+        color: Color? = nil,
+        inset: CGFloat? = nil,
+        visibleThickness: CGFloat? = nil,
+        invisibleThickness: CGFloat? = nil,
+        showsHandle: Bool = false
+    ) {
+        self.showsHandle = showsHandle
         privateColor = color
         privateInset = inset
         privateVisibleThickness = visibleThickness
@@ -90,6 +121,7 @@ struct Splitter: SplitDivider {
     }
 
     init(styling: SplitStyling) {
+        showsHandle = false
         privateColor = styling.color
         privateInset = styling.inset
         privateVisibleThickness = styling.visibleThickness
@@ -113,13 +145,15 @@ extension Splitter {
 
     /// Umbra: the 1pt border rule between two panes *inside* one island (a list beside its
     /// detail), where there is no frame-coloured gap to act as the seam. The drag target is kept
-    /// to the island gap's width so it doesn't swallow clicks at either pane's edge.
+    /// to the island gap's width so it doesn't swallow clicks at either pane's edge. A short
+    /// capsule fades in over the line under the cursor, as on `HandleSplitter`.
     static func rule() -> Splitter {
         Splitter(
             color: IDEAppearance.ColorToken.border,
             inset: 0,
             visibleThickness: 1,
-            invisibleThickness: IDEAppearance.Spacing.panelGap
+            invisibleThickness: IDEAppearance.Spacing.panelGap,
+            showsHandle: true
         )
     }
 }
