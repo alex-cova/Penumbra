@@ -33,14 +33,23 @@ extension IDEAgentController {
             run(descriptor, arguments: invocation.arguments)
             return
         }
+        // A lone `/word` that is no command or skill is still sent, but it is probably a mistyped
+        // command (or one from another tool), so the transcript says it went to the model as text.
+        let unknownCommand = IDEAgentSlashInvocation.parse(text).flatMap { $0.arguments.isEmpty ? $0.name : nil }
         if selected.isRunning {
             // Written during a run: it joins the conversation at the model's next turn.
             promptHistory()?.add(text)
+            if let unknownCommand { selected.appendNotice(Self.unknownCommandNotice(unknownCommand)) }
             selected.enqueue(text)
         } else if selected.canSend {
             promptHistory()?.add(text)
+            if let unknownCommand { selected.appendNotice(Self.unknownCommandNotice(unknownCommand)) }
             selected.send()
         }
+    }
+
+    static func unknownCommandNotice(_ name: String) -> String {
+        "There is no command or skill named /\(name) here, so it was sent to the agent as a message. /help lists the commands."
     }
 
     // MARK: - Suggestions
