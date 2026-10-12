@@ -94,10 +94,15 @@ extension IDEWorkspace {
             case .testGroup:
                 symbol = "play.circle.fill"
                 label = "Run the tests in \(location.title)"
+            case .preview:
+                symbol = "eye.circle"
+                label = "Show the preview \(location.title)"
             }
+            var isPreview = false
+            if case .preview = location.kind { isPreview = true }
             decorations.append(GutterDecoration(
-                line: location.line, symbolName: symbol, accessibilityLabel: label, tintColor: green,
-                placement: .lineMarkerColumn
+                line: location.line, symbolName: symbol, accessibilityLabel: label,
+                tintColor: isPreview ? NSColor.systemBlue.cgColor : green, placement: .lineMarkerColumn
             ))
         }
         return decorations
@@ -135,6 +140,11 @@ extension IDEWorkspace {
     private func showRunnableLocationMenu(_ location: IDERunnableLocation, file: URL, in textView: TextView) {
         guard let provider = activeRunProvider else { return }
         let document = gutterRunDocument(file: file, textView: textView)
+        if case .preview = location.kind {
+            // A preview is shown, not run: no Run / Debug menu.
+            provider.run(document, location: location, mode: .run)
+            return
+        }
         let modify: (() -> Void)? = provider.canEditRunConfiguration(location)
             ? { provider.editRunConfiguration(document, location: location) }
             : nil
@@ -198,12 +208,18 @@ extension IDEWorkspace {
         var runItems: [NSMenuItem] = []
         if let location = gutter.locations.first(where: { $0.line == click.line }), let provider = activeRunProvider {
             let document = gutterRunDocument(file: gutter.fileURL, textView: textView)
-            runItems = IDERunGutterMenu.items(
-                title: location.title,
-                keymapPreset: preferences.keymapPreset,
-                run: { provider.run(document, location: location, mode: .run) },
-                debug: { provider.run(document, location: location, mode: .debug) }
-            )
+            if case .preview = location.kind {
+                runItems = [IDEClosureMenuItem(title: "Show Preview ‘\(location.title)’") {
+                    provider.run(document, location: location, mode: .run)
+                }]
+            } else {
+                runItems = IDERunGutterMenu.items(
+                    title: location.title,
+                    keymapPreset: preferences.keymapPreset,
+                    run: { provider.run(document, location: location, mode: .run) },
+                    debug: { provider.run(document, location: location, mode: .debug) }
+                )
+            }
             if provider.canEditRunConfiguration(location) {
                 runItems.append(.separator())
                 runItems.append(IDEClosureMenuItem(title: "Modify Run Configuration…") {

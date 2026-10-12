@@ -12,6 +12,24 @@ extension IDEWorkspace {
         return swiftUIPreviewPackage(for: url) != nil
     }
 
+    /// Whether `url` is a Swift file of a SwiftPM code target, so it can be previewed.
+    func canPreviewSwiftUI(file url: URL) -> Bool {
+        swiftPM.isActive && url.pathExtension == "swift" && swiftUIPreviewPackage(for: url) != nil
+    }
+
+    /// Opens the canvas on the active file's preview number `blockIndex` (the gutter's eye).
+    func showSwiftUIPreview(blockIndex: Int) {
+        guard canPreviewSwiftUI else {
+            notifications.post("Open a Swift file of a SwiftPM package to preview it.", category: .general)
+            return
+        }
+        let session = swiftUIPreview ?? makeSwiftUIPreviewSession()
+        swiftUIPreview = session
+        isSwiftUIPreviewVisible = true
+        swiftUIPreviewDocumentID = workbench.activePane.selectedDocument?.id
+        session.select(blockIndex)
+    }
+
     /// Shows the canvas and builds the active file's preview, or closes it.
     func toggleSwiftUIPreview() {
         if isSwiftUIPreviewVisible {

@@ -391,6 +391,62 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         XCTAssertEqual(session.fileName, "First.swift", "a hidden canvas does not follow the tabs")
     }
 
+    func testPreviewsAreGutterLocationsAndNotRunnable() async throws {
+        let root = directory.appendingPathComponent("pkg", isDirectory: true)
+        let sources = root.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let text = """
+        import SwiftUI
+
+        struct Row: View {
+            var body: some View { Text("r") }
+        }
+
+        #Preview("Plain") { Row() }
+
+        #Preview { Row().padding() }
+        """
+        let file = sources.appendingPathComponent("Row.swift")
+        try text.write(to: file, atomically: true, encoding: .utf8)
+
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        workspace.swiftPM.trustPrompt = { _ in false }
+        defer { workspace.teardown() }
+        workspace.openProjectFolder(root)
+        await workspace.openDocument(from: file)
+
+        let provider = try XCTUnwrap(workspace.runProviders.provider(forLanguage: "swift"))
+        let document = IDERunDocument(url: file, languageIdentifier: "swift", caretUTF16Offset: 0, text: text)
+        let locations = await provider.runnableLocations(in: document)
+        let previews = locations.compactMap { location -> (Int, Int, String)? in
+            guard case .preview(let index) = location.kind else { return nil }
+            return (index, location.line, location.title)
+        }
+        XCTAssertEqual(previews.map(\.0), [0, 1])
+        XCTAssertEqual(previews.map(\.1), [7, 9])
+        XCTAssertEqual(previews.map(\.2), ["Plain", "Preview 2"])
+
+        // Run in Context at a preview does not run anything and does not claim to have.
+        let atPreview = IDERunDocument(
+            url: file, languageIdentifier: "swift",
+            caretUTF16Offset: (text as NSString).range(of: "Row().padding()").location, text: text
+        )
+        let handled = await provider.runInContext(atPreview, mode: .run)
+        XCTAssertFalse(handled)
+
+        // The eye opens the canvas on that preview.
+        workspace.showSwiftUIPreview(blockIndex: 1)
+        XCTAssertTrue(workspace.isSwiftUIPreviewVisible)
+        let session = try XCTUnwrap(workspace.swiftUIPreview)
+        XCTAssertEqual(session.selectedIndex, 1)
+    }
+
     // MARK: Real pipeline
 
     func testASaveIsLoadedIntoTheRunningHostWithoutABuild() async throws {

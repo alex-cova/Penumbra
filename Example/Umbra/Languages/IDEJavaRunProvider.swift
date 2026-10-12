@@ -141,6 +141,8 @@ final class IDEJavaRunProvider: IDERunProvider {
         case .test, .testGroup:
             let debug = mode == .debug
             Task { await launchTest(in: document, location: location, debug: debug) }
+        case .preview:
+            break
         }
     }
 

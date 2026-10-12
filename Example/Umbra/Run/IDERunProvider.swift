@@ -85,6 +85,9 @@ struct IDERunnableLocation: Equatable, Sendable {
         case test
         /// A group of tests: a test class.
         case testGroup
+        /// A SwiftUI preview of the file; `index` is its place among the file's previews. It is
+        /// shown, not run: the gutter opens the canvas on it.
+        case preview(index: Int)
     }
 
     let kind: Kind
