@@ -13,12 +13,14 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-preview-session-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
+        IDEWorkspace.isSessionPersistenceEnabled = true
         if let directory { try? FileManager.default.removeItem(at: directory) }
     }
 
@@ -327,6 +329,66 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         }
         XCTAssertTrue(hot, "phase \(session.phase)\n\(session.log.suffix(12).joined(separator: "\n"))")
         session.stop()
+    }
+
+    // MARK: Window
+
+    func testSwitchingTabsShowsThePreviewOfTheFileNowInFront() async throws {
+        let root = directory.appendingPathComponent("pkg", isDirectory: true)
+        let sources = root.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let first = sources.appendingPathComponent("First.swift")
+        let second = sources.appendingPathComponent("Second.swift")
+        let notes = sources.appendingPathComponent("notes.txt")
+        for (file, name) in [(first, "First"), (second, "Second")] {
+            try "import SwiftUI\n#Preview(\"\(name)\") { Text(\"\(name)\") }\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        try "not swift".write(to: notes, atomically: true, encoding: .utf8)
+
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        // `bootstrap()` wires the window's modal trust sheet; this folder is simply not trusted.
+        workspace.swiftPM.trustPrompt = { _ in false }
+        defer { workspace.teardown() }
+        workspace.openProjectFolder(root)
+        await workspace.openDocument(from: first)
+        await workspace.openDocument(from: second)
+        await workspace.openDocument(from: notes)
+        XCTAssertFalse(workspace.canPreviewSwiftUI, "a text file is not previewed")
+
+        let pane = workspace.workbench.activePane
+        func select(_ url: URL) throws {
+            let document = try XCTUnwrap(pane.documents.first { $0.url?.standardizedFileURL == url.standardizedFileURL })
+            pane.selectDocument(document.id)
+            workspace.refreshPresentation()
+        }
+        try select(second)
+        XCTAssertTrue(workspace.canPreviewSwiftUI)
+        workspace.toggleSwiftUIPreview()
+        let session = try XCTUnwrap(workspace.swiftUIPreview)
+        XCTAssertEqual(session.fileName, "Second.swift")
+
+        // Another Swift file in front: its preview is asked for, after a short pause.
+        try select(first)
+        let switched = await waitUntil(seconds: 5) { session.fileName == "First.swift" }
+        XCTAssertTrue(switched, "fileName \(String(describing: session.fileName))")
+
+        // A file that is not Swift leaves the canvas as it is.
+        try select(notes)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(session.fileName, "First.swift")
+        XCTAssertTrue(workspace.isSwiftUIPreviewVisible)
+
+        workspace.hideSwiftUIPreview()
+        XCTAssertFalse(workspace.isSwiftUIPreviewVisible)
+        try select(second)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(session.fileName, "First.swift", "a hidden canvas does not follow the tabs")
     }
 
     // MARK: Real pipeline

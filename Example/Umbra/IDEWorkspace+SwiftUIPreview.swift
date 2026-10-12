@@ -25,12 +25,33 @@ extension IDEWorkspace {
         let session = swiftUIPreview ?? makeSwiftUIPreviewSession()
         swiftUIPreview = session
         isSwiftUIPreviewVisible = true
+        swiftUIPreviewDocumentID = workbench.activePane.selectedDocument?.id
         session.refresh()
     }
 
     func hideSwiftUIPreview() {
         isSwiftUIPreviewVisible = false
+        swiftUIPreviewSwitchTask?.cancel()
+        swiftUIPreviewSwitchTask = nil
+        swiftUIPreviewDocumentID = nil
         swiftUIPreview?.stop()
+    }
+
+    /// Shows the preview of the Swift file a tab switch brought to the front. A switch to a file that
+    /// is not Swift (or not in a code target) leaves the canvas as it is, and quick switches are
+    /// collapsed: only the file that stays selected is built.
+    func noteSwiftUIPreviewActiveDocumentMayHaveChanged() {
+        guard isSwiftUIPreviewVisible, let document = workbench.activePane.selectedDocument,
+              document.id != swiftUIPreviewDocumentID, document.contentKind == .text,
+              let url = document.url, url.pathExtension == "swift", swiftUIPreviewPackage(for: url) != nil else { return }
+        swiftUIPreviewDocumentID = document.id
+        swiftUIPreviewSwitchTask?.cancel()
+        swiftUIPreviewSwitchTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            guard let self, self.isSwiftUIPreviewVisible,
+                  self.workbench.activePane.selectedDocument?.id == document.id else { return }
+            self.swiftUIPreview?.refresh()
+        }
     }
 
     /// Rebuilds the preview after the active file was saved, when the canvas is showing.

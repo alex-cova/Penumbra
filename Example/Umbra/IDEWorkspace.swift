@@ -451,6 +451,9 @@ public final class IDEWorkspace {
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
     var swiftUIPreview: IDESwiftUIPreviewSession?
+    /// The document the canvas was last asked to show, so a tab switch is told from any other change.
+    @ObservationIgnored var swiftUIPreviewDocumentID: UUID?
+    @ObservationIgnored var swiftUIPreviewSwitchTask: Task<Void, Never>?
     var isJSONDiagramVisible = false
     var isCSVTableVisible = false
     var statusSelectionLength = 0
@@ -862,6 +865,8 @@ public final class IDEWorkspace {
         gitStatus.setRoot(nil)
         fileIndexer.setRoot(nil)
         runProviders.stopAll()
+        swiftUIPreviewSwitchTask?.cancel()
+        swiftUIPreviewSwitchTask = nil
         swiftUIPreview?.stop()
         swiftUIPreview = nil
         projectSystems.stop()
@@ -4999,6 +5004,7 @@ public final class IDEWorkspace {
             statusEncoding = document.encoding
         }
         syncHexPaletteCommands()
+        noteSwiftUIPreviewActiveDocumentMayHaveChanged()
         if let document = workbench.activePane.selectedDocument {
             windowTitle = "\(document.displayName) · \(projectTitle)"
             let pathItems = pathBreadcrumbItems(for: document)
