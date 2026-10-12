@@ -53,7 +53,8 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
             XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/h/\(name)")), "shell", name)
             XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/h/\(name.uppercased())")), "shell", name)
         }
-        XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/p/.gitignore")), "plain")
+        // `.gitignore` had no language; it has one now (Ignore File), as do its siblings.
+        XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/p/.gitignore")), "gitignore")
         XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/p/Makefile")), "plain")
     }
 
@@ -89,7 +90,7 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
         let withGrammar = [
             "javascript", "typescript", "json", "python", "yaml", "toml", "sql", "html", "xml", "css", "scss",
             "swift", "java", "groovy", "kotlin", "go", "shell", "bash", "sh", "zsh", "graphql", "markdown",
-            "markdown_inline", "http", "mermaid", "rust", "c", "cpp", "diff", "patch"
+            "markdown_inline", "http", "mermaid", "rust", "c", "cpp", "diff", "patch", "gitignore"
         ]
         for identifier in withGrammar {
             XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: identifier), identifier)
@@ -124,7 +125,7 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
         let options = IDELanguageSupport.selectableSyntaxes.map { "\($0.id ?? "nil")=\($0.displayName)" }
         XCTAssertEqual(options, [
             "nil=Plain Text", "c=C", "cpp=C++", "css=CSS", "diff=Diff", "go=Go", "graphql=GraphQL", "html=HTML",
-            "http=HTTP", "java=Java", "javascript=JavaScript", "json=JSON", "kotlin=Kotlin", "markdown=Markdown",
+            "http=HTTP", "gitignore=Ignore File", "java=Java", "javascript=JavaScript", "json=JSON", "kotlin=Kotlin", "markdown=Markdown",
             "mermaid=Mermaid", "python=Python", "rust=Rust", "scss=SCSS", "shell=Shell Script", "sql=SQL",
             "swift=Swift", "toml=TOML", "typescript=TypeScript", "xml=XML", "yaml=YAML"
         ])

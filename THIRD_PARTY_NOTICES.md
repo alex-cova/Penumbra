@@ -72,6 +72,7 @@ keeps the license of its upstream project; all are MIT.
 | Markdown | [MDeiml/tree-sitter-markdown](https://github.com/MDeiml/tree-sitter-markdown) | MIT |
 | HTTP | [rest-nvim/tree-sitter-http](https://github.com/rest-nvim/tree-sitter-http) | MIT |
 | Mermaid | [monaqa/tree-sitter-mermaid](https://github.com/monaqa/tree-sitter-mermaid) | MIT |
+| `.gitignore` and similar ignore files | [shunsambongi/tree-sitter-gitignore](https://github.com/shunsambongi/tree-sitter-gitignore) (`src/` from the main branch; the highlight query is Penumbra's own, upstream ships none) | MIT |
 
 The TOML/SQL/Java/Go/Bash and Kotlin `*Penumbra` wrapper targets were migrated
 from Hextech's former `Vendor/PenumbraLanguages` package; the Kotlin wrapper is

@@ -150,7 +150,8 @@ enum BundledGrammars {
         ("rust", { .rust }),
         ("c", { .c }),
         ("cpp", { .cpp }),
-        ("diff", { .diff })
+        ("diff", { .diff }),
+        ("gitignore", { .gitIgnore })
     ]
 
     private static let installed: Void = {

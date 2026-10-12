@@ -163,7 +163,7 @@ final class LanguageDefinitionRegistryTests: XCTestCase {
     func testSharedRegistryIsBackToBuiltInsAfterwards() {
         XCTAssertNil(LanguageIdentifier.identifier(forFileExtension: "utl"))
         XCTAssertNil(LanguageDefinitionRegistry.shared.definition(forIdentifier: "umbra-test-lang"))
-        XCTAssertEqual(IDELanguageSupport.selectableSyntaxes.count, 25)
+        XCTAssertEqual(IDELanguageSupport.selectableSyntaxes.count, 26)
     }
 }
 

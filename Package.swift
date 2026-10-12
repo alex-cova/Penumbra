@@ -380,6 +380,16 @@ let package = Package(
             dependencies: ["Penumbra", "TreeSitterRust", "TreeSitterRustQueries"],
             swiftSettings: swift6
         ),
+        .target(name: "TreeSitterGitIgnore", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterGitIgnoreQueries",
+            resources: [.copy("highlights.scm")]
+        ),
+        .target(
+            name: "TreeSitterGitIgnorePenumbra",
+            dependencies: ["Penumbra", "TreeSitterGitIgnore", "TreeSitterGitIgnoreQueries"],
+            swiftSettings: swift6
+        ),
         .target(name: "TreeSitterDiff", cSettings: [.headerSearchPath("src")]),
         .target(
             name: "TreeSitterDiffQueries",
@@ -431,7 +441,8 @@ let package = Package(
                 "TreeSitterRustPenumbra",
                 "TreeSitterCPenumbra",
                 "TreeSitterCppPenumbra",
-                "TreeSitterDiffPenumbra"
+                "TreeSitterDiffPenumbra",
+                "TreeSitterGitIgnorePenumbra"
             ],
             resources: [
                 .copy("Queries")

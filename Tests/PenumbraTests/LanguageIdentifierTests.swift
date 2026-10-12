@@ -69,9 +69,13 @@ final class LanguageIdentifierTests: XCTestCase {
     }
 
     func testUnknownDotfileFallsBackToExtensionDetection() {
-        // ".gitignore" isn't in the shell special-case set and has no extension after the dot
-        // (pathExtension is empty), so it should resolve like any other extensionless file.
-        let url = URL(fileURLWithPath: "/project/.gitignore")
+        // ".editorconfig" isn't in the shell special-case set, is no language's file name and has no
+        // extension after the dot (pathExtension is empty), so it resolves like any extensionless file.
+        let url = URL(fileURLWithPath: "/project/.editorconfig")
         XCTAssertEqual(LanguageIdentifier.identifier(for: url), "plain")
+    }
+
+    func testIgnoreFilesAreTheirOwnLanguage() {
+        XCTAssertEqual(LanguageIdentifier.identifier(for: URL(fileURLWithPath: "/project/.gitignore")), "gitignore")
     }
 }

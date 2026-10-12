@@ -17,3 +17,4 @@
 @_exported import TreeSitterCPenumbra
 @_exported import TreeSitterCppPenumbra
 @_exported import TreeSitterDiffPenumbra
+@_exported import TreeSitterGitIgnorePenumbra

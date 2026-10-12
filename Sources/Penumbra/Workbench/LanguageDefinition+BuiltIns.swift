@@ -67,6 +67,10 @@ public extension LanguageDefinition {
         LanguageDefinition(id: "http", displayName: "HTTP", fileExtensions: ["http", "rest"], isSelectable: true),
         LanguageDefinition(id: "mermaid", displayName: "Mermaid", fileExtensions: ["mmd", "mermaid"], isSelectable: true),
         LanguageDefinition(id: "diff", displayName: "Diff", fileExtensions: ["diff", "patch"],
-                           aliases: ["patch"], isSelectable: true)
+                           aliases: ["patch"], isSelectable: true),
+        LanguageDefinition(id: "gitignore", displayName: "Ignore File",
+                           fileNames: [".gitignore", ".dockerignore", ".npmignore", ".eslintignore",
+                                       ".prettierignore", ".ignore", ".slugignore", ".gcloudignore"],
+                           aliases: ["ignore", "git-ignore"], fenceAliases: ["ignore"], isSelectable: true)
     ]
 }
