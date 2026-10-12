@@ -49,6 +49,7 @@ extension IDEBottomPanelTab {
         static let gradle = 20
         static let npm = 25
         static let swiftPM = 27
+        static let xcode = 28
         static let http = 30
         static let problems = 40
         static let typeHierarchy = 50

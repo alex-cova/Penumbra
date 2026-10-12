@@ -55,6 +55,18 @@ inside the Umbra app only, not redistributed as a standalone component library. 
 is an Umbra approximation — the upstream component uses the `vgpu` runtime and was not
 ported line-for-line.
 
+## Umbra project wizard (Xcode project format)
+
+Umbra's New Project wizard and Xcode project system (`Example/Umbra/ProjectWizard/`,
+`Example/Umbra/Projects/IDEXcodeProject*.swift`) read and write Xcode 27's `project.xcproj` with
+[apple/xcode-project-format](https://github.com/apple/xcode-project-format) (`XcodeProjectFormat`).
+It is fetched as a SwiftPM dependency of the `Umbra` target only, not of `Penumbra` or
+`EditorIntelligence`.
+
+| Component | Source | License |
+| --- | --- | --- |
+| XcodeProjectFormat | [apple/xcode-project-format](https://github.com/apple/xcode-project-format) | Apache License 2.0 with Runtime Library Exception |
+
 ## Bundled Tree-sitter grammars
 
 The `PenumbraLanguages`, `PenumbraGraphQLLanguage`, and `PenumbraMarkdownLanguage`

@@ -413,7 +413,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         request.processGroup = true
         request.killGroupOnExit = true
         request.timeout = nil
-        let buffer = IDESwiftPMOutputBuffer()
+        let buffer = IDEProjectOutputBuffer()
         let projectToken = projectGeneration
         let onOutput: @Sendable (Data, SubprocessOutputSource) -> Void = { [weak self] data, source in
             let lines = buffer.consume(data, source: source)
@@ -540,7 +540,8 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
 }
 
 /// Splits live process output into lines. One buffer per stream; a partial line waits for its newline.
-private final class IDESwiftPMOutputBuffer: @unchecked Sendable {
+/// Shared by the project systems that run a child process.
+final class IDEProjectOutputBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var stdout = Data()
     private var stderr = Data()

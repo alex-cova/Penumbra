@@ -89,7 +89,8 @@ struct IDEWelcomeView: View {
                 IDEWelcomeActionList(
                     openFile: workspace.openFile,
                     openFolder: workspace.openFolder,
-                    newFile: workspace.newFile
+                    newFile: workspace.newFile,
+                    newProject: workspace.showNewProject
                 )
                 if !workspace.recentProjectURLs.isEmpty {
                     IDEWelcomeRecentProjectsSection(
@@ -279,9 +280,11 @@ private struct IDEWelcomeActionList: View {
     let openFile: () -> Void
     let openFolder: () -> Void
     let newFile: () -> Void
+    let newProject: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            IDEWelcomeActionRow(title: "New Project…", systemImage: "shippingbox", shortcut: nil, action: newProject)
             IDEWelcomeActionRow(title: "Open File…", systemImage: "doc", shortcut: "⌘O", action: openFile)
             IDEWelcomeActionRow(title: "Open Folder…", systemImage: "folder", shortcut: "⌘⇧O", action: openFolder)
             IDEWelcomeActionRow(title: "New File", systemImage: "doc.badge.plus", shortcut: "⌘N", action: newFile)

@@ -29,6 +29,8 @@ final class IDEIntelligenceServices {
     let npm: IDENpmProjectSystem
     /// SwiftPM, registered after npm: a folder with a `gradlew` or a package.json keeps those first.
     let swiftPM: IDESwiftPMProjectSystem
+    /// Xcode projects, registered last: a package or a Gradle build in the same folder keeps the sidebar.
+    let xcode: IDEXcodeProjectSystem
     /// The window's project systems, in the order they claim a folder.
     let projectSystems: IDEProjectSystems
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
@@ -59,7 +61,9 @@ final class IDEIntelligenceServices {
         self.npm = npm
         let swiftPM = IDESwiftPMProjectSystem(status: projectStatus)
         self.swiftPM = swiftPM
-        projectSystems = IDEProjectSystems([gradle, npm, swiftPM])
+        let xcode = IDEXcodeProjectSystem(status: projectStatus)
+        self.xcode = xcode
+        projectSystems = IDEProjectSystems([gradle, npm, swiftPM, xcode])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let sourceKit = LSPLanguageService(

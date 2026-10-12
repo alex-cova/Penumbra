@@ -187,6 +187,8 @@ public final class IDEWorkspace {
     var npm: IDENpmProjectSystem { intelligenceServices.npm }
     /// SwiftPM, registered after npm.
     var swiftPM: IDESwiftPMProjectSystem { intelligenceServices.swiftPM }
+    /// Xcode projects, registered after SwiftPM.
+    var xcode: IDEXcodeProjectSystem { intelligenceServices.xcode }
     /// The window's TypeScript index. The symbol palette reads it; the language service holds it weakly.
     var typescriptSupport: IDETypeScriptSupport { intelligenceServices.typescriptSupport }
     /// The window's Swift index. The symbol palette and the SwiftPM project system use it.
@@ -408,6 +410,8 @@ public final class IDEWorkspace {
     /// Run or Debug was pressed in a Gradle module with neither `run` nor `bootRun`: the task
     /// picker shows while set.
     var gradleRunTaskPrompt: IDEGradleRunTaskPrompt?
+    /// File ▸ New Project… is showing its sheet.
+    var isNewProjectSheetPresented = false
     /// The workspace edit being previewed (rename, extract variable, …).
     var workspaceEditPreview: IDEWorkspaceEditPreviewModel?
     /// The JWT being read (Tools ▸ Encode / Decode ▸ Decode JWT…): its sheet shows while set.
@@ -696,6 +700,27 @@ public final class IDEWorkspace {
         swiftPM.onBuildDiagnostics = { [weak self] diagnostics in
             guard let self else { return }
             self.problems.setBuildDiagnostics(diagnostics, source: IDEProblemsStore.swiftPMBuildSource)
+            if diagnostics.values.contains(where: { $0.contains { $0.severity == .error } }) {
+                self.showProblems()
+            }
+        }
+        // Xcode: its own trust (build phases run scripts) and its own Problems source.
+        xcode.trustPrompt = { [weak self] url in
+            guard let self else { return false }
+            let name = url.lastPathComponent
+            return await self.promptProjectTrust(
+                message: "Trust and run xcodebuild for “\(name)”?",
+                detail: "Build phases and build tool plugins can run scripts when xcodebuild builds the project. "
+                    + "Trust this folder only if you trust its contents."
+            )
+        }
+        xcode.onActivity = { [weak self] in
+            self?.showBottomTab(.xcode)
+        }
+        xcode.bufferText = { [weak self] url in self?.openBufferText(for: url) }
+        xcode.onBuildDiagnostics = { [weak self] diagnostics in
+            guard let self else { return }
+            self.problems.setBuildDiagnostics(diagnostics, source: IDEProblemsStore.xcodeBuildSource)
             if diagnostics.values.contains(where: { $0.contains { $0.severity == .error } }) {
                 self.showProblems()
             }
@@ -1022,6 +1047,10 @@ public final class IDEWorkspace {
         showsWelcome = !hasOpenDocuments
         refreshPresentation()
         saveSession()
+        // A project the New Project wizard just made opens on its main file.
+        if let file = IDENewProjectOpenRequests.take(for: url) {
+            Task { await openDocument(from: file) }
+        }
     }
 
     /// Replaces this window's project and tabs with `url`, after confirming if anything is unsaved.
@@ -4672,6 +4701,8 @@ public final class IDEWorkspace {
         }
         palette.commandRegistry.register(textToolsPaletteCommands())
         palette.commandRegistry.register([
+            EditorCommand(id: "file.newProject", title: "New Project…", group: "File",
+                          action: { [weak self] in self?.showNewProject() }),
             EditorCommand(id: "app.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
             EditorCommand(id: "app.splitDown", title: "Split Editor Down", group: "View",

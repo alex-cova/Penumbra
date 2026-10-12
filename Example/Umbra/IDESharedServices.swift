@@ -23,6 +23,8 @@ final class IDESharedServices {
     /// Which folders the user trusted to evaluate `Package.swift` and run `swift` commands. Its own
     /// file, like npm's.
     let swiftPMTrust: GradleTrustStore
+    /// Which folders the user trusted to run `xcodebuild` (build phases can run scripts). Its own file.
+    let xcodeTrust: GradleTrustStore
     let jdkSelection: JDKSelectionStore
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
@@ -37,6 +39,7 @@ final class IDESharedServices {
         gradleTrust = GradleTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
         npmTrust = GradleTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
         swiftPMTrust = GradleTrustStore(storeURL: IDESwiftPMProjectSystem.defaultTrustStoreURL)
+        xcodeTrust = GradleTrustStore(storeURL: IDEXcodeProjectSystem.defaultTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
         runConfigurations = JavaRunConfigurationCatalog(
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)

@@ -132,6 +132,9 @@ private struct IDEFileCommands: View {
         Button("New File", systemImage: "doc.badge.plus") { workspace?.newFile() }
             .menuShortcut(.newFile, in: preset)
             .disabled(workspace == nil)
+        Button("New Project…", systemImage: "shippingbox") { workspace?.showNewProject() }
+            .disabled(workspace == nil)
+
         Button("Open…", systemImage: "folder") { workspace?.openFile() }
             .menuShortcut(.openFile, in: preset)
             .disabled(workspace == nil)

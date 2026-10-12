@@ -235,6 +235,14 @@ public struct IDERootView: View {
                     .preferredColorScheme(IDEAppearance.preferredColorScheme)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { workspace.isNewProjectSheetPresented },
+            set: { workspace.isNewProjectSheetPresented = $0 }
+        )) {
+            IDENewProjectSheet()
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .sheet(item: Binding(
             get: { workspace.workspaceEditPreview },
             set: { if $0 == nil { workspace.dismissWorkspaceEditPreview() } }

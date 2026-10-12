@@ -26,6 +26,7 @@ final class IDEProblemsStore {
     /// owns its own bucket, so a SwiftPM build never replaces Gradle's results or the reverse.
     static let gradleBuildSource = "gradle"
     static let swiftPMBuildSource = "swiftpm"
+    static let xcodeBuildSource = "xcode"
 
     /// Every source's build problems, merged per file (sources in name order, so it is stable).
     /// Editor, javac and inspection buckets are not build output.
