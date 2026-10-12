@@ -66,6 +66,7 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         file: (url: URL, text: String)?,
         fileProvider: (@MainActor () -> (url: URL, text: String)?)? = nil,
         package: (root: URL, target: String)? = nil,
+        buildSystem: SwiftPreviewBuildPlan.BuildSystem = .swiftPM,
         trusted: Bool = true,
         toolchain: IDESwiftUIPreviewToolchain? = IDESwiftUIPreviewToolchain(swift: "/usr/bin/swift", swiftc: "/usr/bin/swiftc"),
         runner: any IDESwiftUIPreviewProcessRunning,
@@ -73,8 +74,8 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
     ) -> IDESwiftUIPreviewSession {
         let context = IDESwiftUIPreviewContext(
             activeFile: { fileProvider?() ?? file },
-            package: { _ in package },
-            ensureTrusted: { trusted },
+            package: { _ in package.map { IDESwiftUIPreviewPackage(root: $0.root, target: $0.target, buildSystem: buildSystem) } },
+            ensureTrusted: { _ in trusted },
             toolchain: { toolchain },
             publishDiagnostics: published,
             bufferText: { _ in nil }
@@ -708,6 +709,125 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         let updated = await waitUntil(seconds: 10) { seenText() == "bonjour+color!" }
         XCTAssertTrue(updated, "saw \(seenText() ?? "nil"), last reload \(String(describing: session.lastReload))\n\(session.log.suffix(12).joined(separator: "\n"))")
         XCTAssertEqual(session.lastReload, .hotReload, "the copy should compile against the module's Bundle.module")
+        session.stop()
+    }
+
+    // MARK: Xcode projects
+
+    func testTheXcodeModelNamesTheTargetAFileIsCompiledIn() throws {
+        // project.xcproj (a folder with target membership).
+        let template = try XCTUnwrap(IDEProjectTemplates.template(id: "swift.xcode.macos-app"))
+        let options = IDENewProjectOptions(name: "Modeled", parentDirectory: directory)
+        let root = try IDEProjectWriter.create(template, options: options)
+        let project = try XCTUnwrap(IDEXcodeProjectModel.findProject(in: root))
+        let model = try IDEXcodeProjectModel.load(projectURL: project)
+        let view = root.appendingPathComponent("Modeled/ContentView.swift")
+        XCTAssertEqual(model.targets(containing: view), ["Modeled"])
+        XCTAssertTrue(model.targets(containing: root.appendingPathComponent("Other/File.swift")).isEmpty)
+
+        // project.pbxproj: a synchronized group, a classic group with a Sources phase, and a test target.
+        let pbxproj = """
+        {
+          objects = {
+            P = { isa = PBXProject; mainGroup = G0; targets = (T1, T2); };
+            G0 = { isa = PBXGroup; children = (SYNC, CLASSIC, TESTS); sourceTree = "<group>"; };
+            SYNC = { isa = PBXFileSystemSynchronizedRootGroup; path = Synced; sourceTree = "<group>"; };
+            CLASSIC = { isa = PBXGroup; path = Classic; sourceTree = "<group>"; children = (F1); };
+            F1 = { isa = PBXFileReference; path = Listed.swift; sourceTree = "<group>"; };
+            TESTS = { isa = PBXGroup; path = Tests; sourceTree = "<group>"; children = (F2); };
+            F2 = { isa = PBXFileReference; path = AppTests.swift; sourceTree = "<group>"; };
+            B1 = { isa = PBXBuildFile; fileRef = F1; };
+            B2 = { isa = PBXBuildFile; fileRef = F2; };
+            S1 = { isa = PBXSourcesBuildPhase; files = (B1); };
+            S2 = { isa = PBXSourcesBuildPhase; files = (B2); };
+            T1 = { isa = PBXNativeTarget; name = App; productType = "com.apple.product-type.application";
+                   buildPhases = (S1); fileSystemSynchronizedGroups = (SYNC); };
+            T2 = { isa = PBXNativeTarget; name = AppTests; productType = "com.apple.product-type.bundle.unit-test";
+                   buildPhases = (S2); };
+          };
+          rootObject = P;
+        }
+        """
+        let classic = directory.appendingPathComponent("Classic.xcodeproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: classic, withIntermediateDirectories: true)
+        try pbxproj.write(to: classic.appendingPathComponent("project.pbxproj"), atomically: true, encoding: .utf8)
+        let classicModel = try IDEXcodeProjectModel.load(projectURL: classic)
+        XCTAssertEqual(classicModel.targets(containing: directory.appendingPathComponent("Synced/Deep/View.swift")), ["App"])
+        XCTAssertEqual(classicModel.targets(containing: directory.appendingPathComponent("Classic/Listed.swift")), ["App"])
+        XCTAssertTrue(
+            classicModel.targets(containing: directory.appendingPathComponent("Tests/AppTests.swift")).isEmpty,
+            "a test target is not what is previewed"
+        )
+    }
+
+    func testAnXcodeBuildIsAskedForTheHostsArchitectureInItsOwnDirectories() {
+        let job = SwiftPreviewBuildPlan.Job(
+            packageRoot: "/p/App", scratchPath: "/cache/x", workDirectory: "/cache/work", targetName: "App",
+            sourcePath: "/p/App/App/ContentView.swift", sourceText: "", imports: [],
+            block: SwiftPreviewBlock(
+                kind: .macro, title: nil, index: 0, traits: nil, fullBytes: 0..<0, bodyBytes: 0..<0,
+                contentBytes: 0..<0, previewables: [], line: 1
+            ),
+            buildSystem: .xcode(project: "/p/App/App.xcodeproj")
+        )
+        let plan = SwiftPreviewBuildPlan(job: job)
+        let command = plan.buildCommand
+        XCTAssertEqual(command.tool, SwiftPreviewCommand.Tool.xcodebuild)
+        XCTAssertTrue(command.arguments.contains("SYMROOT=/cache/x/Products"))
+        XCTAssertTrue(command.arguments.contains("OBJROOT=/cache/x/Intermediates"))
+        XCTAssertTrue(command.arguments.contains("ARCHS=arm64"))
+        XCTAssertTrue(command.arguments.contains("CODE_SIGNING_ALLOWED=NO"))
+        XCTAssertEqual(plan.knownBinPath, "/cache/x/Products/Debug")
+        XCTAssertEqual(plan.intermediatesPath, "/cache/x/Intermediates")
+        let flags = command.arguments.first { $0.hasPrefix("OTHER_SWIFT_FLAGS=") } ?? ""
+        XCTAssertTrue(flags.contains("$(inherited)") && flags.contains("-enable-testing"))
+    }
+
+    func testAnXcodeProjectViewIsPreviewedAndReloaded() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let template = try XCTUnwrap(IDEProjectTemplates.template(id: "swift.xcode.macos-app"))
+        let options = IDENewProjectOptions(name: "Shown", parentDirectory: directory)
+        let root = try IDEProjectWriter.create(template, options: options)
+        let project = try XCTUnwrap(IDEXcodeProjectModel.findProject(in: root))
+        let file = root.appendingPathComponent("Shown/ContentView.swift")
+        func source(_ greeting: String) -> String {
+            """
+            import SwiftUI
+
+            struct ContentView: View {
+                var body: some View {
+                    Text("\(greeting)").font(.largeTitle).padding(30)
+                }
+            }
+
+            #Preview { ContentView() }
+            """
+        }
+        var current = source("First")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: nil, fileProvider: { (file, current) }, package: (root, "Shown"),
+            buildSystem: .xcode(project: project.path),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 200))
+        session.refresh()
+        let built = await waitUntil(seconds: 300) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(built, "phase \(session.phase)\n\(session.log.suffix(25).joined(separator: "\n"))")
+        XCTAssertEqual(session.lastReload, .build)
+        let first = try XCTUnwrap(session.frame?.tiffRepresentation)
+
+        current = source("Second, a longer greeting")
+        try current.write(to: file, atomically: true, encoding: .utf8)
+        session.lastReloadReset()
+        session.refresh()
+        let hot = await waitUntil(seconds: 60) {
+            session.lastReload == .hotReload && session.phase == .ready && session.frame?.tiffRepresentation != first
+        }
+        XCTAssertTrue(hot, "phase \(session.phase) last \(String(describing: session.lastReload))\n\(session.log.suffix(12).joined(separator: "\n"))")
         session.stop()
     }
 

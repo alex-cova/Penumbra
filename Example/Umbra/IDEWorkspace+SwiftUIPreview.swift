@@ -6,7 +6,7 @@ import Penumbra
 extension IDEWorkspace {
     /// Whether the active file is a Swift file in a SwiftPM code target, so a preview can be built.
     var canPreviewSwiftUI: Bool {
-        guard swiftPM.isActive, let url = workbench.activePane.selectedDocument?.url, url.pathExtension == "swift" else {
+        guard swiftPM.isActive || xcode.isActive, let url = workbench.activePane.selectedDocument?.url, url.pathExtension == "swift" else {
             return false
         }
         return swiftUIPreviewPackage(for: url) != nil
@@ -14,7 +14,7 @@ extension IDEWorkspace {
 
     /// Whether `url` is a Swift file of a SwiftPM code target, so it can be previewed.
     func canPreviewSwiftUI(file url: URL) -> Bool {
-        swiftPM.isActive && url.pathExtension == "swift" && swiftUIPreviewPackage(for: url) != nil
+        (swiftPM.isActive || xcode.isActive) && url.pathExtension == "swift" && swiftUIPreviewPackage(for: url) != nil
     }
 
     /// Opens the canvas on the active file's preview number `blockIndex` (the gutter's eye).
@@ -79,11 +79,23 @@ extension IDEWorkspace {
         swiftUIPreview?.refresh()
     }
 
-    private func swiftUIPreviewPackage(for url: URL) -> (root: URL, target: String)? {
-        guard let manifest = swiftPM.manifest, let root = swiftPM.rootURL,
-              let name = manifest.moduleResolver(root: root)(url), let target = manifest.target(named: name),
-              target.kind == .regular || target.kind == .executable else { return nil }
-        return (root, target.name)
+    /// The SwiftPM package or Xcode project target a Swift file is compiled in.
+    private func swiftUIPreviewPackage(for url: URL) -> IDESwiftUIPreviewPackage? {
+        if swiftPM.isActive, let manifest = swiftPM.manifest, let root = swiftPM.rootURL,
+           let name = manifest.moduleResolver(root: root)(url), let target = manifest.target(named: name),
+           target.kind == .regular || target.kind == .executable {
+            return IDESwiftUIPreviewPackage(root: root, target: target.name)
+        }
+        if xcode.isActive, let model = xcode.model {
+            // A file in several targets (an app and its extension): the first that is not a test.
+            if let name = model.targets(containing: url).first {
+                return IDESwiftUIPreviewPackage(
+                    root: model.projectURL.deletingLastPathComponent(), target: name,
+                    buildSystem: .xcode(project: model.projectURL.path)
+                )
+            }
+        }
+        return nil
     }
 
     private func makeSwiftUIPreviewSession() -> IDESwiftUIPreviewSession {
@@ -94,11 +106,21 @@ extension IDEWorkspace {
                 return (url, text)
             },
             package: { [weak self] url in self?.swiftUIPreviewPackage(for: url) },
-            ensureTrusted: { [weak self] in await self?.swiftPM.ensureTrusted() ?? false },
+            ensureTrusted: { [weak self] package in
+                guard let self else { return false }
+                switch package.buildSystem {
+                case .swiftPM: return await self.swiftPM.ensureTrusted()
+                case .xcode: return await self.xcode.ensureTrusted()
+                }
+            },
             toolchain: { [weak self] in
                 let environment = self?.swiftPM.launchEnvironment
                 guard let swift = IDESwiftPMProjectSystem.resolveSwift(environment: environment) else { return nil }
-                return IDESwiftUIPreviewToolchain.beside(swift: swift)
+                var toolchain = IDESwiftUIPreviewToolchain.beside(swift: swift)
+                if let xcodebuild = IDEXcodeProjectSystem.resolveXcodebuild(environment: self?.xcode.launchEnvironment) {
+                    toolchain.xcodebuild = xcodebuild
+                }
+                return toolchain
             },
             publishDiagnostics: { [weak self] diagnostics in
                 self?.problems.setBuildDiagnostics(diagnostics, source: IDEProblemsStore.swiftUIPreviewBuildSource)

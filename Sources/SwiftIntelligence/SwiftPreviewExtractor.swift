@@ -42,6 +42,21 @@ public struct SwiftPreviewBlock: Sendable, Equatable {
     /// 1-based line of `#Preview` or of the provider's name.
     public var line: Int
 
+    public init(
+        kind: Kind, title: String?, index: Int, traits: String?, fullBytes: Range<Int>, bodyBytes: Range<Int>,
+        contentBytes: Range<Int>, previewables: [Previewable], line: Int
+    ) {
+        self.kind = kind
+        self.title = title
+        self.index = index
+        self.traits = traits
+        self.fullBytes = fullBytes
+        self.bodyBytes = bodyBytes
+        self.contentBytes = contentBytes
+        self.previewables = previewables
+        self.line = line
+    }
+
     /// The label a canvas shows for the block.
     public var displayName: String {
         if let title, !title.isEmpty { return title }

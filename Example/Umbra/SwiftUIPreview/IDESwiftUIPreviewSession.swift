@@ -5,16 +5,24 @@ import Foundation
 import Observation
 import SwiftIntelligence
 
+/// The build a file belongs to: where it is run from, which target, and by what.
+struct IDESwiftUIPreviewPackage: Equatable {
+    /// The directory of `Package.swift`, or the one that holds the `.xcodeproj`.
+    var root: URL
+    var target: String
+    var buildSystem: SwiftPreviewBuildPlan.BuildSystem = .swiftPM
+}
+
 /// What a preview session needs from its window. Closures, so the session never holds the
 /// workspace and a test supplies plain values.
 @MainActor
 struct IDESwiftUIPreviewContext {
     /// The file the preview is for, with the text of its live buffer.
     var activeFile: () -> (url: URL, text: String)?
-    /// The SwiftPM package and target a file belongs to, nil when it is in none.
-    var package: (URL) -> (root: URL, target: String)?
-    /// True when the package is trusted, asking the user when it is not.
-    var ensureTrusted: () async -> Bool
+    /// The SwiftPM package or Xcode project and target a file belongs to, nil when it is in none.
+    var package: (URL) -> IDESwiftUIPreviewPackage?
+    /// True when the package or project is trusted, asking the user when it is not.
+    var ensureTrusted: (IDESwiftUIPreviewPackage) async -> Bool
     var toolchain: () -> IDESwiftUIPreviewToolchain?
     /// Receives the compiler problems of the preview's builds, per file; an empty map clears them.
     var publishDiagnostics: ([URL: [Diagnostic]]) -> Void
@@ -162,6 +170,7 @@ final class IDESwiftUIPreviewSession {
         var url: URL
         var packageRoot: URL
         var target: String
+        var buildSystem: SwiftPreviewBuildPlan.BuildSystem
         var binPath: String
         var modulePaths: [String]
         var toolchain: IDESwiftUIPreviewToolchain
@@ -403,7 +412,7 @@ final class IDESwiftUIPreviewSession {
             return fail(token, "No swift toolchain was found on PATH.")
         }
         phase = .building("Waiting for trust…")
-        guard await context.ensureTrusted() else {
+        guard await context.ensureTrusted(package) else {
             guard isCurrent(token) else { return }
             return fail(token, "Building a preview runs the package's code. Trust the folder to continue.")
         }
@@ -412,8 +421,8 @@ final class IDESwiftUIPreviewSession {
         // 3. The recipe.
         let directory = workDirectory(for: package.root)
         let plan = makePlan(
-            root: package.root, directory: directory, target: package.target, url: url, text: text,
-            imports: read.1, block: block
+            root: package.root, directory: directory, target: package.target, buildSystem: package.buildSystem,
+            url: url, text: text, imports: read.1, block: block
         )
         let fileManager = FileManager.default
         do {
@@ -436,12 +445,25 @@ final class IDESwiftUIPreviewSession {
         guard build.succeeded else {
             return fail(token, Self.summary(of: build.output, fallback: "swift build failed."))
         }
-        let binPathResult = await execute(plan.binPathCommand, toolchain: toolchain, directory: root, echo: false)
-        guard isCurrent(token) else { return }
-        guard binPathResult.succeeded,
-              let binPath = binPathResult.output.split(whereSeparator: \.isNewline).last.map(String.init), binPath.hasPrefix("/")
-        else { return fail(token, "swift could not report where it built.") }
-        let located = IDESwiftUIPreviewArtifacts.locate(binPath: binPath, module: plan.moduleName)
+        let binPath: String
+        var located: IDESwiftUIPreviewArtifacts.Located
+        if let known = plan.knownBinPath, let intermediates = plan.intermediatesPath {
+            // An Xcode build: products and intermediates are where the command put them.
+            binPath = known
+            located = IDESwiftUIPreviewArtifacts.Located(
+                objects: IDESwiftUIPreviewArtifacts.locateXcode(intermediates: intermediates, architecture: plan.job.architecture),
+                modulePaths: []
+            )
+        } else {
+            let binPathResult = await execute(plan.binPathCommand, toolchain: toolchain, directory: root, echo: false)
+            guard isCurrent(token) else { return }
+            guard binPathResult.succeeded,
+                  let reported = binPathResult.output.split(whereSeparator: \.isNewline).last.map(String.init),
+                  reported.hasPrefix("/")
+            else { return fail(token, "swift could not report where it built.") }
+            binPath = reported
+            located = IDESwiftUIPreviewArtifacts.locate(binPath: binPath, module: plan.moduleName)
+        }
         guard !located.objects.isEmpty else {
             return fail(token, "The build left no object files for \(package.target).")
         }
@@ -538,8 +560,8 @@ final class IDESwiftUIPreviewSession {
             Self.stamps(under: root, excluding: url)
         }.value
         baseline = Baseline(
-            url: url, packageRoot: package.root, target: package.target, binPath: binPath,
-            modulePaths: modulePaths, toolchain: toolchain, stamps: stamps
+            url: url, packageRoot: package.root, target: package.target, buildSystem: package.buildSystem,
+            binPath: binPath, modulePaths: modulePaths, toolchain: toolchain, stamps: stamps
         )
         phase = .ready
         await renderSerially()
@@ -555,14 +577,15 @@ final class IDESwiftUIPreviewSession {
     }
 
     private func makePlan(
-        root: URL, directory: URL, target: String, url: URL, text: String, imports: [String], block: SwiftPreviewBlock
+        root: URL, directory: URL, target: String, buildSystem: SwiftPreviewBuildPlan.BuildSystem,
+        url: URL, text: String, imports: [String], block: SwiftPreviewBlock
     ) -> SwiftPreviewBuildPlan {
         SwiftPreviewBuildPlan(job: .init(
             packageRoot: root.path,
             scratchPath: directory.appendingPathComponent("scratch").path,
             workDirectory: directory.appendingPathComponent("work").path,
             targetName: target, sourcePath: url.path, sourceText: text,
-            imports: imports, block: block, deploymentTarget: Self.deploymentTarget
+            imports: imports, block: block, deploymentTarget: Self.deploymentTarget, buildSystem: buildSystem
         ))
     }
 
@@ -620,8 +643,8 @@ final class IDESwiftUIPreviewSession {
         guard let connection else { return false }
         let directory = workDirectory(for: baseline.packageRoot)
         let plan = makePlan(
-            root: baseline.packageRoot, directory: directory, target: baseline.target, url: url, text: text,
-            imports: imports, block: block
+            root: baseline.packageRoot, directory: directory, target: baseline.target,
+            buildSystem: baseline.buildSystem, url: url, text: text, imports: imports, block: block
         )
         phase = .building("Reloading…")
         onChange?()

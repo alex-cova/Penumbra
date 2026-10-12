@@ -6,12 +6,14 @@ import SwiftIntelligence
 struct IDESwiftUIPreviewToolchain: Sendable, Equatable {
     var swift: String
     var swiftc: String
+    var xcodebuild = "/usr/bin/xcodebuild"
 
     func executable(for tool: SwiftPreviewCommand.Tool) -> String {
         switch tool {
         case .swift: return swift
         case .swiftc: return swiftc
         case .nm: return "/usr/bin/nm"
+        case .xcodebuild: return xcodebuild
         }
     }
 

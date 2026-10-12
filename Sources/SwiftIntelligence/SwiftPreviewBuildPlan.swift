@@ -3,7 +3,7 @@ import Foundation
 /// One command the preview pipeline runs. The tool is named, not resolved: the caller finds
 /// `swift` and `swiftc` in the toolchain it uses for the project.
 public struct SwiftPreviewCommand: Sendable, Equatable {
-    public enum Tool: Sendable, Equatable { case swift, swiftc, nm }
+    public enum Tool: Sendable, Equatable { case swift, swiftc, nm, xcodebuild }
 
     public var tool: Tool
     public var arguments: [String]
@@ -30,8 +30,16 @@ public struct SwiftPreviewCommand: Sendable, Equatable {
 /// The recipe is the one proved in `Tools/PreviewSpike` and described in
 /// `docs/SWIFTUI_PREVIEW_PLAN.md`.
 public struct SwiftPreviewBuildPlan: Sendable, Equatable {
+    /// What builds the file's target.
+    public enum BuildSystem: Sendable, Equatable {
+        /// `swift build --target`, in the directory of `Package.swift`.
+        case swiftPM
+        /// `xcodebuild -target`, for the `.xcodeproj` at this path.
+        case xcode(project: String)
+    }
+
     public struct Job: Sendable, Equatable {
-        /// The directory of `Package.swift`.
+        /// The directory of `Package.swift`, or of the `.xcodeproj` for an Xcode project.
         public var packageRoot: String
         /// SwiftPM's `--scratch-path` for preview builds: kept apart so the project's own `.build` is never invalidated.
         public var scratchPath: String
@@ -49,11 +57,12 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         /// `14.0`: the lowest macOS the thunks and the host are compiled for.
         public var deploymentTarget: String
         public var architecture: String
+        public var buildSystem: BuildSystem
 
         public init(
             packageRoot: String, scratchPath: String, workDirectory: String, targetName: String,
             sourcePath: String, sourceText: String, imports: [String], block: SwiftPreviewBlock,
-            deploymentTarget: String = "14.0", architecture: String = "arm64"
+            deploymentTarget: String = "14.0", architecture: String = "arm64", buildSystem: BuildSystem = .swiftPM
         ) {
             self.packageRoot = packageRoot
             self.scratchPath = scratchPath
@@ -65,6 +74,7 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             self.block = block
             self.deploymentTarget = deploymentTarget
             self.architecture = architecture
+            self.buildSystem = buildSystem
         }
     }
 
@@ -126,10 +136,36 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
     /// Builds the file's target and what it depends on, and nothing else: another target of the
     /// package that does not compile does not stop the preview.
     public var buildCommand: SwiftPreviewCommand {
-        SwiftPreviewCommand(tool: .swift, arguments: [
-            "build", "--package-path", job.packageRoot, "--scratch-path", job.scratchPath,
-            "--target", job.targetName
-        ] + Self.compilerFlags)
+        switch job.buildSystem {
+        case .swiftPM:
+            return SwiftPreviewCommand(tool: .swift, arguments: [
+                "build", "--package-path", job.packageRoot, "--scratch-path", job.scratchPath,
+                "--target", job.targetName
+            ] + Self.compilerFlags)
+        case .xcode(let project):
+            // Products and intermediates in a directory of their own, for the host's architecture
+            // only (a fat build would leave two of every object), unsigned.
+            return SwiftPreviewCommand(tool: .xcodebuild, arguments: [
+                "-project", project, "-target", job.targetName, "-configuration", "Debug",
+                "SYMROOT=" + job.scratchPath + "/Products", "OBJROOT=" + job.scratchPath + "/Intermediates",
+                "ARCHS=" + job.architecture, "ONLY_ACTIVE_ARCH=YES", "ENABLE_TESTABILITY=YES",
+                "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=",
+                "OTHER_SWIFT_FLAGS=$(inherited) -enable-testing -Xfrontend -enable-implicit-dynamic -Xfrontend -enable-private-imports",
+                "build"
+            ])
+        }
+    }
+
+    /// Where an Xcode build leaves its products, known without asking; nil for SwiftPM.
+    public var knownBinPath: String? {
+        if case .xcode = job.buildSystem { return job.scratchPath + "/Products/Debug" }
+        return nil
+    }
+
+    /// Where an Xcode build leaves its per-file objects; nil for SwiftPM.
+    public var intermediatesPath: String? {
+        if case .xcode = job.buildSystem { return job.scratchPath + "/Intermediates" }
+        return nil
     }
 
     /// Prints the directory the build leaves its objects and `.swiftmodule`s in. It differs between

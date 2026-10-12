@@ -112,7 +112,7 @@ Exit: click-through of a form with a text field and a `List`; resize of the pane
 - `@Previewable`, `PreviewModifier`, `traits`, `PreviewProvider.previews` groups.
 - Resource bundles (`Bundle.module`), asset catalogs in packages, `SwiftData`/`@Query` previews with `.modelContainer`.
 - Dependency edits: edit a file the preview depends on (axe's "untracked dependency → incremental reload, else rebuild").
-- **Xcode projects**: a project-system claim for `.xcodeproj`/`.xcworkspace` using `xcodebuild -showBuildSettings -json` and a scheme build; the same host, linked differently (inject via the loader approach rather than a generated package). Large; decide after P3 whether it is worth it.
+- **Xcode projects** ✅ (first slice): `xcodebuild -target` with its own `SYMROOT`/`OBJROOT` and `ARCHS=arm64`, the objects of every target it built linked into the same host, the same thunks. File to target comes from the project model (folder and synchronized-group membership, Sources build phases). Not covered: workspaces, schemes, dependencies that are dynamic frameworks or packages (their objects are linked but frameworks are not found or embedded), per-configuration settings beyond Debug.
 - Multiple Swift toolchains (`xcrun --toolchain`, the project's selected toolchain).
 
 ### P5 — Ship (1 wk)

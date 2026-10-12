@@ -60,6 +60,19 @@ enum IDESwiftUIPreviewArtifacts {
         return Located(objects: objects, modulePaths: modulePaths)
     }
 
+    /// An Xcode build's objects: every `Objects-normal/<arch>/*.o` under its intermediates, the
+    /// targets it built for dependencies included. The module is beside the products.
+    static func locateXcode(intermediates: String, architecture: String, fileManager: FileManager = .default) -> [String] {
+        var objects: [String] = []
+        guard let enumerator = fileManager.enumerator(atPath: intermediates) else { return objects }
+        for case let relative as String in enumerator {
+            guard relative.hasSuffix(".o"), !relative.hasSuffix("_lto.o"),
+                  relative.contains("/Objects-normal/\(architecture)/") else { continue }
+            objects.append(intermediates + "/" + relative)
+        }
+        return objects.sorted()
+    }
+
     /// The files `nm -gU` reported a defined `_main` for. `nm` prints `path:` before each file's
     /// symbols when it is given several, and no header for one.
     static func objectsDefiningMain(nmOutput: String, files: [String]) -> Set<String> {

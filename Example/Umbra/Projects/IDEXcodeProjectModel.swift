@@ -56,6 +56,28 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
         var productType: String?
     }
 
+    /// A folder (a synchronized group: everything under it) or one file, and the targets it is in.
+    struct SourceRoot: Equatable, Sendable {
+        var url: URL
+        var isFolder: Bool
+        var targets: Set<String>
+    }
+
+    /// The names of the targets `file` is compiled in, the most specific root first. Test targets
+    /// are left out: a preview is of the code they test.
+    func targets(containing file: URL) -> [String] {
+        let path = file.standardizedFileURL.path
+        var names: [String] = []
+        let tests = Set(targets.filter { $0.kind == .test }.map(\.name))
+        let matching = sourceRoots.filter { root in
+            root.isFolder ? path.hasPrefix(root.url.path + "/") : path == root.url.path
+        }.sorted { $0.url.path.count > $1.url.path.count }
+        for root in matching {
+            for name in root.targets.sorted() where !tests.contains(name) && !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
     /// `<root>/Name.xcodeproj`.
     var projectURL: URL
     var format: Format
@@ -63,6 +85,9 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
     var configurations: [String]
     /// Standardized paths of the folders and groups that hold sources.
     var sourceDirectories: [URL]
+    /// Folders and files that belong to targets, by standardized path: what tells which target a
+    /// source file is compiled in.
+    var sourceRoots: [SourceRoot] = []
     /// Swift packages the project depends on.
     var packageCount: Int
 
@@ -134,6 +159,8 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
         let base = projectURL.deletingLastPathComponent()
         var directories: [URL] = []
         collectDirectories(in: project.topLevelReferences, parent: base, into: &directories)
+        var roots: [SourceRoot] = []
+        collectSourceRoots(in: project.topLevelReferences, parent: base, into: &roots)
         let targets = project.targets.map { target -> Target in
             let type = target.commonProperties.productTypeID?.rawValue
             return Target(name: target.name, kind: TargetKind(productType: type), productType: type)
@@ -144,6 +171,7 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
             targets: targets,
             configurations: project.configurations.map(\.name.name),
             sourceDirectories: directories,
+            sourceRoots: roots,
             packageCount: project.packages.count
         )
     }
@@ -159,6 +187,25 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
             case .group(let group):
                 let next = resolve(group.path, parent: parent) ?? parent
                 collectDirectories(in: group.children, parent: next, into: &result)
+            case .fileReference, .variantGroup, .versionGroup:
+                break
+            }
+        }
+    }
+
+    /// Folders with their target membership; a group's own path adds to its parent's.
+    private static func collectSourceRoots(
+        in references: [XCSchema.Reference], parent: URL, into result: inout [SourceRoot]
+    ) {
+        for reference in references {
+            switch reference {
+            case .folder(let folder):
+                if let url = resolve(folder.path, parent: parent) {
+                    result.append(SourceRoot(url: url, isFolder: true, targets: Set(folder.targets.map(\.targetName))))
+                }
+            case .group(let group):
+                let next = resolve(group.path, parent: parent) ?? parent
+                collectSourceRoots(in: group.children, parent: next, into: &result)
             case .fileReference, .variantGroup, .versionGroup:
                 break
             }
@@ -220,13 +267,67 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
             return isa == "XCRemoteSwiftPackageReference" || isa == "XCLocalSwiftPackageReference"
         }.count
 
+        let roots = sourceRoots(objects: objects, root: root, base: base)
+
         return IDEXcodeProjectModel(
             projectURL: projectURL,
             format: .pbxproj,
             targets: targets,
             configurations: uniqueConfigurations,
             sourceDirectories: directories,
+            sourceRoots: roots,
             packageCount: packages
         )
+    }
+
+    /// Resolves every group and file reference to a path, then reads which targets compile what:
+    /// a native target's synchronized groups, and the files of its Sources build phase.
+    private static func sourceRoots(objects: [String: [String: Any]], root: [String: Any], base: URL) -> [SourceRoot] {
+        func children(of object: [String: Any]) -> [String] { object["children"] as? [String] ?? [] }
+        var paths: [String: URL] = [:]
+
+        func resolve(_ object: [String: Any], parent: URL) -> URL? {
+            let path = object["path"] as? String
+            let tree = object["sourceTree"] as? String ?? "<group>"
+            switch tree {
+            case "<absolute>": return path.map { URL(fileURLWithPath: $0).standardizedFileURL }
+            case "SOURCE_ROOT": return path.map { base.appendingPathComponent($0).standardizedFileURL } ?? base
+            case "<group>": return path.map { parent.appendingPathComponent($0).standardizedFileURL } ?? parent
+            default: return nil
+            }
+        }
+        func walk(_ id: String, parent: URL, depth: Int) {
+            guard depth < 64, let object = objects[id] else { return }
+            if let url = resolve(object, parent: parent) {
+                paths[id] = url
+                for child in children(of: object) { walk(child, parent: url, depth: depth + 1) }
+            }
+        }
+        if let projectID = root["rootObject"] as? String, let project = objects[projectID],
+           let mainGroup = project["mainGroup"] as? String {
+            walk(mainGroup, parent: base, depth: 0)
+        }
+
+        var byURL: [String: SourceRoot] = [:]
+        func add(_ url: URL, folder: Bool, target: String) {
+            let key = url.path
+            var entry = byURL[key] ?? SourceRoot(url: url, isFolder: folder, targets: [])
+            entry.targets.insert(target)
+            byURL[key] = entry
+        }
+        for object in objects.values where object["isa"] as? String == "PBXNativeTarget" {
+            guard let name = object["name"] as? String else { continue }
+            for id in object["fileSystemSynchronizedGroups"] as? [String] ?? [] {
+                if let url = paths[id] { add(url, folder: true, target: name) }
+            }
+            for phaseID in object["buildPhases"] as? [String] ?? [] {
+                guard let phase = objects[phaseID], phase["isa"] as? String == "PBXSourcesBuildPhase" else { continue }
+                for fileID in phase["files"] as? [String] ?? [] {
+                    guard let reference = objects[fileID]?["fileRef"] as? String, let url = paths[reference] else { continue }
+                    add(url, folder: false, target: name)
+                }
+            }
+        }
+        return byURL.values.sorted { $0.url.path < $1.url.path }
     }
 }
