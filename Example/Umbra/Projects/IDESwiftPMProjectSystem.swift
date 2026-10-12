@@ -113,6 +113,21 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         return trustStore.isTrusted(rootURL)
     }
 
+    /// True when the folder is trusted, asking first when it is not; a yes is remembered. A
+    /// SwiftUI preview builds and runs the package's code outside `run(_:)`, so it asks here.
+    func ensureTrusted() async -> Bool {
+        guard let root = rootURL else { return false }
+        if trustStore.isTrusted(root) { return true }
+        let token = projectGeneration
+        guard let prompt = trustPrompt, await prompt(root), projectGeneration == token else { return false }
+        trustStore.setTrusted(true, for: root)
+        if case .untrusted = syncState, let manifest {
+            syncState = .synced(modules: manifest.targets.count, dependencies: manifest.dependencyCount)
+        }
+        refineManifest(root: root)
+        return true
+    }
+
     // MARK: Lifecycle
 
     func projectDidChange(root: URL?) {

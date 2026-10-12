@@ -448,6 +448,9 @@ public final class IDEWorkspace {
     @ObservationIgnored private var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
     var isMarkdownPreviewVisible = false
+    /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
+    var isSwiftUIPreviewVisible = false
+    var swiftUIPreview: IDESwiftUIPreviewSession?
     var isJSONDiagramVisible = false
     var isCSVTableVisible = false
     var statusSelectionLength = 0
@@ -859,6 +862,8 @@ public final class IDEWorkspace {
         gitStatus.setRoot(nil)
         fileIndexer.setRoot(nil)
         runProviders.stopAll()
+        swiftUIPreview?.stop()
+        swiftUIPreview = nil
         projectSystems.stop()
         intelligenceServices.javaSupport.teardown()
         languageServerHost.stop()
@@ -3332,6 +3337,11 @@ public final class IDEWorkspace {
     }
 
     public func toggleMarkdownPreview() {
+        // The titlebar button and ⌘B are the file's preview: a Swift file's is the SwiftUI canvas.
+        if statusLanguage == "swift" {
+            toggleSwiftUIPreview()
+            return
+        }
         adapter.textView?.perform(.toggleMarkdownPreview)
     }
 
@@ -4318,6 +4328,7 @@ public final class IDEWorkspace {
             diskSync.noteSaved(path: url.standardizedFileURL.path)
         }
         languages.documentsDidSave(url.map { [$0] } ?? [])
+        noteSwiftUIPreviewDocumentSaved(url)
     }
 
     func javaInlayHintsPreferenceChanged() {
