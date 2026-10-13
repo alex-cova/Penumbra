@@ -55,6 +55,11 @@ inside the Umbra app only, not redistributed as a standalone component library. 
 is an Umbra approximation — the upstream component uses the `vgpu` runtime and was not
 ported line-for-line.
 
+The **Balatro** background is not from React Bits: it is a Metal port of the paint-swirl
+shader by localthunk ([playbalatro.com](https://www.playbalatro.com)), kept with its
+original colours and constants and credited in `IDEWelcomeShaderMetalSource.swift`. No
+license file accompanies the original shader.
+
 ## Umbra project wizard (Xcode project format)
 
 Umbra's New Project wizard and Xcode project system (`Example/Umbra/ProjectWizard/`,

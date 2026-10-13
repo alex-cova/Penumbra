@@ -13,6 +13,7 @@ enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
     case particles
     case dotField
     case aeroShards
+    case balatro
     case none
 
     var id: String { rawValue }
@@ -30,6 +31,7 @@ enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
         case .particles: "Particles"
         case .dotField: "Dot Field"
         case .aeroShards: "Aero Shards"
+        case .balatro: "Balatro"
         case .none: "None"
         }
     }
@@ -40,7 +42,7 @@ enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
         case .gradientWaves, .moltenMetal, .galaxy, .liquidChrome, .evilEye,
              .pixelSnow, .particles, .dotField, .aeroShards:
             true
-        case .starfield, .deepSpace, .none:
+        case .starfield, .deepSpace, .balatro, .none:
             false
         }
     }
@@ -155,6 +157,9 @@ private struct IDEWelcomeBackdrop: View {
                 .background(IDEAppearance.ColorToken.editor)
         case .aeroShards:
             IDEWelcomeAeroShards(parallax: parallax)
+                .background(IDEAppearance.ColorToken.editor)
+        case .balatro:
+            IDEWelcomeBalatro(parallax: parallax)
                 .background(IDEAppearance.ColorToken.editor)
         case .none:
             IDEAppearance.ColorToken.editor

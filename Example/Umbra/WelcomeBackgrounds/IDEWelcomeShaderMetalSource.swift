@@ -820,5 +820,70 @@ enum IDEWelcomeShaderMetalSource {
         col = pow(col, float3(0.92));
         return float4(col, 1.0);
     }
+
+    // -------------------------------------------------------------------------
+    // Balatro (original shader by localthunk, https://www.playbalatro.com)
+    // -------------------------------------------------------------------------
+
+    struct BalatroUniforms {
+        float2 resolution;
+        float time;
+        float _pad0;
+    };
+
+    constant float kBalatroSpinRotation = -2.0;
+    constant float kBalatroSpinSpeed = 7.0;
+    constant float kBalatroContrast = 3.5;
+    constant float kBalatroLighting = 0.4;
+    constant float kBalatroSpinAmount = 0.25;
+    constant float kBalatroPixelFilter = 745.0;
+    constant float kBalatroSpinEase = 1.0;
+    constant float3 kBalatroColour1 = float3(0.871, 0.267, 0.231);
+    constant float3 kBalatroColour2 = float3(0.0, 0.42, 0.706);
+    constant float3 kBalatroColour3 = float3(0.086, 0.137, 0.145);
+
+    fragment float4 balatroFragment(
+        VertexOut in [[stage_in]],
+        constant BalatroUniforms &u [[buffer(0)]]
+    ) {
+        // The original is Shadertoy GLSL: fragCoord has its origin at the bottom left.
+        float2 screenSize = u.resolution;
+        float2 coords = float2(in.position.x, screenSize.y - in.position.y);
+
+        float screenLength = length(screenSize);
+        float pixelSize = screenLength / kBalatroPixelFilter;
+        float2 uv = (floor(coords * (1.0 / pixelSize)) * pixelSize - 0.5 * screenSize) / screenLength;
+        float uvLen = length(uv);
+
+        float speed = kBalatroSpinRotation * kBalatroSpinEase * 0.2;
+        speed += 302.2;
+        float angle = atan2(uv.y, uv.x) + speed
+            - kBalatroSpinEase * 20.0 * (kBalatroSpinAmount * uvLen + (1.0 - kBalatroSpinAmount));
+        float2 mid = (screenSize / screenLength) / 2.0;
+        uv = float2(uvLen * cos(angle) + mid.x, uvLen * sin(angle) + mid.y) - mid;
+
+        uv *= 30.0;
+        speed = u.time * kBalatroSpinSpeed;
+        float2 uv2 = float2(uv.x + uv.y);
+
+        for (int i = 0; i < 5; ++i) {
+            uv2 += sin(max(uv.x, uv.y)) + uv;
+            uv += 0.5 * float2(cos(5.1123314 + 0.353 * uv2.y + speed * 0.131121), sin(uv2.x - 0.113 * speed));
+            uv -= 1.0 * cos(uv.x + uv.y) - 1.0 * sin(uv.x * 0.711 - uv.y);
+        }
+
+        float contrastMod = 0.25 * kBalatroContrast + 0.5 * kBalatroSpinAmount + 1.2;
+        float paintRes = min(2.0, max(0.0, length(uv) * 0.035 * contrastMod));
+        float c1p = max(0.0, 1.0 - contrastMod * abs(1.0 - paintRes));
+        float c2p = max(0.0, 1.0 - contrastMod * abs(paintRes));
+        float c3p = 1.0 - min(1.0, c1p + c2p);
+        float light = (kBalatroLighting - 0.2) * max(c1p * 5.0 - 4.0, 0.0)
+            + kBalatroLighting * max(c2p * 5.0 - 4.0, 0.0);
+        float base = 0.3 / kBalatroContrast;
+        float3 color = base * kBalatroColour1
+            + (1.0 - base) * (kBalatroColour1 * c1p + kBalatroColour2 * c2p + c3p * kBalatroColour3)
+            + light;
+        return float4(clamp(color, 0.0, 1.0), 1.0);
+    }
     """
 }

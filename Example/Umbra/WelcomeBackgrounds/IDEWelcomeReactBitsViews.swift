@@ -83,3 +83,15 @@ struct IDEWelcomeAeroShards: View {
         }
     }
 }
+
+struct IDEWelcomeBalatro: View {
+    let parallax: IDEWelcomeParallax
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    var body: some View {
+        IDEWelcomeMetalShaderView(parallax: parallax, isPaused: reduceMotion || controlActiveState == .inactive) {
+            IDEWelcomeBalatroRenderer()
+        }
+    }
+}

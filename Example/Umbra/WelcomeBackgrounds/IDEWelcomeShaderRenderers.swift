@@ -503,3 +503,28 @@ final class IDEWelcomeAeroShardsRenderer: IDEWelcomeFragmentRendererBase, IDEWel
         }
     }
 }
+
+// MARK: - Balatro
+
+@MainActor
+final class IDEWelcomeBalatroRenderer: IDEWelcomeFragmentRendererBase, IDEWelcomeMetalRenderer {
+    private struct Uniforms {
+        var resolution: SIMD2<Float>
+        var time: Float
+        var pad0: Float = 0
+    }
+
+    init?(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
+        super.init(device: device, fragmentName: "balatroFragment")
+    }
+
+    func draw(in view: MTKView) {
+        drawFullscreenTriangle(in: view) { encoder, size, time, _ in
+            var uniforms = Uniforms(
+                resolution: SIMD2(Float(size.width), Float(size.height)),
+                time: Float(time)
+            )
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+        }
+    }
+}
