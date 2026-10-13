@@ -21,7 +21,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             let r = UIGraphicsImageRenderer(bounds: w.bounds)
             let img = r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: true) }
-            do { try img.pngData()!.write(to: URL(fileURLWithPath: out)) ; print("wrote", out) } catch { print("write failed", error) }
+            do {
+                try img.pngData()!.write(to: URL(fileURLWithPath: out))
+                print("wrote", out)
+            } catch {
+                print("write failed", error)
+            }
             // dlopen a host-built sim dylib
             if let p = ProcessInfo.processInfo.environment["UMBRA_DYLIB"] {
                 let h = dlopen(p, RTLD_NOW); let r = h != nil ? "dlopen ok" : "dlopen failed " + String(cString: dlerror()); try? r.write(toFile: out + ".dlopen.txt", atomically: true, encoding: .utf8)
