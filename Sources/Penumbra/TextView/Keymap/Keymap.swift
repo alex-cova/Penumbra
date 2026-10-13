@@ -96,6 +96,10 @@ public extension Keymap {
     static let intelliJ: Keymap = {
         var map = Keymap.default_
 
+        // ⌘K is Commit in IntelliJ (Umbra shows the Changes sidebar from its menu), so it can't
+        // also be the prefix of the ⌘K ⌘D chord, which a menu key equivalent would shadow anyway.
+        map.unbindAll(.skipCurrentOccurrence)
+
         // Go to File is also double-Shift, handled out of band by DoubleModifierDetector.
         map.bind(KeyStroke(KeyChord("a", [.command, .shift])), to: .findAction)
         map.bind(KeyStroke(KeyChord("o", [.command, .shift])), to: .quickOpenFile)

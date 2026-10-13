@@ -295,6 +295,7 @@ extension IDEWorkspace {
     func perform(_ command: IDEMenuCommand) {
         switch command {
         case .toggleBreakpoint: toggleBreakpointAtCaret()
+        case .toggleSourceControl: toggleSourceControl()
         default: break
         }
     }

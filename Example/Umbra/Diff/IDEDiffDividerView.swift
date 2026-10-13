@@ -23,7 +23,20 @@ final class IDEDiffDividerView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // A ribbon whose lines are scrolled out of view is laid out above or below the strip;
+        // since macOS 14 a view no longer clips its drawing to its bounds by default.
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        clipsToBounds = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        NSBezierPath(rect: bounds).addClip()
         IDEAppearance.NSToken.editor.setFill()
         bounds.fill()
         buttons = []

@@ -200,7 +200,9 @@ enum IDEMenuShortcuts {
         .sendHTTPRequest: KeyboardShortcut(.return, modifiers: .control),
         .toggleSidebar: KeyboardShortcut("1", modifiers: .command),
         .toggleProblems: KeyboardShortcut("6", modifiers: .command),
-        .toggleSourceControl: KeyboardShortcut("9", modifiers: .command),
+        // ⌘K is Commit in IntelliJ, which opens the Changes tool window; ⌘9 (Version Control)
+        // keeps working as a secondary key. The ⌘K ⌘D chord is unbound in that keymap.
+        .toggleSourceControl: KeyboardShortcut("k", modifiers: .command),
         .toggleTerminal: KeyboardShortcut(functionKey12, modifiers: .option),
         // ⌥⌘E is Encapsulate Field in IntelliJ; Select In Project View is ⌥F1.
         .revealActiveFile: KeyboardShortcut(functionKey1, modifiers: .option),
@@ -214,8 +216,9 @@ extension IDEMenuShortcuts {
     static func secondaryShortcuts(in preset: KeymapPreset) -> [(command: IDEMenuCommand, key: String, modifiers: NSEvent.ModifierFlags)] {
         switch preset {
         case .intelliJ:
-            // IntelliJ's Toggle Line Breakpoint, next to F3.
-            return [(.toggleBreakpoint, String(Character(UnicodeScalar(NSF8FunctionKey)!)), .command)]
+            // IntelliJ's Toggle Line Breakpoint, next to F3, and Version Control next to ⌘K.
+            return [(.toggleBreakpoint, String(Character(UnicodeScalar(NSF8FunctionKey)!)), .command),
+                    (.toggleSourceControl, "9", .command)]
         case .sublime, .default_:
             return []
         }

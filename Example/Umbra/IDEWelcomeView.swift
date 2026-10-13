@@ -178,10 +178,6 @@ private struct IDEWelcomeBrandHeader: View {
                 IDEWelcomeMark()
             }
             .labelStyle(.titleAndIcon)
-
-            Text("A lightweight code editor for macOS")
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
     }
 }

@@ -100,7 +100,15 @@ final class IDEMenuShortcutsTests: XCTestCase {
         XCTAssertEqual(shortcut(.toggleSidebar, preset), KeyboardShortcut("1"))
         XCTAssertEqual(shortcut(.toggleProblems, preset), KeyboardShortcut("6"))
         XCTAssertEqual(shortcut(.toggleStructure, preset), KeyboardShortcut("7"))
-        XCTAssertEqual(shortcut(.toggleSourceControl, preset), KeyboardShortcut("9"))
+        XCTAssertEqual(shortcut(.toggleSourceControl, preset), KeyboardShortcut("k"), "⌘K is Commit in IntelliJ")
+        XCTAssertTrue(
+            IDEMenuShortcuts.secondaryShortcuts(in: preset).contains { $0.command == .toggleSourceControl && $0.key == "9" && $0.modifiers == .command },
+            "⌘9 (Version Control) still shows Changes"
+        )
+        XCTAssertNil(
+            Keymap.intelliJ.action(for: KeyStroke(KeyChord("k", .command), KeyChord("d", .command))),
+            "⌘K is the Changes shortcut, so the ⌘K ⌘D chord is unbound"
+        )
         XCTAssertEqual(shortcut(.recentChanges, preset), KeyboardShortcut("c", modifiers: [.option, .shift]))
     }
 
