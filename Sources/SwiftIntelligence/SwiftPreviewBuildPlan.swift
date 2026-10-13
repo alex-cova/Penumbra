@@ -161,12 +161,19 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
 
     /// The bundle identifier of the simulator host: one per work directory, so two projects'
     /// hosts live side by side and a rerun replaces only its own.
-    public var hostBundleIdentifier: String {
+    public var hostBundleIdentifier: String { Self.hostBundleIdentifier(workDirectory: job.workDirectory) }
+
+    /// The identifier a work directory's simulator host has. The directory is per session, so the
+    /// identifiers of the directories that still exist are the hosts that may stay installed.
+    public static func hostBundleIdentifier(workDirectory: String) -> String {
         var hash: UInt64 = 0xcbf29ce484222325
-        for byte in job.workDirectory.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        for byte in workDirectory.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
         let hex = String(hash, radix: 16)
-        return "com.umbra.preview." + String(repeating: "0", count: 16 - hex.count) + hex
+        return hostBundleIdentifierPrefix + String(repeating: "0", count: 16 - hex.count) + hex
     }
+
+    /// Every simulator host's identifier starts with this.
+    public static let hostBundleIdentifierPrefix = "com.umbra.preview."
 
     /// The executable the host is linked to. Beside the objects for macOS, so `Bundle.module` finds
     /// the resource bundles; inside the app bundle for the simulator.

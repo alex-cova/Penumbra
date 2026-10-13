@@ -78,6 +78,8 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     public func applicationWillTerminate(_ notification: Notification) {
         IDEWindowRegistry.shared.saveSessionsForTermination()
         IDEWindowRegistry.shared.tearDownAll()
+        // A booted device is a few hundred MB: it does not outlive the app that started it.
+        IDESimulatorService.shared.shutdownBootedByUsBlocking()
     }
 
     private static func restorableWindows() -> [NSWindow] {

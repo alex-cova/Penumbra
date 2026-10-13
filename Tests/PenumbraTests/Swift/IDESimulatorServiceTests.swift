@@ -275,6 +275,226 @@ final class IDESimulatorServiceTests: XCTestCase {
         try await IDESimulatorService(runner: runner).boot(target)
     }
 
+    // MARK: Lifecycle (docs/SWIFTUI_PREVIEW_IOS_PLAN.md S5a)
+
+    private func shutdowns(_ runner: ScriptedRunner) -> Int {
+        runner.commands.filter { $0.starts(with: ["simctl", "shutdown"]) }.count
+    }
+
+    func testTwoSessionsOfOneProjectShareNoFileSocketOrIdentifier() {
+        let project = URL(fileURLWithPath: "/cache/abcdef0123456789", isDirectory: true)
+        let one = IDESwiftUIPreviewSession.workDirectory(in: project, platform: .iOSSimulator, identity: "1111aaaa")
+        let two = IDESwiftUIPreviewSession.workDirectory(in: project, platform: .iOSSimulator, identity: "2222bbbb")
+        XCTAssertNotEqual(one, two)
+        XCTAssertEqual(one.deletingLastPathComponent(), project, "beside the project's shared scratch path")
+        XCTAssertNotEqual(
+            IDESwiftUIPreviewSession.workDirectory(in: project, platform: .macOS, identity: "1111aaaa"),
+            IDESwiftUIPreviewSession.workDirectory(in: project, platform: .iOSSimulator, identity: "1111aaaa")
+        )
+        // Generations start at 0 in every session: the socket must differ for the same generation.
+        XCTAssertNotEqual(
+            IDESwiftUIPreviewSession.socketPath(for: project, identity: "1111aaaa", generation: 1),
+            IDESwiftUIPreviewSession.socketPath(for: project, identity: "2222bbbb", generation: 1)
+        )
+        XCTAssertEqual(
+            IDESwiftUIPreviewSession.socketPath(for: project, identity: "1111aaaa", generation: 1),
+            IDESwiftUIPreviewSession.socketPath(for: project, identity: "1111aaaa", generation: 1)
+        )
+        // `simctl launch --terminate-running-process` ends the app with that identifier: they differ.
+        let first = SwiftPreviewBuildPlan.hostBundleIdentifier(workDirectory: one.path)
+        let second = SwiftPreviewBuildPlan.hostBundleIdentifier(workDirectory: two.path)
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(first.hasPrefix(SwiftPreviewBuildPlan.hostBundleIdentifierPrefix))
+        // A short path: a socket's sun_path holds about a hundred bytes.
+        XCTAssertLessThan(IDESwiftUIPreviewSession.socketPath(for: project, identity: "1111aaaa", generation: 99).utf8.count, 100)
+    }
+
+    func testOnlyUntouchedWorkDirectoriesOfNobodyAreRemoved() throws {
+        let fm = FileManager.default
+        let now = Date()
+        func make(_ name: String, age: TimeInterval) throws {
+            let url = directory.appendingPathComponent(name)
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            try fm.setAttributes([.modificationDate: now.addingTimeInterval(-age)], ofItemAtPath: url.path)
+        }
+        let day: TimeInterval = 24 * 60 * 60
+        try make("work-oldold01", age: 5 * day)
+        try make("work-ios-oldold01", age: 5 * day)
+        try make("work", age: 5 * day) // the layout before sessions had identities
+        try make("work-ios", age: 5 * day)
+        try make("work-fresh001", age: 60)
+        try make("work-ios-mine0001", age: 5 * day) // a session's own, however old it looks
+        try make("scratch", age: 30 * day) // the shared build is never this function's
+        try make("notes", age: 30 * day)
+
+        let removed = IDESwiftUIPreviewSession.pruneWorkDirectories(
+            in: directory, keeping: [directory.appendingPathComponent("work-ios-mine0001").path],
+            olderThan: 2 * day, now: now
+        )
+        XCTAssertEqual(Set(removed), ["work-oldold01", "work-ios-oldold01", "work", "work-ios"])
+        for kept in ["work-fresh001", "work-ios-mine0001", "scratch", "notes"] {
+            XCTAssertTrue(fm.fileExists(atPath: directory.appendingPathComponent(kept).path), kept)
+        }
+    }
+
+    func testBuildsOfOneScratchPathTakeTurnsAndOthersRunTogether() async {
+        let gate = IDESwiftUIPreviewBuildGate()
+        await gate.acquire("scratch-a")
+        let order = OrderLog()
+        let waiter = Task {
+            await gate.acquire("scratch-a")
+            await order.add("second")
+            gate.release("scratch-a")
+        }
+        // Another project's build is not held up.
+        await gate.acquire("scratch-b")
+        gate.release("scratch-b")
+        try? await Task.sleep(for: .milliseconds(80))
+        let beforeRelease = await order.values
+        XCTAssertEqual(beforeRelease, [], "the second build waits for the first")
+        await order.add("first")
+        gate.release("scratch-a")
+        await waiter.value
+        let all = await order.values
+        XCTAssertEqual(all, ["first", "second"])
+        XCTAssertFalse(gate.isHeld("scratch-a"))
+    }
+
+    private actor OrderLog {
+        var values: [String] = []
+        func add(_ value: String) { values.append(value) }
+    }
+
+    func testADeviceInUseIsKeptAndAnIdleOneItBootedIsShutDown() async throws {
+        let runner = ScriptedRunner { _, _ in (0, "") }
+        let service = IDESimulatorService(runner: runner, idleInterval: .milliseconds(120))
+        let target = try await FakeSimulator().target
+        try await service.boot(target)
+        await service.lease(target)
+        await service.lease(target) // a second window on the same device
+        await service.release(target)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(shutdowns(runner), 0, "another session still uses it")
+        let leases = await service.leaseCount(target)
+        XCTAssertEqual(leases, 1)
+
+        await service.release(target)
+        let pending = await service.hasPendingIdleShutdown(target)
+        XCTAssertTrue(pending)
+        let ended = await waitUntil { self.shutdowns(runner) == 1 }
+        XCTAssertTrue(ended, "no preview open for the idle time: the device Umbra booted goes down")
+        XCTAssertTrue(runner.commands.contains(["simctl", "shutdown", "UDID-1"]))
+    }
+
+    func testAPreviewThatComesBackInTimeFindsTheDeviceRunning() async throws {
+        let runner = ScriptedRunner { _, _ in (0, "") }
+        let service = IDESimulatorService(runner: runner, idleInterval: .milliseconds(200))
+        let target = try await FakeSimulator().target
+        try await service.boot(target)
+        await service.lease(target)
+        await service.release(target)
+        try await Task.sleep(for: .milliseconds(60))
+        await service.lease(target) // the panel was reopened
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(shutdowns(runner), 0)
+        let pending = await service.hasPendingIdleShutdown(target)
+        XCTAssertFalse(pending)
+    }
+
+    func testADeviceItDidNotBootIsNotShutDownWhenIdle() async throws {
+        let runner = ScriptedRunner { _, arguments in
+            arguments.starts(with: ["simctl", "boot"])
+                ? (149, "Unable to boot device in current state: Booted\n") : (0, "")
+        }
+        let service = IDESimulatorService(runner: runner, idleInterval: .milliseconds(60))
+        let target = try await FakeSimulator().target
+        try await service.boot(target)
+        await service.lease(target)
+        await service.release(target)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(shutdowns(runner), 0)
+    }
+
+    private nonisolated static let listAppsOutput = """
+        2026-10-13 10:00:00.000 simctl[1] warning: something
+        {
+            "com.apple.mobilesafari" = { CFBundleIdentifier = "com.apple.mobilesafari"; };
+            "com.umbra.preview.00000000000000aa" = { CFBundleIdentifier = "com.umbra.preview.00000000000000aa"; };
+            "com.umbra.preview.00000000000000bb" = { CFBundleIdentifier = "com.umbra.preview.00000000000000bb"; };
+            "com.umbra.preview.spike" = { CFBundleIdentifier = "com.umbra.preview.spike"; };
+            "com.example.MyApp" = { CFBundleIdentifier = "com.example.MyApp"; };
+        }
+        """
+
+    func testOnlyPreviewHostsNoWorkDirectoryAccountsForAreStale() {
+        let stale = IDESimulatorService.staleHostIdentifiers(
+            listAppsOutput: Self.listAppsOutput, keeping: ["com.umbra.preview.00000000000000aa"]
+        )
+        XCTAssertEqual(stale, ["com.umbra.preview.00000000000000bb", "com.umbra.preview.spike"])
+        XCTAssertEqual(IDESimulatorService.staleHostIdentifiers(listAppsOutput: "not a plist", keeping: []), [])
+    }
+
+    func testStaleHostsAreUninstalledAndOthersLeftAlone() async throws {
+        let runner = ScriptedRunner { _, arguments in
+            arguments.starts(with: ["simctl", "listapps"]) ? (0, Self.listAppsOutput) : (0, "")
+        }
+        let service = IDESimulatorService(runner: runner)
+        let target = try await FakeSimulator().target
+        await service.removeStaleHosts(on: target, keeping: ["com.umbra.preview.00000000000000aa"])
+        let uninstalls = runner.commands.filter { $0.starts(with: ["simctl", "uninstall"]) }
+        XCTAssertEqual(uninstalls, [
+            ["simctl", "uninstall", "UDID-1", "com.umbra.preview.00000000000000bb"],
+            ["simctl", "uninstall", "UDID-1", "com.umbra.preview.spike"]
+        ])
+    }
+
+    func testAHostThatClosesItsEndOfTheSocketIsReportedAndOneWeCloseIsNot() async throws {
+        let path = NSTemporaryDirectory() + "umbra-t-\(UUID().uuidString.prefix(6)).sock"
+        defer { unlink(path) }
+        func listener() -> Int32 {
+            let server = socket(AF_UNIX, SOCK_STREAM, 0)
+            var address = sockaddr_un()
+            address.sun_family = sa_family_t(AF_UNIX)
+            withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8.prefix($0.count - 1))) }
+            _ = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            }
+            listen(server, 1)
+            return server
+        }
+
+        // The host goes away.
+        var server = listener()
+        let reported = ClosedFlag()
+        let connection = try await IDESwiftUIPreviewHostConnection.connect(path: path, attempts: 20)
+        connection.onHostClosed = { reported.set() }
+        let accepted = accept(server, nil, nil)
+        close(accepted)
+        let seen = await waitUntil { reported.isSet }
+        XCTAssertTrue(seen, "an exited host is noticed without a request")
+        close(server)
+        unlink(path)
+
+        // We close it.
+        server = listener()
+        let quiet = ClosedFlag()
+        let ours = try await IDESwiftUIPreviewHostConnection.connect(path: path, attempts: 20)
+        ours.onHostClosed = { quiet.set() }
+        let peer = accept(server, nil, nil)
+        ours.close()
+        close(peer)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(quiet.isSet, "ending the host ourselves is not a crash")
+        close(server)
+    }
+
+    private final class ClosedFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool { lock.withLock { value } }
+        func set() { lock.withLock { value = true } }
+    }
+
     // MARK: Input replies
 
     private func event(_ fields: [String: Any]) -> IDESwiftUIPreviewHostEvent {
@@ -767,6 +987,99 @@ final class IDESimulatorServiceTests: XCTestCase {
         XCTAssertGreaterThan(still.centroidX, 0.5, "still right to left")
         print("S2 timings: first build \(String(format: "%.1f", build)) s, move to \(other.name) \(String(format: "%.1f", move)) s")
         session.stop()
+    }
+
+    /// A host app that is closed (a crash, Simulator's own close) is noticed at once, and Refresh
+    /// starts it again from what was built, with no build.
+    func testAHostThatDiesIsStartedAgainWithoutABuild() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let runtimes = await IDESimulatorService().runtimesForTests()
+        try XCTSkipIf(runtimes.isEmpty, "no iOS Simulator runtime is installed")
+        let fixture = try makeIOSFixture { word in
+            "import SwiftUI\nstruct ContentView: View { var body: some View { Text(\"\(word)\") } }\n#Preview { ContentView() }\n"
+        }
+        let text = fixture.source("Alive")
+        try text.write(to: fixture.file, atomically: true, encoding: .utf8)
+        let session = try makeSimulatorSession(root: fixture.root, project: fixture.project, file: fixture.file, current: { text })
+        session.setViewport(CGSize(width: 320, height: 200))
+        session.refresh()
+        let built = await waitUntil(seconds: 420) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(built, "phase \(session.phase)")
+
+        // Close every preview host app of the Umbra devices, as Simulator's own close would.
+        let runner = IDESwiftUIPreviewSubprocessRunner()
+        let devices = await runner.run(executable: "/usr/bin/xcrun", arguments: ["simctl", "list", "-j", "devices"], workingDirectory: nil, onOutput: { _ in })
+        let udids = IDESimulatorCatalog.devices(fromJSON: devices.output)?
+            .filter { $0.name.hasPrefix("Umbra Preview") && $0.isBooted }.map(\.udid) ?? []
+        XCTAssertFalse(udids.isEmpty, "a booted Umbra device")
+        let apps = await runner.run(executable: "/usr/bin/xcrun", arguments: ["simctl", "listapps", udids[0]], workingDirectory: nil, onOutput: { _ in })
+        let hosts = IDESimulatorService.staleHostIdentifiers(listAppsOutput: apps.output, keeping: [])
+        for identifier in hosts {
+            _ = await runner.run(executable: "/usr/bin/xcrun", arguments: ["simctl", "terminate", udids[0], identifier], workingDirectory: nil, onOutput: { _ in })
+        }
+        let noticed = await waitUntil(seconds: 10) { if case .failed = session.phase { return true } else { return false } }
+        XCTAssertTrue(noticed, "the stopped host is noticed without a request; phase \(session.phase)")
+
+        let started = Date()
+        session.lastReloadReset()
+        session.refresh()
+        let back = await waitUntil(seconds: 120) { session.phase == .ready && session.frame != nil }
+        let took = Date().timeIntervalSince(started)
+        XCTAssertTrue(back, "phase \(session.phase)\n\(session.log.suffix(15).joined(separator: "\n"))")
+        XCTAssertLessThan(took, 60, "a start, not a build")
+        XCTAssertFalse(session.log.suffix(15).joined().contains("Building the package"), "no build was needed")
+        print("S5a: host started again in \(String(format: "%.1f", took)) s")
+        session.stop()
+    }
+
+    /// The bug that motivated per-session identities: two windows, one project root. Each has its
+    /// own files, socket and app, so neither ends the other's.
+    func testTwoSessionsOfOneProjectKeepTheirOwnHosts() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let runtimes = await IDESimulatorService().runtimesForTests()
+        try XCTSkipIf(runtimes.isEmpty, "no iOS Simulator runtime is installed")
+        let fixture = try makeIOSFixture { word in
+            "import SwiftUI\nstruct ContentView: View { var body: some View { Text(\"\(word)\") } }\n#Preview { ContentView() }\n"
+        }
+        var text = fixture.source("First")
+        try text.write(to: fixture.file, atomically: true, encoding: .utf8)
+        func makeSession(identity: String) throws -> IDESwiftUIPreviewSession {
+            let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+            let (root, project, file) = (fixture.root, fixture.project, fixture.file)
+            let context = IDESwiftUIPreviewContext(
+                activeFile: { (file, text) },
+                package: { _ in IDESwiftUIPreviewPackage(root: root, target: "Shown", buildSystem: .xcode(project: project.path)) },
+                ensureTrusted: { _ in true },
+                toolchain: { .beside(swift: swift) },
+                publishDiagnostics: { _ in },
+                bufferText: { _ in nil }
+            )
+            return IDESwiftUIPreviewSession(context: context, cacheRoot: directory.appendingPathComponent("cache"), identity: identity)
+        }
+        let one = try makeSession(identity: "aaaa0001")
+        let two = try makeSession(identity: "bbbb0002")
+        one.setViewport(CGSize(width: 320, height: 200))
+        two.setViewport(CGSize(width: 320, height: 200))
+        one.refresh()
+        let firstUp = await waitUntil(seconds: 420) { one.phase == .ready && one.frame != nil }
+        XCTAssertTrue(firstUp, "first: \(one.phase)")
+        two.refresh()
+        let secondUp = await waitUntil(seconds: 420) { two.phase == .ready && two.frame != nil }
+        XCTAssertTrue(secondUp, "second: \(two.phase)\n\(two.log.suffix(15).joined(separator: "\n"))")
+        XCTAssertEqual(one.phase, .ready, "the second session did not end the first one's app")
+
+        // The first still answers: an edit reloads into its own app.
+        text = fixture.source("Changed by the first window")
+        try text.write(to: fixture.file, atomically: true, encoding: .utf8)
+        let before = one.frame?.tiffRepresentation
+        one.refresh()
+        let reloaded = await waitUntil(seconds: 120) { one.phase == .ready && one.frame?.tiffRepresentation != before }
+        XCTAssertTrue(reloaded, "first after the second started: \(one.phase)")
+        XCTAssertEqual(two.phase, .ready)
+        one.stop()
+        two.stop()
     }
 
     /// Input on a real simulator (`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3, exit): a button, a switch, a

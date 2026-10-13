@@ -297,7 +297,11 @@ struct IDESwiftUIPreviewPanel: View {
         case .unavailable(let text):
             message(text, systemImage: "doc")
         case .failed(let text):
-            message(text, systemImage: "exclamationmark.triangle", tint: .orange)
+            VStack(spacing: 4) {
+                message(text, systemImage: "exclamationmark.triangle", tint: .orange)
+                // A host that stopped starts again from what was built, with no build.
+                Button("Refresh") { session.refresh() }.controlSize(.small)
+            }
         case .ready:
             EmptyView()
         }

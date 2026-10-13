@@ -260,12 +260,18 @@ final class IDESwiftUIPreviewSession {
     /// Called when a refresh produced or lost a frame; the window uses it to keep its toolbar current.
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
+    /// Names this session's files, socket and simulator app. Two windows can preview files of one
+    /// project, and what they write (thunks, frames, the host, its bundle identifier) must not meet.
+    @ObservationIgnored let identity: String
+
     init(
         context: IDESwiftUIPreviewContext,
         runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(),
         simulator: (any IDESimulatorControlling)? = nil,
-        cacheRoot: URL? = nil
+        cacheRoot: URL? = nil,
+        identity: String? = nil
     ) {
+        self.identity = identity ?? String(UUID().uuidString.prefix(8)).lowercased()
         self.context = context
         self.runner = runner
         self.simulator = simulator ?? IDESimulatorService.shared
@@ -517,6 +523,8 @@ final class IDESwiftUIPreviewSession {
         renderTask?.cancel()
         renderTask = nil
         endHost()
+        endedBaseline = nil
+        releaseSimulator()
         frame = nil
         phase = .idle
         context.publishDiagnostics([:])
@@ -571,6 +579,18 @@ final class IDESwiftUIPreviewSession {
         selectedIndex = min(max(wantedIndex, 0), blocks.count - 1)
         let block = blocks[selectedIndex]
 
+        // 1a. The host stopped (it crashed, or it was closed in Simulator) and nothing else changed:
+        // it starts again from what was built, with no build.
+        if allowHotReload, baseline == nil, connection == nil, let saved = endedBaseline, saved.url == url {
+            if let obstacle = await changedFilesObstacle(baseline: saved, url: url, token: token) {
+                guard isCurrent(token) else { return }
+                append("Building the package: \(obstacle).\n")
+            } else if await relaunch(token: token, saved: saved, url: url, text: text, imports: read.1, block: block) {
+                return
+            }
+            guard isCurrent(token) else { return }
+        }
+
         // 1b. The host is up and nothing else changed: the file's text goes in as a thunk.
         if allowHotReload {
             let obstacle = await hotReloadObstacle(token: token, url: url)
@@ -623,6 +643,8 @@ final class IDESwiftUIPreviewSession {
                     ))
                     guard isCurrent(token) else { return }
                     simulatorTarget = prepared
+                    await leaseSimulator(prepared)
+                    guard isCurrent(token) else { return }
                     simulatorDeviceTypes = prepared.runtime.deviceTypes.filter {
                         $0.productFamily == "iPhone" || $0.productFamily == "iPad"
                     }
@@ -630,13 +652,21 @@ final class IDESwiftUIPreviewSession {
                     simulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
                     // The device boots while the project builds: the first boot is the slow part.
                     let service = simulator
-                    simulatorBoot = Task { try await service.boot(prepared) }
+                    let live = liveHostBundleIdentifiers()
+                    simulatorBoot = Task {
+                        try await service.boot(prepared)
+                        // Apps of sessions and runs that are gone would pile up on the device.
+                        await service.removeStaleHosts(on: prepared, keeping: live)
+                    }
                     append("Previewing on \(prepared.device.name) (\(prepared.runtime.name)).\n")
                 } catch {
                     return fail(token, error.localizedDescription)
                 }
             }
         }
+
+        // A macOS target on a session that was on the simulator gives the device back.
+        if platform == .macOS { releaseSimulator() }
 
         // 3. The recipe.
         let directory = workDirectory(for: package.root)
@@ -656,8 +686,18 @@ final class IDESwiftUIPreviewSession {
             return fail(token, "Could not create \(plan.job.workDirectory): \(error.localizedDescription)")
         }
         currentFixedSize = plan.fixedSize.map { CGSize(width: $0.width, height: $0.height) }
+        Self.touch(plan.job.workDirectory)
+        pruneStaleWorkDirectories(in: directory)
 
-        // 4. Build the package's target.
+        // 4. Build the package's target. Two sessions of one project share its scratch path, and two
+        // builds into one would fight over its lock files and databases: they take turns.
+        phase = .building("Waiting for another preview of this project…")
+        onChange?()
+        let gateKey = plan.job.scratchPath
+        await Self.buildGate.acquire(gateKey)
+        var holdsBuildGate = true
+        defer { if holdsBuildGate { Self.buildGate.release(gateKey) } }
+        guard isCurrent(token) else { return }
         phase = .building("Building \(package.target)…")
         let root = URL(fileURLWithPath: package.root.path)
         let build = await execute(plan.buildCommand, toolchain: toolchain, directory: root)
@@ -740,6 +780,9 @@ final class IDESwiftUIPreviewSession {
         let link = await execute(plan.hostCommand(binPath: binPath, objects: objects, modulePaths: modulePaths), toolchain: toolchain, directory: root)
         guard isCurrent(token) else { return }
         guard link.succeeded else { return fail(token, Self.summary(of: link.output, fallback: "Linking the preview failed.")) }
+        // The objects are read; the next session may build.
+        Self.buildGate.release(gateKey)
+        holdsBuildGate = false
         if let bundle = plan.hostBundlePath, let simulatorTarget {
             phase = .building("Installing the preview on the simulator…")
             if let donor = IDESwiftUIPreviewHostBundle.donor(in: binPath, target: package.target) {
@@ -803,7 +846,7 @@ final class IDESwiftUIPreviewSession {
         thunkPath: String, directory: URL
     ) async -> Bool {
         endHost()
-        let socket = Self.socketPath(for: directory, generation: token)
+        let socket = Self.socketPath(for: directory, identity: identity, generation: token)
         socketPath = socket
         do {
             let onOutput: @Sendable (String) -> Void = { [weak self] text in
@@ -833,6 +876,12 @@ final class IDESwiftUIPreviewSession {
                 return false
             }
             self.connection = connection
+            connection.onHostClosed = { [weak self, weak connection] in
+                Task { @MainActor [weak self] in
+                    // A host that exits or is closed in Simulator is noticed now, not at the next request.
+                    if let self, let connection, self.connection === connection { self.hostEnded() }
+                }
+            }
             let ready = try await connection.nextEvent()
             guard ready.name == "ready" else {
                 fail(token, "The preview host did not start.")
@@ -852,6 +901,164 @@ final class IDESwiftUIPreviewSession {
             fail(token, "The preview host stopped unexpectedly (\(error)).")
             return false
         }
+        return true
+    }
+
+    // MARK: Files of one session
+
+    /// The folder a session builds its host and thunks in: one per session and platform, beside the
+    /// project's shared scratch path.
+    static func workDirectory(in directory: URL, platform: SwiftPreviewBuildPlan.Platform, identity: String) -> URL {
+        let platformName = platform == .macOS ? "work" : "work-ios"
+        return directory.appendingPathComponent("\(platformName)-\(identity)", isDirectory: true)
+    }
+
+    /// How long a work directory may sit untouched before another session removes it. A running
+    /// session touches its own at every build.
+    nonisolated static let staleWorkDirectoryAge: TimeInterval = 2 * 24 * 60 * 60
+
+    nonisolated static func touch(_ path: String) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+    }
+
+    /// Removes the `work*` directories of `directory` that no session has touched for
+    /// `staleWorkDirectoryAge`, the ones of earlier launches and of the older unnumbered layout
+    /// included. Returns what it removed.
+    @discardableResult
+    nonisolated static func pruneWorkDirectories(
+        in directory: URL, keeping: Set<String>, olderThan age: TimeInterval, now: Date = Date()
+    ) -> [String] {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return [] }
+        var removed: [String] = []
+        for name in entries where name == "work" || name == "work-ios" || name.hasPrefix("work-") {
+            let url = directory.appendingPathComponent(name)
+            guard !keeping.contains(url.path),
+                  let modified = (try? fileManager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+                  now.timeIntervalSince(modified) > age else { continue }
+            if (try? fileManager.removeItem(at: url)) != nil { removed.append(name) }
+        }
+        return removed
+    }
+
+    private func pruneStaleWorkDirectories(in directory: URL) {
+        let keeping: Set<String> = [macWorkDirectory(in: directory), iosWorkDirectory(in: directory)]
+        Task.detached(priority: .utility) {
+            Self.pruneWorkDirectories(in: directory, keeping: keeping, olderThan: Self.staleWorkDirectoryAge)
+        }
+    }
+
+    private func macWorkDirectory(in directory: URL) -> String {
+        Self.workDirectory(in: directory, platform: .macOS, identity: identity).path
+    }
+
+    private func iosWorkDirectory(in directory: URL) -> String {
+        Self.workDirectory(in: directory, platform: .iOSSimulator, identity: identity).path
+    }
+
+    /// The bundle identifiers of every work directory that still exists under the cache: the simulator
+    /// hosts that may stay installed.
+    private func liveHostBundleIdentifiers() -> Set<String> {
+        let fileManager = FileManager.default
+        var identifiers = Set<String>()
+        for project in (try? fileManager.contentsOfDirectory(atPath: cacheRoot.path)) ?? [] {
+            let projectURL = cacheRoot.appendingPathComponent(project, isDirectory: true)
+            for entry in (try? fileManager.contentsOfDirectory(atPath: projectURL.path)) ?? [] where entry.hasPrefix("work-ios") {
+                identifiers.insert(SwiftPreviewBuildPlan.hostBundleIdentifier(workDirectory: projectURL.appendingPathComponent(entry).path))
+            }
+        }
+        return identifiers
+    }
+
+    /// Builds of one scratch path take turns (see `run`).
+    static let buildGate = IDESwiftUIPreviewBuildGate()
+
+    // MARK: Device lease
+
+    /// The device this session holds a lease on: it is not shut down while a session holds one.
+    @ObservationIgnored private var leasedTarget: IDESimulatorTarget?
+    /// The host that stopped, with what it was started from; cleared by an explicit stop.
+    @ObservationIgnored private var endedBaseline: Baseline?
+
+    private func leaseSimulator(_ target: IDESimulatorTarget) async {
+        if leasedTarget?.device.udid == target.device.udid { return }
+        let previous = leasedTarget
+        leasedTarget = target
+        await simulator.lease(target)
+        if let previous { await simulator.release(previous) }
+    }
+
+    private func releaseSimulator() {
+        guard let target = leasedTarget else { return }
+        leasedTarget = nil
+        let simulator = simulator
+        Task { await simulator.release(target) }
+    }
+
+    // MARK: Starting the host again
+
+    /// The host ended and nothing it was linked with changed: compile the file's text and start the
+    /// same host again (on the simulator: the app that is still installed). False when that is not
+    /// possible and the package should be built.
+    private func relaunch(
+        token: Int, saved: Baseline, url: URL, text: String, imports: [String], block: SwiftPreviewBlock
+    ) async -> Bool {
+        let directory = workDirectory(for: saved.packageRoot)
+        let plan = makePlan(
+            root: saved.packageRoot, directory: directory, target: saved.target, buildSystem: saved.buildSystem,
+            url: url, text: text, imports: imports, block: block,
+            platform: saved.platform, deploymentTarget: saved.deploymentTarget, sdkPath: saved.sdkPath
+        )
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: plan.hostExecutablePath(binPath: saved.binPath)) else {
+            append("The preview host's files are gone; building the package instead.\n")
+            return false
+        }
+        phase = .building("Starting the preview again…")
+        onChange?()
+        for sub in ["host", "thunks", "frames"] {
+            try? fileManager.createDirectory(
+                at: URL(fileURLWithPath: plan.job.workDirectory).appendingPathComponent(sub), withIntermediateDirectories: true
+            )
+        }
+        Self.touch(plan.job.workDirectory)
+        let compile = await compileThunk(
+            plan: plan, token: token, binPath: saved.binPath, modulePaths: saved.modulePaths,
+            toolchain: saved.toolchain, directory: saved.packageRoot, modes: [.copy]
+        )
+        guard isCurrent(token) else { return true }
+        guard compile.succeeded else {
+            publish(compile.output, root: saved.packageRoot)
+            append("The file could not be compiled for the stopped host; building the package instead.\n")
+            return false
+        }
+        if let target = saved.simulatorTarget {
+            do {
+                try await simulator.boot(target)
+                await leaseSimulator(target)
+            } catch {
+                guard isCurrent(token) else { return true }
+                append("The simulator could not be started again; building the package instead.\n")
+                return false
+            }
+            guard isCurrent(token) else { return true }
+        }
+        let thunkPath = plan.thunkLibraryPath(generation: token)
+        guard await startHost(
+            plan: plan, token: token, binPath: saved.binPath, simulatorTarget: saved.simulatorTarget,
+            thunkPath: thunkPath, directory: directory
+        ) else { return true } // The failure is shown, or a newer run took over.
+        publish("", root: saved.packageRoot)
+        currentFixedSize = plan.fixedSize.map { CGSize(width: $0.width, height: $0.height) }
+        var restored = saved
+        restored.thunkPath = thunkPath
+        baseline = restored
+        endedBaseline = nil
+        framePrefix = plan.framePath(generation: token)
+        lastReload = .build
+        phase = .ready
+        await renderSerially()
+        onChange?()
         return true
     }
 
@@ -896,6 +1103,8 @@ final class IDESwiftUIPreviewSession {
             return fail(token, error.localizedDescription)
         }
         guard isCurrent(token) else { return }
+        await leaseSimulator(target)
+        guard isCurrent(token) else { return }
         append("Previewing on \(target.device.name) (\(target.runtime.name)).\n")
         guard await startHost(
             plan: plan, token: token, binPath: saved.binPath, simulatorTarget: target,
@@ -933,7 +1142,7 @@ final class IDESwiftUIPreviewSession {
         let plan = SwiftPreviewBuildPlan(job: .init(
             packageRoot: root.path,
             scratchPath: directory.appendingPathComponent("scratch" + suffix).path,
-            workDirectory: directory.appendingPathComponent("work" + suffix).path,
+            workDirectory: Self.workDirectory(in: directory, platform: platform, identity: identity).path,
             targetName: target, sourcePath: url.path, sourceText: text,
             imports: imports, block: block,
             deploymentTarget: deploymentTarget ?? simulator?.runtime.version ?? Self.deploymentTarget,
@@ -976,6 +1185,12 @@ final class IDESwiftUIPreviewSession {
     private func hotReloadObstacle(token: Int, url: URL) async -> String? {
         guard let baseline else { return "nothing has been built yet" }
         guard connection != nil, host != nil else { return "the preview host is not running" }
+        return await changedFilesObstacle(baseline: baseline, url: url, token: token)
+    }
+
+    /// Why a host built from `baseline` is out of date for `url`; nil when nothing it was linked
+    /// with has changed.
+    private func changedFilesObstacle(baseline: Baseline, url: URL, token: Int) async -> String? {
         guard baseline.url == url else { return "another file is being previewed" }
         let root = baseline.packageRoot
         let stamps = await Task.detached(priority: .userInitiated) { Self.stamps(under: root, excluding: url) }.value
@@ -1004,6 +1219,13 @@ final class IDESwiftUIPreviewSession {
         )
         phase = .building("Reloading…")
         onChange?()
+        // A session that sat idle may have had its folder pruned by another one: it is made again.
+        for sub in ["host", "thunks", "frames"] {
+            try? FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: plan.job.workDirectory).appendingPathComponent(sub), withIntermediateDirectories: true
+            )
+        }
+        Self.touch(plan.job.workDirectory)
         // Only the copy shows the edit; the imported thunk would show what was built.
         let compile = await compileThunk(
             plan: plan, token: token, binPath: baseline.binPath, modulePaths: baseline.modulePaths,
@@ -1194,6 +1416,8 @@ final class IDESwiftUIPreviewSession {
 
     private func hostEnded() {
         guard connection != nil else { return }
+        // What the host was started from, so a refresh can start it again without a build.
+        endedBaseline = baseline
         endHost()
         if phase == .ready { phase = .failed("The preview host stopped. Refresh to start it again.") }
         onChange?()
@@ -1207,8 +1431,8 @@ final class IDESwiftUIPreviewSession {
 
     /// A short path: a socket's `sun_path` holds about a hundred bytes. Each run has its own, so a
     /// new host never meets the one it replaces, which may not have exited yet.
-    private static func socketPath(for directory: URL, generation: Int) -> String {
-        let digest = SHA256.hash(data: Data(directory.path.utf8))
+    static func socketPath(for directory: URL, identity: String, generation: Int) -> String {
+        let digest = SHA256.hash(data: Data((directory.path + "#" + identity).utf8))
         let name = digest.prefix(5).map { String(format: "%02x", $0) }.joined()
         return NSTemporaryDirectory() + "umbra-pv-\(name)-\(generation).sock"
     }
@@ -1232,4 +1456,41 @@ final class IDESwiftUIPreviewSession {
             return text
         }.joined(separator: "\n")
     }
+}
+
+/// Lets one build of a scratch path run at a time: the sessions of one project share it, and
+/// SwiftPM's lock files and `xcodebuild`'s build database do not take two writers. Waiters go in
+/// order; a waiter that was cancelled still takes its turn and gives it back at once.
+final class IDESwiftUIPreviewBuildGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: Set<String> = []
+    private var waiting: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func acquire(_ key: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if held.insert(key).inserted {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiting[key, default: []].append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func release(_ key: String) {
+        lock.lock()
+        if var queue = waiting[key], !queue.isEmpty {
+            let next = queue.removeFirst()
+            waiting[key] = queue.isEmpty ? nil : queue
+            lock.unlock()
+            next.resume() // the key stays held: the turn passes on
+        } else {
+            held.remove(key)
+            lock.unlock()
+        }
+    }
+
+    func isHeld(_ key: String) -> Bool { lock.withLock { held.contains(key) } }
 }

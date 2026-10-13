@@ -1,4 +1,6 @@
 import Foundation
+import SubprocessKit
+import SwiftIntelligence
 
 /// An iOS runtime that `simctl` lists, with the device types it can run.
 struct IDESimulatorRuntime: Equatable, Sendable {
@@ -145,6 +147,12 @@ struct IDESimulatorRequest: Sendable, Equatable, Hashable {
     }
 }
 
+extension IDESimulatorControlling {
+    func lease(_ target: IDESimulatorTarget) async {}
+    func release(_ target: IDESimulatorTarget) async {}
+    func removeStaleHosts(on target: IDESimulatorTarget, keeping bundleIdentifiers: Set<String>) async {}
+}
+
 /// What the preview session asks of the simulator. The real one is `IDESimulatorService`; tests
 /// substitute a fake that records the calls.
 protocol IDESimulatorControlling: Sendable {
@@ -153,6 +161,13 @@ protocol IDESimulatorControlling: Sendable {
     /// Boots the device if it is not running and returns when it is ready for apps.
     func boot(_ target: IDESimulatorTarget) async throws
     func install(bundlePath: String, on target: IDESimulatorTarget) async throws
+    /// A preview session now uses the device: it is not shut down while any session holds a lease.
+    func lease(_ target: IDESimulatorTarget) async
+    /// The session no longer uses the device. When the last lease goes, the device is shut down
+    /// after the idle time if Umbra booted it.
+    func release(_ target: IDESimulatorTarget) async
+    /// Uninstalls the preview hosts on the device that no session's work directory accounts for.
+    func removeStaleHosts(on target: IDESimulatorTarget, keeping bundleIdentifiers: Set<String>) async
     /// Starts the app. The process ends it: `terminate()` stops the launcher and the app.
     func launch(
         bundleIdentifier: String, arguments: [String], on target: IDESimulatorTarget,
@@ -171,10 +186,32 @@ actor IDESimulatorService: IDESimulatorControlling {
     /// and forth between two phones does not boot each time.
     static let maximumBooted = 2
     private var preparing: [IDESimulatorRequest: Task<IDESimulatorTarget, Error>] = [:]
+    /// Sessions using each device, and the shutdown waiting for the last of them to go.
+    private var leases: [String: Int] = [:]
+    private var idleShutdowns: [String: Task<Void, Never>] = [:]
+    private let idleInterval: Duration
+    /// What `shutdownBootedByUsBlocking()` reads at quit, when the actor cannot be awaited.
+    private let bootedRegistry = BootedRegistry()
 
-    init(runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(), xcrun: String = "/usr/bin/xcrun") {
+    /// Ten minutes with no preview open: a booted device is a few hundred MB resident.
+    static let defaultIdleInterval: Duration = .seconds(600)
+
+    init(
+        runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(), xcrun: String = "/usr/bin/xcrun",
+        idleInterval: Duration = IDESimulatorService.defaultIdleInterval
+    ) {
         self.runner = runner
         self.xcrun = xcrun
+        self.idleInterval = idleInterval
+    }
+
+    /// The udids of the devices this service booted, readable without awaiting the actor.
+    private final class BootedRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var udids: [String] = []
+        var all: [String] { lock.withLock { udids } }
+        func add(_ udid: String) { lock.withLock { if !udids.contains(udid) { udids.append(udid) } } }
+        func remove(_ udid: String) { lock.withLock { udids.removeAll { $0 == udid } } }
     }
 
     static let shared = IDESimulatorService()
@@ -239,7 +276,10 @@ actor IDESimulatorService: IDESimulatorControlling {
         guard booted.succeeded || wasRunning else {
             throw IDESimulatorError.commandFailed("Booting \(target.device.name)", output: booted.output)
         }
-        if booted.succeeded, !target.device.isBooted, !bootedByUs.contains(udid) { bootedByUs.append(udid) }
+        if booted.succeeded, !target.device.isBooted, !bootedByUs.contains(udid) {
+            bootedByUs.append(udid)
+            bootedRegistry.add(udid)
+        }
         // Returns when the device is ready for apps (SpringBoard is up).
         let status = await simctl(["bootstatus", udid])
         guard status.succeeded else {
@@ -253,6 +293,7 @@ actor IDESimulatorService: IDESimulatorControlling {
         // The oldest of its own devices go, so the Mac does not end up running one per phone tried.
         while bootedByUs.count > Self.maximumBooted, let oldest = bootedByUs.first(where: { $0 != udid }) {
             bootedByUs.removeAll { $0 == oldest }
+            bootedRegistry.remove(oldest)
             _ = await simctl(["shutdown", oldest])
         }
     }
@@ -286,7 +327,82 @@ actor IDESimulatorService: IDESimulatorControlling {
     func shutdownIfBootedByUs(_ target: IDESimulatorTarget) async {
         guard bootedByUs.contains(target.device.udid) else { return }
         bootedByUs.removeAll { $0 == target.device.udid }
+        bootedRegistry.remove(target.device.udid)
         _ = await simctl(["shutdown", target.device.udid])
+    }
+
+    // MARK: Leases and idle shutdown
+
+    func lease(_ target: IDESimulatorTarget) async {
+        let udid = target.device.udid
+        leases[udid, default: 0] += 1
+        idleShutdowns[udid]?.cancel()
+        idleShutdowns[udid] = nil
+    }
+
+    func release(_ target: IDESimulatorTarget) async {
+        let udid = target.device.udid
+        guard let count = leases[udid], count > 0 else { return }
+        if count > 1 {
+            leases[udid] = count - 1
+            return
+        }
+        leases[udid] = nil
+        // Nobody is previewing on it any more. A moved preview, a rebuild and a reopened panel come
+        // back within the interval and find it running.
+        idleShutdowns[udid]?.cancel()
+        let interval = idleInterval
+        idleShutdowns[udid] = Task { [weak self] in
+            do { try await Task.sleep(for: interval) } catch { return }
+            await self?.idleShutdown(target)
+        }
+    }
+
+    private func idleShutdown(_ target: IDESimulatorTarget) async {
+        let udid = target.device.udid
+        idleShutdowns[udid] = nil
+        guard (leases[udid] ?? 0) == 0 else { return }
+        await shutdownIfBootedByUs(target)
+    }
+
+    /// Whether a shutdown is waiting for the device's last lease interval to pass (for tests).
+    func hasPendingIdleShutdown(_ target: IDESimulatorTarget) -> Bool { idleShutdowns[target.device.udid] != nil }
+
+    func leaseCount(_ target: IDESimulatorTarget) -> Int { leases[target.device.udid] ?? 0 }
+
+    /// At quit: shuts down every device this service booted, and waits. A pending idle shutdown
+    /// would never fire, and the quit would leave the device running.
+    nonisolated func shutdownBootedByUsBlocking() {
+        for udid in bootedRegistry.all {
+            var request = SubprocessRequest(executable: xcrun, arguments: ["simctl", "shutdown", udid])
+            request.timeout = .seconds(15)
+            _ = try? SubprocessRunner.runBlocking(request)
+            bootedRegistry.remove(udid)
+        }
+    }
+
+    // MARK: Hosts that stay installed
+
+    /// The identifiers `simctl listapps` shows that belong to a preview host and that no live work
+    /// directory accounts for. `output` is the old-style property list `listapps` prints, possibly
+    /// after a line of warnings.
+    static func staleHostIdentifiers(listAppsOutput output: String, keeping live: Set<String>) -> [String] {
+        guard let start = output.firstIndex(of: "{"),
+              let data = String(output[start...]).data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        else { return [] }
+        return plist.keys
+            .filter { $0.hasPrefix(SwiftPreviewBuildPlan.hostBundleIdentifierPrefix) && !live.contains($0) }
+            .sorted()
+    }
+
+    func removeStaleHosts(on target: IDESimulatorTarget, keeping bundleIdentifiers: Set<String>) async {
+        let udid = target.device.udid
+        let listed = await simctl(["listapps", udid])
+        guard listed.succeeded else { return }
+        for identifier in Self.staleHostIdentifiers(listAppsOutput: listed.output, keeping: bundleIdentifiers) {
+            _ = await simctl(["uninstall", udid, identifier])
+        }
     }
 
     /// The app of one `simctl launch --console`. Ending the launcher does not end the app, so

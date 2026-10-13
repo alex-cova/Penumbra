@@ -188,7 +188,7 @@ Why: a target built for iOS uses API that does not exist on macOS (`Color(.syste
   - Tests: the integration test above; unit tests for the request (pinned runtime, type fallback), the booted-device bound, the remembered choice, the bezel and the flags the simulator turns off.
 - **S3 — Input.** *(Detailed in `SWIFTUI_PREVIEW_IOS_PLAN.md` §3.)* ✅ built 2026-10-13, not yet run on a device. The spike (S0-style table in the iOS plan) found that SwiftUI publishes its accessibility tree only to an app launched with the device's `ApplicationAccessibilityEnabled` preference on, so `IDESimulatorService.boot` sets it; then tap = text field focus, else `accessibilityActivate()` of the smallest element under the point, else the `UIControl` there (tab bar, back button); scroll and drag = clamped content offset; keys = `UIKeyInput`/`UITextInput` on the first responder. Sheets, alerts and open menus are in the frame; the software keyboard is not. No route: drag and long-press gestures, `onTapGesture` on a non-button, alert buttons, menu items. Panel: "Limited input".
 - **S4 — Packages and the picker.** `swift build --sdk/--triple`, the Size menu's platform choice and its per-package memory, packages that only declare iOS.
-- **S5 — Ship.** Idle shutdown and cleanup of created devices, "Components" guidance, a Settings pane entry, `Example/Umbra/CLAUDE.md`, a measurement table here.
+- **S5 — Ship.** Split in two in `SWIFTUI_PREVIEW_IOS_PLAN.md`. S5a (per-session files, socket and app identifier, device leases and idle shutdown, stale app cleanup, a host that stopped starts again with no build) is built 2026-10-13 and not yet run on a device. S5b (a Settings pane, "Components" guidance, measurement table) remains.
 
 ### Risks and open questions
 

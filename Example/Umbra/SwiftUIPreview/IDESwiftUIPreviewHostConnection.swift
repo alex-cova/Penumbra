@@ -69,6 +69,13 @@ final class IDESwiftUIPreviewHostConnection: @unchecked Sendable {
     private var buffered: [IDESwiftUIPreviewHostEvent] = []
     private var waiters: [CheckedContinuation<IDESwiftUIPreviewHostEvent, Error>] = []
     private var isClosed = false
+    /// Called once, from the reading thread, when the host's end of the socket closes while this
+    /// side has not closed it: the host exited or crashed.
+    var onHostClosed: (@Sendable () -> Void)? {
+        get { lock.withLock { closedHandler } }
+        set { lock.withLock { closedHandler = newValue } }
+    }
+    private var closedHandler: (@Sendable () -> Void)?
 
     /// Connects to the socket the host creates, retrying while it starts (it binds a moment after launch).
     static func connect(path: String, attempts: Int = 100, delay: Duration = .milliseconds(50)) async throws -> IDESwiftUIPreviewHostConnection {
@@ -189,7 +196,12 @@ final class IDESwiftUIPreviewHostConnection: @unchecked Sendable {
                     }
                 }
             }
-            self?.close()
+            // End of file: the host went away. Close() by this side marks the connection closed first.
+            if let self {
+                let (wasOpen, handler) = self.lock.withLock { (!self.isClosed, self.closedHandler) }
+                self.close()
+                if wasOpen { handler?() }
+            }
         }
     }
 
