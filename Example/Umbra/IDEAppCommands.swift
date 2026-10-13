@@ -138,6 +138,8 @@ private struct IDEFileCommands: View {
         Button("Open…", systemImage: "folder") { workspace?.openFile() }
             .menuShortcut(.openFile, in: preset)
             .disabled(workspace == nil)
+        Button("Open Profiler Recording…", systemImage: "flame") { workspace?.chooseProfilerRecording() }
+            .disabled(workspace == nil)
         Button("Open Folder…", systemImage: "folder.badge.plus") {
             IDEWindowRegistry.shared.chooseFolder(from: origin)
         }
@@ -276,6 +278,18 @@ private struct IDERunCommands: View {
             .menuShortcut(.runInContext, in: preset)
         Button("Debug in Context", action: { workspace?.runInContext(debug: true) })
             .menuShortcut(.debugInContext, in: preset)
+        Divider()
+        Button("Run with Coverage", action: { workspace?.runInstrumented(.coverage) })
+            .disabled(workspace?.hasOpenProject != true)
+        Button("Run Tests with Coverage", action: { workspace?.runTestsInstrumented(.coverage) })
+            .disabled(workspace?.hasOpenProject != true)
+        Button("Clear Coverage", action: { workspace?.clearCoverage() })
+            .disabled(workspace?.coverage.snapshot == nil)
+        Button("Profile", action: { workspace?.runInstrumented(.profile) })
+            .disabled(workspace?.hasOpenProject != true)
+        Button("Profile Tests", action: { workspace?.runTestsInstrumented(.profile) })
+            .disabled(workspace?.hasOpenProject != true)
+        Divider()
         Button("Edit Configurations…", action: { workspace?.editRunConfiguration() })
             .disabled(!(workspace?.canEditRunConfiguration ?? false))
         Button("Save Temporary Configuration", action: { workspace?.saveSelectedTemporaryRunConfiguration() })

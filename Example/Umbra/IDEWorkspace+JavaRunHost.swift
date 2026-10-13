@@ -27,4 +27,12 @@ extension IDEWorkspace: IDEJavaRunHost {
     func startDebugging(_ configuration: JavaRunConfiguration) {
         debugLaunch(configuration)
     }
+
+    func showCoverageTabIfWanted() {
+        if IDEPreferences.shared.javaCoverageOpensWindow { showCoverageTab() }
+    }
+
+    func reportInstrumentationNote(_ message: String) {
+        gradle.appendConsoleNote(message)
+    }
 }

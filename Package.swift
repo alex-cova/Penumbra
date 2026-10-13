@@ -5,9 +5,22 @@
 // Do not set `defaultIsolation: MainActor` (SE-0476): EIP actors, background parse,
 // and off-main search must stay nonisolated by default.
 
+import Foundation
 import PackageDescription
 
 let swift6: [SwiftSetting] = [.swiftLanguageMode(.v6)]
+
+/// The JaCoCo agent and CLI that `Example/Umbra/Tools/JaCoCo/fetch.sh` downloads. They are not
+/// committed, and a missing resource fails the whole build, so a checkout that has not run the
+/// script just builds an Umbra that says "not bundled" for Run with Coverage.
+let umbraJaCoCoResources: [Resource] = {
+    let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Example/Umbra/Tools/JaCoCo/build")
+    return ["jacocoagent.jar", "jacococli.jar"].compactMap { name in
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
+            ? .copy("Tools/JaCoCo/build/\(name)") : nil
+    }
+}()
 
 let package = Package(
     name: "Penumbra",
@@ -244,12 +257,13 @@ let package = Package(
                 "Tools/JavaDebugAdapter/build/test-classes",
                 "Tools/JavaDebugAdapter/build/test-sources.txt",
                 "Tools/JavaDebugAdapter/build/sources.txt",
-                "Tools/JavaDebugAdapter/src"
+                "Tools/JavaDebugAdapter/src",
+                "Tools/JaCoCo/fetch.sh"
             ],
             resources: [
                 .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar"),
                 .copy("../umbra.png")
-            ],
+            ] + umbraJaCoCoResources,
             swiftSettings: swift6
         ),
         .target(name: "TestTreeSitterLanguages"),
@@ -487,6 +501,6 @@ let package = Package(
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling")], swiftSettings: swift6)
     ]
 )

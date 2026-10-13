@@ -39,6 +39,8 @@ func printUsageAndExit() -> Never {
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inspections <path|synthetic> [--lines N] [--samples N]
+      java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
+      java-coverage-bands synthetic [--lines N]
       swift-index <path|synthetic> [--files N]
       swift-completion <path|synthetic> [--files N] [--lines N]
       ts-index <path|synthetic> [--files N]
@@ -89,6 +91,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections"
+    || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
@@ -117,6 +120,14 @@ do {
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
         )
+    case "java-profile-import":
+        JavaInstrumentationProfile.runProfileImport(
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 60_000,
+            depth: Int(flagValue("--depth", in: rest) ?? "") ?? 128,
+            stacks: Int(flagValue("--stacks", in: rest) ?? "") ?? 2_000
+        )
+    case "java-coverage-bands":
+        try JavaInstrumentationProfile.runCoverageBands(lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000)
     case "java-members":
         JavaMembersProfile.run(root: path)
     case "swift-index", "ts-index", "swift-completion", "ts-completion":

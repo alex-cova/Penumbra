@@ -79,6 +79,8 @@ public enum BinaryContentDetector {
         if bytes.starts(with: [0x25, 0x50, 0x44, 0x46]) { return "PDF" }
         if bytes.starts(with: Array("SQLite format 3\u{0}".utf8)) { return "SQLite database" }
         if bytes.starts(with: [0x00, 0x61, 0x73, 0x6D]) { return "WebAssembly" }
+        // `FLR\0`: a Java Flight Recorder file (the recording itself, not a chunk of one).
+        if bytes.starts(with: [0x46, 0x4C, 0x52, 0x00]) { return "Java Flight Recording" }
         return nil
     }
 

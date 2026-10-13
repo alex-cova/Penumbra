@@ -12,11 +12,13 @@ enum IDERunGutterMenu {
         keymapPreset: KeymapPreset,
         run: @escaping () -> Void,
         debug: @escaping () -> Void,
+        coverage: (() -> Void)? = nil,
+        profile: (() -> Void)? = nil,
         modify: (() -> Void)? = nil
     ) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for item in items(title: title, keymapPreset: keymapPreset, run: run, debug: debug) {
+        for item in items(title: title, keymapPreset: keymapPreset, run: run, debug: debug, coverage: coverage, profile: profile) {
             menu.addItem(item)
         }
         if let modify {
@@ -31,7 +33,9 @@ enum IDERunGutterMenu {
         title: String,
         keymapPreset: KeymapPreset,
         run: @escaping () -> Void,
-        debug: @escaping () -> Void
+        debug: @escaping () -> Void,
+        coverage: (() -> Void)? = nil,
+        profile: (() -> Void)? = nil
     ) -> [NSMenuItem] {
         let runItem = IDEClosureMenuItem(title: "Run ‘\(title)’", handler: run)
         runItem.image = symbol("play", color: .systemGreen)
@@ -39,7 +43,18 @@ enum IDERunGutterMenu {
         let debugItem = IDEClosureMenuItem(title: "Debug ‘\(title)’", handler: debug)
         debugItem.image = symbol("ladybug", color: .systemGreen)
         showShortcut(IDEMenuShortcuts.shortcut(for: .debugInContext, in: keymapPreset), on: debugItem)
-        return [runItem, debugItem]
+        var result = [runItem, debugItem]
+        if let coverage {
+            let item = IDEClosureMenuItem(title: "Run ‘\(title)’ with Coverage", handler: coverage)
+            item.image = symbol("chart.bar.doc.horizontal", color: .systemGreen)
+            result.append(item)
+        }
+        if let profile {
+            let item = IDEClosureMenuItem(title: "Profile ‘\(title)’", handler: profile)
+            item.image = symbol("flame", color: .systemOrange)
+            result.append(item)
+        }
+        return result
     }
 
     /// Opens `menu` at the click that is being handled, since the gutter reports clicks from

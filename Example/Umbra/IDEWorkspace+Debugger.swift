@@ -153,6 +153,10 @@ extension IDEWorkspace {
             keymapPreset: preferences.keymapPreset,
             run: { provider.run(document, location: location, mode: .run) },
             debug: { provider.run(document, location: location, mode: .debug) },
+            coverage: provider.supportsInstrumentation(at: location)
+                ? { provider.run(document, location: location, instrumentation: .coverage) } : nil,
+            profile: provider.supportsInstrumentation(at: location)
+                ? { provider.run(document, location: location, instrumentation: .profile) } : nil,
             modify: modify
         )
         IDERunGutterMenu.popUp(menu, in: textView)
@@ -217,7 +221,11 @@ extension IDEWorkspace {
                     title: location.title,
                     keymapPreset: preferences.keymapPreset,
                     run: { provider.run(document, location: location, mode: .run) },
-                    debug: { provider.run(document, location: location, mode: .debug) }
+                    debug: { provider.run(document, location: location, mode: .debug) },
+                    coverage: provider.supportsInstrumentation(at: location)
+                        ? { provider.run(document, location: location, instrumentation: .coverage) } : nil,
+                    profile: provider.supportsInstrumentation(at: location)
+                        ? { provider.run(document, location: location, instrumentation: .profile) } : nil
                 )
             }
             if provider.canEditRunConfiguration(location) {
@@ -506,7 +514,7 @@ extension IDEWorkspace {
         if debug ?? testResults.lastRunWasDebug {
             debugTests(scope: scope, title: title)
         } else {
-            runTests(scope: scope, title: title)
+            javaRun.runTests(scope: scope, title: title, instrumentation: testResults.lastInstrumentation)
         }
     }
 
@@ -696,7 +704,10 @@ extension IDEWorkspace {
 
     func applyExecutionLineBackground(to textView: TextView, shownFile: URL?) {
         let point = executionPoint
-        let bands = Self.executionLineBackgrounds(stopFile: point?.file, stopLine: point?.line, shownFile: shownFile)
+        // Coverage first, the execution line over it: both live in `lineBackgrounds`, so the host
+        // merges them (a replace would drop one whenever the other refreshes).
+        let bands = coverageLineBackgrounds(forFile: shownFile)
+            + Self.executionLineBackgrounds(stopFile: point?.file, stopLine: point?.line, shownFile: shownFile)
         if textView.lineBackgrounds != bands { textView.lineBackgrounds = bands }
     }
 

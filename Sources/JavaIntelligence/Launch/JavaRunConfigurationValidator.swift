@@ -5,7 +5,7 @@ import Foundation
 public enum JavaRunConfigurationValidator {
     /// The form field a problem belongs to.
     public enum Field: String, Sendable {
-        case target, sourceFile, workingDirectory, jdk, redirectInput, beforeLaunch
+        case target, sourceFile, workingDirectory, jdk, redirectInput, beforeLaunch, instrumentation
     }
 
     public struct Problem: Equatable, Sendable {
@@ -117,6 +117,23 @@ public enum JavaRunConfigurationValidator {
         }
         if let version = context.jdkFeatureVersion, version < 8 {
             add(.jdk, "Java \(version) is too old to run this.")
+        }
+        switch configuration.instrumentation {
+        case .none: break
+        case .coverage:
+            if !configuration.supportsInstrumentation {
+                add(.instrumentation, "Run with Coverage cannot be combined with the debugger.")
+            }
+            if case .singleFile = configuration.target {
+                add(.instrumentation, "Run with Coverage needs a compiled class.")
+            }
+        case .profile:
+            if !configuration.supportsInstrumentation {
+                add(.instrumentation, "Profile cannot be combined with the debugger.")
+            }
+            if let version = context.jdkFeatureVersion, version < 11 {
+                add(.jdk, "Profiling needs Java Flight Recorder, which comes with Java 11 or newer (this is Java \(version)).")
+            }
         }
         for task in configuration.beforeLaunch {
             switch task {

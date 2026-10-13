@@ -7,6 +7,8 @@ enum IDENotificationAction: Equatable {
     case showGradleOutput
     case showSourceControl
     case showProblems
+    /// Show the Coverage tab.
+    case showCoverage
     /// Open the agent panel on this chat.
     case showAgentChat(UUID)
     /// Show this file's tab (opening it if it was closed).

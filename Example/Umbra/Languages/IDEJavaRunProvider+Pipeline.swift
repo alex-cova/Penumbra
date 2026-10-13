@@ -65,18 +65,44 @@ extension IDEJavaRunProvider {
                 return
             }
         }
+        var instrumentation: InstrumentationPlan?
+        var extraVMArguments: [String] = []
+        if configuration.instrumentation != .none {
+            switch await makeInstrumentationPlan(for: configuration, jdk: jdk) {
+            case .failure(let failure):
+                session.fail(failure.message)
+                return
+            case .success(let plan):
+                switch vmArguments(for: plan) {
+                case .failure(let failure):
+                    session.fail(failure.message)
+                    return
+                case .success(let arguments):
+                    extraVMArguments = arguments
+                    instrumentation = plan
+                }
+            }
+        }
         guard let launch = JavaLaunchCommand.makeProcessLaunch(
             configuration: configuration,
             javaHome: jdk.home,
             runtimeClasspath: classpath,
             projectRoot: host?.projectRootURL,
             jdkFeatureVersion: jdk.featureVersion,
-            usesNewLaunchProtocol: newProtocol
+            usesNewLaunchProtocol: newProtocol,
+            extraVMArguments: extraVMArguments
         ) else {
             session.fail("It can't be launched: check its target.")
             return
         }
         session.appendNote("Java \(jdk.featureVersion) · \(jdk.home.path)")
+        if let instrumentation {
+            switch instrumentation {
+            case .coverage: session.appendNote("With coverage: the report is built when the program ends.")
+            case .profile: session.appendNote("With Java Flight Recorder: the recording opens when the program ends.")
+            }
+            finishWhenSessionEnds(session, plan: instrumentation)
+        }
         session.appendNote(launch.displayCommand + "\n")
         session.start(IDEProcessLaunch(launch))
     }

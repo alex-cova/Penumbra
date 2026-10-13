@@ -12,6 +12,8 @@ public enum WorkbenchDocumentContentKind: String, Sendable, Equatable {
     case diagram
     /// A host-drawn hex view of a file's bytes. Restored with the session.
     case binary
+    /// A host-drawn Java Flight Recorder profile. Restored with the session when it has a file.
+    case profile
 }
 
 extension WorkbenchDocumentContentKind: Codable {

@@ -20,10 +20,12 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertNil(IDELanguageModules.module(id: "rust"))
     }
 
-    func testJavaContributesTheElevenCommandsItAlwaysHad() {
+    func testJavaContributesItsCommandsInOrder() {
         let commands = IDEJavaModule().commands(for: makeWorkspace())
         XCTAssertEqual(commands.map(\.id), [
             "app.java.buildGradleProject", "app.java.runTests", "app.java.runLastConfiguration",
+            "app.java.runWithCoverage", "app.java.runTestsWithCoverage", "app.java.clearCoverage",
+            "app.java.profile", "app.java.profileTests", "app.java.openProfilerRecording",
             "app.java.editRunConfiguration", "app.java.reloadGradleProject", "app.java.showGradleOutput",
             "app.java.showClassDiagram", "app.java.showPackageDiagram", "app.java.showProjectDiagram",
             "app.java.showGradleModuleDiagram", "app.java.showGradleDependencyDiagram"
@@ -85,10 +87,10 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testSettingsPagesKeepTheirOrderWithTheJavaOnesBetweenProjectAndAgent() {
         let modulePages = IDELanguageModules.preferencePanes.map(\.domain)
-        XCTAssertEqual(modulePages.map(\.id), ["java", "inspections", "typescript", "swift", "hex"])
+        XCTAssertEqual(modulePages.map(\.id), ["java", "inspections", "typescript", "swift", "swiftUIPreview", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "hex", "agent"]
+            ["general", "editor", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "swiftUIPreview", "hex", "agent"]
         )
         XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "appearance", "focus", "project", "agent"])
     }

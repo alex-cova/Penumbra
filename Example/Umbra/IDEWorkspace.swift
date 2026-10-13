@@ -99,6 +99,8 @@ public final class IDEWorkspace {
     @ObservationIgnored
     var hexSniffedPaths: Set<String> = []
     var diagramSessions: [UUID: IDEDiagramSession] = [:]
+    /// One per open Flight Recorder profile tab, by document id.
+    var profileSessions: [UUID: IDEProfilerSession] = [:]
     private let intelligenceServices = IDEIntelligenceServices()
     /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
     let languageServerHost = IDELanguageServerHost()
@@ -160,6 +162,8 @@ public final class IDEWorkspace {
     let usages = IDEUsagesStore()
     /// The Test Results tab's content; empty until a test run finishes.
     let testResults = IDETestResultsStore()
+    /// What the last Run with Coverage measured: the report, which files it can still colour.
+    let coverage = IDECoverageController()
     /// The programs Run started, shown in the Run tab of the bottom panel.
     let runs = IDERunSessions()
     /// Bumped by the Run tab's "Scroll to End" so the console jumps to the bottom.
@@ -624,6 +628,10 @@ public final class IDEWorkspace {
             host.diagramViewer.focus()
             return
         }
+        if workbench.activePane.selectedDocument?.contentKind == .profile {
+            host.profileViewer.focus()
+            return
+        }
         if host.isCSVTableVisible {
             host.csvTableView.focus()
             return
@@ -895,6 +903,7 @@ public final class IDEWorkspace {
         agent.teardown()
         closeAllDiffSessions()
         closeAllDiagramSessions()
+        closeAllProfileSessions()
         closeAllHexSessions()
         notifications.dismissToast()
         projectAccess.end()
@@ -1269,7 +1278,7 @@ public final class IDEWorkspace {
             diffSessions[document.id]?.save()
             return false
         }
-        if document.contentKind == .diagram { return false }
+        if document.contentKind == .diagram || document.contentKind == .profile { return false }
         if document.contentKind == .binary {
             return await saveHexDocument(document)
         }
@@ -4093,6 +4102,13 @@ public final class IDEWorkspace {
     }
 
     func openDocument(from url: URL, selecting range: NSRange? = nil, inRightSplit: Bool = false) async {
+        // A Flight Recorder file is only useful through the profiler. Reopen as Hex reaches the bytes
+        // through `loadDocument(openAsHex:)`, which this does not intercept.
+        if IDEWorkspace.isFlightRecording(url) {
+            recordRecentFile(url)
+            openProfile(file: url)
+            return
+        }
         do {
             let document = try await loadDocument(from: url)
             if inRightSplit {
@@ -4195,7 +4211,7 @@ public final class IDEWorkspace {
         return NSRange(location: location, length: 0)
     }
 
-    private func recordRecentFile(_ url: URL) {
+    func recordRecentFile(_ url: URL) {
         recentFiles.removeAll { $0 == url }
         recentFiles.insert(url, at: 0)
         if recentFiles.count > 15 {
@@ -4227,6 +4243,8 @@ public final class IDEWorkspace {
                 host.imageViewerController.focusForInteraction()
             } else if pane.selectedDocument?.contentKind == .diagram {
                 host.diagramViewer.focus()
+            } else if pane.selectedDocument?.contentKind == .profile {
+                host.profileViewer.focus()
             } else if pane.selectedDocument?.contentKind == .binary {
                 host.hexViewer.focus()
             } else {
@@ -4270,6 +4288,7 @@ public final class IDEWorkspace {
         case .showGradleOutput: showGradleOutput()
         case .showSourceControl: showSourceControl()
         case .showProblems: showProblems()
+        case .showCoverage: showCoverageTab()
         case .showAgentChat(let id):
             agent.select(id)
             agent.showPanel()
@@ -4530,6 +4549,7 @@ public final class IDEWorkspace {
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
+        closeProfileSession(documentID, in: pane)
         let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
         pane.closeDocument(documentID)
         let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
@@ -5021,7 +5041,9 @@ public final class IDEWorkspace {
                     title: document.displayName,
                     isDirty: document.isDirty,
                     isSelected: document.id == pane.selectedDocumentID,
-                    symbolName: document.contentKind == .diagram ? diagramSessions[document.id]?.request.symbolName : nil
+                    symbolName: document.contentKind == .diagram
+                        ? diagramSessions[document.id]?.request.symbolName
+                        : (document.contentKind == .profile ? "flame" : nil)
                 )
             }
         }
@@ -5518,6 +5540,7 @@ public final class IDEWorkspace {
             switch document.contentKind {
             case .image: statusLanguage = "Image"
             case .diagram: statusLanguage = "Diagram"
+            case .profile: statusLanguage = "Profile"
             case .binary: statusLanguage = "Hex"
             case .diff: statusLanguage = "Diff"
             case .text: break
@@ -5775,6 +5798,11 @@ public final class IDEWorkspace {
         host: IDEEditorPaneHost
     ) {
         guard let document = pane.selectedDocument else { return }
+        if document.contentKind != .profile { host.profileViewer.hide() }
+        if document.contentKind == .profile {
+            showProfileDocument(document, in: pane, host: host)
+            return
+        }
         if document.contentKind == .binary {
             showHexDocument(document, in: pane, host: host)
             return
@@ -6278,6 +6306,7 @@ extension IDEWorkspace: TextViewDelegate {
         }
         scheduleSemanticHighlighting(forEditedTextView: textView)
         scheduleNameIndexOverlay(for: textView)
+        noteCoverageEdit(in: textView)
         refreshJavaRunAvailability(from: textView)
         refreshStructure()
         recordRecentlyEdited()

@@ -150,6 +150,10 @@ protocol IDERunProvider: AnyObject {
     func runInContext(_ document: IDERunDocument, mode: IDERunMode) async -> Bool
     /// Runs the session again in its tab with the settings it has now.
     func rerun(_ session: IDERunSession)
+    /// Whether the gutter menu offers Run with Coverage and Profile for `location`.
+    func supportsInstrumentation(at location: IDERunnableLocation) -> Bool
+    /// The gutter's Run with Coverage or Profile item for one ``IDERunnableLocation``.
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, instrumentation: JavaRunInstrumentation)
 
     /// Something this provider started that is not a Run-tab session is still going (a Gradle task).
     var hasActiveWork: Bool { get }
@@ -165,6 +169,8 @@ extension IDERunProvider {
     func run(_ document: IDERunDocument, location: IDERunnableLocation, mode: IDERunMode) {
         run(document, mode: mode)
     }
+    func supportsInstrumentation(at location: IDERunnableLocation) -> Bool { false }
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, instrumentation: JavaRunInstrumentation) {}
     func canEditRunConfiguration(_ location: IDERunnableLocation) -> Bool { false }
     func editRunConfiguration(_ document: IDERunDocument, location: IDERunnableLocation) {}
 }

@@ -18,6 +18,8 @@ protocol IDEJavaRunHost: AnyObject {
     var notifications: IDENotificationCenter { get }
     /// The test class of the active file, kept by the gutter refresh.
     var activeJavaTestClass: JavaTestClass? { get }
+    /// What the last run with coverage measured.
+    var coverage: IDECoverageController { get }
 
     /// The text of `url` if it is open, unsaved edits included.
     func openBufferText(for url: URL) -> String?
@@ -34,5 +36,13 @@ protocol IDEJavaRunHost: AnyObject {
     func promptForGradleRunTask(_ prompt: IDEGradleRunTaskPrompt)
     /// The debugger stays in the window: it is Java-only and shares the gutter and the tabs.
     func startDebugging(_ configuration: JavaRunConfiguration)
+    /// Opens the Coverage tab when Settings asks for it.
+    func showCoverageTabIfWanted()
+    /// Repaints the coverage bands of every open editor.
+    func refreshCoverageBands()
+    /// Says something about an instrumented Gradle run where the user will see it (the Gradle console).
+    func reportInstrumentationNote(_ message: String)
+    /// Opens `recordings` (Flight Recorder files of one run) in the profiler.
+    func openProfile(recordings: [URL], title: String, runID: String?, project: URL?)
     func debugTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration?)
 }

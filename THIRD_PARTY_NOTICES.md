@@ -39,6 +39,20 @@ download code is ported from the author's Hextech app.
 Model weights are not part of Umbra. Each model has its own license, shown on its Hugging Face page,
 and is the user's to accept; gated models need the user's own access token.
 
+## Umbra Java coverage (JaCoCo)
+
+Run with Coverage starts the user's program or tests with the JaCoCo agent and reads the report the
+JaCoCo command line tool writes. Both jars are resources of the Umbra app, fetched at build time by
+`Example/Umbra/Tools/JaCoCo/fetch.sh` (pinned release, SHA-256 checked) from Maven Central, run as
+child processes, and never linked into `Penumbra`, `EditorIntelligence` or `JavaIntelligence`.
+
+| Component | Source | License |
+| --- | --- | --- |
+| JaCoCo agent (`org.jacoco.agent`, runtime) and command line tool (`org.jacoco.cli`, nodeps) | [jacoco/jacoco](https://github.com/jacoco/jacoco), 0.8.15 | Eclipse Public License 2.0 |
+
+JaCoCo stays under EPL-2.0 in binary distributions; its source is available from the project above.
+Profiling uses Java Flight Recorder and the `jfr` tool of the user's own JDK, and bundles nothing.
+
 ## Umbra split views
 
 Umbra's split panes (`Example/Umbra/SplitView/`) are vendored from

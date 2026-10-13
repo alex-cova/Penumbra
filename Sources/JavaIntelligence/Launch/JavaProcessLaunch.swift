@@ -51,6 +51,9 @@ extension JavaLaunchCommand {
     /// With ``JavaRunConfiguration/ShortenCommandLine/argFile`` (or `auto` and a long classpath) on a
     /// JDK of 9 or later, `-cp <classpath>` is written to a file in `argFileDirectory` and the
     /// command line carries `@file`; the file is listed in ``JavaProcessLaunch/temporaryFiles``.
+    ///
+    /// `extraVMArguments` go ahead of the configuration's own VM options: the coverage agent or the
+    /// flight recorder switch, which the user's options can still override.
     public static func makeProcessLaunch(
         configuration: JavaRunConfiguration,
         javaHome: URL,
@@ -58,6 +61,7 @@ extension JavaLaunchCommand {
         projectRoot: URL?,
         jdkFeatureVersion: Int? = nil,
         usesNewLaunchProtocol: Bool = false,
+        extraVMArguments: [String] = [],
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         argFileDirectory: URL = FileManager.default.temporaryDirectory
     ) -> JavaProcessLaunch? {
@@ -66,7 +70,7 @@ extension JavaLaunchCommand {
         if case .singleFile = configuration.target { isSourceLaunch = true }
         let vmOptions = newLaunchProtocolArguments(
             usesNewLaunchProtocol: usesNewLaunchProtocol, jdkFeatureVersion: jdkFeatureVersion, sourceLaunch: isSourceLaunch
-        ) + JavaCommandLine.split(configuration.vmArguments)
+        ) + extraVMArguments + JavaCommandLine.split(configuration.vmArguments)
         let programArguments = JavaCommandLine.split(configuration.programArguments)
         var arguments: [String]
         var temporaryFiles: [URL] = []

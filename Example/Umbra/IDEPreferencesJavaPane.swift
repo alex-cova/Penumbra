@@ -37,6 +37,58 @@ struct IDEPreferencesJavaPane: View {
             )
         }
 
+        IDESettingsSection(
+            "Coverage",
+            footer: "Run ▸ Run with Coverage starts the program or the tests with the JaCoCo agent and paints the lines the run executed. Editing a file removes its colours, since they describe the text that ran."
+        ) {
+            IDESettingsToggle("Show Coverage in the Editor", isOn: $preferences.javaCoverageShowsInEditor)
+                .onChange(of: preferences.javaCoverageShowsInEditor) {
+                    workspace.refreshCoverageBands()
+                }
+            IDESettingsToggle(
+                "Include Test Sources",
+                isOn: $preferences.javaCoverageIncludesTests,
+                detail: "Reports on the test classes too."
+            )
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                Text("Package Filter")
+                TextField("com.acme, org.example.util", text: $preferences.javaCoveragePackageFilter)
+                    .textFieldStyle(.roundedBorder)
+                    .font(IDEAppearance.Typography.monoSmall)
+                Text("Limits the report to these packages and their subpackages. Empty reports on all of them.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            IDESettingsToggle(
+                "Clear Coverage on the Next Run",
+                isOn: $preferences.javaCoverageClearsOnRun,
+                detail: "Off keeps the previous colours until the new report is ready."
+            )
+            IDESettingsToggle("Open the Coverage Tab After a Run", isOn: $preferences.javaCoverageOpensWindow)
+        }
+
+        IDESettingsSection(
+            "Profiling",
+            footer: "Profile uses Java Flight Recorder, which comes with the JDK (Java 11 or newer). Nothing is attached to a running program: the recording is made by the JVM Umbra starts."
+        ) {
+            IDEPreferencesIntStepper(
+                title: "CPU Sample Period",
+                value: $preferences.javaProfileSamplePeriod,
+                range: 0...100,
+                valueWidth: 40,
+                valueSuffix: "ms"
+            )
+            IDESettingsToggle("Open the Recording After a Run", isOn: $preferences.javaProfileOpensRecording)
+            IDEPreferencesIntStepper(
+                title: "Ask Before Reading Over",
+                value: $preferences.javaProfileConfirmMegabytes,
+                range: 50...5000,
+                step: 50,
+                valueWidth: 48,
+                valueSuffix: "MB"
+            )
+        }
+
         IDESettingsSection("Analysis") {
             IDESettingsToggle(
                 "Compiler Diagnostics",

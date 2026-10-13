@@ -30,6 +30,13 @@ public struct JDKInstallation: Hashable, Sendable {
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
     }
 
+    /// `bin/jfr`, the Flight Recorder's reader, when this home ships it (JDK 11 and later; a
+    /// JRE-only home usually does not), otherwise `nil`.
+    public var jfr: URL? {
+        let url = home.appendingPathComponent("bin/jfr")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
     /// `true` when this home ships a compiler; a JRE-only home can run programs but not analyze them.
     public var isFullJDK: Bool { javac != nil }
 

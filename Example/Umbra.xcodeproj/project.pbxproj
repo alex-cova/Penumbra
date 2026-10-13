@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000000093 /* jacocoagent.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000095 /* jacocoagent.jar */; };
+		000000000000000000000094 /* jacococli.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* jacococli.jar */; };
 		000000000000000000000017 /* java-debug-adapter.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* java-debug-adapter.jar */; };
 		00000000000000000000006C /* Penumbra in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006B /* Penumbra */; };
 		00000000000000000000006E /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006D /* PenumbraLanguages */; };
@@ -30,6 +32,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		000000000000000000000095 /* jacocoagent.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = jacocoagent.jar; path = Umbra/Tools/JaCoCo/build/jacocoagent.jar; sourceTree = "<group>"; };
+		000000000000000000000096 /* jacococli.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = jacococli.jar; path = Umbra/Tools/JaCoCo/build/jacococli.jar; sourceTree = "<group>"; };
 		000000000000000000000016 /* java-debug-adapter.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-debug-adapter.jar; path = Umbra/Tools/JavaDebugAdapter/build/java-debug-adapter.jar; sourceTree = "<group>"; };
 		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -44,6 +48,9 @@
 				CLAUDE.md,
 				SplitView/LICENSE,
 				SplitView/README.md,
+				Tools/JaCoCo/build/jacocoagent.jar,
+				Tools/JaCoCo/build/jacococli.jar,
+				Tools/JaCoCo/fetch.sh,
 				Tools/JavaDebugAdapter/build.sh,
 				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$1.class,
 				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Cache.class,
@@ -152,6 +159,8 @@
 				00000000000000000000000A /* Resources */,
 				00000000000000000000000D /* umbra.png */,
 				000000000000000000000016 /* java-debug-adapter.jar */,
+				000000000000000000000095 /* jacocoagent.jar */,
+				000000000000000000000096 /* jacococli.jar */,
 				000000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -180,6 +189,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 000000000000000000000013 /* Build configuration list for PBXNativeTarget "Umbra" */;
 			buildPhases = (
+				000000000000000000000097 /* Fetch JaCoCo */,
 				000000000000000000000006 /* Sources */,
 				000000000000000000000007 /* Frameworks */,
 				000000000000000000000008 /* Resources */,
@@ -264,10 +274,34 @@
 			files = (
 				00000000000000000000000E /* umbra.png in Resources */,
 				000000000000000000000017 /* java-debug-adapter.jar in Resources */,
+				000000000000000000000093 /* jacocoagent.jar in Resources */,
+				000000000000000000000094 /* jacococli.jar in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		000000000000000000000097 /* Fetch JaCoCo */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Fetch JaCoCo";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# The coverage agent and CLI are not committed; fetch.sh downloads the pinned releases (SHA-256 checked) and does nothing when they are there.\n\"${SRCROOT}/Umbra/Tools/JaCoCo/fetch.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		000000000000000000000006 /* Sources */ = {
@@ -335,6 +369,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_DEBUG_DYLIB = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -359,6 +394,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

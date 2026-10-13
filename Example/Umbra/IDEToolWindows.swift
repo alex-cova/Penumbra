@@ -31,6 +31,7 @@ struct IDEToolWindow: Identifiable {
         static let history = 300
         static let debug = 310
         static let testResults = 320
+        static let coverage = 325
         static let usages = 330
         static let typeHierarchy = 340
         static let callHierarchy = 350

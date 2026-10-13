@@ -39,6 +39,8 @@ final class IDETestResultsStore {
     /// What ran last, for Rerun; and whether it ran under the debugger.
     private(set) var lastScope: JavaTestRunScope?
     private(set) var lastRunWasDebug = false
+    /// Whether the last Gradle run measured coverage or recorded a profile, so Rerun repeats it.
+    private(set) var lastInstrumentation: JavaRunInstrumentation = .none
     /// How a run that is not a Gradle one (SwiftPM) is repeated: `failedOnly` asks for just the
     /// cases that failed. Set by whoever began the run; a Gradle run replaces it with a scope.
     private(set) var rerunHandler: (@MainActor (_ failedOnly: Bool) -> Void)?
@@ -52,6 +54,7 @@ final class IDETestResultsStore {
         label: String,
         scope: JavaTestRunScope? = nil,
         debug: Bool = false,
+        instrumentation: JavaRunInstrumentation = .none,
         rerunHandler: (@MainActor (_ failedOnly: Bool) -> Void)? = nil
     ) {
         isRunning = true
@@ -60,6 +63,7 @@ final class IDETestResultsStore {
         if let scope {
             lastScope = scope
             lastRunWasDebug = debug
+            lastInstrumentation = debug ? .none : instrumentation
             self.rerunHandler = nil
         } else if let rerunHandler {
             // The newest run owns Rerun, whichever build system it came from.

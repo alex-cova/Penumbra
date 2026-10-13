@@ -60,6 +60,14 @@ public final class IDEPreferences {
         static let javaInlayVariableTypes = "com.umbra.editor.javaInlayVariableTypes"
         static let javaInlayLambdaTypes = "com.umbra.editor.javaInlayLambdaTypes"
         static let javaCodeVisionUsages = "com.umbra.editor.javaCodeVisionUsages"
+        static let javaCoverageShowsInEditor = "com.umbra.editor.javaCoverageShowsInEditor"
+        static let javaCoverageIncludesTests = "com.umbra.editor.javaCoverageIncludesTests"
+        static let javaCoveragePackageFilter = "com.umbra.editor.javaCoveragePackageFilter"
+        static let javaCoverageClearsOnRun = "com.umbra.editor.javaCoverageClearsOnRun"
+        static let javaCoverageOpensWindow = "com.umbra.editor.javaCoverageOpensWindow"
+        static let javaProfileSamplePeriod = "com.umbra.editor.javaProfileSamplePeriod"
+        static let javaProfileOpensRecording = "com.umbra.editor.javaProfileOpensRecording"
+        static let javaProfileConfirmMegabytes = "com.umbra.editor.javaProfileConfirmMegabytes"
         static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
@@ -421,6 +429,53 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaInlayLambdaTypes, forKey: Keys.javaInlayLambdaTypes) }
     }
 
+    /// Paints covered, partly covered and missed lines of the last coverage run in the editor.
+    var javaCoverageShowsInEditor: Bool {
+        didSet { UserDefaults.standard.set(javaCoverageShowsInEditor, forKey: Keys.javaCoverageShowsInEditor) }
+    }
+
+    /// Includes the test source sets in the coverage report.
+    var javaCoverageIncludesTests: Bool {
+        didSet { UserDefaults.standard.set(javaCoverageIncludesTests, forKey: Keys.javaCoverageIncludesTests) }
+    }
+
+    /// Package prefixes (separated by commas or spaces) the coverage report is limited to; empty
+    /// reports on every package of the project.
+    var javaCoveragePackageFilter: String {
+        didSet { UserDefaults.standard.set(javaCoveragePackageFilter, forKey: Keys.javaCoveragePackageFilter) }
+    }
+
+    /// The prefixes of ``javaCoveragePackageFilter``.
+    var javaCoveragePackagePrefixes: [String] {
+        javaCoveragePackageFilter.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init)
+    }
+
+    /// Removes the previous run's coverage when the next run starts, instead of keeping it until
+    /// the new report is ready.
+    var javaCoverageClearsOnRun: Bool {
+        didSet { UserDefaults.standard.set(javaCoverageClearsOnRun, forKey: Keys.javaCoverageClearsOnRun) }
+    }
+
+    /// Opens the Coverage tab when a report is ready.
+    var javaCoverageOpensWindow: Bool {
+        didSet { UserDefaults.standard.set(javaCoverageOpensWindow, forKey: Keys.javaCoverageOpensWindow) }
+    }
+
+    /// The CPU sample period in milliseconds; 0 keeps the `profile` setting's 10 ms. Java 17 and later.
+    var javaProfileSamplePeriod: Int {
+        didSet { UserDefaults.standard.set(javaProfileSamplePeriod, forKey: Keys.javaProfileSamplePeriod) }
+    }
+
+    /// Opens a profiled run's recording in the profiler when the run ends.
+    var javaProfileOpensRecording: Bool {
+        didSet { UserDefaults.standard.set(javaProfileOpensRecording, forKey: Keys.javaProfileOpensRecording) }
+    }
+
+    /// A recording larger than this many megabytes asks before it is read.
+    var javaProfileConfirmMegabytes: Int {
+        didSet { UserDefaults.standard.set(javaProfileConfirmMegabytes, forKey: Keys.javaProfileConfirmMegabytes) }
+    }
+
     /// `3 usages` above classes, methods and constructors. A search per declaration, so off by default.
     var javaCodeVisionUsages: Bool {
         didSet { UserDefaults.standard.set(javaCodeVisionUsages, forKey: Keys.javaCodeVisionUsages) }
@@ -707,6 +762,14 @@ public final class IDEPreferences {
         javaInlayVariableTypes = defaults.bool(forKey: Keys.javaInlayVariableTypes)
         javaInlayLambdaTypes = defaults.bool(forKey: Keys.javaInlayLambdaTypes)
         javaCodeVisionUsages = defaults.bool(forKey: Keys.javaCodeVisionUsages)
+        javaCoverageShowsInEditor = defaults.object(forKey: Keys.javaCoverageShowsInEditor) as? Bool ?? true
+        javaCoverageIncludesTests = defaults.object(forKey: Keys.javaCoverageIncludesTests) as? Bool ?? false
+        javaCoveragePackageFilter = defaults.string(forKey: Keys.javaCoveragePackageFilter) ?? ""
+        javaCoverageClearsOnRun = defaults.object(forKey: Keys.javaCoverageClearsOnRun) as? Bool ?? true
+        javaCoverageOpensWindow = defaults.object(forKey: Keys.javaCoverageOpensWindow) as? Bool ?? true
+        javaProfileSamplePeriod = defaults.object(forKey: Keys.javaProfileSamplePeriod) as? Int ?? 0
+        javaProfileOpensRecording = defaults.object(forKey: Keys.javaProfileOpensRecording) as? Bool ?? true
+        javaProfileConfirmMegabytes = defaults.object(forKey: Keys.javaProfileConfirmMegabytes) as? Int ?? 500
         javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))

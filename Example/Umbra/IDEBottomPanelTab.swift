@@ -18,6 +18,8 @@ struct IDEBottomPanelTab: Hashable, CustomStringConvertible {
     static let problems = IDEBottomPanelTab("problems")
     /// The results of the last Find Usages.
     static let usages = IDEBottomPanelTab("usages")
+    /// The last Run with Coverage: packages and classes with their percentages.
+    static let coverage = IDEBottomPanelTab("coverage")
 }
 
 /// A tab a language module puts in the bottom panel: its place in the strip, the strip item, and the
@@ -54,6 +56,7 @@ extension IDEBottomPanelTab {
         static let problems = 40
         static let typeHierarchy = 50
         static let usages = 60
+        static let coverage = 75
         static let testResults = 70
         static let debug = 80
         static let callHierarchy = 90

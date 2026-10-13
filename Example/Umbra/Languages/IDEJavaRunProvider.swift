@@ -22,10 +22,14 @@ final class IDEJavaRunProvider: IDERunProvider {
     private(set) var launchEpoch = 0
     /// When set, the finished Gradle run's XML reports are parsed into test results.
     var pendingTestRunRequest: JavaTestRunRequest?
+    /// The coverage or profile plan of the Gradle task run that is going; consumed when it ends.
+    var pendingInstrumentation: (plan: InstrumentationPlan, tasks: [String])?
 
     init(host: any IDEJavaRunHost, java: IDEJavaSupport) {
         self.host = host
         self.java = java
+        // Tests turn session persistence off; they must not trim the developer's own cache.
+        if IDEWorkspace.isSessionPersistenceEnabled { Self.pruneArtifactsOnce() }
     }
 
     // MARK: - Availability
@@ -150,6 +154,27 @@ final class IDEJavaRunProvider: IDERunProvider {
         location.kind == .entryPoint
     }
 
+    func supportsInstrumentation(at location: IDERunnableLocation) -> Bool {
+        switch location.kind {
+        case .entryPoint, .test, .testGroup: return true
+        case .preview: return false
+        }
+    }
+
+    func run(_ document: IDERunDocument, location: IDERunnableLocation, instrumentation: JavaRunInstrumentation) {
+        switch location.kind {
+        case .entryPoint:
+            guard var configuration = mainConfiguration(in: document, line: location.line) else { return }
+            configuration.launchMode = .run
+            configuration.instrumentation = instrumentation
+            launch(configuration)
+        case .test, .testGroup:
+            Task { await launchTest(in: document, location: location, debug: false, instrumentation: instrumentation) }
+        case .preview:
+            break
+        }
+    }
+
     func editRunConfiguration(_ document: IDERunDocument, location: IDERunnableLocation) {
         guard let configuration = mainConfiguration(in: document, line: location.line) else { return }
         host?.openRunConfigurationDraft(configuration)
@@ -169,7 +194,10 @@ final class IDEJavaRunProvider: IDERunProvider {
         return mainRunConfiguration(for: found, file: url, source: text)
     }
 
-    private func launchTest(in document: IDERunDocument, location: IDERunnableLocation, debug: Bool) async {
+    private func launchTest(
+        in document: IDERunDocument, location: IDERunnableLocation, debug: Bool,
+        instrumentation: JavaRunInstrumentation = .none
+    ) async {
         guard let url = document.url else { return }
         let standard = url.standardizedFileURL
         let cached = host?.activeJavaTestClass
@@ -185,7 +213,7 @@ final class IDEJavaRunProvider: IDERunProvider {
             if debug {
                 host?.debugTests(scope: .testClass(testClass), title: title, recording: nil)
             } else {
-                runTests(scope: .testClass(testClass), title: title)
+                runTests(scope: .testClass(testClass), title: title, instrumentation: instrumentation)
             }
             return
         }
@@ -194,7 +222,7 @@ final class IDEJavaRunProvider: IDERunProvider {
         if debug {
             host?.debugTests(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: title, recording: nil)
         } else {
-            runTests(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: title)
+            runTests(scope: .testMethod(method, taskPath: testClass.gradleTaskPath), title: title, instrumentation: instrumentation)
         }
     }
 
@@ -283,11 +311,51 @@ final class IDEJavaRunProvider: IDERunProvider {
         host.runConfigurationStore.setLast(configuration, forProject: host.projectRootURL)
         host.refreshLastRunConfiguration()
         host.showGradleConsole()
-        gradle.runGradleTasks(
-            [JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName)],
-            extraArguments: JavaLaunchCommand.gradleRunArguments(configuration: configuration),
-            runsApplication: true
-        )
+        let task = JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName)
+        let base = JavaLaunchCommand.gradleRunArguments(configuration: configuration)
+        guard configuration.instrumentation != .none else {
+            gradle.runGradleTasks([task], extraArguments: base, runsApplication: true)
+            return
+        }
+        // Measuring needs the JDK (the report tool and `jfr` run on it), which is resolved off the
+        // main actor.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let plan = await self.instrumentationPlan(for: configuration, tasks: [task]) else { return }
+            guard case .success(let extra) = self.gradleArguments(for: plan) else {
+                if case .failure(let failure) = self.gradleArguments(for: plan) { self.host?.reportRunProblem(failure.message) }
+                return
+            }
+            self.pendingInstrumentation = (plan, [task])
+            self.gradle.runGradleTasks([task], extraArguments: base + extra, runsApplication: true) { [weak self] outcome in
+                self?.instrumentedRunDidNotStart(outcome)
+            }
+        }
+    }
+
+    /// The plan for `configuration`, with the reason shown when there is none.
+    func instrumentationPlan(for configuration: JavaRunConfiguration, tasks: [String]) async -> InstrumentationPlan? {
+        guard let jdk = await resolveRunJDK(for: configuration) else {
+            host?.reportRunProblem("No JDK found to run on. Choose one under Java ▸ Project JDK.")
+            return nil
+        }
+        switch await makeInstrumentationPlan(for: configuration, jdk: jdk, tasks: tasks) {
+        case .success(let plan): return plan
+        case .failure(let failure):
+            host?.reportRunProblem(failure.message)
+            return nil
+        }
+    }
+
+    /// A Gradle run that never started leaves no pending plan behind.
+    func instrumentedRunDidNotStart(_ outcome: IDEGradleRunOutcome) {
+        switch outcome {
+        case .notStarted(let reason), .failed(let reason):
+            pendingInstrumentation = nil
+            host?.reportRunProblem(reason)
+        case .finished, .timedOut, .cancelled:
+            break
+        }
     }
 
     // MARK: - Run in context
@@ -326,6 +394,32 @@ final class IDEJavaRunProvider: IDERunProvider {
             }
         }
         return true
+    }
+
+    /// Run with Coverage or Profile (Run menu): what the caret is in, else the active file's launch,
+    /// else the last configuration. `true` when something was started.
+    @discardableResult
+    func runInstrumented(_ document: IDERunDocument?, instrumentation: JavaRunInstrumentation) async -> Bool {
+        if let document, let target = await resolveContext(document) {
+            switch target {
+            case .configuration(var configuration):
+                configuration.launchMode = .run
+                configuration.instrumentation = instrumentation
+                launch(configuration)
+            case .testMethod(let method, let taskPath):
+                runTests(scope: .testMethod(method, taskPath: taskPath), title: "\(method.methodName)()", instrumentation: instrumentation)
+            case .testClass(let testClass):
+                runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName), instrumentation: instrumentation)
+            }
+            return true
+        }
+        if var configuration = activeRunConfiguration() ?? host?.runConfigurations.last {
+            configuration.launchMode = .run
+            configuration.instrumentation = instrumentation
+            launch(configuration)
+            return true
+        }
+        return false
     }
 
     private func resolveContext(_ document: IDERunDocument) async -> ContextTarget? {

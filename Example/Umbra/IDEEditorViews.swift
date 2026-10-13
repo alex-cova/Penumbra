@@ -15,6 +15,8 @@ final class IDEEditorPaneHost: NSView {
     /// Laid over the editor while a class or dependency diagram tab is selected, and while a JSON
     /// file's diagram preview is showing.
     let diagramViewer = IDEDiagramViewerView()
+    /// Laid over the editor while a Java Flight Recorder profile tab is selected.
+    let profileViewer = IDEProfilerViewerView()
     /// True while this pane's JSON file is covered by its diagram.
     private(set) var isJSONDiagramVisible = false
     private var jsonDiagramSession: IDEDiagramSession?
@@ -92,6 +94,15 @@ final class IDEEditorPaneHost: NSView {
             diagramViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
             diagramViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
             diagramViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        profileViewer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(profileViewer)
+        NSLayoutConstraint.activate([
+            profileViewer.topAnchor.constraint(equalTo: topAnchor),
+            profileViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            profileViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            profileViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         csvTableView.translatesAutoresizingMaskIntoConstraints = false

@@ -14,3 +14,5 @@ Example/Umbra.xcodeproj/xcuserdata/
 Example/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
 # Planning notes under docs/ (AGENT_HARNESS_PLAN.md, GIT_CLIENT_PLAN.md, …)
 docs/**/*PLAN.md
+# JaCoCo agent and CLI, fetched by Example/Umbra/Tools/JaCoCo/fetch.sh
+Example/Umbra/Tools/JaCoCo/build/

@@ -33,6 +33,10 @@ EXCLUDED = [
     "Tools/JavaDebugAdapter/build/test-sources.txt",
     "Tools/JavaDebugAdapter/build/sources.txt",
     "Tools/JavaDebugAdapter/src",
+    # The JaCoCo jars are fetched, not committed, and copied through explicit references as well.
+    "Tools/JaCoCo/fetch.sh",
+    "Tools/JaCoCo/build/jacocoagent.jar",
+    "Tools/JaCoCo/build/jacococli.jar",
 ]
 
 

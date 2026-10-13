@@ -19,6 +19,18 @@ struct IDEJavaModule: IDELanguageModule {
                           action: { [weak workspace] in workspace?.runActiveJavaTests() }),
             EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
                           action: { [weak workspace] in workspace?.runLastRunConfiguration() }),
+            EditorCommand(id: "app.java.runWithCoverage", title: "Java: Run with Coverage", group: "Java",
+                          action: { [weak workspace] in workspace?.runInstrumented(.coverage) }),
+            EditorCommand(id: "app.java.runTestsWithCoverage", title: "Java: Run Tests with Coverage", group: "Java",
+                          action: { [weak workspace] in workspace?.runTestsInstrumented(.coverage) }),
+            EditorCommand(id: "app.java.clearCoverage", title: "Java: Clear Coverage", group: "Java",
+                          action: { [weak workspace] in workspace?.clearCoverage() }),
+            EditorCommand(id: "app.java.profile", title: "Java: Profile", group: "Java",
+                          action: { [weak workspace] in workspace?.runInstrumented(.profile) }),
+            EditorCommand(id: "app.java.profileTests", title: "Java: Profile Tests", group: "Java",
+                          action: { [weak workspace] in workspace?.runTestsInstrumented(.profile) }),
+            EditorCommand(id: "app.java.openProfilerRecording", title: "Java: Open Profiler Recording…", group: "Java",
+                          action: { [weak workspace] in workspace?.chooseProfilerRecording() }),
             EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Configurations…", group: "Java",
                           action: { [weak workspace] in workspace?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",
@@ -72,6 +84,12 @@ struct IDEJavaModule: IDELanguageModule {
             if workspace.showsTestResultsTab {
                 windows.append(workspace.bottomToolWindow(
                     .testResults, "flask", "Test Results", nil, .green, .leadingBottom, order: IDEToolWindow.Order.testResults
+                ))
+            }
+            if workspace.showsCoverageTab {
+                windows.append(workspace.bottomToolWindow(
+                    .coverage, "chart.bar.doc.horizontal", "Coverage", nil, .green, .leadingBottom,
+                    order: IDEToolWindow.Order.coverage
                 ))
             }
             if workspace.showsTypeHierarchyTab {
@@ -133,6 +151,28 @@ struct IDEJavaModule: IDELanguageModule {
                     ))
                 },
                 content: { _ in AnyView(IDETestResultsPanel()) }
+            ))
+        }
+        if workspace.showsCoverageTab {
+            tabs.append(IDEBottomTabContribution(
+                tab: .coverage, order: Order.coverage,
+                item: { workspace in
+                    let controller = workspace.coverage
+                    let title: String
+                    if controller.isBuilding {
+                        title = "Coverage · …"
+                    } else if let percent = controller.snapshot?.report.totals.lines.percent {
+                        title = "Coverage · \(percent)%"
+                    } else {
+                        title = "Coverage"
+                    }
+                    return AnyView(IDECoverageTabItem(
+                        title: title,
+                        isSelected: workspace.isBottomTabSelected(.coverage),
+                        onSelect: { [weak workspace] in workspace?.showBottomTab(.coverage) }
+                    ))
+                },
+                content: { _ in AnyView(IDECoveragePanel()) }
             ))
         }
         if workspace.showsDebugTab {

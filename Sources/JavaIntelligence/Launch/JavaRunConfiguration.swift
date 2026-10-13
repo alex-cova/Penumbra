@@ -6,6 +6,15 @@ public enum JavaLaunchMode: String, Codable, Equatable, Sendable {
     case debug
 }
 
+/// What a launch is measured with: nothing, JaCoCo line coverage, or a Java Flight Recorder
+/// recording. Kept apart from ``JavaLaunchMode`` because that one is stored in files and used across
+/// the workspace, so an older build must still read a newer configuration.
+public enum JavaRunInstrumentation: String, Codable, Equatable, Sendable, CaseIterable {
+    case none
+    case coverage
+    case profile
+}
+
 /// How to launch a Java program: what to run, and the arguments and environment to run it with.
 public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public enum Target: Codable, Equatable, Sendable {
@@ -72,6 +81,8 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public var environment: [String: String]
     /// Run in the terminal or launch under the debugger (classpath targets only in Umbra today).
     public var launchMode: JavaLaunchMode
+    /// Whether the launch records coverage or a profile. Not combined with ``JavaLaunchMode/debug``.
+    public var instrumentation: JavaRunInstrumentation
     /// JDWP listen port for debug launches. `nil` lets the host pick a free port.
     public var jdwpPort: Int?
     /// When debugging, wait at startup until the debugger attaches.
@@ -109,6 +120,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         vmArguments: String = "",
         environment: [String: String] = [:],
         launchMode: JavaLaunchMode = .run,
+        instrumentation: JavaRunInstrumentation = .none,
         jdwpPort: Int? = nil,
         suspendOnStart: Bool = true,
         isTemporary: Bool? = nil,
@@ -129,6 +141,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         self.vmArguments = vmArguments
         self.environment = environment
         self.launchMode = launchMode
+        self.instrumentation = instrumentation
         self.jdwpPort = jdwpPort
         self.suspendOnStart = suspendOnStart
         self.isTemporary = isTemporary ?? Self.isBlank(name)
@@ -149,7 +162,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, target, programArguments, vmArguments, environment
-        case launchMode, jdwpPort, suspendOnStart
+        case launchMode, instrumentation, jdwpPort, suspendOnStart
         case isTemporary, storeAsProjectFile, folder, workingDirectory, jdkHome
         case buildBeforeRun, allowMultipleInstances, beforeLaunch, shortenCommandLine, redirectInputPath
     }
@@ -164,6 +177,8 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         vmArguments = try container.decodeIfPresent(String.self, forKey: .vmArguments) ?? ""
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         launchMode = try container.decodeIfPresent(JavaLaunchMode.self, forKey: .launchMode) ?? .run
+        // An unknown raw value (a newer build's mode) reads as `.none` rather than failing the file.
+        instrumentation = (try? container.decodeIfPresent(JavaRunInstrumentation.self, forKey: .instrumentation)) ?? .none
         jdwpPort = try container.decodeIfPresent(Int.self, forKey: .jdwpPort)
         suspendOnStart = try container.decodeIfPresent(Bool.self, forKey: .suspendOnStart) ?? true
         isTemporary = try container.decodeIfPresent(Bool.self, forKey: .isTemporary) ?? Self.isBlank(name)
@@ -306,6 +321,10 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         case .singleFile: return false
         }
     }
+
+    /// Whether the launch can be run with ``instrumentation``: the debugger owns the launch and its
+    /// JVM options, so the two do not combine.
+    public var supportsInstrumentation: Bool { launchMode != .debug }
 
     /// A new configuration for `target` that starts from this one's settings, as a template does:
     /// a fresh identity and no name, everything else kept.

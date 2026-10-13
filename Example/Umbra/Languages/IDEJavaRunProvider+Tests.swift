@@ -8,13 +8,18 @@ import JavaIntelligence
 extension IDEJavaRunProvider {
     // MARK: - Running tests
 
-    func runTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
+    func runTests(
+        scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil,
+        instrumentation requested: JavaRunInstrumentation = .none
+    ) {
         guard let host else { return }
-        recordTestRun(scope: scope, debug: false, from: recording)
+        let instrumentation = requested != .none ? requested : (recording?.instrumentation ?? .none)
+        recordTestRun(scope: scope, debug: false, from: recording, instrumentation: instrumentation)
         guard let reason = gradleTestBlockReason() else {
-            host.testResults.beginRun(label: "Running \(title)…", scope: scope)
+            let suffix = instrumentation == .coverage ? " with coverage" : (instrumentation == .profile ? " with profiling" : "")
+            host.testResults.beginRun(label: "Running \(title)\(suffix)…", scope: scope, instrumentation: instrumentation)
             host.showTestResults()
-            startGradleTests(scope: scope)
+            startGradleTests(scope: scope, instrumentation: instrumentation)
             return
         }
         // A run that cannot start must not leave the Test Results tab on "Running…".
@@ -24,16 +29,16 @@ extension IDEJavaRunProvider {
     /// The open test class when the editor is showing one. Otherwise every test task in the
     /// Gradle project: the Actions command is available as soon as a project is open, and a
     /// project with no test file focused still has tests to run.
-    func runActiveTests() {
+    func runActiveTests(instrumentation: JavaRunInstrumentation = .none) {
         if let testClass = host?.activeJavaTestClass, !testClass.methods.isEmpty {
-            runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName))
+            runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName), instrumentation: instrumentation)
             return
         }
         guard gradle.isActive, gradle.rootURL != nil else {
             host?.reportRunProblem("Running tests needs a Gradle project.")
             return
         }
-        runTests(scope: .allInModule(gradleTaskPath: "test"), title: "all tests")
+        runTests(scope: .allInModule(gradleTaskPath: "test"), title: "all tests", instrumentation: instrumentation)
     }
 
     /// Why a Gradle test task cannot start, or nil when it can.
@@ -53,7 +58,10 @@ extension IDEJavaRunProvider {
 
     /// Remembers a test run as a configuration, so Run Last and the picker can repeat it. The
     /// configuration a run came from keeps its settings; any other run is a temporary one.
-    func recordTestRun(scope: JavaTestRunScope, debug: Bool, from configuration: JavaRunConfiguration?) {
+    func recordTestRun(
+        scope: JavaTestRunScope, debug: Bool, from configuration: JavaRunConfiguration?,
+        instrumentation: JavaRunInstrumentation = .none
+    ) {
         guard let host else { return }
         var recorded: JavaRunConfiguration
         if let configuration {
@@ -64,13 +72,14 @@ extension IDEJavaRunProvider {
             recorded = fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
         }
         recorded.launchMode = debug ? .debug : .run
+        recorded.instrumentation = debug ? .none : instrumentation
         host.runConfigurationStore.setLast(recorded, forProject: host.projectRootURL)
         host.refreshLastRunConfiguration()
     }
 
     /// Starts the Gradle test task for `scope`. With `debug` the test JVM waits for a debugger on the
     /// JDWP port (`--debug-jvm`), and Gradle's run is not timed out.
-    func startGradleTests(scope: JavaTestRunScope, debug: Bool = false) {
+    func startGradleTests(scope: JavaTestRunScope, debug: Bool = false, instrumentation: JavaRunInstrumentation = .none) {
         guard let url = gradle.rootURL else { return }
         guard var request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradle.model) else { return }
         let taskPaths = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
@@ -86,12 +95,39 @@ extension IDEJavaRunProvider {
         }
         pendingTestRunRequest = request
         let args = JavaTestRunner.gradleArguments(for: request, debug: debug)
+        guard instrumentation != .none, !debug else {
+            runTestTasks(taskPaths, arguments: args, debug: debug)
+            return
+        }
+        var configuration = JavaRunConfiguration.makeTestLaunch(scope: scope)
+        configuration.instrumentation = instrumentation
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let plan = await self.instrumentationPlan(for: configuration, tasks: taskPaths) else {
+                self.pendingTestRunRequest = nil
+                self.host?.testResults.stopRun(message: "The tests were not started.")
+                return
+            }
+            switch self.gradleArguments(for: plan) {
+            case .failure(let failure):
+                self.pendingTestRunRequest = nil
+                self.host?.testResults.stopRun(message: failure.message)
+                self.host?.reportRunProblem(failure.message)
+            case .success(let extra):
+                self.pendingInstrumentation = (plan, taskPaths)
+                self.runTestTasks(taskPaths, arguments: args + extra, debug: false)
+            }
+        }
+    }
+
+    private func runTestTasks(_ taskPaths: [String], arguments args: [String], debug: Bool) {
         gradle.runGradleTasks(taskPaths, extraArguments: args, runsApplication: debug) { [weak self] outcome in
             guard let self, let host = self.host else { return }
             switch outcome {
             case .notStarted(let reason), .failed(let reason):
                 // A declined trust prompt or a missing Gradle never produces results. Leave the
                 // Test Results tab on that reason instead of "Running…" with no run behind it.
+                self.pendingInstrumentation = nil
                 host.testResults.stopRun(message: reason)
                 host.reportRunProblem(reason)
             case .finished, .timedOut, .cancelled:
@@ -106,6 +142,15 @@ extension IDEJavaRunProvider {
         applyBuildOutput(report)
         notifyTasks(report)
         applyTestOutput(report)
+        applyInstrumentationOutput(report)
+    }
+
+    /// The task run a coverage or profile plan was made for ended: read what it wrote. A build or a
+    /// before-launch task that ends meanwhile is not that run.
+    private func applyInstrumentationOutput(_ report: IDEProjectTaskReport) {
+        guard let pending = pendingInstrumentation, pending.tasks == report.tasks else { return }
+        pendingInstrumentation = nil
+        finishGradleRun(plan: pending.plan, report: report)
     }
 
     /// Run and test tasks have their own panels; only builds and the like are announced.

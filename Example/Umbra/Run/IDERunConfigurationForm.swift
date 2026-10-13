@@ -129,6 +129,22 @@ struct IDERunConfigurationForm: View {
                 jdkPicker
             }
         }
+        if configuration.supportsInstrumentation {
+            field(
+                "Run with",
+                caption: "Coverage paints the lines the run executed (Java agent: JaCoCo). Profile records the run with Java Flight Recorder and opens it in the profiler.",
+                problems: problems.filter { $0.field == .instrumentation }
+            ) {
+                Picker("Run with", selection: $configuration.instrumentation) {
+                    Text("Nothing").tag(JavaRunInstrumentation.none)
+                    Text("Coverage").tag(JavaRunInstrumentation.coverage)
+                    Text("Profiler").tag(JavaRunInstrumentation.profile)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 280, alignment: .leading)
+            }
+        }
         if configuration.supportsVMArguments {
             field("VM options", caption: "For example -Xmx512m -Dkey=value. Quote an option that contains spaces.", problems: []) {
                 monoField("-Xmx512m", text: $configuration.vmArguments)

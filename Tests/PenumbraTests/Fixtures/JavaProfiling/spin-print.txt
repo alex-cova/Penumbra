@@ -1,0 +1,368 @@
+jdk.ExecutionSample {
+  startTime = 12:51:14.809 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.809 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.820 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.820 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.833 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.833 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.844 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.856 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.856 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.868 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.868 (2026-10-13)
+  sampledThread = "worker-1" (javaThreadId = 40)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin$Worker.run() line: 7
+    java.lang.Thread.run() line: 1516
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 12:51:14.880 (2026-10-13)
+  sampledThread = "main" (javaThreadId = 3)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.fib(int) line: 5
+    app.Spin.lambda$main$0() line: 11
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 12:51:14.801 (2026-10-13)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 142.9 kB
+  eventThread = "main" (javaThreadId = 3)
+  stackTrace = [
+    app.Spin.main(String[]) line: 11
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 12:51:14.806 (2026-10-13)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 142.3 kB
+  eventThread = "main" (javaThreadId = 3)
+  stackTrace = [
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 12:51:14.811 (2026-10-13)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 143.3 kB
+  eventThread = "main" (javaThreadId = 3)
+  stackTrace = [
+    app.Spin.main(String[]) line: 14
+  ]
+}
+
+jdk.GarbageCollection {
+  startTime = 12:51:15.010 (2026-10-13)
+  duration = 0.841 ms
+  gcId = 2
+  name = "G1New"
+  cause = "G1 Evacuation Pause"
+  sumOfPauses = 0.841 ms
+  longestPause = 0.841 ms
+  eventThread = "VM Thread" (osThreadId = 19459)
+}
+
+jdk.GarbageCollection {
+  startTime = 12:51:15.324 (2026-10-13)
+  duration = 0.744 ms
+  gcId = 3
+  name = "G1New"
+  cause = "G1 Evacuation Pause"
+  sumOfPauses = 0.744 ms
+  longestPause = 0.744 ms
+  eventThread = "VM Thread" (osThreadId = 19459)
+}
+
