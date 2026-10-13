@@ -297,10 +297,34 @@ struct IDESwiftUIPreviewPanel: View {
         case .unavailable(let text):
             message(text, systemImage: "doc")
         case .failed(let text):
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 message(text, systemImage: "exclamationmark.triangle", tint: .orange)
-                // A host that stopped starts again from what was built, with no build.
-                Button("Refresh") { session.refresh() }.controlSize(.small)
+                HStack {
+                    switch session.remedy {
+                    case .installRuntime?:
+                        Button("Download iOS Runtime") { session.downloadSimulatorRuntime() }
+                        Button("Open Xcode") { session.openXcode() }
+                    case .installXcode?:
+                        Button("Get Xcode") { session.openXcodeInAppStore() }
+                    case nil:
+                        EmptyView()
+                    }
+                    // A host that stopped starts again from what was built, with no build.
+                    Button("Refresh") { session.refresh() }
+                }
+                .controlSize(.small)
+            }
+        case .paused(let text):
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Label(text, systemImage: "pause.circle").font(.system(size: 11))
+                    Button("Refresh") { session.refresh() }.controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding(12)
             }
         case .ready:
             EmptyView()

@@ -26,12 +26,31 @@ struct IDESimulatorDevice: Equatable, Sendable {
     var isBooted: Bool
 }
 
+/// A device Umbra created, as Settings lists it.
+struct IDESimulatorOwnDevice: Equatable, Sendable, Identifiable {
+    var udid: String
+    var name: String
+    /// `iOS 27.0`, from the runtime identifier.
+    var runtimeName: String
+    var state: String
+    /// False when the runtime it was made for has been removed: `simctl` lists it but cannot start it.
+    var isAvailable: Bool
+    var isInUse = false
+    /// Bytes on disk, once measured.
+    var bytes: Int64?
+
+    var id: String { udid }
+    var isBooted: Bool { state == "Booted" }
+}
+
 /// What the preview needs of a simulator once it has chosen one.
 struct IDESimulatorTarget: Equatable, Sendable {
     var device: IDESimulatorDevice
     var runtime: IDESimulatorRuntime
     /// `xcrun --sdk iphonesimulator --show-sdk-path`.
     var sdkPath: String
+    /// True when this preparation created the device: its first start is the slow one.
+    var wasCreated = false
 }
 
 enum IDESimulatorError: Error, Equatable, LocalizedError {
@@ -39,6 +58,49 @@ enum IDESimulatorError: Error, Equatable, LocalizedError {
     case noDeviceType(runtime: String)
     case commandFailed(String, output: String)
     case unreadable(String)
+    /// Only the Command Line Tools are installed, or no Xcode is selected: `simctl` is not there.
+    case xcodeMissing
+    /// The disk is full: creating (or starting) a device writes a few GB.
+    case diskFull(String)
+    /// CoreSimulatorService did not answer, even after one more try (it restarts at times).
+    case serviceUnavailable(String)
+
+    /// What can be done about it in the panel.
+    enum Remedy: Equatable, Sendable {
+        case installRuntime
+        case installXcode
+    }
+
+    var remedy: Remedy? {
+        switch self {
+        case .noRuntime: return .installRuntime
+        case .xcodeMissing: return .installXcode
+        default: return nil
+        }
+    }
+
+    /// The error for a failed `simctl`/`xcrun` call, read from what it printed.
+    static func classify(_ what: String, output: String) -> IDESimulatorError {
+        let text = output.lowercased()
+        if text.contains("unable to find utility \"simctl\"") || text.contains("invalid active developer path")
+            || text.contains("xcode-select: error") || text.contains("requires xcode") {
+            return .xcodeMissing
+        }
+        if text.contains("no space left on device") || text.contains("nsposixerrordomain code=28")
+            || text.contains("not enough free space") || text.contains("disk is full") {
+            return .diskFull(what)
+        }
+        if isServiceFailure(output) { return .serviceUnavailable(what) }
+        return .commandFailed(what, output: output)
+    }
+
+    /// CoreSimulatorService going away or not answering: worth one more try a moment later.
+    static func isServiceFailure(_ output: String) -> Bool {
+        let text = output.lowercased()
+        return text.contains("coresimulatorservice") || text.contains("connection became invalid")
+            || text.contains("unable to connect to simulator service") || text.contains("simulator service")
+            || text.contains("xpc_error_connection")
+    }
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +114,15 @@ enum IDESimulatorError: Error, Equatable, LocalizedError {
             return detail.map { "\(what) failed: \($0)" } ?? "\(what) failed."
         case .unreadable(let what):
             return "Could not read \(what) from simctl."
+        case .xcodeMissing:
+            return "The iOS Simulator comes with Xcode; the Command Line Tools alone do not include it. "
+                + "Install Xcode, then choose it with xcode-select -s /Applications/Xcode.app."
+        case .diskFull(let what):
+            return "\(what) failed: there is not enough free disk space. A simulator device takes a few GB; "
+                + "free some space, or remove the devices Umbra created in Settings ▸ SwiftUI Preview."
+        case .serviceUnavailable(let what):
+            return "\(what) failed: the simulator service did not answer. It restarts by itself after a moment; "
+                + "refresh to try again."
         }
     }
 }
@@ -99,6 +170,34 @@ enum IDESimulatorCatalog {
         return result
     }
 
+    /// `iOS 27.0` from `com.apple.CoreSimulator.SimRuntime.iOS-27-0`.
+    static func runtimeName(identifier: String) -> String {
+        let tail = identifier.split(separator: ".").last.map(String.init) ?? identifier
+        let parts = tail.split(separator: "-").map(String.init)
+        guard let platform = parts.first else { return identifier }
+        return ([platform] + [parts.dropFirst().joined(separator: ".")].filter { !$0.isEmpty }).joined(separator: " ")
+    }
+
+    /// The devices Umbra created (by name), available or not, of `simctl list -j devices`.
+    static func ownDevices(fromJSON output: String) -> [IDESimulatorOwnDevice]? {
+        guard let object = jsonObject(in: output), let byRuntime = object["devices"] as? [String: [[String: Any]]] else { return nil }
+        var result: [IDESimulatorOwnDevice] = []
+        for (runtime, list) in byRuntime {
+            for entry in list {
+                guard let udid = entry["udid"] as? String, let name = entry["name"] as? String,
+                      name.hasPrefix(deviceNamePrefix) else { continue }
+                result.append(IDESimulatorOwnDevice(
+                    udid: udid, name: name, runtimeName: runtimeName(identifier: runtime),
+                    state: entry["state"] as? String ?? "Unknown", isAvailable: (entry["isAvailable"] as? Bool) ?? true
+                ))
+            }
+        }
+        return result.sorted { ($0.runtimeName, $0.name) < ($1.runtimeName, $1.name) }
+    }
+
+    /// Every device Umbra creates starts with this.
+    static let deviceNamePrefix = "Umbra Preview - "
+
     /// `27.0` against `26.5` by numeric components, so `26.10` is newer than `26.5`.
     static func compare(_ lhs: String, _ rhs: String) -> ComparisonResult {
         lhs.compare(rhs, options: .numeric)
@@ -126,7 +225,7 @@ enum IDESimulatorCatalog {
     /// The name of the device Umbra creates for a device type; found again by it. A device of the
     /// user's is never reused, so their state and installed apps are left alone.
     static func deviceName(for type: IDESimulatorRuntime.DeviceType) -> String {
-        "Umbra Preview - \(type.name)"
+        deviceNamePrefix + type.name
     }
 }
 
@@ -148,6 +247,9 @@ struct IDESimulatorRequest: Sendable, Equatable, Hashable {
 }
 
 extension IDESimulatorControlling {
+    func prepare(_ request: IDESimulatorRequest, progress: @escaping @Sendable (String) -> Void) async throws -> IDESimulatorTarget {
+        try await prepare(request)
+    }
     func lease(_ target: IDESimulatorTarget) async {}
     func release(_ target: IDESimulatorTarget) async {}
     func removeStaleHosts(on target: IDESimulatorTarget, keeping bundleIdentifiers: Set<String>) async {}
@@ -161,6 +263,8 @@ protocol IDESimulatorControlling: Sendable {
     /// Boots the device if it is not running and returns when it is ready for apps.
     func boot(_ target: IDESimulatorTarget) async throws
     func install(bundlePath: String, on target: IDESimulatorTarget) async throws
+    /// `prepare` that says what it is doing ("Creating the device…") while it does it.
+    func prepare(_ request: IDESimulatorRequest, progress: @escaping @Sendable (String) -> Void) async throws -> IDESimulatorTarget
     /// A preview session now uses the device: it is not shut down while any session holds a lease.
     func lease(_ target: IDESimulatorTarget) async
     /// The session no longer uses the device. When the last lease goes, the device is shut down
@@ -189,7 +293,9 @@ actor IDESimulatorService: IDESimulatorControlling {
     /// Sessions using each device, and the shutdown waiting for the last of them to go.
     private var leases: [String: Int] = [:]
     private var idleShutdowns: [String: Task<Void, Never>] = [:]
-    private let idleInterval: Duration
+    /// A fixed idle time (tests); nil reads Settings each time, where 0 minutes means never.
+    private let fixedIdleInterval: Duration?
+    private let serviceRetryDelay: Duration
     /// What `shutdownBootedByUsBlocking()` reads at quit, when the actor cannot be awaited.
     private let bootedRegistry = BootedRegistry()
     /// The devices this service booted, on disk with the process that booted them: a crash leaves
@@ -198,14 +304,14 @@ actor IDESimulatorService: IDESimulatorControlling {
     private let liveHostIdentifiers: @Sendable () -> Set<String>
     private var orphansAdopted = false
 
-    /// Ten minutes with no preview open: a booted device is a few hundred MB resident.
-    static let defaultIdleInterval: Duration = .seconds(600)
+    private var idleInterval: Duration? { fixedIdleInterval ?? IDESwiftUIPreviewSettings.idleInterval }
 
     /// `ledgerURL` nil keeps no record (tests); `liveHostIdentifiers` is what no work directory
     /// accounts for the complement of; `processIsAlive` says whether a process of the ledger is running.
     init(
         runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(), xcrun: String = "/usr/bin/xcrun",
-        idleInterval: Duration = IDESimulatorService.defaultIdleInterval,
+        idleInterval: Duration? = nil,
+        serviceRetryDelay: Duration = .milliseconds(1500),
         ledgerURL: URL? = nil,
         processIdentifier: Int32 = getpid(),
         processIsAlive: @escaping @Sendable (Int32) -> Bool = IDESimulatorService.isProcessAlive,
@@ -215,7 +321,8 @@ actor IDESimulatorService: IDESimulatorControlling {
     ) {
         self.runner = runner
         self.xcrun = xcrun
-        self.idleInterval = idleInterval
+        self.fixedIdleInterval = idleInterval
+        self.serviceRetryDelay = serviceRetryDelay
         self.ledger = BootedLedger(url: ledgerURL, processIdentifier: processIdentifier, isAlive: processIsAlive)
         self.liveHostIdentifiers = liveHostIdentifiers
     }
@@ -309,23 +416,34 @@ actor IDESimulatorService: IDESimulatorControlling {
 
     static let shared = IDESimulatorService()
 
+    /// Runs `simctl`. CoreSimulatorService restarts at times (and when Xcode updates it); a command
+    /// that failed because it went away is run once more a moment later.
     private func simctl(_ arguments: [String]) async -> IDESwiftUIPreviewRunResult {
-        await runner.run(executable: xcrun, arguments: ["simctl"] + arguments, workingDirectory: nil, onOutput: { _ in })
+        let first = await runner.run(executable: xcrun, arguments: ["simctl"] + arguments, workingDirectory: nil, onOutput: { _ in })
+        guard !first.succeeded, IDESimulatorError.isServiceFailure(first.output) else { return first }
+        try? await Task.sleep(for: serviceRetryDelay)
+        return await runner.run(executable: xcrun, arguments: ["simctl"] + arguments, workingDirectory: nil, onOutput: { _ in })
     }
 
     func prepare(_ request: IDESimulatorRequest) async throws -> IDESimulatorTarget {
+        try await prepare(request, progress: { _ in })
+    }
+
+    func prepare(_ request: IDESimulatorRequest, progress: @escaping @Sendable (String) -> Void) async throws -> IDESimulatorTarget {
         if let running = preparing[request] { return try await running.value }
-        let task = Task { try await self.findOrCreate(request) }
+        let task = Task { try await self.findOrCreate(request, progress: progress) }
         preparing[request] = task
         defer { preparing[request] = nil }
         return try await task.value
     }
 
-    private func findOrCreate(_ request: IDESimulatorRequest) async throws -> IDESimulatorTarget {
+    private func findOrCreate(
+        _ request: IDESimulatorRequest, progress: @Sendable (String) -> Void
+    ) async throws -> IDESimulatorTarget {
         let minimumVersion = request.minimumVersion
         let listed = await simctl(["list", "-j", "runtimes"])
         guard listed.succeeded, let runtimes = IDESimulatorCatalog.runtimes(fromJSON: listed.output) else {
-            throw IDESimulatorError.commandFailed("Listing the simulator runtimes", output: listed.output)
+            throw IDESimulatorError.classify("Listing the simulator runtimes", output: listed.output)
         }
         let pinned = request.runtimeIdentifier.flatMap { id in runtimes.first { $0.identifier == id } }
         guard let runtime = pinned ?? IDESimulatorCatalog.runtime(in: runtimes, atLeast: minimumVersion) else {
@@ -340,35 +458,37 @@ actor IDESimulatorService: IDESimulatorControlling {
         )
         let sdkPath = sdk.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
         guard sdk.succeeded, sdkPath.hasPrefix("/") else {
-            throw IDESimulatorError.commandFailed("Finding the iOS Simulator SDK", output: sdk.output)
+            throw IDESimulatorError.classify("Finding the iOS Simulator SDK", output: sdk.output)
         }
         let devices = await simctl(["list", "-j", "devices"])
         guard devices.succeeded, let known = IDESimulatorCatalog.devices(fromJSON: devices.output) else {
-            throw IDESimulatorError.commandFailed("Listing the simulator devices", output: devices.output)
+            throw IDESimulatorError.classify("Listing the simulator devices", output: devices.output)
         }
         adoptOrphans(known: known)
         let name = IDESimulatorCatalog.deviceName(for: type)
         if let existing = known.first(where: { $0.name == name && $0.runtimeIdentifier == runtime.identifier }) {
             return IDESimulatorTarget(device: existing, runtime: runtime, sdkPath: sdkPath)
         }
+        progress("Creating the simulator device \(type.name) (first time only)…")
         let created = await simctl(["create", name, type.identifier, runtime.identifier])
         let udid = created.output.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
         guard created.succeeded, !udid.isEmpty else {
-            throw IDESimulatorError.commandFailed("Creating the simulator device", output: created.output)
+            throw IDESimulatorError.classify("Creating the simulator device", output: created.output)
         }
         let device = IDESimulatorDevice(
             udid: udid, name: name, runtimeIdentifier: runtime.identifier, deviceTypeIdentifier: type.identifier, isBooted: false
         )
-        return IDESimulatorTarget(device: device, runtime: runtime, sdkPath: sdkPath)
+        return IDESimulatorTarget(device: device, runtime: runtime, sdkPath: sdkPath, wasCreated: true)
     }
 
     func boot(_ target: IDESimulatorTarget) async throws {
         let udid = target.device.udid
+        let bootStarted = Date()
         let booted = await simctl(["boot", udid])
         // Booted already (a window of ours, or the user's own Simulator): not an error, and not ours to shut down.
         let wasRunning = booted.output.contains("current state: Booted")
         guard booted.succeeded || wasRunning else {
-            throw IDESimulatorError.commandFailed("Booting \(target.device.name)", output: booted.output)
+            throw IDESimulatorError.classify("Booting \(target.device.name)", output: booted.output)
         }
         if booted.succeeded, !target.device.isBooted, !bootedByUs.contains(udid) {
             bootedByUs.append(udid)
@@ -378,8 +498,11 @@ actor IDESimulatorService: IDESimulatorControlling {
         // Returns when the device is ready for apps (SpringBoard is up).
         let status = await simctl(["bootstatus", udid])
         guard status.succeeded else {
-            throw IDESimulatorError.commandFailed("Waiting for \(target.device.name) to start", output: status.output)
+            throw IDESimulatorError.classify("Waiting for \(target.device.name) to start", output: status.output)
         }
+        // A cold start is what the next one is told to expect (a boot of a running device takes no time).
+        let took = Date().timeIntervalSince(bootStarted)
+        if booted.succeeded, !target.device.isBooted, took >= 2 { IDESwiftUIPreviewSettings.lastBootSeconds = took }
         // SwiftUI vends its accessibility tree only to an app that launched with this preference on, and
         // the host taps through that tree (Tools/PreviewSpike/ios-simulator/input-host.swift: a running
         // app does not notice a later change). It is a device of our own, so the preference is ours to
@@ -456,7 +579,9 @@ actor IDESimulatorService: IDESimulatorControlling {
 
     private func scheduleIdleShutdown(udid: String) {
         idleShutdowns[udid]?.cancel()
-        let interval = idleInterval
+        idleShutdowns[udid] = nil
+        // Idle stops switched off in Settings: the device stays until Umbra quits.
+        guard let interval = idleInterval else { return }
         idleShutdowns[udid] = Task { [weak self] in
             do { try await Task.sleep(for: interval) } catch { return }
             await self?.idleShutdown(udid: udid)
@@ -520,6 +645,61 @@ actor IDESimulatorService: IDESimulatorControlling {
             bootedRegistry.remove(udid)
             ledger.forget(udid)
         }
+    }
+
+    // MARK: The devices Umbra created (Settings)
+
+    /// The devices whose name says Umbra made them, unavailable ones included.
+    func ownDevices() async -> [IDESimulatorOwnDevice] {
+        let listed = await simctl(["list", "-j", "devices"])
+        guard listed.succeeded, let devices = IDESimulatorCatalog.ownDevices(fromJSON: listed.output) else { return [] }
+        return devices.map { device in
+            var device = device
+            device.isInUse = (leases[device.udid] ?? 0) > 0
+            return device
+        }
+    }
+
+    /// Deletes devices Umbra created. One a preview is using is left, and a running one is shut down
+    /// first. Returns the reason for each that was not removed, by udid.
+    func removeOwnDevices(udids: [String]) async -> [String: String] {
+        let ours = Set(await ownDevices().map(\.udid))
+        var failures: [String: String] = [:]
+        for udid in udids {
+            guard ours.contains(udid) else {
+                failures[udid] = "It is not a device Umbra created."
+                continue
+            }
+            if (leases[udid] ?? 0) > 0 {
+                failures[udid] = "A preview is using it."
+                continue
+            }
+            idleShutdowns[udid]?.cancel()
+            idleShutdowns[udid] = nil
+            bootedByUs.removeAll { $0 == udid }
+            bootedRegistry.remove(udid)
+            ledger.forget(udid)
+            _ = await simctl(["shutdown", udid])
+            let deleted = await simctl(["delete", udid])
+            if !deleted.succeeded {
+                failures[udid] = deleted.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? "simctl delete failed."
+            }
+        }
+        return failures
+    }
+
+    /// Bytes under the device's data folder; nil when it cannot be read (a sandboxed build).
+    nonisolated static func sizeOnDisk(udid: String) -> Int64? {
+        let folder = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Developer/CoreSimulator/Devices/\(udid)", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: []
+        ) else { return nil }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            total += Int64((try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 
     // MARK: Hosts that stay installed

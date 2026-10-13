@@ -47,6 +47,8 @@ final class IDESwiftUIPreviewSession {
         case noPreviews
         case unavailable(String)
         case failed(String)
+        /// The host ended after the idle time; the last frame stays, and Refresh starts it again.
+        case paused(String)
 
         var isWorking: Bool {
             if case .building = self { return true }
@@ -175,6 +177,9 @@ final class IDESwiftUIPreviewSession {
     private(set) var simulatorDeviceTypes: [IDESimulatorRuntime.DeviceType] = []
     /// The device type the preview is on (or will be on); nil for the runtime's default phone.
     private(set) var simulatorDeviceTypeID: String?
+
+    /// What the panel can offer for the failure it shows, when there is one.
+    private(set) var remedy: IDESimulatorError.Remedy?
 
     /// Why the last tap did nothing, for a few seconds: set when the iOS host reports that no route
     /// handled it (`route` `none` in its `ack`). Nil for the macOS host, which takes real events.
@@ -499,6 +504,7 @@ final class IDESwiftUIPreviewSession {
     /// ordered after what is in flight, and only the newest frame is drawn.
     private func send(_ commands: [IDESwiftUIPreviewHostCommand]) {
         guard connection != nil, phase == .ready else { return }
+        noteActivity()
         let counter = nextRenderCounter()
         enqueue { [weak self] connection in
             for command in commands {
@@ -570,6 +576,8 @@ final class IDESwiftUIPreviewSession {
         endHost()
         endedBaseline = nil
         releaseSimulator()
+        idleWatcher?.cancel()
+        idleWatcher = nil
         frame = nil
         phase = .idle
         context.publishDiagnostics([:])
@@ -589,6 +597,8 @@ final class IDESwiftUIPreviewSession {
         }
         generation += 1
         let token = generation
+        noteActivity()
+        startIdleWatcher()
         pipeline?.cancel()
         renderTask?.cancel()
         fileName = file.url.lastPathComponent
@@ -669,6 +679,8 @@ final class IDESwiftUIPreviewSession {
         isSimulatorPreview = false
         var simulatorTarget: IDESimulatorTarget?
         var simulatorBoot: Task<Void, Error>?
+        var startSimulatorBoot: (() -> Task<Void, Error>)?
+        remedy = nil
         if case .xcode(let project) = package.buildSystem {
             phase = .building("Reading the target's settings…")
             let command = SwiftPreviewBuildPlan.buildSettingsCommand(project: project, target: package.target)
@@ -685,26 +697,47 @@ final class IDESwiftUIPreviewSession {
                     let prepared = try await simulator.prepare(IDESimulatorRequest(
                         minimumVersion: SwiftPreviewBuildPlan.buildSetting("IPHONEOS_DEPLOYMENT_TARGET", fromBuildSettings: settings.output),
                         deviceTypeIdentifier: simulatorDeviceTypeID
-                    ))
+                    ), progress: { [weak self] text in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.isCurrent(token) else { return }
+                            self.phase = .building(text)
+                            self.onChange?()
+                        }
+                    })
                     guard isCurrent(token) else { return }
                     simulatorTarget = prepared
                     await leaseSimulator(prepared)
                     guard isCurrent(token) else { return }
                     simulatorDeviceTypes = prepared.runtime.deviceTypes.filter {
-                        $0.productFamily == "iPhone" || $0.productFamily == "iPad"
+                        ($0.productFamily == "iPhone" || $0.productFamily == "iPad")
+                            && IDESwiftUIPreviewSettings.offers(family: $0.productFamily)
                     }
                     activeSimulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
                     simulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
-                    // The device boots while the project builds: the first boot is the slow part.
+                    if prepared.wasCreated { append("Created \(prepared.device.name); its first start is the slow one.\n") }
+                    if let warning = IDESwiftUIPreviewToolchainCheck.mismatch(
+                        sdkPath: prepared.sdkPath, compilerPath: toolchain.swiftc
+                    ) {
+                        append(warning + "\n")
+                        toolchainMismatch = warning
+                    } else {
+                        toolchainMismatch = nil
+                    }
+                    // The device boots while the project builds (the first boot is the slow part), or,
+                    // when Settings say so, after it, so the two do not compete for the CPU.
                     let service = simulator
                     let live = liveHostBundleIdentifiers()
-                    simulatorBoot = Task {
-                        try await service.boot(prepared)
-                        // Apps of sessions and runs that are gone would pile up on the device.
-                        await service.removeStaleHosts(on: prepared, keeping: live)
+                    startSimulatorBoot = {
+                        Task {
+                            try await service.boot(prepared)
+                            // Apps of sessions and runs that are gone would pile up on the device.
+                            await service.removeStaleHosts(on: prepared, keeping: live)
+                        }
                     }
+                    if IDESwiftUIPreviewSettings.startsSimulatorWithBuild { simulatorBoot = startSimulatorBoot?() }
                     append("Previewing on \(prepared.device.name) (\(prepared.runtime.name)).\n")
                 } catch {
+                    remedy = (error as? IDESimulatorError)?.remedy
                     return fail(token, error.localizedDescription)
                 }
             }
@@ -840,8 +873,20 @@ final class IDESwiftUIPreviewSession {
             guard sign.succeeded else { return fail(token, Self.summary(of: sign.output, fallback: "Signing the preview host failed.")) }
             do {
                 // Boot first, then install: the device takes apps only once it has started.
+                if simulatorBoot == nil { simulatorBoot = startSimulatorBoot?() }
+                let waitStarted = Date()
+                if let typical = IDESwiftUIPreviewSettings.lastBootSeconds {
+                    phase = .building("Starting \(simulatorTarget.device.name) (last start took \(Int(typical.rounded())) s)…")
+                } else {
+                    phase = .building("Starting \(simulatorTarget.device.name) (the first start can take half a minute)…")
+                }
+                onChange?()
                 try await simulatorBoot?.value
                 guard isCurrent(token) else { return }
+                let waited = Date().timeIntervalSince(waitStarted)
+                if waited >= 1 { append(String(format: "Waited %.1f s for %@ to start.\n", waited, simulatorTarget.device.name)) }
+                phase = .building("Installing the preview on the simulator…")
+                onChange?()
                 try await simulator.install(bundlePath: bundle, on: simulatorTarget)
             } catch {
                 guard isCurrent(token) else { return }
@@ -947,6 +992,98 @@ final class IDESwiftUIPreviewSession {
             return false
         }
         return true
+    }
+
+    // MARK: Idle
+
+    /// How often an idle host is looked for: the time itself is Settings'.
+    static let idleCheckInterval: Duration = .seconds(20)
+    @ObservationIgnored private var lastActivity = Date()
+    @ObservationIgnored private var idleWatcher: Task<Void, Never>?
+
+    private func noteActivity() {
+        lastActivity = Date()
+    }
+
+    private func startIdleWatcher() {
+        guard idleWatcher == nil else { return }
+        idleWatcher = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.idleCheckInterval)
+                guard !Task.isCancelled, let self else { return }
+                self.pauseIfIdle()
+            }
+        }
+    }
+
+    /// Ends the host of a preview nobody has used for the idle time (Settings; 0 keeps it). The last
+    /// frame stays on the canvas, the device goes back to the service (which shuts it down after the
+    /// same time again), and Refresh starts the host again from what was built, with no build.
+    func pauseIfIdle(now: Date = Date()) {
+        guard phase == .ready, connection != nil, let interval = IDESwiftUIPreviewSettings.idleInterval else { return }
+        let seconds = Double(interval.components.seconds)
+        guard now.timeIntervalSince(lastActivity) >= seconds else { return }
+        endedBaseline = baseline
+        endHost()
+        releaseSimulator()
+        let minutes = Int((seconds / 60).rounded())
+        phase = .paused("Paused after \(minutes) minute\(minutes == 1 ? "" : "s") without use.")
+        onChange?()
+    }
+
+    // MARK: Remedies
+
+    /// Runs `xcodebuild -downloadPlatform iOS` (several GB) and, when it finishes, builds the preview.
+    /// Started by the person pressing the button, never by itself.
+    func downloadSimulatorRuntime() {
+        generation += 1
+        let token = generation
+        pipeline?.cancel()
+        renderTask?.cancel()
+        remedy = nil
+        phase = .building("Downloading the iOS Simulator runtime (several GB)…")
+        append("xcodebuild -downloadPlatform iOS\n")
+        onChange?()
+        let runner = runner
+        let onOutput: @Sendable (String) -> Void = { [weak self] text in
+            Task { @MainActor [weak self] in self?.noteDownloadOutput(text, token: token) }
+        }
+        pipeline = Task { [weak self] in
+            let result = await runner.run(
+                executable: "/usr/bin/xcodebuild", arguments: ["-downloadPlatform", "iOS"], workingDirectory: nil,
+                onOutput: onOutput
+            )
+            guard let self, self.isCurrent(token) else { return }
+            if result.succeeded {
+                self.append("The iOS Simulator runtime is installed.\n")
+                self.start(selecting: nil, allowHotReload: false)
+            } else {
+                self.remedy = .installRuntime
+                self.fail(token, "Downloading the runtime failed: "
+                    + Self.summary(of: result.output, fallback: "xcodebuild did not finish.")
+                    + "\nYou can also install it in Xcode ▸ Settings ▸ Components.")
+            }
+        }
+    }
+
+    private func noteDownloadOutput(_ text: String, token: Int) {
+        guard isCurrent(token) else { return }
+        append(text)
+        // xcodebuild redraws one progress line with carriage returns: the last whole one is the state.
+        let line = text.split(whereSeparator: { $0 == "\r" || $0 == "\n" }).last
+            .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        if !line.isEmpty { phase = .building(line) }
+        onChange?()
+    }
+
+    /// Opens the Xcode that `xcode-select` points at (Settings ▸ Components is under ⌘,).
+    func openXcode() {
+        let runner = runner
+        Task { @MainActor in await IDEXcodeLauncher.openSelectedXcode(runner: runner) }
+    }
+
+    func openXcodeInAppStore() {
+        if let url = URL(string: "https://apps.apple.com/app/xcode/id497799835") { NSWorkspace.shared.open(url) }
     }
 
     // MARK: Files of one session
@@ -1451,9 +1588,16 @@ final class IDESwiftUIPreviewSession {
 
     private func fail(_ token: Int, _ message: String) {
         guard token == generation else { return }
+        var message = message
+        if let mismatch = toolchainMismatch, IDESwiftUIPreviewToolchainCheck.looksLikeVersionMismatch(message) {
+            message += "\n" + mismatch
+        }
         phase = .failed(message)
         onChange?()
     }
+
+    /// Set when the compiler and the iOS SDK come from different Xcodes.
+    @ObservationIgnored private var toolchainMismatch: String?
 
     private func endHost() {
         baseline = nil
@@ -1548,4 +1692,34 @@ final class IDESwiftUIPreviewBuildGate: @unchecked Sendable {
     }
 
     func isHeld(_ key: String) -> Bool { lock.withLock { held.contains(key) } }
+}
+
+/// Whether the compiler and the SDK come from one Xcode. `xcrun` follows `xcode-select` (or
+/// `DEVELOPER_DIR`), while the swift of a project can be found elsewhere on the path, and a module
+/// built by one compiler cannot be read by an older one.
+enum IDESwiftUIPreviewToolchainCheck {
+    /// `/Applications/Xcode.app/Contents/Developer` of a path inside it; nil outside an Xcode.
+    static func developerDirectory(of path: String) -> String? {
+        guard let range = path.range(of: "/Contents/Developer") else { return nil }
+        return String(path[..<range.upperBound])
+    }
+
+    /// A sentence when both paths are inside an Xcode and not the same one.
+    static func mismatch(sdkPath: String, compilerPath: String) -> String? {
+        guard let sdk = developerDirectory(of: sdkPath), let compiler = developerDirectory(of: compilerPath),
+              sdk != compiler else { return nil }
+        return "The compiler is from \(xcodeName(compiler)) and the iOS SDK from \(xcodeName(sdk)). "
+            + "If the build fails with a module version error, make them one Xcode (xcode-select -s, or DEVELOPER_DIR)."
+    }
+
+    static func looksLikeVersionMismatch(_ message: String) -> Bool {
+        let text = message.lowercased()
+        return text.contains("compiled with") || text.contains("different version of the compiler")
+            || text.contains("module compiled with swift") || text.contains("cannot load module")
+            || text.contains("failed to build module")
+    }
+
+    private static func xcodeName(_ developerDirectory: String) -> String {
+        developerDirectory.split(separator: "/").first { $0.hasSuffix(".app") }.map(String.init) ?? developerDirectory
+    }
 }

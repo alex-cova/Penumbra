@@ -120,4 +120,42 @@ final class JavaBreadcrumbProviderTests: XCTestCase {
         XCTAssertEqual(before, ["A", "m()"])
         XCTAssertEqual(after, ["B", "run(int)"])
     }
+
+    func testStackTraceSelectAllDoesNotProduceACrumbPerFrame() async {
+        let text = """
+        com.mongodb.MongoQueryException: Command failed with error 291 (NoQueryExecutionPlans): 'No indexed plans available, and running with 'notablescan' 2' on server localhost:27017.
+          at com.mongodb.internal.operation.FindOperation.lambda$execute$1(FindOperation.java:303)
+          at com.mongodb.internal.operation.SyncOperationHelper.lambda$withSourceAndConnection$0(SyncOperationHelper.java:131)
+          at com.mongodb.internal.operation.FindOperation.execute(FindOperation.java:307)
+          at com.mongodb.client.internal.MongoIterableImpl.into(MongoIterableImpl.java:151)
+          at com.sicarx.product.infra.ds.mongo.repository.DoctorRepositoryImpl.list(DoctorRepositoryImpl.java:53)
+          at com.sicarx.product.app.read.DoctorReadAction.list(DoctorReadAction.java:27)
+          at com.sicarx.product.infra.controller.DoctorController.list(DoctorController.java:28)
+          at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1089)
+          at org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:193)
+          at java.base/java.lang.Thread.run(Thread.java:1570)
+        """
+        let tree = JavaSyntaxParser().parse(text)
+        var counts: [String: Int] = [:]
+        func walk(_ node: SyntaxNode) {
+            counts[node.type, default: 0] += 1
+            for child in node.namedChildren { walk(child) }
+        }
+        if let tree { walk(tree.rootNode) }
+        let interesting = counts.filter { key, _ in
+            key.contains("declaration") || key.contains("class") || key.contains("method") || key == "ERROR"
+        }
+        let atStart = await titles(at: "com.mongodb.MongoQueryException", in: text) ?? []
+        let atEnd = await titles(at: "Thread.run", in: text) ?? []
+        let position = JavaNavigationText.position(utf16Offset: 0, in: text)
+        let document = Document(
+            displayName: "New file", contentSnapshot: TextSnapshot(version: 0, text: text),
+            selection: Selection(range: TextRange(start: position, end: JavaNavigationText.position(utf16Offset: (text as NSString).length, in: text))),
+            cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 10, height: 10),
+            languageIdentifier: "java"
+        )
+        let selectedAll = await JavaBreadcrumbProvider().breadcrumbs(for: document)?.map(\.title) ?? []
+        XCTAssertLessThanOrEqual(selectedAll.count, 4, "start=\(atStart) end=\(atEnd) all=\(selectedAll) nodes=\(interesting)")
+    }
 }

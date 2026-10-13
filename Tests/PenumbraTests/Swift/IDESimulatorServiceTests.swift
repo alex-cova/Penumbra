@@ -12,7 +12,15 @@ import XCTest
 final class IDESimulatorServiceTests: XCTestCase {
     private var directory: URL!
 
+    private static let settingsKeys = [
+        IDESwiftUIPreviewSettings.idleMinutesKey, IDESwiftUIPreviewSettings.startsSimulatorWithBuildKey,
+        IDESwiftUIPreviewSettings.offersPhonesKey, IDESwiftUIPreviewSettings.offersTabletsKey,
+        IDESwiftUIPreviewSettings.lastBootSecondsKey
+    ]
+
     override func setUpWithError() throws {
+        // Settings of the machine the tests run on must not decide what they assert.
+        Self.settingsKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
         IDEWorkspace.isSessionPersistenceEnabled = false
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-simulator-\(UUID().uuidString)", isDirectory: true)
@@ -20,6 +28,7 @@ final class IDESimulatorServiceTests: XCTestCase {
     }
 
     override func tearDown() {
+        Self.settingsKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
         IDEWorkspace.isSessionPersistenceEnabled = true
         if let directory { try? FileManager.default.removeItem(at: directory) }
     }
@@ -446,6 +455,297 @@ final class IDESimulatorServiceTests: XCTestCase {
             ["simctl", "uninstall", "UDID-1", "com.umbra.preview.00000000000000bb"],
             ["simctl", "uninstall", "UDID-1", "com.umbra.preview.spike"]
         ])
+    }
+
+    // MARK: S5b: settings, failures, the device list
+
+    func testTheSettingsDefaultToTenIdleMinutesAndEverythingOn() {
+        XCTAssertEqual(IDESwiftUIPreviewSettings.idleMinutes, 10)
+        XCTAssertEqual(IDESwiftUIPreviewSettings.idleInterval, .seconds(600))
+        XCTAssertTrue(IDESwiftUIPreviewSettings.startsSimulatorWithBuild)
+        XCTAssertTrue(IDESwiftUIPreviewSettings.offers(family: "iPhone"))
+        XCTAssertTrue(IDESwiftUIPreviewSettings.offers(family: "iPad"))
+
+        IDESwiftUIPreviewSettings.idleMinutes = 0
+        XCTAssertNil(IDESwiftUIPreviewSettings.idleInterval, "0 keeps the host and the device until the panel closes")
+        IDESwiftUIPreviewSettings.idleMinutes = 9999
+        XCTAssertEqual(IDESwiftUIPreviewSettings.idleMinutes, IDESwiftUIPreviewSettings.idleMinutesRange.upperBound)
+
+        IDESwiftUIPreviewSettings.offersPhones = false
+        XCTAssertFalse(IDESwiftUIPreviewSettings.offers(family: "iPhone"), "tablets only")
+        IDESwiftUIPreviewSettings.offersTablets = false
+        XCTAssertTrue(IDESwiftUIPreviewSettings.offers(family: "iPhone"), "a menu with nothing in it is no choice")
+        XCTAssertFalse(IDESwiftUIPreviewSettings.offers(family: "iPad"))
+    }
+
+    func testAFailedSimctlIsClassifiedByWhatItPrinted() {
+        func classify(_ output: String) -> IDESimulatorError { IDESimulatorError.classify("Listing", output: output) }
+        XCTAssertEqual(classify("xcrun: error: unable to find utility \"simctl\", not a developer tool or in PATH"), .xcodeMissing)
+        XCTAssertEqual(classify("xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)"), .xcodeMissing)
+        XCTAssertEqual(
+            classify("Error Domain=NSPOSIXErrorDomain Code=28 \"No space left on device\""), .diskFull("Listing")
+        )
+        XCTAssertEqual(
+            classify("CoreSimulatorService connection became invalid. Simulator services will no longer be available."),
+            .serviceUnavailable("Listing")
+        )
+        // An ordinary refusal keeps its output.
+        XCTAssertEqual(
+            classify("Unable to boot device in current state: Booted"),
+            .commandFailed("Listing", output: "Unable to boot device in current state: Booted")
+        )
+        // The domain name of simctl's own errors is not a service failure.
+        XCTAssertFalse(IDESimulatorError.isServiceFailure("domain=com.apple.CoreSimulator.SimError, code=405"))
+    }
+
+    func testEachFailureSaysWhatToDoAndOffersWhatThePanelCan() {
+        XCTAssertEqual(IDESimulatorError.noRuntime(minimum: nil).remedy, .installRuntime)
+        XCTAssertEqual(IDESimulatorError.xcodeMissing.remedy, .installXcode)
+        XCTAssertNil(IDESimulatorError.diskFull("x").remedy)
+        let missing = IDESimulatorError.xcodeMissing.localizedDescription
+        XCTAssertTrue(missing.contains("Command Line Tools") && missing.contains("xcode-select"), missing)
+        let full = IDESimulatorError.diskFull("Creating the simulator device").localizedDescription
+        XCTAssertTrue(full.contains("disk space") && full.contains("Settings"), full)
+        XCTAssertTrue(IDESimulatorError.serviceUnavailable("Booting").localizedDescription.contains("restarts"))
+    }
+
+    func testOnlyTheCommandLineToolsMeansNoSimulatorAndNothingElseRuns() async {
+        let runner = ScriptedRunner { _, _ in
+            (72, "xcrun: error: unable to find utility \"simctl\", not a developer tool or in PATH\n")
+        }
+        do {
+            _ = try await IDESimulatorService(runner: runner, serviceRetryDelay: .milliseconds(1)).prepare(IDESimulatorRequest())
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? IDESimulatorError, .xcodeMissing)
+        }
+        XCTAssertEqual(runner.commands.count, 1, "one question, one answer")
+    }
+
+    func testADiskThatIsFullWhenTheDeviceIsCreatedSaysSo() async {
+        let runtimes = runtimesJSON
+        let runner = ScriptedRunner { _, arguments in
+            if arguments == ["simctl", "list", "-j", "runtimes"] { return (0, runtimes) }
+            if arguments == ["simctl", "list", "-j", "devices"] { return (0, #"{"devices":{}}"#) }
+            if arguments.first == "--sdk" { return (0, "/Xcode/iPhoneSimulator27.0.sdk\n") }
+            if arguments.starts(with: ["simctl", "create"]) {
+                return (1, "An error was encountered processing the command: Error Domain=NSPOSIXErrorDomain Code=28 \"No space left on device\"\n")
+            }
+            return (0, "")
+        }
+        do {
+            _ = try await IDESimulatorService(runner: runner).prepare(IDESimulatorRequest())
+            XCTFail("expected an error")
+        } catch {
+            guard case .diskFull(let what)? = error as? IDESimulatorError else { return XCTFail("\(error)") }
+            XCTAssertEqual(what, "Creating the simulator device")
+        }
+    }
+
+    func testAServiceThatRestartedAnswersTheSecondTime() async throws {
+        let calls = CallCounter()
+        let runtimes = runtimesJSON
+        let runner = ScriptedRunner { _, arguments in
+            if arguments == ["simctl", "list", "-j", "runtimes"] {
+                return calls.next() == 1
+                    ? (1, "CoreSimulatorService connection became invalid\n") : (0, runtimes)
+            }
+            if arguments == ["simctl", "list", "-j", "devices"] {
+                return (0, #"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[{"udid":"U","name":"Umbra Preview - iPhone 17","state":"Shutdown","isAvailable":true,"deviceTypeIdentifier":"dt"}]}}"#)
+            }
+            if arguments.first == "--sdk" { return (0, "/Xcode/iPhoneSimulator27.0.sdk\n") }
+            return (0, "")
+        }
+        let target = try await IDESimulatorService(runner: runner, serviceRetryDelay: .milliseconds(5)).prepare(IDESimulatorRequest())
+        XCTAssertEqual(target.device.udid, "U")
+        XCTAssertEqual(calls.count, 2, "one retry")
+    }
+
+    func testAServiceThatStaysDownIsReportedAfterOneRetry() async {
+        let runner = ScriptedRunner { _, _ in (1, "CoreSimulatorService connection became invalid\n") }
+        do {
+            _ = try await IDESimulatorService(runner: runner, serviceRetryDelay: .milliseconds(5)).prepare(IDESimulatorRequest())
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? IDESimulatorError, .serviceUnavailable("Listing the simulator runtimes"))
+        }
+        XCTAssertEqual(runner.commands.count, 2)
+    }
+
+    private final class CallCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        var count: Int { lock.withLock { value } }
+        func next() -> Int { lock.withLock { value += 1; return value } }
+    }
+
+    private final class Collected: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [String] = []
+        var values: [String] { lock.withLock { items } }
+        func add(_ item: String) { lock.withLock { items.append(item) } }
+    }
+
+    func testCreatingTheDeviceIsReportedAsItHappens() async throws {
+        let seen = Collected()
+        let runner = simctlRunner()
+        let service = IDESimulatorService(runner: runner)
+        let target = try await service.prepare(IDESimulatorRequest(), progress: { seen.add($0) })
+        XCTAssertTrue(target.wasCreated)
+        XCTAssertEqual(seen.values.count, 1)
+        XCTAssertTrue(seen.values[0].contains("Creating the simulator device") && seen.values[0].contains("first time only"), "\(seen.values)")
+
+        // Found again: nothing was created, nothing to report.
+        let devices = """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+          {"udid":"OURS","name":"Umbra Preview - iPhone 17","state":"Shutdown","isAvailable":true,"deviceTypeIdentifier":"dt"}]}}
+        """
+        let again = Collected()
+        let found = try await IDESimulatorService(runner: simctlRunner(devicesJSON: devices)).prepare(IDESimulatorRequest(), progress: { again.add($0) })
+        XCTAssertFalse(found.wasCreated)
+        XCTAssertEqual(again.values, [])
+    }
+
+    func testAColdBootIsTimedForTheNextOneToQuote() async throws {
+        let runner = ScriptedRunner { _, arguments in
+            if arguments.starts(with: ["simctl", "bootstatus"]) { Thread.sleep(forTimeInterval: 2.1) }
+            return (0, "")
+        }
+        let target = try await FakeSimulator().target
+        try await IDESimulatorService(runner: runner).boot(target)
+        let measured = try XCTUnwrap(IDESwiftUIPreviewSettings.lastBootSeconds)
+        XCTAssertGreaterThanOrEqual(measured, 2)
+    }
+
+    func testTheDevicesUmbraCreatedAreListedWithTheirRuntimeAndAvailability() throws {
+        let json = """
+        {"devices":{
+          "com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+            {"udid":"A","name":"Umbra Preview - iPhone 17","state":"Booted","isAvailable":true},
+            {"udid":"MINE","name":"iPhone 17","state":"Shutdown","isAvailable":true}],
+          "com.apple.CoreSimulator.SimRuntime.iOS-17-5":[
+            {"udid":"B","name":"Umbra Preview - iPhone 15","state":"Shutdown","isAvailable":false}]}}
+        """
+        let devices = try XCTUnwrap(IDESimulatorCatalog.ownDevices(fromJSON: json))
+        XCTAssertEqual(devices.map(\.udid), ["B", "A"], "by runtime, then name; the user's own device is not listed")
+        XCTAssertEqual(devices[0].runtimeName, "iOS 17.5")
+        XCTAssertFalse(devices[0].isAvailable)
+        XCTAssertTrue(devices[1].isBooted)
+        XCTAssertEqual(IDESimulatorCatalog.runtimeName(identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0"), "iOS 27.0")
+    }
+
+    func testARemovedDeviceIsShutDownThenDeletedAndOneInUseIsKept() async throws {
+        let devices = """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+          {"udid":"A","name":"Umbra Preview - iPhone 17","state":"Booted","isAvailable":true},
+          {"udid":"B","name":"Umbra Preview - iPad Air","state":"Shutdown","isAvailable":true},
+          {"udid":"MINE","name":"iPhone 17","state":"Shutdown","isAvailable":true}]}}
+        """
+        let runner = ScriptedRunner { _, arguments in
+            arguments == ["simctl", "list", "-j", "devices"] ? (0, devices) : (0, "")
+        }
+        let service = IDESimulatorService(runner: runner)
+        let inUse = IDESimulatorTarget(
+            device: IDESimulatorDevice(udid: "B", name: "x", runtimeIdentifier: "rt", deviceTypeIdentifier: "dt", isBooted: false),
+            runtime: try await FakeSimulator().target.runtime, sdkPath: "/sdk"
+        )
+        await service.lease(inUse)
+        let failures = await service.removeOwnDevices(udids: ["A", "B", "MINE", "NOPE"])
+        XCTAssertEqual(Set(failures.keys), ["B", "MINE", "NOPE"])
+        XCTAssertTrue((failures["B"] ?? "").contains("preview is using"))
+        let commands = runner.commands
+        let shutdown = try XCTUnwrap(commands.firstIndex(of: ["simctl", "shutdown", "A"]))
+        let delete = try XCTUnwrap(commands.firstIndex(of: ["simctl", "delete", "A"]))
+        XCTAssertLessThan(shutdown, delete)
+        XCTAssertFalse(commands.contains(["simctl", "delete", "MINE"]), "never the user's device")
+        XCTAssertFalse(commands.contains(["simctl", "delete", "B"]))
+    }
+
+    func testTheSettingsModelListsAndRemoves() async throws {
+        let devices = """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+          {"udid":"A","name":"Umbra Preview - iPhone 17","state":"Shutdown","isAvailable":true}]}}
+        """
+        let runner = ScriptedRunner { _, arguments in
+            arguments == ["simctl", "list", "-j", "devices"] ? (0, devices) : (0, "")
+        }
+        let model = IDESimulatorDevicesModel(service: IDESimulatorService(runner: runner))
+        await model.reload()
+        XCTAssertEqual(model.devices.map(\.name), ["Umbra Preview - iPhone 17"])
+        await model.removeAll()
+        XCTAssertTrue(runner.commands.contains(["simctl", "delete", "A"]))
+        XCTAssertNil(model.message)
+    }
+
+    func testTheCompilerAndTheSDKOfOneXcodeAreNotAMismatch() {
+        let sdk = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.0.sdk"
+        let same = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        let other = "/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        XCTAssertNil(IDESwiftUIPreviewToolchainCheck.mismatch(sdkPath: sdk, compilerPath: same))
+        let warning = try? XCTUnwrap(IDESwiftUIPreviewToolchainCheck.mismatch(sdkPath: sdk, compilerPath: other))
+        XCTAssertTrue(warning?.contains("Xcode-beta.app") == true && warning?.contains("Xcode.app") == true, "\(String(describing: warning))")
+        // A shim outside any Xcode (/usr/bin/swiftc follows xcode-select) cannot be told apart.
+        XCTAssertNil(IDESwiftUIPreviewToolchainCheck.mismatch(sdkPath: sdk, compilerPath: "/usr/bin/swiftc"))
+        XCTAssertTrue(IDESwiftUIPreviewToolchainCheck.looksLikeVersionMismatch(
+            "error: module compiled with Swift 6.3 cannot be imported by the Swift 6.2 compiler"
+        ))
+        XCTAssertFalse(IDESwiftUIPreviewToolchainCheck.looksLikeVersionMismatch("error: cannot find 'x' in scope"))
+    }
+
+    func testARuntimeThatIsMissingOffersToGetOneAndNoXcodeOffersXcode() async {
+        let missingRuntime = makeSession(
+            runner: xcodeRunner(platform: "iphoneos"),
+            simulator: FakeSimulator(failure: IDESimulatorError.noRuntime(minimum: "18.0"))
+        )
+        missingRuntime.refresh()
+        _ = await waitUntil { if case .failed = missingRuntime.phase { return true } else { return false } }
+        XCTAssertEqual(missingRuntime.remedy, .installRuntime)
+
+        let noXcode = makeSession(runner: xcodeRunner(platform: "iphoneos"), simulator: FakeSimulator(failure: IDESimulatorError.xcodeMissing))
+        noXcode.refresh()
+        _ = await waitUntil { if case .failed = noXcode.phase { return true } else { return false } }
+        XCTAssertEqual(noXcode.remedy, .installXcode)
+    }
+
+    func testTheRuntimeIsDownloadedByXcodebuildOnRequestAndTheBuildFollows() async {
+        let runner = ScriptedRunner { executable, arguments in
+            if arguments == ["-downloadPlatform", "iOS"] {
+                return (0, "Downloading iOS 27.0 Simulator: 12.3%\rDownloading iOS 27.0 Simulator: 100.0%\n")
+            }
+            if arguments.contains("-showBuildSettings") {
+                return (0, "Build settings for action build and target App:\n    PLATFORM_NAME = iphoneos\n")
+            }
+            return (1, "/p/App/App/ContentView.swift:2:1: error: stop here\n")
+        }
+        let session = makeSession(runner: runner, simulator: FakeSimulator())
+        session.downloadSimulatorRuntime()
+        let resumed = await waitUntil { session.log.joined().contains("The iOS Simulator runtime is installed.") }
+        XCTAssertTrue(resumed, session.log.joined())
+        XCTAssertEqual(runner.commands.first, ["-downloadPlatform", "iOS"])
+        // After the download the preview is built (here: the scripted build fails, which is the end of it).
+        let reached = await waitUntil { runner.commands.contains { $0.contains("-showBuildSettings") } }
+        XCTAssertTrue(reached, "the build follows the download: \(runner.commands)")
+    }
+
+    func testTheSimulatorStartsAfterTheBuildWhenSettingsSaySo() async {
+        IDESwiftUIPreviewSettings.startsSimulatorWithBuild = false
+        let runner = xcodeRunner(platform: "iphoneos", minimum: "18.0")
+        let simulator = FakeSimulator()
+        let session = makeSession(runner: runner, simulator: simulator)
+        session.refresh()
+        let failed = await waitUntil { if case .failed = session.phase { return true } else { return false } }
+        XCTAssertTrue(failed, "\(session.phase)")
+        try? await Task.sleep(for: .milliseconds(150))
+        let booted = await simulator.booted
+        XCTAssertEqual(booted, [], "the build failed before the device was wanted")
+    }
+
+    func testTheDeviceMenuOffersOnlyTheFamiliesSettingsKeep() async {
+        IDESwiftUIPreviewSettings.offersTablets = false
+        let session = makeSession(runner: xcodeRunner(platform: "iphoneos", minimum: "18.0"), simulator: FakeSimulator())
+        session.refresh()
+        _ = await waitUntil { !session.simulatorDeviceTypes.isEmpty }
+        XCTAssertEqual(session.simulatorDeviceTypes.map(\.productFamily), ["iPhone"])
     }
 
     // MARK: Devices a crash left booted
