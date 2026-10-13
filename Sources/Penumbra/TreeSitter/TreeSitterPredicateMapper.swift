@@ -14,6 +14,10 @@ enum TreeSitterPredicateMapper {
             case "set!":
                 let setProperties = self.properties(fromSetSteps: predicate.steps)
                 properties[setProperties.name] = setProperties.value
+            case "offset!":
+                // `#offset!` adjusts an injection range. Leaving it unrecognized would drop the
+                // whole match; the range stays the captured node's until offset is applied.
+                break
             case "eq?":
                 textPredicates.append(self.textPredicate(fromEqSteps: predicate.steps, isPositive: true))
             case "not-eq?":

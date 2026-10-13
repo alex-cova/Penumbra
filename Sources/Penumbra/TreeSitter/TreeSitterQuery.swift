@@ -128,15 +128,23 @@ private extension TreeSitterQuery {
         guard let rawSteps = ts_query_predicates_for_pattern(pointer, index, lengthPointer) else {
             return []
         }
+        // A pattern may list several predicates. Each one starts with its name and ends at
+        // Done; reading every predicate from the start of the list kept only the first and
+        // dropped a following `#set!` (so an injection lost its language).
+        let count = Int(lengthPointer.pointee)
         var predicates: [TreeSitterPredicate] = []
-        var l = 0
-        while l < lengthPointer.pointee {
+        var offset = 0
+        while offset < count {
+            let nameStep = rawSteps[offset]
+            guard nameStep.type == TSQueryPredicateStepTypeString else {
+                break
+            }
+            let name = stringValue(forId: nameStep.value_id)
+            offset += 1
             var steps: [TreeSitterPredicate.Step] = []
-            let name = stringValue(forId: rawSteps.pointee.value_id)
-            l += 1
-            for i in 1 ..< .max {
-                let step = (rawSteps + UnsafePointer<TSQueryPredicateStep>.Stride(i)).pointee
-                l += 1
+            while offset < count {
+                let step = rawSteps[offset]
+                offset += 1
                 if step.type == TSQueryPredicateStepTypeCapture {
                     steps.append(.capture(step.value_id))
                 } else if step.type == TSQueryPredicateStepTypeString {
@@ -145,8 +153,7 @@ private extension TreeSitterQuery {
                     break
                 }
             }
-            let predicate = TreeSitterPredicate(name: name, steps: steps)
-            predicates.append(predicate)
+            predicates.append(TreeSitterPredicate(name: name, steps: steps))
         }
         return predicates
     }
