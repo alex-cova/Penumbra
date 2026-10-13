@@ -122,7 +122,8 @@ final class LanguagePackTests: XCTestCase {
         let captures = captureNames(language: .json, text: text)
         XCTAssertTrue(captures.contains("string"), "Expected string, got \(captures)")
         XCTAssertTrue(captures.contains("number"), "Expected number, got \(captures)")
-        XCTAssertTrue(captures.contains("constant.builtin"), "Expected constant.builtin, got \(captures)")
+        XCTAssertTrue(captures.contains("boolean"), "Expected boolean, got \(captures)")
+        XCTAssertTrue(captures.contains("property"), "Expected property, got \(captures)")
     }
 
     func testPythonHighlightCaptures() {
