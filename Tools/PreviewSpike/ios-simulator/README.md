@@ -28,5 +28,9 @@ are in `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3. In short:
 - Tab bar items and the back button answer `UIControl.sendActions(.touchUpInside)`, not activation.
 - Scroll is `setContentOffset` (lazy rows follow); text is `becomeFirstResponder` on the `UITextField` found
   under the point, then `UIKeyInput`.
-- No public route: `DragGesture`, long press, `onTapGesture` on a non-button, alert buttons, menu items, and a
-  hand-made `UITouch`. The software keyboard is not in `drawHierarchy`; sheets, alerts and open menus are.
+- Round 2: menu and picker items are reached through the opening button's public `menu`
+  (`UIAction.performWithSender`, then `contextMenuInteraction?.dismissMenu()`); `UISlider` and `UIStepper` by
+  setting their value and sending `.valueChanged`; swipe actions through `accessibilityCustomActions`.
+- No public route: `DragGesture`, long press, `onTapGesture` (also with the button trait), alert buttons
+  (`keyCommands` is empty), context-menu items, and a hand-made `UITouch`. The software keyboard is not in
+  `drawHierarchy`; sheets, alerts and open menus are.

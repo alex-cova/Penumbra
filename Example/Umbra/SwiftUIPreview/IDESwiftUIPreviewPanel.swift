@@ -204,7 +204,7 @@ struct IDESwiftUIPreviewPanel: View {
     /// An iOS preview is driven from inside the app with public API only, so some input has no route.
     /// Says so where the frame is, with the list a tap away (`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3).
     private var limitedInputNote: some View {
-        Label("Limited input", systemImage: "hand.tap")
+        Label(session.inputHint ?? "Limited input", systemImage: session.inputHint == nil ? "hand.tap" : "exclamationmark.circle")
             .font(.system(size: 10))
             .lineLimit(1)
             .foregroundStyle(.secondary)

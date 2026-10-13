@@ -176,6 +176,14 @@ final class IDESwiftUIPreviewSession {
     /// The device type the preview is on (or will be on); nil for the runtime's default phone.
     private(set) var simulatorDeviceTypeID: String?
 
+    /// Why the last tap did nothing, for a few seconds: set when the iOS host reports that no route
+    /// handled it (`route` `none` in its `ack`). Nil for the macOS host, which takes real events.
+    private(set) var inputHint: String?
+    @ObservationIgnored private var hintTask: Task<Void, Never>?
+    /// Called when a swipe on a row of an iOS preview offered actions: the point of the frame and
+    /// their names. The canvas shows them as a menu and answers with `perform(customAction:at:)`.
+    @ObservationIgnored var swipeActionsHandler: ((CGPoint, [String]) -> Void)?
+
     /// Forgets how the last frame was made, so a caller waiting for the next reload can tell it from the last.
     func lastReloadReset() { lastReload = nil }
 
@@ -376,12 +384,47 @@ final class IDESwiftUIPreviewSession {
     /// What an iOS preview cannot be driven to do: the host acts from inside the app with public
     /// API (accessibility activation, controls, scroll views, the first responder), so these have no route.
     static let limitedInputExplanation = """
-        Taps on buttons, toggles, links, tabs and fields, scrolling, dragging a list, typing and \
-        sheets work.
-        Not reachable from a preview: drag and long-press gestures, onTapGesture on a view that is \
-        not a button, the buttons of an alert and the items of a menu, pinch, and the software keyboard \
-        (it is not part of the frame).
+        Works: buttons, toggles, links, tabs, sliders, steppers, menus and pickers (open one, then \
+        click an item), text fields and typing, sheets, scrolling and dragging a list, pulling it \
+        down to refresh, and swipe actions (drag a row sideways to pick one).
+        Not reachable from a preview: drag and long-press gestures, onTapGesture (a Button works), \
+        the buttons of an alert, context menus, pinch, and the software keyboard (it is not part of \
+        the frame).
         """
+
+    /// Shown for a few seconds after a tap that no route handled.
+    static let noRouteHint = "Nothing there takes a tap from the preview"
+
+    /// The hint a host reply calls for: only a release without travel that no route handled.
+    static func inputHint(for command: IDESwiftUIPreviewHostCommand, route: String?) -> String? {
+        guard case .mouse(let type, _, _) = command, type == "up", route == "none" else { return nil }
+        return noRouteHint
+    }
+
+    /// The offer of a swipe: where the row is, in frame points, and its action names.
+    static func swipeOffer(in event: IDESwiftUIPreviewHostEvent) -> (point: CGPoint, names: [String])? {
+        guard event["route"] as? String == "actions",
+              let names = event["actions"] as? [String], !names.isEmpty,
+              let x = event["x"] as? Double, let y = event["y"] as? Double else { return nil }
+        return (CGPoint(x: x, y: y), names)
+    }
+
+    /// Runs one of the actions a swipe offered, on the row at `point`.
+    func perform(customAction name: String, at point: CGPoint) {
+        send([.customAction(x: point.x, y: point.y, name: name)])
+    }
+
+    private func noteInputReply(to command: IDESwiftUIPreviewHostCommand, _ event: IDESwiftUIPreviewHostEvent) {
+        if let hint = Self.inputHint(for: command, route: event["route"] as? String) {
+            inputHint = hint
+            hintTask?.cancel()
+            hintTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                if !Task.isCancelled { self?.inputHint = nil }
+            }
+        }
+        if let offer = Self.swipeOffer(in: event) { swipeActionsHandler?(offer.point, offer.names) }
+    }
 
     /// A click at a point of the frame, in points.
     func click(at point: CGPoint) {
@@ -428,7 +471,10 @@ final class IDESwiftUIPreviewSession {
         guard connection != nil, phase == .ready else { return }
         let counter = nextRenderCounter()
         enqueue { [weak self] connection in
-            for command in commands { _ = try await connection.request(command) }
+            for command in commands {
+                let reply = try await connection.request(command)
+                self?.noteInputReply(to: command, reply)
+            }
             await self?.render(counter: counter)
         }
         // What the input started has not happened yet when that frame is drawn: a SwiftUI sheet was

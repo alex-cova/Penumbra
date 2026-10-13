@@ -29,6 +29,10 @@ final class Model: ObservableObject {
     @Published var gestureTaps = 0
     @Published var alert = false
     @Published var alertOK = 0
+    @Published var gestureButtonTaps = 0
+    @Published var slider = 50.0
+    @Published var stepper = 0
+    @Published var contextPicked = ""
     var appeared = 0
     var frames: [String: CGRect] = [:]
 }
@@ -77,6 +81,15 @@ struct Fixture: View {
                             Text("a").tag("a"); Text("b").tag("b"); Text("c").tag("c")
                         }.pickerStyle(.menu).probe("picker")
                         Menu("Menu") { Button("One") { m.menuPicked = "one" } }.probe("menu")
+                    }
+                    Section("More") {
+                        Text("Tap gesture, button trait").padding(.vertical, 8)
+                            .onTapGesture { m.gestureButtonTaps += 1 }
+                            .accessibilityAddTraits(.isButton).probe("gestureButton")
+                        Slider(value: $m.slider, in: 0...100).probe("slider")
+                        Stepper("Count \(m.stepper)", value: $m.stepper).probe("stepper")
+                        Text("Context menu").padding(.vertical, 8)
+                            .contextMenu { Button("Copy") { m.contextPicked = "copy" } }.probe("context")
                     }
                     Section("Rows") {
                         ForEach(0..<50, id: \.self) { i in
@@ -392,6 +405,9 @@ final class Spike {
         await runCase(.init(id: "tab bar item (Other)", point: { self.labelPoint("Other") }, observe: { "tab=\(m.tab)" }, reset: { m.tab = 0 }))
         m.tab = 0; await settle(0.8)
 
+        await moreProbes()
+        await scrollToTop()
+
         // Alert: presented by activation; is its button reachable, and is it in the frame?
         await scrollToTop()
         await runCase(.init(id: "alert presenter", point: { self.modelPoint("alert") ?? self.labelPoint("Show alert") },
@@ -416,6 +432,13 @@ final class Spike {
             note("   \(sendControl(at: q)); alertOK=\(m.alertOK) alert=\(m.alert)")
             let alertVC = window.rootViewController?.presentedViewController as? UIAlertController
             note("   presented UIAlertController: \(alertVC != nil) actions=\(alertVC?.actions.map { $0.title ?? "?" } ?? [])")
+            let commands = alertVC?.keyCommands ?? []
+            note("   alert keyCommands: \(commands.map { "input='\($0.input ?? "")' title='\($0.discoverabilityTitle ?? "")' action=\($0.action.map { String(describing: $0) } ?? "nil")" })")
+            if let vc = alertVC, let cmd = commands.first, let action = cmd.action {
+                let ok = UIApplication.shared.sendAction(action, to: vc, from: cmd, for: nil)
+                await settle(0.8)
+                note("   sendAction of the first key command: \(ok); alertOK=\(m.alertOK) alert=\(m.alert)")
+            }
             await settle(0.6)
             note("   alertOK=\(m.alertOK) alert=\(m.alert)")
         } else { note("   no OK element in the tree") }
@@ -454,6 +477,121 @@ final class Spike {
         note("== done")
         try? lines.joined(separator: "\n").write(toFile: "\(outDir)/results.txt", atomically: true, encoding: .utf8)
         try? "done".write(toFile: "\(outDir)/done", atomically: true, encoding: .utf8)
+    }
+
+    /// Scrolls the list until the label is on screen (nil when it never is).
+    func bringIntoView(_ label: String) async -> CGPoint? {
+        guard let s = innerScrollView(at: CGPoint(x: 100, y: 400)) else { return nil }
+        for _ in 0..<30 {
+            if let p = labelPoint(label), p.y > 200, p.y < 760 { return p }
+            let maxY = s.contentSize.height - s.bounds.height + s.adjustedContentInset.bottom
+            let next = min(s.contentOffset.y + 250, maxY)
+            if next == s.contentOffset.y { break }
+            s.setContentOffset(CGPoint(x: 0, y: next), animated: false)
+            await settle(0.35)
+        }
+        return labelPoint(label)
+    }
+
+    func moreProbes() async {
+        let m = model
+        note("== round 2: routes for what round 1 found no way into")
+        // 1. onTapGesture with the button trait added by the user's code.
+        if let p = await bringIntoView("Tap gesture, button trait") {
+            let before = m.gestureButtonTaps
+            let e = element(at: p)
+            let ok = e?.accessibilityActivate() ?? false
+            await settle(0.3)
+            note("   onTapGesture + .accessibilityAddTraits(.isButton): element=\(e.map { describe($0) } ?? "none") activate=\(ok) taps \(before) -> \(m.gestureButtonTaps)")
+        } else { note("   gesture button not found") }
+        // 2. Slider and Stepper through the adjustable trait.
+        if let p = await bringIntoView("Count 0") ?? labelPoint("Count 0") {
+            let e = element(at: p)
+            note("   stepper element: \(e.map { describe($0) } ?? "none")")
+        }
+        for e in elements() where e.accessibilityTraits.contains(.adjustable) {
+            note("   adjustable: \(describe(e)) value='\(e.accessibilityValue ?? "")'")
+        }
+        if let adjustable = elements().first(where: { $0.accessibilityTraits.contains(.adjustable) && $0.accessibilityFrame.midY > 100 }) {
+            let before = m.slider, beforeStep = m.stepper
+            for _ in 0..<3 { adjustable.accessibilityIncrement() }
+            await settle(0.4)
+            note("   accessibilityIncrement x3 on the first adjustable: slider \(before) -> \(m.slider); stepper \(beforeStep) -> \(m.stepper); value now '\(adjustable.accessibilityValue ?? "")'")
+            adjustable.accessibilityDecrement()
+            await settle(0.3)
+            note("   accessibilityDecrement x1: slider \(m.slider) stepper \(m.stepper)")
+        }
+        if let slider = elements().first(where: { $0 is UISlider }) as? UISlider {
+            let before = m.slider
+            slider.value = slider.minimumValue + (slider.maximumValue - slider.minimumValue) * 0.8
+            slider.sendActions(for: .valueChanged)
+            await settle(0.4)
+            note("   UISlider: value=0.8 of the range + sendActions(.valueChanged): model \(before) -> \(m.slider); frame \(slider.convert(slider.bounds, to: window))")
+        } else { note("   no UISlider among the elements") }
+        for e in elements() {
+            guard let id = (e as? UIAccessibilityIdentification)?.accessibilityIdentifier, id.hasPrefix("stepper") else { continue }
+            let before = m.stepper
+            let ok = e.accessibilityActivate()
+            await settle(0.4)
+            note("   \(id): activate=\(ok) stepper \(before) -> \(m.stepper)")
+        }
+        var steppers: [UIStepper] = []
+        func walk(_ v: UIView) { if let st = v as? UIStepper { steppers.append(st) }; v.subviews.forEach(walk) }
+        walk(window)
+        if let st = steppers.first {
+            let before = m.stepper
+            st.value += st.stepValue
+            st.sendActions(for: .valueChanged)
+            await settle(0.4)
+            note("   UIStepper (\(st.minimumValue)...\(st.maximumValue) step \(st.stepValue)): value+=step + sendActions(.valueChanged): stepper \(before) -> \(m.stepper); frame \(st.convert(st.bounds, to: window))")
+        } else { note("   no UIStepper in the hierarchy") }
+        // 3. The context menu: is there anything public to read from the interaction?
+        if let p = await bringIntoView("Context menu") {
+            var view = hit(p)
+            var found: [String] = []
+            while let c = view {
+                for i in c.interactions { found.append("\(type(of: c)): \(type(of: i))") }
+                view = c.superview
+            }
+            note("   interactions above the context-menu text: \(found)")
+            if let e = element(at: p) { note("   its AX element: \(describe(e))") }
+        }
+        // 4. A Menu/Picker button's own `menu` and UIAction.performWithSender.
+        if let p = await bringIntoView("Pick, a") ?? labelPoint("Pick") {
+            if let button = element(at: p) as? UIButton {
+                note("   picker element is a \(type(of: button)); menu=\(button.menu != nil) interaction=\(button.contextMenuInteraction != nil)")
+                func flatten(_ menu: UIMenu) -> [UIAction] {
+                    menu.children.flatMap { child -> [UIAction] in
+                        if let a = child as? UIAction { return [a] }
+                        if let sub = child as? UIMenu { return flatten(sub) }
+                        return []
+                    }
+                }
+                let actions = button.menu.map(flatten) ?? []
+                note("   menu actions: \(actions.map(\.title))")
+                if let b = actions.first(where: { $0.title == "b" }) {
+                    let before = m.picked
+                    b.performWithSender(nil, target: nil)
+                    await settle(0.5)
+                    note("   UIAction.performWithSender(nil, target: nil) on 'b': picked \(before) -> \(m.picked)")
+                }
+                // And through the real flow: open it, then perform an item and dismiss the menu.
+                m.picked = "a"; await settle(0.3)
+                _ = button.accessibilityActivate()
+                await settle(0.8)
+                let c = actions.first(where: { $0.title == "c" })
+                c?.performWithSender(nil, target: nil)
+                button.contextMenuInteraction?.dismissMenu()
+                await settle(0.8)
+                note("   open + perform 'c' + dismissMenu: picked \(m.picked); \(windowsAndViews())")
+                _ = frameHash("60-menu-performed")
+            } else if let p = labelPoint("Pick") {
+                note("   picker element is not a UIButton: \(element(at: p).map { describe($0) } ?? "none")")
+            }
+        } else { note("   picker not found") }
+        if let p = await bringIntoView("Menu"), let button = element(at: p) as? UIButton {
+            note("   Menu element: \(type(of: button)) menu children=\(button.menu?.children.count ?? -1)")
+        }
     }
 
     func scrollProbes() async {

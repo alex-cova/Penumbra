@@ -12,6 +12,7 @@ struct IDESwiftUIPreviewInput: NSViewRepresentable {
 
     func updateNSView(_ view: IDESwiftUIPreviewInputView, context: Context) {
         view.session = session
+        session.swipeActionsHandler = { [weak view] point, names in view?.showSwipeActions(names, at: point) }
     }
 }
 
@@ -134,6 +135,32 @@ final class IDESwiftUIPreviewInputView: NSView {
         case .text(let text): session.type(text)
         case .ignored: super.keyDown(with: event)
         }
+    }
+
+    // MARK: Swipe actions
+
+    /// What a swipe on a row of an iOS preview reveals, as a menu where the pointer is.
+    private struct SwipeRequest {
+        let name: String
+        let point: CGPoint
+    }
+
+    func showSwipeActions(_ names: [String], at point: CGPoint) {
+        guard let window else { return }
+        let menu = NSMenu()
+        for name in names {
+            let item = NSMenuItem(title: name, action: #selector(runSwipeAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = SwipeRequest(name: name, point: point)
+            menu.addItem(item)
+        }
+        let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        menu.popUp(positioning: nil, at: location, in: self)
+    }
+
+    @objc private func runSwipeAction(_ sender: NSMenuItem) {
+        guard let request = sender.representedObject as? SwipeRequest else { return }
+        session?.perform(customAction: request.name, at: request.point)
     }
 
     // MARK: Edit menu

@@ -17,17 +17,23 @@
 ///   presented sheets are part of the window's hierarchy and are in it. The status bar is not.
 /// - Input is public API only, from inside the app (the routes and what each cannot do are measured
 ///   in `Tools/PreviewSpike/ios-simulator/input-host.swift` and tabulated in
-///   `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3). A tap (`mouse` down and up without travel) goes to a text
-///   field's `becomeFirstResponder`, else `accessibilityActivate()` of the smallest accessibility
-///   element under the point, else `sendActions(.touchUpInside)` of the `UIControl` under it. SwiftUI
-///   vends its accessibility tree only when the device's `ApplicationAccessibilityEnabled` preference
-///   was on when the app launched (`IDESimulatorService.boot` sets it), so without it only
-///   `UIControl`s and text fields respond. A `dragged` and a `scroll` move the innermost
-///   `UIScrollView` under the point that can move that way. `key` goes to the first responder through
-///   `UIKeyInput` and `UITextInput`. Every `ack` carries a `route` (`text`, `accessibility`, `control`,
-///   `scroll`, `action` or `none`). Not reachable: drag and long-press gestures, `onTapGesture` on a
-///   view that is not a button, the buttons of an alert and the items of a menu (UIKit tracks those
-///   touches itself), pinch, and the software keyboard (it is another window, not in the frame).
+///   `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3). A tap (`mouse` down and up without travel) goes, in
+///   order, to: the item of an open menu (`UIAction.performWithSender`), a text field's
+///   `becomeFirstResponder`, a `UISlider` (its value from the point) or `UIStepper` (a step by the
+///   half), `accessibilityActivate()` of the smallest accessibility element under the point, and
+///   `sendActions(.touchUpInside)` of the `UIControl` under it (tab bar, back button). SwiftUI vends
+///   its accessibility tree only when the device's `ApplicationAccessibilityEnabled` preference was
+///   on when the app launched (`IDESimulatorService.boot` sets it), so without it only `UIControl`s
+///   and text fields respond. A press that travels is a drag: it moves a slider, or becomes scroll
+///   deltas for the innermost `UIScrollView` that can move that way, or, pulled down past the top of
+///   a list with a refresh control, runs the refresh; a mostly horizontal drag that starts on an
+///   element with accessibility custom actions (swipe actions) is answered with the action names
+///   (`route` `actions`) and the panel's choice comes back as `customAction`. `key` goes to the first
+///   responder through `UIKeyInput` and `UITextInput`. Every `ack` carries a `route` (`text`,
+///   `accessibility`, `control`, `slider`, `stepper`, `menu`, `scroll`, `refresh`, `actions`,
+///   `customAction`, `action`, `drag` or `none`). Not reachable: drag and long-press gestures,
+///   `onTapGesture` (also with the button trait), the buttons of an alert, context menus, pinch, and
+///   the software keyboard (it is another window, not in the frame).
 ///
 /// The simulator process is a Mac process: it binds the socket, loads the thunk by its absolute
 /// path and writes the PNG anywhere the Mac user can write.
@@ -151,13 +157,16 @@ public enum SwiftPreviewIOSHostSource {
             case "render": render(object)
             case "mouse": ack(mouse(object))
             case "scroll": ack(scroll(object))
+            case "customAction": performCustomAction(object)
             case "key": ack(key(object))
             case "quit": exit(0)
             default: send(["event": "error", "message": "unknown command"])
             }
         }
 
+        /// One reply per command. An empty route means the reply was already sent with more in it.
         func ack(_ route: String) {
+            guard !route.isEmpty else { return }
             send(["event": "ack", "route": route])
         }
 
@@ -169,6 +178,15 @@ public enum SwiftPreviewIOSHostSource {
         var lastPoint: CGPoint?
         var travelled = false
         static let tapSlop: CGFloat = 6
+        /// What a press that travels is doing, decided at the first movement past the slop.
+        enum DragMode { case scroll, slider(UISlider), swipe }
+        var dragMode: DragMode?
+        /// How far the pointer has pulled down at the top of a list, and whether that already refreshed.
+        var pull: CGFloat = 0
+        var pulledToRefresh = false
+        static let pullThreshold: CGFloat = 70
+        /// The button whose menu a tap opened: the next tap picks from it, or closes it.
+        weak var openMenuButton: UIButton?
 
         func mouse(_ object: [String: Any]) -> String {
             guard let x = object["x"] as? Double, let y = object["y"] as? Double else { return "none" }
@@ -178,39 +196,173 @@ public enum SwiftPreviewIOSHostSource {
                 pressPoint = point
                 lastPoint = point
                 travelled = false
+                dragMode = nil
+                pull = 0
+                pulledToRefresh = false
                 return "none"
             case "dragged":
                 guard let start = pressPoint, let last = lastPoint else { return "none" }
-                if !travelled, hypot(point.x - start.x, point.y - start.y) < PreviewHost.tapSlop { return "none" }
-                travelled = true
+                if !travelled {
+                    guard hypot(point.x - start.x, point.y - start.y) >= PreviewHost.tapSlop else { return "none" }
+                    travelled = true
+                    dragMode = dragMode(from: start, to: point)
+                }
                 lastPoint = point
-                // The content follows the pointer: a pointer moving up brings later content in.
-                return scroll(at: start, dx: last.x - point.x, dy: last.y - point.y)
+                switch dragMode {
+                case .slider(let slider)?:
+                    setSlider(slider, atWindowPoint: point)
+                    return "slider"
+                case .swipe?:
+                    return "none"
+                default:
+                    // The content follows the pointer: a pointer moving up brings later content in.
+                    return scroll(at: start, dx: last.x - point.x, dy: last.y - point.y, pulling: true)
+                }
             case "up":
-                let wasTap = pressPoint != nil && !travelled
+                let start = pressPoint
+                let mode = dragMode
+                let wasTap = start != nil && !travelled
                 pressPoint = nil
                 lastPoint = nil
                 travelled = false
-                return wasTap ? tap(at: point) : "none"
+                dragMode = nil
+                if wasTap { return tap(at: point) }
+                if case .swipe? = mode, let start { return offerSwipeActions(startingAt: start) }
+                return travelledUp(mode)
             default:
                 return "none"
             }
         }
 
+        /// A press that ended after travelling: it has already acted while it moved.
+        func travelledUp(_ mode: DragMode?) -> String {
+            if case .slider? = mode { return "slider" }
+            return "drag"
+        }
+
+        /// What a press that has just started to travel is for. A slider keeps the pointer; a mostly
+        /// horizontal press on an element with custom actions is a swipe; the rest scrolls.
+        func dragMode(from start: CGPoint, to point: CGPoint) -> DragMode {
+            if let slider = control(UISlider.self, at: start), slider.isEnabled { return .slider(slider) }
+            if abs(point.x - start.x) > abs(point.y - start.y), customActionElement(at: start) != nil { return .swipe }
+            return .scroll
+        }
+
+        // MARK: Controls with a value
+
+        func control<T: UIView>(_ type: T.Type, at point: CGPoint) -> T? {
+            var view = window?.hitTest(point, with: nil)
+            while let current = view {
+                if let match = current as? T { return match }
+                view = current.superview
+            }
+            return nil
+        }
+
+        /// A slider's value from where the pointer is along its track, as a drag of the thumb would.
+        func setSlider(_ slider: UISlider, atWindowPoint point: CGPoint) {
+            let local = slider.convert(point, from: window)
+            let track = slider.trackRect(forBounds: slider.bounds)
+            guard track.width > 0 else { return }
+            var fraction = (local.x - track.minX) / track.width
+            if slider.effectiveUserInterfaceLayoutDirection == .rightToLeft { fraction = 1 - fraction }
+            fraction = min(max(fraction, 0), 1)
+            let value = slider.minimumValue + Float(fraction) * (slider.maximumValue - slider.minimumValue)
+            guard value != slider.value else { return }
+            slider.value = value
+            slider.sendActions(for: .valueChanged)
+        }
+
+        /// One step of a stepper: the trailing half adds, the leading half subtracts.
+        func step(_ stepper: UIStepper, atWindowPoint point: CGPoint) {
+            let local = stepper.convert(point, from: window)
+            var increases = local.x >= stepper.bounds.midX
+            if stepper.effectiveUserInterfaceLayoutDirection == .rightToLeft { increases.toggle() }
+            let value = min(max(stepper.value + (increases ? stepper.stepValue : -stepper.stepValue),
+                                stepper.minimumValue), stepper.maximumValue)
+            guard value != stepper.value else { return }
+            stepper.value = value
+            stepper.sendActions(for: .valueChanged)
+        }
+
+        // MARK: Menus
+
+        /// The `UIAction`s of a menu, submenus flattened, those that can be chosen.
+        func actions(of menu: UIMenu) -> [UIAction] {
+            menu.children.flatMap { child -> [UIAction] in
+                if let action = child as? UIAction {
+                    return action.attributes.contains(.disabled) ? [] : [action]
+                }
+                if let submenu = child as? UIMenu { return actions(of: submenu) }
+                return []
+            }
+        }
+
+        /// A tap while a menu is open: the item under the point is performed and the menu closed;
+        /// anywhere else only closes it, as on a device.
+        func tapInOpenMenu(_ button: UIButton, at point: CGPoint) -> String {
+            openMenuButton = nil
+            defer { button.contextMenuInteraction?.dismissMenu() }
+            guard let menu = button.menu, let window else { return "menu" }
+            let screenPoint = window.convert(point, to: window.screen.coordinateSpace)
+            let label = accessibilityElements(containing: screenPoint).first?.accessibilityLabel
+            if let label, let action = actions(of: menu).first(where: { label == $0.title || label.hasPrefix($0.title + ",") }) {
+                action.performWithSender(nil, target: nil)
+            }
+            return "menu"
+        }
+
+        // MARK: Swipe actions
+
+        /// The smallest accessibility element holding the point that offers custom actions: what a
+        /// swipe on a row reveals (`swipeActions`) and what `accessibilityAction` adds.
+        func customActionElement(at point: CGPoint) -> NSObject? {
+            guard let window else { return nil }
+            let screenPoint = window.convert(point, to: window.screen.coordinateSpace)
+            return accessibilityElements(containing: screenPoint).first { !($0.accessibilityCustomActions ?? []).isEmpty }
+        }
+
+        /// The end of a swipe: the names of the actions go to Umbra, which asks which one to run.
+        func offerSwipeActions(startingAt start: CGPoint) -> String {
+            guard let element = customActionElement(at: start), let window else { return "none" }
+            let names = (element.accessibilityCustomActions ?? []).map(\.name)
+            let frame = window.convert(element.accessibilityFrame, from: window.screen.coordinateSpace)
+            send(["event": "ack", "route": "actions", "actions": names, "x": Double(frame.midX), "y": Double(frame.midY)])
+            return ""
+        }
+
+        func performCustomAction(_ object: [String: Any]) {
+            guard let x = object["x"] as? Double, let y = object["y"] as? Double, let name = object["name"] as? String,
+                  let element = customActionElement(at: CGPoint(x: x, y: y)),
+                  let action = (element.accessibilityCustomActions ?? []).first(where: { $0.name == name }),
+                  let handler = action.actionHandler else { return ack("none") }
+            _ = handler(action)
+            ack("customAction")
+        }
+
         func tap(at point: CGPoint) -> String {
             guard let window else { return "none" }
+            if let button = openMenuButton, button.window != nil { return tapInOpenMenu(button, at: point) }
+            openMenuButton = nil
             if let field = textInput(at: point) {
                 return field.becomeFirstResponder() ? "text" : "none"
             }
+            if let slider = control(UISlider.self, at: point), slider.isEnabled {
+                setSlider(slider, atWindowPoint: point)
+                return "slider"
+            }
+            if let stepper = control(UIStepper.self, at: point), stepper.isEnabled {
+                step(stepper, atWindowPoint: point)
+                return "stepper"
+            }
             // The tree is read for this tap only: it follows the hierarchy, not the document.
             let screenPoint = window.convert(point, to: window.screen.coordinateSpace)
-            var elements: [NSObject] = []
-            var seen = Set<ObjectIdentifier>()
-            collectAccessibilityElements(window, depth: 0, into: &elements, seen: &seen)
-            let smallest = elements
-                .filter { $0.accessibilityFrame.contains(screenPoint) }
-                .min { $0.accessibilityFrame.width * $0.accessibilityFrame.height < $1.accessibilityFrame.width * $1.accessibilityFrame.height }
-            if let smallest, smallest.accessibilityActivate() { return "accessibility" }
+            if let smallest = accessibilityElements(containing: screenPoint).first, smallest.accessibilityActivate() {
+                // A `Menu` or a menu-style `Picker` is a button with a `menu`: activating it opens the
+                // menu in the frame, and the next tap chooses from it.
+                if let button = smallest as? UIButton, button.menu != nil { openMenuButton = button }
+                return "accessibility"
+            }
             var view = window.hitTest(point, with: nil)
             while let current = view {
                 if let control = current as? UIControl, control.isEnabled {
@@ -220,6 +372,17 @@ public enum SwiftPreviewIOSHostSource {
                 view = current.superview
             }
             return "none"
+        }
+
+        /// The accessibility elements whose frame holds the point (screen coordinates), smallest first.
+        func accessibilityElements(containing screenPoint: CGPoint) -> [NSObject] {
+            guard let window else { return [] }
+            var elements: [NSObject] = []
+            var seen = Set<ObjectIdentifier>()
+            collectAccessibilityElements(window, depth: 0, into: &elements, seen: &seen)
+            return elements
+                .filter { $0.accessibilityFrame.contains(screenPoint) }
+                .sorted { $0.accessibilityFrame.width * $0.accessibilityFrame.height < $1.accessibilityFrame.width * $1.accessibilityFrame.height }
         }
 
         func collectAccessibilityElements(
@@ -274,22 +437,30 @@ public enum SwiftPreviewIOSHostSource {
         func scroll(_ object: [String: Any]) -> String {
             guard let x = object["x"] as? Double, let y = object["y"] as? Double else { return "none" }
             let dx = CGFloat(object["dx"] as? Double ?? 0), dy = CGFloat(object["dy"] as? Double ?? 0)
-            return scroll(at: CGPoint(x: x, y: y), dx: dx, dy: dy)
+            return scroll(at: CGPoint(x: x, y: y), dx: dx, dy: dy, pulling: false)
         }
 
         /// Moves the innermost scroll view under the point that can move that way, by points
-        /// (positive `dy`: later content comes into view), as the macOS host does.
-        func scroll(at point: CGPoint, dx: CGFloat, dy: CGFloat) -> String {
+        /// (positive `dy`: later content comes into view), as the macOS host does. A drag (`pulling`)
+        /// that pulls down past the top of a list with a refresh control runs the refresh once.
+        func scroll(at point: CGPoint, dx: CGFloat, dy: CGFloat, pulling: Bool) -> String {
             guard let window, dx != 0 || dy != 0 else { return "none" }
+            var refreshable: UIRefreshControl?
             var view = window.hitTest(point, with: nil)
             while let current = view {
-                if let scrollView = current as? UIScrollView, scrollView.isScrollEnabled,
-                   move(scrollView, dx: dx, dy: dy) {
-                    return "scroll"
+                if let scrollView = current as? UIScrollView, scrollView.isScrollEnabled {
+                    if move(scrollView, dx: dx, dy: dy) { return "scroll" }
+                    let atTop = scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top + 0.5
+                    if refreshable == nil, atTop, let control = scrollView.refreshControl { refreshable = control }
                 }
                 view = current.superview
             }
-            return "none"
+            guard pulling, dy < 0, let refreshable else { return "none" }
+            pull += -dy
+            guard pull >= PreviewHost.pullThreshold, !pulledToRefresh else { return "none" }
+            pulledToRefresh = true
+            refreshable.sendActions(for: .valueChanged)
+            return "refresh"
         }
 
         /// False when the scroll view cannot move that way (the next one out is tried).
@@ -373,6 +544,7 @@ public enum SwiftPreviewIOSHostSource {
                 send(["event": "loaded", "generation": generation, "ok": false, "error": message])
             }
             guard let window else { return fail("no window") }
+            openMenuButton = nil
             guard let path = object["dylib"] as? String else { return fail("no dylib") }
             guard let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
                 return fail(String(cString: dlerror()))

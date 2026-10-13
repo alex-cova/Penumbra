@@ -275,6 +275,45 @@ final class IDESimulatorServiceTests: XCTestCase {
         try await IDESimulatorService(runner: runner).boot(target)
     }
 
+    // MARK: Input replies
+
+    private func event(_ fields: [String: Any]) -> IDESwiftUIPreviewHostEvent {
+        IDESwiftUIPreviewHostEvent(fields: fields)
+    }
+
+    func testOnlyATapThatNoRouteHandledGetsAHint() {
+        let up = IDESwiftUIPreviewHostCommand.mouse(type: "up", x: 1, y: 2)
+        XCTAssertEqual(IDESwiftUIPreviewSession.inputHint(for: up, route: "none"), IDESwiftUIPreviewSession.noRouteHint)
+        for route in ["accessibility", "control", "text", "slider", "stepper", "menu", "drag", nil] {
+            XCTAssertNil(IDESwiftUIPreviewSession.inputHint(for: up, route: route), "\(route ?? "nil")")
+        }
+        // A press or a drag at a scroll limit is not a tap: no hint.
+        XCTAssertNil(IDESwiftUIPreviewSession.inputHint(for: .mouse(type: "dragged", x: 1, y: 2), route: "none"))
+        XCTAssertNil(IDESwiftUIPreviewSession.inputHint(for: .mouse(type: "down", x: 1, y: 2), route: "none"))
+        XCTAssertNil(IDESwiftUIPreviewSession.inputHint(for: .scroll(x: 1, y: 2, dx: 0, dy: 5), route: "none"))
+        XCTAssertNil(IDESwiftUIPreviewSession.inputHint(for: .key(kind: "text", value: "a"), route: "none"))
+    }
+
+    func testASwipeOfferCarriesTheRowAndTheActionNames() throws {
+        let offer = try XCTUnwrap(IDESwiftUIPreviewSession.swipeOffer(in: event([
+            "event": "ack", "route": "actions", "actions": ["Delete", "Archive"], "x": 220.0, "y": 640.0
+        ])))
+        XCTAssertEqual(offer.names, ["Delete", "Archive"])
+        XCTAssertEqual(offer.point, CGPoint(x: 220, y: 640))
+        XCTAssertNil(IDESwiftUIPreviewSession.swipeOffer(in: event(["event": "ack", "route": "scroll"])))
+        XCTAssertNil(IDESwiftUIPreviewSession.swipeOffer(in: event([
+            "event": "ack", "route": "actions", "actions": [String](), "x": 1.0, "y": 2.0
+        ])), "an offer with nothing in it is not a menu")
+    }
+
+    func testTheCustomActionCommandNamesTheRowAndTheAction() {
+        let json = IDESwiftUIPreviewHostCommand.customAction(x: 220, y: 640, name: "Delete").json
+        XCTAssertEqual(json["cmd"] as? String, "customAction")
+        XCTAssertEqual(json["name"] as? String, "Delete")
+        XCTAssertEqual(json["x"] as? Double, 220)
+        XCTAssertEqual(json["y"] as? Double, 640)
+    }
+
     func testABootThatFailsReportsTheReason() async throws {
         let runner = ScriptedRunner { _, arguments in
             arguments.starts(with: ["simctl", "boot"]) ? (1, "Unable to boot: Operation not permitted\n") : (0, "")
@@ -754,11 +793,17 @@ final class IDESimulatorServiceTests: XCTestCase {
                 @State private var name = ""
                 @State private var row = 0
                 @State private var lastRow = 0
+                @State private var slider = 50.0
+                @State private var stepper = 0
+                @State private var swiped = 0
+                @State private var refreshes = 0
                 @State private var frames: [String: CGRect] = [:]
 
                 private var summary: String {
                     var lines = ["taps=\(taps)", "on=\(on)", "sheet=\(sheet)", "pushed=\(path.count)",
-                                 "name=\(name)", "row=\(row)", "lastRow=\(lastRow)"]
+                                 "name=\(name)", "row=\(row)", "lastRow=\(lastRow)",
+                                 "slider=\(Int(slider))", "stepper=\(stepper)", "swiped=\(swiped)",
+                                 "refreshes=\(refreshes)"]
                     for (key, f) in frames.sorted(by: { $0.key < $1.key }) {
                         lines.append("frame.\(key)=\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))")
                     }
@@ -775,6 +820,9 @@ final class IDESimulatorServiceTests: XCTestCase {
                             Button("Show sheet") { sheet = true }.modifier(mark("sheet"))
                             NavigationLink("Push", value: 1).modifier(mark("push"))
                             TextField("Name", text: $name).modifier(mark("field"))
+                            Slider(value: $slider, in: 0...100).modifier(mark("slider"))
+                            Stepper("Count \(stepper)", value: $stepper).modifier(mark("stepper"))
+                            Text("Swipe me").swipeActions { Button("Delete") { swiped += 1 } }.modifier(mark("swipe"))
                             ForEach(0..<50, id: \.self) { i in
                                 Button("Row \(i)") { row = i + 1 }
                                     .onAppear { lastRow = max(lastRow, i) }
@@ -782,6 +830,7 @@ final class IDESimulatorServiceTests: XCTestCase {
                             }
                         }
                         .navigationTitle("Input")
+                        .refreshable { refreshes += 1 }
                         .navigationDestination(for: Int.self) { _ in Text("Detail") }
                         .sheet(isPresented: $sheet) {
                             Button("Close") { sheet = false }.padding(40).modifier(mark("close"))
@@ -862,6 +911,35 @@ final class IDESimulatorServiceTests: XCTestCase {
         await eventually("typing reaches the focused field") { state()["name"] == "hello" }
         session.perform(command: "deleteBackward:")
         await eventually("an editing command reaches it too") { state()["name"] == "hell" }
+
+        // A slider follows a drag, a stepper steps by the half that is pressed.
+        let sliderFrame = try XCTUnwrap(frame("slider"))
+        session.drag(
+            from: CGPoint(x: sliderFrame.minX + sliderFrame.width * 0.1, y: sliderFrame.midY),
+            to: CGPoint(x: sliderFrame.minX + sliderFrame.width * 0.8, y: sliderFrame.midY)
+        )
+        await eventually("a drag along a slider moves it") { (Int(state()["slider"] ?? "0") ?? 0) > 65 }
+        let stepperFrame = try XCTUnwrap(frame("stepper"))
+        session.click(at: CGPoint(x: stepperFrame.maxX - 35, y: stepperFrame.midY))
+        await eventually("the trailing half of a stepper adds") { state()["stepper"] == "1" }
+        session.click(at: CGPoint(x: stepperFrame.maxX - 99, y: stepperFrame.midY))
+        await eventually("the leading half subtracts") { state()["stepper"] == "0" }
+
+        // A sideways drag on a row with swipe actions offers them; choosing one runs it.
+        var offered: (point: CGPoint, names: [String])?
+        session.swipeActionsHandler = { point, names in offered = (point, names) }
+        let swipeFrame = try XCTUnwrap(frame("swipe"))
+        session.drag(
+            from: CGPoint(x: swipeFrame.maxX - 60, y: swipeFrame.midY),
+            to: CGPoint(x: swipeFrame.maxX - 220, y: swipeFrame.midY)
+        )
+        await eventually("a swipe offers the row's actions") { offered?.names == ["Delete"] }
+        session.perform(customAction: "Delete", at: try XCTUnwrap(offered).point)
+        await eventually("the chosen action runs") { state()["swiped"] == "1" }
+
+        // Pulling a list down at its top refreshes it.
+        session.drag(from: CGPoint(x: 100, y: 320), to: CGPoint(x: 100, y: 620))
+        await eventually("pull to refresh") { state()["refreshes"] == "1" }
 
         // Scrolling: by the wheel, and by dragging; lazy rows appear and can then be tapped.
         let lastBefore = Int(state()["lastRow"] ?? "0") ?? 0

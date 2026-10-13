@@ -246,6 +246,24 @@ final class SwiftPreviewBuildPlanTests: XCTestCase {
         XCTAssertTrue(host.contains("send([\"event\": \"ack\", \"route\": route])"))
     }
 
+    func testTheSimulatorHostReachesMenusSlidersSteppersSwipesAndRefresh() throws {
+        let host = try simulatorPlan().hostSource
+        // The routes round 2 of the spike measured: each is a public property or method.
+        for route in ["performWithSender(nil, target: nil)", "dismissMenu()", "button.menu",
+                      "UISlider.self", "trackRect(forBounds:", "UIStepper.self", "stepValue",
+                      "accessibilityCustomActions", "actionHandler", "refreshControl", "sendActions(for: .valueChanged)",
+                      "case \"customAction\""] {
+            XCTAssertTrue(host.contains(route), route)
+        }
+        // A swipe's offer and a drag's end are answered as routes of their own.
+        XCTAssertTrue(host.contains("\"route\": \"actions\""))
+        for name in ["slider", "stepper", "menu", "refresh", "customAction", "drag"] {
+            XCTAssertTrue(host.contains("\"\(name)\""), name)
+        }
+        // The key-command attempt on alerts found nothing (spike), so there is no such route.
+        XCTAssertFalse(host.contains("keyCommands"))
+    }
+
     func testTheSimulatorThunkHandsOverAViewController() throws {
         let text = try simulatorPlan().thunkSource(mode: .copy)
         XCTAssertTrue(text.contains("import UIKit"))
