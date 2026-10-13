@@ -382,7 +382,10 @@ final class LanguageServiceRegistryTests: XCTestCase {
             languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "markdown", "http"],
             "one tiered completion provider per language, in registration order"
         )
-        XCTAssertEqual(languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift"])
+        XCTAssertEqual(
+            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "http"],
+            "`.http` adds the state of a `###@scheme:` line"
+        )
         XCTAssertEqual(
             languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift"],
             "Java's javac and inspection providers share one tiered provider"
@@ -408,8 +411,12 @@ final class LanguageServiceRegistryTests: XCTestCase {
         XCTAssertNotNil(languages.lineMarkers(for: "swift"))
         XCTAssertNotNil(languages.typeHierarchy(for: "swift"))
         XCTAssertNotNil(languages.callHierarchy(for: "swift"))
+        // `.http` colours `{{templates}}` and the `###@scheme:` line; it has no other host-driven feature.
+        XCTAssertNotNil(languages.semanticTokens(for: "http"))
         for language in ["markdown", "json", "http", nil] as [String?] {
-            XCTAssertNil(languages.semanticTokens(for: language), language ?? "nil")
+            if language != "http" {
+                XCTAssertNil(languages.semanticTokens(for: language), language ?? "nil")
+            }
             XCTAssertNil(languages.lineMarkers(for: language), language ?? "nil")
             XCTAssertNil(languages.structure(for: language), language ?? "nil")
             XCTAssertNil(languages.typeHierarchy(for: language), language ?? "nil")

@@ -13,7 +13,9 @@ struct IDEHTTPModule: IDELanguageModule {
             EditorCommand(id: "app.http.sendRequest", title: "HTTP: Send Request", group: "HTTP",
                           action: { [weak workspace] in workspace?.sendActiveHTTPRequest() }),
             EditorCommand(id: "app.http.showResponse", title: "HTTP: Show Response", group: "HTTP",
-                          action: { [weak workspace] in workspace?.showHTTPResponse() })
+                          action: { [weak workspace] in workspace?.showHTTPResponse() }),
+            EditorCommand(id: "app.http.refreshGraphQLSchema", title: "HTTP: Refresh GraphQL Schema", group: "HTTP",
+                          action: { [weak workspace] in workspace?.refreshGraphQLSchema() })
         ]
     }
 
@@ -84,6 +86,7 @@ private struct IDEHTTPCommands: View {
             .disabled(!(workspace?.httpFileCanSend ?? false))
         Button("Show Response", action: { workspace?.showHTTPResponse() })
             .disabled(workspace?.httpSupport.responseLog.lines.isEmpty ?? true)
+        Button("Refresh GraphQL Schema", action: { workspace?.refreshGraphQLSchema() })
     }
 }
 

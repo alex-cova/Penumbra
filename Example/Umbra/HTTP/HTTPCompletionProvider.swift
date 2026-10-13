@@ -10,11 +10,25 @@ final class HTTPCompletionProvider: CompletionProvider, @unchecked Sendable {
 
     private let lock = NSLock()
     private var globalsSource: GlobalsSource = { [:] }
+    private var schemaStore: GraphQLSchemaStore?
 
     func setGlobals(_ source: @escaping GlobalsSource) {
         lock.lock()
         globalsSource = source
         lock.unlock()
+    }
+
+    /// Where GraphQL bodies get their schema. Without one, only the other sites complete.
+    func setSchemaStore(_ store: GraphQLSchemaStore?) {
+        lock.lock()
+        schemaStore = store
+        lock.unlock()
+    }
+
+    private var currentSchemaStore: GraphQLSchemaStore? {
+        lock.lock()
+        defer { lock.unlock() }
+        return schemaStore
     }
 
     private var globals: [String: String] {
@@ -57,7 +71,25 @@ final class HTTPCompletionProvider: CompletionProvider, @unchecked Sendable {
             return HTTPCompletion.flags.map {
                 item($0, insert: $0, kind: .keyword, range: context.range, filter: $0)
             }
+        case .graphQL:
+            return await graphQLItems(in: text, caret: caret, context: context)
         }
+    }
+
+    /// Reads the schema the file names without waiting for the network: a schema that is not here yet
+    /// is being fetched, and the next keystroke finds it.
+    private func graphQLItems(in text: String, caret: Int, context: CompletionContext) async -> [CompletionItem] {
+        guard let store = currentSchemaStore,
+              let directive = HTTPGraphQLDirective.directive(in: text, caretUTF16: caret),
+              let body = HTTPCompletion.graphQLBody(in: text, caretUTF16: caret),
+              case .success(let request) = GraphQLSchemaResolver.resolve(
+                  directive, in: text, fileURL: context.document.url, globals: globals
+              ),
+              let schema = await store.schema(for: request),
+              let site = GraphQLCompletionContext.site(in: body, schema: schema) else {
+            return []
+        }
+        return GraphQLCompletionItems.items(for: site, schema: schema, range: context.range, source: name)
     }
 
     private func templateItems(in text: String, caret: Int, range: EditorIntelligence.TextRange) -> [CompletionItem] {
@@ -142,6 +174,8 @@ enum HTTPCompletion {
         case authorization
         case mediaType
         case directive
+        /// In a GraphQL body of a file that names a `###@scheme:`.
+        case graphQL
     }
 
     struct Function {
@@ -199,7 +233,8 @@ enum HTTPCompletion {
             linePrefix.removeLast()
         }
         let previous = lineStart == 0 ? "" : ns.substring(to: lineStart)
-        let region = region(before: previous)
+        let scanned = scan(before: previous)
+        let region = scanned.region
 
         if directivePrefix(linePrefix) {
             return .directive
@@ -213,6 +248,10 @@ enum HTTPCompletion {
             default:
                 return nil
             }
+        }
+
+        if region == .body {
+            return graphQLBody(in: text, caretUTF16: caret) != nil ? .graphQL : nil
         }
 
         let token = firstToken(in: linePrefix)
@@ -262,44 +301,132 @@ enum HTTPCompletion {
         case body
     }
 
-    private static func region(before text: String) -> Region {
-        var region = Region.betweenRequests
-        let normalized = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        // The text is everything before the caret's line, so a trailing newline is the break
-        // before that line, not a blank line of its own.
-        var parts = normalized.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-        if normalized.hasSuffix("\n"), !parts.isEmpty {
-            parts.removeLast()
+    private struct Scan {
+        var region: Region
+        /// UTF-16 offset of the body's first line, while `region` is `.body`.
+        var bodyStart: Int?
+        /// The method of the request the body belongs to.
+        var method: String?
+    }
+
+    /// The text of the GraphQL body before the caret when the caret is in one and the file names a
+    /// schema for it: the request is a `GRAPHQL` one or the body starts like an operation. The
+    /// variables object after the operation is JSON and answers nil from the analysis itself.
+    static func graphQLBody(in text: String, caretUTF16: Int) -> String? {
+        let ns = text as NSString
+        let caret = min(max(caretUTF16, 0), ns.length)
+        guard HTTPGraphQLDirective.directive(in: text, caretUTF16: caret) != nil else { return nil }
+        let breakRange = ns.range(of: "\n", options: .backwards, range: NSRange(location: 0, length: caret))
+        let lineStart = breakRange.location == NSNotFound ? 0 : breakRange.location + breakRange.length
+        let scanned = scan(before: lineStart == 0 ? "" : ns.substring(to: lineStart))
+        guard scanned.region == .body else { return nil }
+        // No body line before this one: the caret's own line is where the body starts.
+        let start = scanned.bodyStart ?? lineStart
+        guard start <= caret else { return nil }
+        let body = ns.substring(with: NSRange(location: start, length: caret - start))
+        if scanned.method == "GRAPHQL" {
+            return body
         }
-        for line in parts {
+        let tokens = GraphQLLexer.lex(body).tokens
+        guard let first = tokens.first else {
+            // Nothing typed yet: a body without a method that says GraphQL could be anything.
+            return nil
+        }
+        if first.kind == .name, ["query", "mutation", "subscription", "fragment"].contains(first.text) {
+            return body
+        }
+        if first.isPunctuator("{"), tokens.count < 2 || tokens[1].kind != .string {
+            return body
+        }
+        return nil
+    }
+
+    /// Walks the lines before the caret's line and says where the caret's line belongs. The caret's
+    /// own line is not part of `text`, so a trailing line break is the break before that line.
+    private static func scan(before text: String) -> Scan {
+        var scan = Scan(region: .betweenRequests, bodyStart: nil, method: nil)
+        var depth = 0
+        let ns = text as NSString
+        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: .byLines) { substring, range, _, _ in
+            let line = substring ?? ""
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty {
-                if region == .headers { region = .body }
-                continue
+                if scan.region == .headers {
+                    scan.region = .body
+                    scan.bodyStart = nil
+                }
+                return
             }
             if trimmed.hasPrefix("###") {
-                region = .betweenRequests
-                continue
+                scan.region = .betweenRequests
+                scan.bodyStart = nil
+                depth = 0
+                return
             }
-            if HTTPSyntax.isDirectiveLine(String(line)) || trimmed == "}" || trimmed == "]" {
-                region = .betweenRequests
-                continue
+            if HTTPSyntax.isDirectiveLine(line) {
+                scan.region = .betweenRequests
+                scan.bodyStart = nil
+                depth = 0
+                return
             }
             if trimmed.hasPrefix("#") || trimmed.hasPrefix("//") || trimmed.hasPrefix("@") {
-                continue
+                return
             }
-            if HTTPSyntax.isRequestLine(String(line)) {
-                region = .headers
-                continue
+            // A request line starts a request, except inside a body that is still open: a GraphQL
+            // string value or a JSON text may begin like one.
+            let insideOpenBody = scan.region == .body && scan.bodyStart != nil && depth > 0
+            if HTTPSyntax.isRequestLine(line), !insideOpenBody {
+                scan.region = .headers
+                scan.bodyStart = nil
+                scan.method = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init)
+                depth = 0
+                return
             }
-            if region == .headers, headerField(String(line)) != nil {
-                continue
+            if scan.region == .headers, headerField(line) != nil {
+                return
             }
-            region = .body
+            scan.region = .body
+            if scan.bodyStart == nil {
+                scan.bodyStart = range.location
+                depth = 0
+            }
+            depth += braceBalance(of: trimmed)
+            // The closing brace of a body ends it, so the next line may be a request again. Braces
+            // that close something opened inside the body (a nested object, a selection set) do not.
+            if (trimmed == "}" || trimmed == "]"), depth <= 0 {
+                scan.region = .betweenRequests
+                scan.bodyStart = nil
+                depth = 0
+            }
         }
-        return region
+        return scan
+    }
+
+    /// Opening minus closing brackets on a line, outside strings and `#` comments.
+    private static func braceBalance(of line: String) -> Int {
+        var balance = 0
+        var inString = false
+        var escaped = false
+        for character in line {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            switch character {
+            case "\"": inString = true
+            case "#": return balance
+            case "{", "[": balance += 1
+            case "}", "]": balance -= 1
+            default: break
+            }
+        }
+        return balance
     }
 
     private struct Token {

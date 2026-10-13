@@ -35,10 +35,16 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertEqual(commands.first { $0.id == "app.java.showGradleModuleDiagram" }?.title, "Gradle: Show Module Diagram")
     }
 
-    func testHTTPContributesItsTwoCommands() {
+    func testHTTPContributesItsCommands() {
         let commands = IDEHTTPModule().commands(for: makeWorkspace())
-        XCTAssertEqual(commands.map(\.id), ["app.http.sendRequest", "app.http.showResponse"])
-        XCTAssertEqual(commands.map(\.title), ["HTTP: Send Request", "HTTP: Show Response"])
+        XCTAssertEqual(
+            commands.map(\.id),
+            ["app.http.sendRequest", "app.http.showResponse", "app.http.refreshGraphQLSchema"]
+        )
+        XCTAssertEqual(
+            commands.map(\.title),
+            ["HTTP: Send Request", "HTTP: Show Response", "HTTP: Refresh GraphQL Schema"]
+        )
         XCTAssertEqual(Set(commands.map(\.group)), ["HTTP"])
     }
 

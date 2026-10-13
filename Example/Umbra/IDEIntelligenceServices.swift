@@ -37,6 +37,8 @@ final class IDEIntelligenceServices {
     let markdownFileMentions = MarkdownFileMentionCompletionProvider()
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
+    /// Hover on a `###@scheme:` line: whether its schema is loaded. Configured with `httpCompletion`.
+    let httpSchemaHover = HTTPSchemaHoverProvider()
 
     /// Every language's intelligence, routed by the document's language: Java, TypeScript, Swift, the app's
     /// Run actions for Java files, `@file` mentions in Markdown, `.http` completion and JSON
@@ -88,7 +90,11 @@ final class IDEIntelligenceServices {
             ),
             BasicLanguageService(
                 name: "umbra.http", languageIdentifiers: ["http"],
-                providers: LanguageProviders(completion: [httpCompletion]),
+                providers: LanguageProviders(
+                    completion: [httpCompletion],
+                    hover: [httpSchemaHover],
+                    semanticTokens: HTTPSemanticTokenProvider()
+                ),
                 policy: LanguagePolicy(disabling: [.snippets, .duplicateSymbolDiagnostics])
             ),
             BasicLanguageService(

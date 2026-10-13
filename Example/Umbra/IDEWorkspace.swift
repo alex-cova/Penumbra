@@ -676,6 +676,8 @@ public final class IDEWorkspace {
         }
         let httpGlobals = httpSupport.globals
         intelligenceServices.httpCompletion.setGlobals { httpGlobals.snapshot() }
+        intelligenceServices.httpCompletion.setSchemaStore(httpSupport.graphQLSchemas)
+        intelligenceServices.httpSchemaHover.configure(store: httpSupport.graphQLSchemas) { httpGlobals.snapshot() }
         projectSystems.start(environment: IDEProjectEnvironment(
             requestTrust: { [weak self] url in
                 guard let self else { return false }
@@ -2081,6 +2083,17 @@ public final class IDEWorkspace {
 
     func showHTTPResponse() {
         showBottomTab(.http)
+    }
+
+    /// HTTP: Refresh GraphQL Schema.
+    func refreshGraphQLSchema() {
+        let textView = host(for: workbench.activePaneID).textView
+        showHTTPResponse()
+        httpSupport.refreshSchema(
+            text: textView.text,
+            caretUTF16Offset: textView.selectedRange.location,
+            fileURL: workbench.activePane.selectedDocument?.url
+        )
     }
 
     func toggleBottomPanelExpanded() {
@@ -5584,8 +5597,10 @@ public final class IDEWorkspace {
         )
         guard stamp != httpGutterStamp else { return }
         httpGutterStamp = stamp
-        let locations = HTTPRequestParser.requestLocations(in: textView.text)
+        let text = textView.text
+        let locations = HTTPRequestParser.requestLocations(in: text)
         httpFileCanSend = !locations.isEmpty
+        httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
         textView.setGutterDecorations(locations.map {
             GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn)
         })
