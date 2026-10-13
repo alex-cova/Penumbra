@@ -26,7 +26,11 @@ let package = Package(
         .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
         .library(name: "SwiftIntelligence", targets: ["SwiftIntelligence"]),
         .library(name: "TypeScriptIntelligence", targets: ["TypeScriptIntelligence"]),
-        .library(name: "HexKit", targets: ["HexKit"])
+        .library(name: "HexKit", targets: ["HexKit"]),
+        // Umbra's Xcode project links these through the root package. Referencing
+        // `Packages/SubprocessKit` as well would declare the target twice in one package graph.
+        .library(name: "SubprocessKit", targets: ["SubprocessKit"]),
+        .library(name: "GitIntelligence", targets: ["GitIntelligence"])
     ],
     dependencies: [
         .package(path: "Packages/AgentKit"),

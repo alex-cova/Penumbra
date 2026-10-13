@@ -241,8 +241,6 @@
 			mainGroup = 000000000000000000000002;
 			packageReferences = (
 				000000000000000000000064 /* XCLocalSwiftPackageReference ".." */,
-				000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */,
-				000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */,
 				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
 				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
 				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
@@ -403,14 +401,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "..";
 		};
-		000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "../Packages/GitIntelligence";
-		};
-		000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "../Packages/SubprocessKit";
-		};
 		000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../Packages/AgentKit";
@@ -501,12 +491,12 @@
 		};
 		000000000000000000000075 /* GitIntelligence */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 000000000000000000000065 /* XCLocalSwiftPackageReference "../Packages/GitIntelligence" */;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = GitIntelligence;
 		};
 		000000000000000000000077 /* SubprocessKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 000000000000000000000066 /* XCLocalSwiftPackageReference "../Packages/SubprocessKit" */;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
 			productName = SubprocessKit;
 		};
 		000000000000000000000079 /* AgentKit */ = {
