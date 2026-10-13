@@ -30,6 +30,10 @@ Open a folder, edit with tree-sitter highlighting and multi-cursor power, run an
 | :---: | :---: |
 | ![Umbra editing a Java file with syntax highlighting, minimap, and project explorer](Screenshots/editor.png) | ![Umbra Java class diagram blueprint view](Screenshots/diagram.png) |
 
+| SwiftUI live preview |
+| :---: |
+| ![Umbra editing SwiftUI with an iOS Simulator preview in a device frame beside the editor](Screenshots/swiftui.png) |
+
 ### Why developers pick Umbra
 
 - **Fast editing first** — Metal rendering, mmap-backed large files, minimap, folding, column selection, and a Sublime-style keymap out of the box.
