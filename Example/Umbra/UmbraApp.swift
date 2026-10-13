@@ -40,9 +40,44 @@ struct IDEWindowScene: View {
             }
         }
         .frame(minWidth: 960, minHeight: 640)
+        .background(IDEReopenCenteringView().frame(width: 0, height: 0))
         .onAppear {
             if workspace == nil {
                 workspace = IDEWorkspace()
+            }
+        }
+    }
+}
+
+/// Centers the window a Dock reopen opens (`IDEWindowRegistry.openWindowForReopen`). It sits outside
+/// the `if let workspace` above so it joins the window with its first layout; the workspace's own
+/// configurator attaches after `onAppear`, by which time the window is already on screen at SwiftUI's
+/// initial position. The window stays transparent until it has been centered, so it never shows
+/// anywhere else.
+private struct IDEReopenCenteringView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        CenteringView()
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class CenteringView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window,
+                  MainActor.assumeIsolated({ IDEWindowRegistry.shared.takeCentersNextWindow() }) else { return }
+            window.alphaValue = 0
+            window.center()
+            // SwiftUI sizes the window to its content after this, which moves the center; place it
+            // again once that layout has run, then show it.
+            DispatchQueue.main.async { [weak window] in
+                DispatchQueue.main.async {
+                    guard let window else { return }
+                    if !window.styleMask.contains(.fullScreen) {
+                        window.center()
+                    }
+                    window.alphaValue = 1
+                }
             }
         }
     }

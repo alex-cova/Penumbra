@@ -37,6 +37,9 @@ final class IDEWindowRegistry {
     private var newWindowJobs: [[URL]] = []
     /// The window a requested new window should join as a native tab, taken by its configurator.
     private var pendingTabParent: NSWindow?
+    /// Set by a Dock reopen with no window left: the next window to appear is centered on screen
+    /// instead of taking SwiftUI's saved or cascaded position.
+    private var centersNextWindow = false
 
     private init() {}
 
@@ -256,6 +259,18 @@ final class IDEWindowRegistry {
     func takePendingTabParent() -> NSWindow? {
         defer { pendingTabParent = nil }
         return pendingTabParent
+    }
+
+    /// Opens a window for a Dock click with every window closed, and centers it on screen.
+    func openWindowForReopen(_ open: () -> Void) {
+        centersNextWindow = true
+        open()
+    }
+
+    /// Taken once by the new window's configurator.
+    func takeCentersNextWindow() -> Bool {
+        defer { centersNextWindow = false }
+        return centersNextWindow
     }
 
     /// Preferences (theme, font, layout toggles, zoom) are shared, so a change made in one window

@@ -34,18 +34,25 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        var handled = false
         if !flag {
             let hidden = Self.restorableWindows().filter { !$0.isVisible }
             if hidden.isEmpty {
-                onReopenWithoutVisibleWindows?()
+                if let reopen = onReopenWithoutVisibleWindows {
+                    handled = true
+                    IDEWindowRegistry.shared.openWindowForReopen(reopen)
+                }
             } else {
+                handled = true
                 for window in hidden {
                     window.makeKeyAndOrderFront(nil)
                 }
             }
         }
         Self.activateAndKeyWindows()
-        return true
+        // Returning true makes SwiftUI run its own reopen, which opens a window of its own next to
+        // the one made above: the first restores the last project and the second starts empty.
+        return !handled
     }
 
     /// Files or folders dropped on the Dock icon, opened with Open With, or `open -a Umbra <path>`.
