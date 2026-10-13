@@ -21,7 +21,10 @@
 ///   order, to: the item of an open menu (`UIAction.performWithSender`), a text field's
 ///   `becomeFirstResponder`, a `UISlider` (its value from the point) or `UIStepper` (a step by the
 ///   half), `accessibilityActivate()` of the smallest accessibility element under the point, and
-///   `sendActions(.touchUpInside)` of the `UIControl` under it (tab bar, back button). SwiftUI vends
+///   `sendActions(.touchUpInside)` of the `UIControl` under it (tab bar, back button), and last the
+///   view controllers' own public API for those two (`UITabBarController.selectedIndex`,
+///   `UINavigationController.popViewController`), so they still work if UIKit changes the controls
+///   under its bars. SwiftUI vends
 ///   its accessibility tree only when the device's `ApplicationAccessibilityEnabled` preference was
 ///   on when the app launched (`IDESimulatorService.boot` sets it), so without it only `UIControl`s
 ///   and text fields respond. A press that travels is a drag: it moves a slider, or becomes scroll
@@ -31,7 +34,9 @@
 ///   (`route` `actions`) and the panel's choice comes back as `customAction`. `key` goes to the first
 ///   responder through `UIKeyInput` and `UITextInput`. Every `ack` carries a `route` (`text`,
 ///   `accessibility`, `control`, `slider`, `stepper`, `menu`, `scroll`, `refresh`, `actions`,
-///   `customAction`, `action`, `drag` or `none`). Not reachable: drag and long-press gestures,
+///   `customAction`, `tab`, `back`, `action`, `drag` or `none`). `elements` answers with the labelled
+///   accessibility elements and their frames in window points, so a test (or a future inspector) can
+///   find what is on screen, an open menu's items included. Not reachable: drag and long-press gestures,
 ///   `onTapGesture` (also with the button trait), the buttons of an alert, context menus, pinch, and
 ///   the software keyboard (it is another window, not in the frame).
 ///
@@ -158,6 +163,7 @@ public enum SwiftPreviewIOSHostSource {
             case "mouse": ack(mouse(object))
             case "scroll": ack(scroll(object))
             case "customAction": performCustomAction(object)
+            case "elements": sendElements()
             case "key": ack(key(object))
             case "quit": exit(0)
             default: send(["event": "error", "message": "unknown command"])
@@ -371,7 +377,62 @@ public enum SwiftPreviewIOSHostSource {
                 }
                 view = current.superview
             }
+            // The bars' own controls are UIKit's to change; their controllers' API is not.
+            let label = accessibilityElements(containing: screenPoint).first?.accessibilityLabel
+            return viewControllerRoute(label: label, at: point)
+        }
+
+        /// Every view controller below the window's root, presented ones included, topmost last.
+        func viewControllers() -> [UIViewController] {
+            var result: [UIViewController] = []
+            func walk(_ controller: UIViewController) {
+                result.append(controller)
+                controller.children.forEach(walk)
+                if let presented = controller.presentedViewController { walk(presented) }
+            }
+            if let root = window?.rootViewController { walk(root) }
+            return result
+        }
+
+        /// A tab chosen by its title, or the back button of a navigation stack, through the
+        /// controllers' public API. SwiftUI's `TabView` and `NavigationStack` follow both
+        /// (measured in the spike).
+        func viewControllerRoute(label: String?, at point: CGPoint) -> String {
+            guard let window, let label, !label.isEmpty else { return "none" }
+            let controllers = viewControllers()
+            for case let tabs as UITabBarController in controllers {
+                let titles = (tabs.tabBar.items ?? []).map { $0.title ?? "" }
+                if let index = titles.firstIndex(of: label), tabs.selectedIndex != index {
+                    tabs.selectedIndex = index
+                    return "tab"
+                }
+            }
+            for case let navigation as UINavigationController in controllers.reversed() where navigation.viewControllers.count > 1 {
+                let bar = navigation.navigationBar
+                guard !bar.isHidden, bar.convert(bar.bounds, to: window).contains(point) else { continue }
+                let previous = navigation.viewControllers[navigation.viewControllers.count - 2]
+                let titles = [previous.navigationItem.backButtonTitle, previous.navigationItem.title, previous.title, "Back"]
+                if titles.contains(where: { $0 == label }) {
+                    navigation.popViewController(animated: true)
+                    return "back"
+                }
+            }
             return "none"
+        }
+
+        /// The labelled accessibility elements of the window, frames in window points.
+        func sendElements() {
+            guard let window else { return send(["event": "elements", "items": []]) }
+            var found: [NSObject] = []
+            var seen = Set<ObjectIdentifier>()
+            collectAccessibilityElements(window, depth: 0, into: &found, seen: &seen)
+            let items: [[String: Any]] = found.prefix(400).compactMap { element in
+                guard let label = element.accessibilityLabel, !label.isEmpty else { return nil }
+                let frame = window.convert(element.accessibilityFrame, from: window.screen.coordinateSpace)
+                return ["label": label, "x": Double(frame.minX), "y": Double(frame.minY),
+                        "width": Double(frame.width), "height": Double(frame.height)]
+            }
+            send(["event": "elements", "items": items])
         }
 
         /// The accessibility elements whose frame holds the point (screen coordinates), smallest first.

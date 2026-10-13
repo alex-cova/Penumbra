@@ -16,6 +16,8 @@ enum IDESwiftUIPreviewHostCommand: Sendable {
     /// Runs the custom action `name` of the accessibility element at the point (a swipe action the
     /// host offered; iOS simulator host only).
     case customAction(x: Double, y: Double, name: String)
+    /// Asks an iOS host for its labelled accessibility elements (`{"event":"elements","items":[…]}`).
+    case elements
     case quit
 
     var json: [String: Any] {
@@ -37,6 +39,8 @@ enum IDESwiftUIPreviewHostCommand: Sendable {
                 : ["cmd": "key", "kind": kind, "selector": value]
         case .customAction(let x, let y, let name):
             return ["cmd": "customAction", "x": x, "y": y, "name": name]
+        case .elements:
+            return ["cmd": "elements"]
         case .quit:
             return ["cmd": "quit"]
         }

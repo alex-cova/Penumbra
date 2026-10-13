@@ -275,8 +275,7 @@ final class IDESwiftUIPreviewSession {
         self.context = context
         self.runner = runner
         self.simulator = simulator ?? IDESimulatorService.shared
-        self.cacheRoot = cacheRoot ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.umbra.editor/SwiftUIPreviews", isDirectory: true)
+        self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot
     }
 
     // MARK: Commands
@@ -415,6 +414,31 @@ final class IDESwiftUIPreviewSession {
         return (CGPoint(x: x, y: y), names)
     }
 
+    /// One labelled accessibility element of an iOS preview, in the frame's points.
+    struct Element: Equatable, Sendable {
+        var label: String
+        var frame: CGRect
+        var center: CGPoint { CGPoint(x: frame.midX, y: frame.midY) }
+    }
+
+    static func elements(in event: IDESwiftUIPreviewHostEvent) -> [Element] {
+        guard event.name == "elements", let items = event["items"] as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let label = item["label"] as? String, let x = item["x"] as? Double, let y = item["y"] as? Double,
+                  let width = item["width"] as? Double, let height = item["height"] as? Double else { return nil }
+            return Element(label: label, frame: CGRect(x: x, y: y, width: width, height: height))
+        }
+    }
+
+    /// What is on screen in an iOS preview, as its accessibility tree labels it: where an open menu's
+    /// items are, for one. Empty for the macOS host, or when the host is not running. It goes through
+    /// the same queue as input, so it answers about what the input before it did.
+    func accessibilityElements() async -> [Element] {
+        await enqueueValue([]) { connection in
+            Self.elements(in: try await connection.request(.elements))
+        }
+    }
+
     /// Runs one of the actions a swipe offered, on the row at `point`.
     func perform(customAction name: String, at point: CGPoint) {
         send([.customAction(x: point.x, y: point.y, name: name)])
@@ -514,6 +538,27 @@ final class IDESwiftUIPreviewSession {
     }
 
     @ObservationIgnored private var hostQueue: Task<Void, Never>?
+
+    /// `enqueue` for a request whose answer the caller wants: `fallback` when the host is not
+    /// there, the run was overtaken or the host stopped answering.
+    private func enqueueValue<T: Sendable>(
+        _ fallback: T, _ body: @escaping @MainActor (IDESwiftUIPreviewHostConnection) async throws -> T
+    ) async -> T {
+        guard let connection, phase == .ready else { return fallback }
+        let previous = hostQueue
+        let task = Task<T, Never> { [weak self] in
+            await previous?.value
+            guard self?.connection === connection else { return fallback }
+            do {
+                return try await body(connection)
+            } catch {
+                self?.hostEnded()
+                return fallback
+            }
+        }
+        hostQueue = Task { _ = await task.value }
+        return await task.value
+    }
 
     /// Stops the host and forgets the frame.
     func stop() {
@@ -956,9 +1001,19 @@ final class IDESwiftUIPreviewSession {
         Self.workDirectory(in: directory, platform: .iOSSimulator, identity: identity).path
     }
 
+    /// Where previews keep their files unless a test says otherwise.
+    nonisolated static var defaultCacheRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.umbra.editor/SwiftUIPreviews", isDirectory: true)
+    }
+
+    private func liveHostBundleIdentifiers() -> Set<String> {
+        Self.liveHostBundleIdentifiers(cacheRoot: cacheRoot)
+    }
+
     /// The bundle identifiers of every work directory that still exists under the cache: the simulator
     /// hosts that may stay installed.
-    private func liveHostBundleIdentifiers() -> Set<String> {
+    nonisolated static func liveHostBundleIdentifiers(cacheRoot: URL) -> Set<String> {
         let fileManager = FileManager.default
         var identifiers = Set<String>()
         for project in (try? fileManager.contentsOfDirectory(atPath: cacheRoot.path)) ?? [] {

@@ -142,7 +142,12 @@ final class Spike {
 
     init(window: UIWindow, outDir: String) { self.window = window; self.outDir = outDir }
 
-    func note(_ s: String) { lines.append(s); print(s) }
+    func note(_ s: String) {
+        lines.append(s)
+        print(s)
+        // Flushed as it goes: a probe that traps still leaves what it found.
+        try? lines.joined(separator: "\n").write(toFile: "\(outDir)/results.txt", atomically: true, encoding: .utf8)
+    }
 
     func settle(_ seconds: Double = 0.45) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -405,6 +410,7 @@ final class Spike {
         await runCase(.init(id: "tab bar item (Other)", point: { self.labelPoint("Other") }, observe: { "tab=\(m.tab)" }, reset: { m.tab = 0 }))
         m.tab = 0; await settle(0.8)
 
+        await fallbackProbes()
         await moreProbes()
         await scrollToTop()
 
@@ -477,6 +483,45 @@ final class Spike {
         note("== done")
         try? lines.joined(separator: "\n").write(toFile: "\(outDir)/results.txt", atomically: true, encoding: .utf8)
         try? "done".write(toFile: "\(outDir)/done", atomically: true, encoding: .utf8)
+    }
+
+    func controllers() -> [UIViewController] {
+        var out: [UIViewController] = []
+        func walk(_ vc: UIViewController) {
+            out.append(vc)
+            vc.children.forEach(walk)
+            if let p = vc.presentedViewController { walk(p) }
+        }
+        if let root = window.rootViewController { walk(root) }
+        return out
+    }
+
+    /// Round 3: do public view-controller APIs reach what the UIControl route reaches, and does SwiftUI follow?
+    func fallbackProbes() async {
+        let m = model
+        note("== round 3: view-controller fallbacks for the tab bar and the back button")
+        let all = controllers()
+        note("   controllers: \(all.map { String(describing: type(of: $0)) })")
+        if let tabs = all.compactMap({ $0 as? UITabBarController }).first {
+            note("   UITabBarController items=\(tabs.tabBar.items?.map { $0.title ?? "?" } ?? []) selectedIndex=\(tabs.selectedIndex)")
+            m.tab = 0; await settle(0.5)
+            tabs.selectedIndex = 1
+            await settle(0.7)
+            note("   selectedIndex = 1: model.tab = \(m.tab), controller index \(tabs.selectedIndex)")
+            m.tab = 0; await settle(0.7)
+            note("   model.tab = 0 afterwards: controller index \(tabs.selectedIndex)")
+        } else { note("   no UITabBarController in the hierarchy") }
+        m.path = [1]; await settle(1.0)
+        let navs = controllers().compactMap { $0 as? UINavigationController }
+        note("   navigation controllers: \(navs.map { "\($0.viewControllers.count) vcs" })")
+        if let nav = navs.first(where: { $0.viewControllers.count > 1 }) {
+            let bar = nav.navigationBar
+            note("   navigationBar frame in window: \(bar.convert(bar.bounds, to: window))")
+            nav.popViewController(animated: false)
+            await settle(0.8)
+            note("   popViewController: model.path.count = \(m.path.count), controller depth \(nav.viewControllers.count)")
+        } else { note("   no navigation controller with a stack") }
+        m.path = []; await settle(0.8)
     }
 
     /// Scrolls the list until the label is on screen (nil when it never is).

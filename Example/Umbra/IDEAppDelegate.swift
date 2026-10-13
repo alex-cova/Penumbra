@@ -28,6 +28,9 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         IDEAppUpdater.startIfNeeded()
         IDESecondaryShortcutMonitor.install()
+        // Remember the simulator devices Umbra boots, so a crash does not strand them.
+        let ledger = IDESimulatorService.defaultLedgerURL
+        Task { await IDESimulatorService.shared.enableLedger(at: ledger) }
         Task { @MainActor in
             Self.activateAndKeyWindows()
         }

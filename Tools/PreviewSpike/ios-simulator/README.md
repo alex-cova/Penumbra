@@ -31,6 +31,8 @@ are in `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3. In short:
 - Round 2: menu and picker items are reached through the opening button's public `menu`
   (`UIAction.performWithSender`, then `contextMenuInteraction?.dismissMenu()`); `UISlider` and `UIStepper` by
   setting their value and sending `.valueChanged`; swipe actions through `accessibilityCustomActions`.
+- Round 3: `UITabBarController.selectedIndex` and `UINavigationController.popViewController` reach what the
+  private bar controls reach, and SwiftUI's `TabView` selection and `NavigationStack` path follow them.
 - No public route: `DragGesture`, long press, `onTapGesture` (also with the button trait), alert buttons
   (`keyCommands` is empty), context-menu items, and a hand-made `UITouch`. The software keyboard is not in
   `drawHierarchy`; sheets, alerts and open menus are.

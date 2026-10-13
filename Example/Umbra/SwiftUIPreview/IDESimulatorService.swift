@@ -192,20 +192,113 @@ actor IDESimulatorService: IDESimulatorControlling {
     private let idleInterval: Duration
     /// What `shutdownBootedByUsBlocking()` reads at quit, when the actor cannot be awaited.
     private let bootedRegistry = BootedRegistry()
+    /// The devices this service booted, on disk with the process that booted them: a crash leaves
+    /// them running, and the next launch finds them there and takes them over.
+    private let ledger: BootedLedger
+    private let liveHostIdentifiers: @Sendable () -> Set<String>
+    private var orphansAdopted = false
 
     /// Ten minutes with no preview open: a booted device is a few hundred MB resident.
     static let defaultIdleInterval: Duration = .seconds(600)
 
+    /// `ledgerURL` nil keeps no record (tests); `liveHostIdentifiers` is what no work directory
+    /// accounts for the complement of; `processIsAlive` says whether a process of the ledger is running.
     init(
         runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(), xcrun: String = "/usr/bin/xcrun",
-        idleInterval: Duration = IDESimulatorService.defaultIdleInterval
+        idleInterval: Duration = IDESimulatorService.defaultIdleInterval,
+        ledgerURL: URL? = nil,
+        processIdentifier: Int32 = getpid(),
+        processIsAlive: @escaping @Sendable (Int32) -> Bool = IDESimulatorService.isProcessAlive,
+        liveHostIdentifiers: @escaping @Sendable () -> Set<String> = {
+            IDESwiftUIPreviewSession.liveHostBundleIdentifiers(cacheRoot: IDESwiftUIPreviewSession.defaultCacheRoot)
+        }
     ) {
         self.runner = runner
         self.xcrun = xcrun
         self.idleInterval = idleInterval
+        self.ledger = BootedLedger(url: ledgerURL, processIdentifier: processIdentifier, isAlive: processIsAlive)
+        self.liveHostIdentifiers = liveHostIdentifiers
+    }
+
+    /// Where the app keeps the ledger. Nothing is recorded while tests run with session persistence
+    /// off, and the shared service has no ledger until the app turns it on at launch.
+    @MainActor static var defaultLedgerURL: URL? {
+        guard IDEWorkspace.isSessionPersistenceEnabled,
+              let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        return base.appendingPathComponent("com.umbra.editor/SwiftUIPreviews/booted-devices.json")
+    }
+
+    /// Starts recording the devices it boots, so a device left running by a crash is found by the
+    /// next launch (`adoptOrphans`).
+    func enableLedger(at url: URL?) {
+        ledger.setURL(url)
+    }
+
+    static let isProcessAlive: @Sendable (Int32) -> Bool = { pid in
+        // Signal 0 only checks: EPERM means it exists and is another user's.
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     /// The udids of the devices this service booted, readable without awaiting the actor.
+    /// The devices Umbra booted and the process that did, as a small JSON file.
+    private final class BootedLedger: @unchecked Sendable {
+        struct Entry: Codable, Equatable {
+            var udid: String
+            var pid: Int32
+        }
+
+        private let lock = NSLock()
+        private var url: URL?
+        let processIdentifier: Int32
+        let isAlive: @Sendable (Int32) -> Bool
+
+        init(url: URL?, processIdentifier: Int32, isAlive: @escaping @Sendable (Int32) -> Bool) {
+            self.url = url
+            self.processIdentifier = processIdentifier
+            self.isAlive = isAlive
+        }
+
+        func setURL(_ url: URL?) { lock.withLock { self.url = url } }
+
+        func entries() -> [Entry] { lock.withLock { read() } }
+
+        func record(_ udid: String) {
+            lock.withLock {
+                var all = read().filter { $0.udid != udid }
+                all.append(Entry(udid: udid, pid: processIdentifier))
+                write(all)
+            }
+        }
+
+        func forget(_ udid: String) {
+            lock.withLock {
+                let all = read()
+                let kept = all.filter { $0.udid != udid }
+                if kept.count != all.count { write(kept) }
+            }
+        }
+
+        /// Entries of a process that is gone: devices a crash left running.
+        func orphans() -> [Entry] {
+            entries().filter { $0.pid != processIdentifier && !isAlive($0.pid) }
+        }
+
+        private func read() -> [Entry] {
+            guard let url, let data = try? Data(contentsOf: url) else { return [] }
+            return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
+        }
+
+        private func write(_ entries: [Entry]) {
+            guard let url else { return }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if entries.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else if let data = try? JSONEncoder().encode(entries) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
     private final class BootedRegistry: @unchecked Sendable {
         private let lock = NSLock()
         private var udids: [String] = []
@@ -253,6 +346,7 @@ actor IDESimulatorService: IDESimulatorControlling {
         guard devices.succeeded, let known = IDESimulatorCatalog.devices(fromJSON: devices.output) else {
             throw IDESimulatorError.commandFailed("Listing the simulator devices", output: devices.output)
         }
+        adoptOrphans(known: known)
         let name = IDESimulatorCatalog.deviceName(for: type)
         if let existing = known.first(where: { $0.name == name && $0.runtimeIdentifier == runtime.identifier }) {
             return IDESimulatorTarget(device: existing, runtime: runtime, sdkPath: sdkPath)
@@ -279,6 +373,7 @@ actor IDESimulatorService: IDESimulatorControlling {
         if booted.succeeded, !target.device.isBooted, !bootedByUs.contains(udid) {
             bootedByUs.append(udid)
             bootedRegistry.add(udid)
+            ledger.record(udid)
         }
         // Returns when the device is ready for apps (SpringBoard is up).
         let status = await simctl(["bootstatus", udid])
@@ -294,6 +389,7 @@ actor IDESimulatorService: IDESimulatorControlling {
         while bootedByUs.count > Self.maximumBooted, let oldest = bootedByUs.first(where: { $0 != udid }) {
             bootedByUs.removeAll { $0 == oldest }
             bootedRegistry.remove(oldest)
+            ledger.forget(oldest)
             _ = await simctl(["shutdown", oldest])
         }
     }
@@ -325,10 +421,15 @@ actor IDESimulatorService: IDESimulatorControlling {
     /// Shuts down a device this service booted; one that was running before, or that another window
     /// started, is left running.
     func shutdownIfBootedByUs(_ target: IDESimulatorTarget) async {
-        guard bootedByUs.contains(target.device.udid) else { return }
-        bootedByUs.removeAll { $0 == target.device.udid }
-        bootedRegistry.remove(target.device.udid)
-        _ = await simctl(["shutdown", target.device.udid])
+        await shutdown(udid: target.device.udid)
+    }
+
+    private func shutdown(udid: String) async {
+        guard bootedByUs.contains(udid) else { return }
+        bootedByUs.removeAll { $0 == udid }
+        bootedRegistry.remove(udid)
+        ledger.forget(udid)
+        _ = await simctl(["shutdown", udid])
     }
 
     // MARK: Leases and idle shutdown
@@ -350,20 +451,48 @@ actor IDESimulatorService: IDESimulatorControlling {
         leases[udid] = nil
         // Nobody is previewing on it any more. A moved preview, a rebuild and a reopened panel come
         // back within the interval and find it running.
+        scheduleIdleShutdown(udid: udid)
+    }
+
+    private func scheduleIdleShutdown(udid: String) {
         idleShutdowns[udid]?.cancel()
         let interval = idleInterval
         idleShutdowns[udid] = Task { [weak self] in
             do { try await Task.sleep(for: interval) } catch { return }
-            await self?.idleShutdown(target)
+            await self?.idleShutdown(udid: udid)
         }
     }
 
-    private func idleShutdown(_ target: IDESimulatorTarget) async {
-        let udid = target.device.udid
+    private func idleShutdown(udid: String) async {
         idleShutdowns[udid] = nil
+        guard (leases[udid] ?? 0) == 0, bootedByUs.contains(udid) else { return }
+        // The last chance to uninstall: a device that is shut down cannot be asked for its apps.
+        await removeStaleHosts(udid: udid, keeping: liveHostIdentifiers())
         guard (leases[udid] ?? 0) == 0 else { return }
-        await shutdownIfBootedByUs(target)
+        await shutdown(udid: udid)
     }
+
+    /// Devices an earlier, crashed run of Umbra left booted: they are this service's now, and with
+    /// no session using them they go down after the idle time like any other. A device that is
+    /// no longer booted is dropped from the ledger, and one whose process still runs is left alone.
+    private func adoptOrphans(known: [IDESimulatorDevice]) {
+        guard !orphansAdopted else { return }
+        orphansAdopted = true
+        for entry in ledger.orphans() {
+            guard let device = known.first(where: { $0.udid == entry.udid }), device.isBooted else {
+                ledger.forget(entry.udid)
+                continue
+            }
+            guard !bootedByUs.contains(entry.udid) else { continue }
+            bootedByUs.append(entry.udid)
+            bootedRegistry.add(entry.udid)
+            ledger.record(entry.udid)
+            if (leases[entry.udid] ?? 0) == 0 { scheduleIdleShutdown(udid: entry.udid) }
+        }
+    }
+
+    /// The udids the service would shut down at quit (for tests).
+    func devicesBootedByUs() -> [String] { bootedByUs }
 
     /// Whether a shutdown is waiting for the device's last lease interval to pass (for tests).
     func hasPendingIdleShutdown(_ target: IDESimulatorTarget) -> Bool { idleShutdowns[target.device.udid] != nil }
@@ -373,11 +502,23 @@ actor IDESimulatorService: IDESimulatorControlling {
     /// At quit: shuts down every device this service booted, and waits. A pending idle shutdown
     /// would never fire, and the quit would leave the device running.
     nonisolated func shutdownBootedByUsBlocking() {
+        let live = liveHostIdentifiers()
         for udid in bootedRegistry.all {
+            // Apps no work directory accounts for go while the device can still be asked.
+            var listing = SubprocessRequest(executable: xcrun, arguments: ["simctl", "listapps", udid])
+            listing.timeout = .seconds(15)
+            if let listed = try? SubprocessRunner.runBlocking(listing), listed.exit.status == 0 {
+                for identifier in Self.staleHostIdentifiers(listAppsOutput: listed.stdout.text, keeping: live) {
+                    var uninstall = SubprocessRequest(executable: xcrun, arguments: ["simctl", "uninstall", udid, identifier])
+                    uninstall.timeout = .seconds(15)
+                    _ = try? SubprocessRunner.runBlocking(uninstall)
+                }
+            }
             var request = SubprocessRequest(executable: xcrun, arguments: ["simctl", "shutdown", udid])
             request.timeout = .seconds(15)
             _ = try? SubprocessRunner.runBlocking(request)
             bootedRegistry.remove(udid)
+            ledger.forget(udid)
         }
     }
 
@@ -397,7 +538,10 @@ actor IDESimulatorService: IDESimulatorControlling {
     }
 
     func removeStaleHosts(on target: IDESimulatorTarget, keeping bundleIdentifiers: Set<String>) async {
-        let udid = target.device.udid
+        await removeStaleHosts(udid: target.device.udid, keeping: bundleIdentifiers)
+    }
+
+    private func removeStaleHosts(udid: String, keeping bundleIdentifiers: Set<String>) async {
         let listed = await simctl(["listapps", udid])
         guard listed.succeeded else { return }
         for identifier in Self.staleHostIdentifiers(listAppsOutput: listed.output, keeping: bundleIdentifiers) {

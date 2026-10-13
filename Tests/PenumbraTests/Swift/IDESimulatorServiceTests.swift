@@ -448,6 +448,132 @@ final class IDESimulatorServiceTests: XCTestCase {
         ])
     }
 
+    // MARK: Devices a crash left booted
+
+    private func ledgerFile() -> URL { directory.appendingPathComponent("booted-devices.json") }
+
+    private func writeLedger(_ entries: [(udid: String, pid: Int32)]) throws {
+        let json = "[" + entries.map { "{\"udid\":\"\($0.udid)\",\"pid\":\($0.pid)}" }.joined(separator: ",") + "]"
+        try json.write(to: ledgerFile(), atomically: true, encoding: .utf8)
+    }
+
+    private func bootedDevicesJSON(udid: String, state: String = "Booted") -> String {
+        """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+          {"udid":"\(udid)","name":"Umbra Preview - iPhone 17","state":"\(state)","isAvailable":true,"deviceTypeIdentifier":"dt"}]}}
+        """
+    }
+
+    func testTheBootsAreRecordedWithTheProcessAndForgottenOnShutdown() async throws {
+        let runner = ScriptedRunner { _, _ in (0, "") }
+        let service = IDESimulatorService(runner: runner, ledgerURL: ledgerFile(), processIdentifier: 777)
+        let target = try await FakeSimulator().target
+        try await service.boot(target)
+        let recorded = try String(contentsOf: ledgerFile(), encoding: .utf8)
+        XCTAssertTrue(recorded.contains("UDID-1") && recorded.contains("777"), recorded)
+        await service.shutdownIfBootedByUs(target)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile().path), "nothing left to remember")
+    }
+
+    func testADeviceAnEarlierRunLeftBootedIsTakenOverAndShutDownWhenIdle() async throws {
+        try writeLedger([(udid: "UDID-1", pid: 424242)])
+        let runner = simctlRunner(devicesJSON: bootedDevicesJSON(udid: "UDID-1"))
+        let service = IDESimulatorService(
+            runner: runner, idleInterval: .milliseconds(100), ledgerURL: ledgerFile(),
+            processIdentifier: 1, processIsAlive: { _ in false }
+        )
+        _ = try await service.prepare(IDESimulatorRequest())
+        let owned = await service.devicesBootedByUs()
+        XCTAssertEqual(owned, ["UDID-1"], "its process is gone: the device is this one's to stop")
+        let ended = await waitUntil { self.shutdowns(runner) == 1 }
+        XCTAssertTrue(ended, "no preview uses it: it goes down after the idle time")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile().path))
+    }
+
+    func testAnOrphanThatASessionStartsUsingIsKept() async throws {
+        try writeLedger([(udid: "UDID-1", pid: 424242)])
+        let runner = simctlRunner(devicesJSON: bootedDevicesJSON(udid: "UDID-1"))
+        let service = IDESimulatorService(
+            runner: runner, idleInterval: .milliseconds(150), ledgerURL: ledgerFile(),
+            processIdentifier: 1, processIsAlive: { _ in false }
+        )
+        let target = try await service.prepare(IDESimulatorRequest())
+        await service.lease(target)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(shutdowns(runner), 0)
+    }
+
+    func testADeviceOfAProcessThatStillRunsIsLeftAlone() async throws {
+        try writeLedger([(udid: "UDID-1", pid: 424242)])
+        let runner = simctlRunner(devicesJSON: bootedDevicesJSON(udid: "UDID-1"))
+        let service = IDESimulatorService(
+            runner: runner, idleInterval: .milliseconds(60), ledgerURL: ledgerFile(),
+            processIdentifier: 1, processIsAlive: { $0 == 424242 }
+        )
+        _ = try await service.prepare(IDESimulatorRequest())
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(shutdowns(runner), 0, "another Umbra owns it")
+        let owned = await service.devicesBootedByUs()
+        XCTAssertEqual(owned, [])
+    }
+
+    func testAnOrphanThatIsNoLongerBootedIsForgotten() async throws {
+        try writeLedger([(udid: "UDID-1", pid: 424242)])
+        let runner = simctlRunner(devicesJSON: bootedDevicesJSON(udid: "UDID-1", state: "Shutdown"))
+        let service = IDESimulatorService(
+            runner: runner, idleInterval: .milliseconds(60), ledgerURL: ledgerFile(),
+            processIdentifier: 1, processIsAlive: { _ in false }
+        )
+        _ = try await service.prepare(IDESimulatorRequest())
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(shutdowns(runner), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile().path))
+    }
+
+    func testStaleAppsAreUninstalledJustBeforeTheIdleShutdown() async throws {
+        let runner = ScriptedRunner { _, arguments in
+            arguments.starts(with: ["simctl", "listapps"]) ? (0, Self.listAppsOutput) : (0, "")
+        }
+        let service = IDESimulatorService(
+            runner: runner, idleInterval: .milliseconds(80),
+            liveHostIdentifiers: { ["com.umbra.preview.00000000000000aa"] }
+        )
+        let target = try await FakeSimulator().target
+        try await service.boot(target)
+        await service.lease(target)
+        await service.release(target)
+        let ended = await waitUntil { self.shutdowns(runner) == 1 }
+        XCTAssertTrue(ended)
+        let commands = runner.commands
+        let uninstall = try XCTUnwrap(commands.firstIndex(of: ["simctl", "uninstall", "UDID-1", "com.umbra.preview.00000000000000bb"]))
+        let shutdown = try XCTUnwrap(commands.firstIndex(of: ["simctl", "shutdown", "UDID-1"]))
+        XCTAssertLessThan(uninstall, shutdown, "a shut-down device cannot be asked for its apps")
+        XCTAssertFalse(commands.contains(["simctl", "uninstall", "UDID-1", "com.umbra.preview.00000000000000aa"]))
+    }
+
+    // MARK: What is on screen
+
+    func testElementsOfAnIOSPreviewAreReadFromTheHostReply() {
+        let reply = event([
+            "event": "elements",
+            "items": [
+                ["label": "b", "x": 120.0, "y": 300.0, "width": 160.0, "height": 44.0],
+                ["label": "Other", "x": 216.0, "y": 877.0, "width": 94.0, "height": 54.0],
+                ["x": 1.0] // no label: not an element a person could name
+            ] as [[String: Any]]
+        ])
+        let elements = IDESwiftUIPreviewSession.elements(in: reply)
+        XCTAssertEqual(elements.map(\.label), ["b", "Other"])
+        XCTAssertEqual(elements[0].center, CGPoint(x: 200, y: 322))
+        XCTAssertEqual(IDESwiftUIPreviewSession.elements(in: event(["event": "ack"])), [])
+    }
+
+    func testAnIdleSessionHasNoElementsToList() async {
+        let session = makeSession(runner: ScriptedRunner { _, _ in (0, "") }, simulator: FakeSimulator())
+        let elements = await session.accessibilityElements()
+        XCTAssertEqual(elements, [])
+    }
+
     func testAHostThatClosesItsEndOfTheSocketIsReportedAndOneWeCloseIsNot() async throws {
         let path = NSTemporaryDirectory() + "umbra-t-\(UUID().uuidString.prefix(6)).sock"
         defer { unlink(path) }
@@ -1110,13 +1236,15 @@ final class IDESimulatorServiceTests: XCTestCase {
                 @State private var stepper = 0
                 @State private var swiped = 0
                 @State private var refreshes = 0
+                @State private var picked = "a"
+                @State private var tab = 0
                 @State private var frames: [String: CGRect] = [:]
 
                 private var summary: String {
                     var lines = ["taps=\(taps)", "on=\(on)", "sheet=\(sheet)", "pushed=\(path.count)",
                                  "name=\(name)", "row=\(row)", "lastRow=\(lastRow)",
                                  "slider=\(Int(slider))", "stepper=\(stepper)", "swiped=\(swiped)",
-                                 "refreshes=\(refreshes)"]
+                                 "refreshes=\(refreshes)", "picked=\(picked)", "tab=\(tab)"]
                     for (key, f) in frames.sorted(by: { $0.key < $1.key }) {
                         lines.append("frame.\(key)=\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))")
                     }
@@ -1126,7 +1254,8 @@ final class IDESimulatorServiceTests: XCTestCase {
                 private func mark(_ id: String) -> some ViewModifier { Mark(id: id, frames: $frames) }
 
                 var body: some View {
-                    NavigationStack(path: $path) {
+                    TabView(selection: $tab) {
+                        NavigationStack(path: $path) {
                         List {
                             Button("Tap me") { taps += 1 }.modifier(mark("tap"))
                             Toggle("Switch", isOn: $on).modifier(mark("switch"))
@@ -1136,6 +1265,9 @@ final class IDESimulatorServiceTests: XCTestCase {
                             Slider(value: $slider, in: 0...100).modifier(mark("slider"))
                             Stepper("Count \(stepper)", value: $stepper).modifier(mark("stepper"))
                             Text("Swipe me").swipeActions { Button("Delete") { swiped += 1 } }.modifier(mark("swipe"))
+                            Picker("Pick", selection: $picked) {
+                                Text("a").tag("a"); Text("b").tag("b"); Text("c").tag("c")
+                            }.pickerStyle(.menu).modifier(mark("picker"))
                             ForEach(0..<50, id: \.self) { i in
                                 Button("Row \(i)") { row = i + 1 }
                                     .onAppear { lastRow = max(lastRow, i) }
@@ -1148,6 +1280,9 @@ final class IDESimulatorServiceTests: XCTestCase {
                         .sheet(isPresented: $sheet) {
                             Button("Close") { sheet = false }.padding(40).modifier(mark("close"))
                         }
+                        }
+                        .tabItem { Label("Home", systemImage: "house") }.tag(0)
+                        Text("Second").tabItem { Label("Other", systemImage: "star") }.tag(1)
                     }
                     .onAppear { save() }
                     .onChange(of: summary) { save() }
@@ -1238,6 +1373,25 @@ final class IDESimulatorServiceTests: XCTestCase {
         session.click(at: CGPoint(x: stepperFrame.maxX - 99, y: stepperFrame.midY))
         await eventually("the leading half subtracts") { state()["stepper"] == "0" }
 
+        // A tab by its label, from the accessibility tree; and back to the first.
+        let tabItems = await session.accessibilityElements()
+        let other = try XCTUnwrap(tabItems.last { $0.label == "Other" }, "the tab bar's item: \(tabItems.map(\.label))")
+        session.click(at: other.center)
+        await eventually("a tap on a tab item selects it") { state()["tab"] == "1" }
+        let afterTab = await session.accessibilityElements()
+        let home = try XCTUnwrap(afterTab.last { $0.label == "Home" })
+        session.click(at: home.center)
+        await eventually("and back") { state()["tab"] == "0" }
+
+        // A menu: the tap opens it in the frame, the next one chooses an item where it is drawn.
+        session.click(at: try XCTUnwrap(center("picker")))
+        try await Task.sleep(for: .milliseconds(700))
+        saveSnapshot(session.frame, named: "input-menu-open")
+        let menuItems = await session.accessibilityElements()
+        let itemB = try XCTUnwrap(menuItems.first { $0.label == "b" }, "an open menu's item: \(menuItems.map(\.label))")
+        session.click(at: itemB.center)
+        await eventually("a tap on a menu item chooses it") { state()["picked"] == "b" }
+
         // A sideways drag on a row with swipe actions offers them; choosing one runs it.
         var offered: (point: CGPoint, names: [String])?
         session.swipeActionsHandler = { point, names in offered = (point, names) }
@@ -1280,6 +1434,12 @@ final class IDESimulatorServiceTests: XCTestCase {
         session.click(at: try XCTUnwrap(center("push")))
         await eventually("a NavigationLink pushes") { state()["pushed"] == "1" }
         saveSnapshot(session.frame, named: "input-pushed")
+        // The back button is found by what it says, then tapped where it is.
+        try await Task.sleep(for: .milliseconds(700))
+        let backItems = await session.accessibilityElements()
+        let back = try XCTUnwrap(backItems.first { $0.label == "Input" }, "the back button: \(backItems.map(\.label))")
+        session.click(at: back.center)
+        await eventually("the back button pops the stack") { state()["pushed"] == "0" }
         session.stop()
     }
 

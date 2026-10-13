@@ -264,6 +264,19 @@ final class SwiftPreviewBuildPlanTests: XCTestCase {
         XCTAssertFalse(host.contains("keyCommands"))
     }
 
+    func testTheSimulatorHostHasPublicFallbacksForTheBarsAndCanListWhatIsOnScreen() throws {
+        let host = try simulatorPlan().hostSource
+        // The bars' controls are UIKit's own; the controllers' API is what is documented.
+        for api in ["UITabBarController", "tabs.selectedIndex = index", "popViewController(animated: true)",
+                    "navigationBar", "backButtonTitle"] {
+            XCTAssertTrue(host.contains(api), api)
+        }
+        XCTAssertTrue(host.contains("\"tab\"") && host.contains("\"back\""))
+        // Listing the elements, for tests and for finding an open menu's items.
+        XCTAssertTrue(host.contains("case \"elements\": sendElements()"))
+        XCTAssertTrue(host.contains("\"event\": \"elements\""))
+    }
+
     func testTheSimulatorThunkHandsOverAViewController() throws {
         let text = try simulatorPlan().thunkSource(mode: .copy)
         XCTAssertTrue(text.contains("import UIKit"))
