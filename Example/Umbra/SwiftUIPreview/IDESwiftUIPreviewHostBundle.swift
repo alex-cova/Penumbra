@@ -24,6 +24,53 @@ enum IDESwiftUIPreviewHostBundle {
         return name.map { binPath + "/" + $0 }
     }
 
+    /// Keys of the app's own `Info.plist` that its code can depend on and the host does not set:
+    /// custom fonts (registered at launch), localizations, a forced appearance, usage descriptions
+    /// (so an access request in a preview asks instead of trapping), App Transport Security and the
+    /// orientations. The identity, the scene manifest and the device family stay the host's.
+    static func carriedInfoKeys(_ key: String) -> Bool {
+        if key.hasPrefix("NS") && key.hasSuffix("UsageDescription") { return true }
+        return [
+            "UIAppFonts", "CFBundleLocalizations", "CFBundleDevelopmentRegion", "UIUserInterfaceStyle",
+            "UIRequiresFullScreen", "NSAppTransportSecurity", "UISupportedInterfaceOrientations",
+            "UISupportedInterfaceOrientations~ipad", "UIStatusBarStyle", "UIViewControllerBasedStatusBarAppearance"
+        ].contains(key)
+    }
+
+    /// The host's keys with the donor's carried ones added (the host's own win).
+    static func mergedInfo(host: [String: Any], donor: [String: Any]) -> [String: Any] {
+        var merged = host
+        for (key, value) in donor where carriedInfoKeys(key) && merged[key] == nil { merged[key] = value }
+        return merged
+    }
+
+    /// Adds the donor app's carried `Info.plist` keys to the bundle's. Returns the keys it added.
+    @discardableResult
+    static func mergeInfoPlist(from donor: String, into bundlePath: String) -> [String] {
+        guard let donorInfo = NSDictionary(contentsOfFile: donor + "/Info.plist") as? [String: Any],
+              let hostInfo = NSDictionary(contentsOfFile: bundlePath + "/Info.plist") as? [String: Any] else { return [] }
+        let merged = mergedInfo(host: hostInfo, donor: donorInfo)
+        let added = merged.keys.filter { hostInfo[$0] == nil }.sorted()
+        guard !added.isEmpty,
+              let data = try? PropertyListSerialization.data(fromPropertyList: merged, format: .xml, options: 0) else { return [] }
+        return (try? data.write(to: URL(fileURLWithPath: bundlePath + "/Info.plist"), options: .atomic)) != nil ? added : []
+    }
+
+    /// Copies the `*.bundle` directories of a SwiftPM build's products folder (`<Package>_<Target>.bundle`,
+    /// holding a package's resources) into the app. SwiftPM's `Bundle.module` looks beside the
+    /// executable of an app, and traps when it is not there (measured in the S4 spike: the build
+    /// folder's path is not a fallback on the simulator).
+    @discardableResult
+    static func copyPackageBundles(fromBin binPath: String, to bundlePath: String, fileManager: FileManager = .default) -> [String] {
+        var copied: [String] = []
+        for name in ((try? fileManager.contentsOfDirectory(atPath: binPath)) ?? []).sorted() where name.hasSuffix(".bundle") {
+            let destination = bundlePath + "/" + name
+            try? fileManager.removeItem(atPath: destination)
+            if (try? fileManager.copyItem(atPath: binPath + "/" + name, toPath: destination)) != nil { copied.append(name) }
+        }
+        return copied
+    }
+
     /// Copies the donor's resources into the bundle. Returns what it copied; a failure to copy one
     /// item leaves it out (the preview is still useful) and is not an error.
     @discardableResult

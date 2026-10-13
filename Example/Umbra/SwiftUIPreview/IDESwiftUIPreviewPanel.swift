@@ -93,14 +93,23 @@ struct IDESwiftUIPreviewPanel: View {
             if session.isSimulatorPreview {
                 // The simulator's window is the device's: the choice is which device, from the runtime's own list.
                 Picker("Device", selection: Binding(
-                    get: { session.simulatorDeviceTypeID ?? "" }, set: { session.setSimulatorDeviceType($0) }
+                    get: { session.simulatorDeviceTypeID ?? "" },
+                    set: { identifier in
+                        if identifier == Self.macDeviceTag { session.choosePlatform(.mac) } else { session.setSimulatorDeviceType(identifier) }
+                    }
                 )) {
+                    // A package that supports both goes back to the Mac from here.
+                    if session.canChooseSimulator { Text("Mac").tag(Self.macDeviceTag) }
                     ForEach(session.simulatorDeviceTypes, id: \.identifier) { Text($0.name).tag($0.identifier) }
                 }
                 if session.frameDevice != nil {
                     Toggle("Device Frame", isOn: Binding(get: { session.showsDeviceFrame }, set: { session.setShowsDeviceFrame($0) }))
                 }
             } else {
+                if session.canChooseSimulator {
+                    // A package that supports iOS as well: the simulator's phone, remembered for it.
+                    Button("Show on iPhone Simulator") { session.choosePlatform(.simulator) }
+                }
                 Picker("Size", selection: Binding(get: { session.sizePreset }, set: { session.setSizePreset($0) })) {
                     ForEach(IDESwiftUIPreviewSession.SizePreset.layouts) { Text($0.title).tag($0) }
                     Section("iPhone") {
@@ -127,6 +136,8 @@ struct IDESwiftUIPreviewPanel: View {
         .fixedSize()
         .help("Text size, language, layout direction, size and device")
     }
+
+    private static let macDeviceTag = "umbra.mac"
 
     private var title: String {
         guard session.blocks.indices.contains(session.selectedIndex) else { return session.fileName ?? "Preview" }

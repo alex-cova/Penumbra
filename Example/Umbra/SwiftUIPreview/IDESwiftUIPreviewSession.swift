@@ -11,6 +11,32 @@ struct IDESwiftUIPreviewPackage: Equatable {
     var root: URL
     var target: String
     var buildSystem: SwiftPreviewBuildPlan.BuildSystem = .swiftPM
+    /// The `platforms:` a SwiftPM package declares (lowercased name to minimum version); empty when
+    /// it declares none, which SwiftPM treats as every platform.
+    var platforms: [String: String] = [:]
+
+    var supportsMac: Bool { platforms.isEmpty || platforms["macos"] != nil }
+    var supportsIOS: Bool { platforms.isEmpty || platforms["ios"] != nil }
+}
+
+/// Which platform a SwiftPM package is previewed on.
+enum IDESwiftUIPreviewPlatformPreference: String {
+    case mac, simulator
+}
+
+enum IDESwiftUIPreviewPlatformChoice {
+    /// A package that supports both is shown on the Mac unless the person chose the simulator; one
+    /// that supports only iOS can only be shown there, whatever was chosen; anything else (macOS only,
+    /// or a platform with no host) stays on the Mac.
+    static func platform(
+        supportsMac: Bool, supportsIOS: Bool, preference: IDESwiftUIPreviewPlatformPreference?
+    ) -> SwiftPreviewBuildPlan.Platform {
+        switch (supportsMac, supportsIOS) {
+        case (true, true): return preference == .simulator ? .iOSSimulator : .macOS
+        case (false, true): return .iOSSimulator
+        default: return .macOS
+        }
+    }
 }
 
 /// What a preview session needs from its window. Closures, so the session never holds the
@@ -177,6 +203,10 @@ final class IDESwiftUIPreviewSession {
     private(set) var simulatorDeviceTypes: [IDESimulatorRuntime.DeviceType] = []
     /// The device type the preview is on (or will be on); nil for the runtime's default phone.
     private(set) var simulatorDeviceTypeID: String?
+
+    /// True for a SwiftPM package that supports both the Mac and iOS: the Device menu then has the
+    /// Mac and the simulator's devices, and the choice is remembered for the package.
+    private(set) var canChooseSimulator = false
 
     /// What the panel can offer for the failure it shows, when there is one.
     private(set) var remedy: IDESimulatorError.Remedy?
@@ -675,13 +705,19 @@ final class IDESwiftUIPreviewSession {
 
         // 2b. Which platform the target is for. A macOS target keeps the AppKit host; an iOS one is
         // built for the simulator and shown by an app there (`docs/SWIFTUI_PREVIEW_PLAN.md` §9).
+        // An Xcode target says so itself; a package declares the platforms it supports, and one that
+        // supports both is shown on the Mac unless the person chose a device (remembered per package).
         var platform = SwiftPreviewBuildPlan.Platform.macOS
         isSimulatorPreview = false
+        canChooseSimulator = false
         var simulatorTarget: IDESimulatorTarget?
         var simulatorBoot: Task<Void, Error>?
         var startSimulatorBoot: (() -> Task<Void, Error>)?
+        var iosMinimum: String?
+        var wantsSimulator = false
         remedy = nil
-        if case .xcode(let project) = package.buildSystem {
+        switch package.buildSystem {
+        case .xcode(let project):
             phase = .building("Reading the target's settings…")
             let command = SwiftPreviewBuildPlan.buildSettingsCommand(project: project, target: package.target)
             let settings = await execute(
@@ -690,57 +726,26 @@ final class IDESwiftUIPreviewSession {
             guard isCurrent(token) else { return }
             let native = SwiftPreviewBuildPlan.platformName(fromBuildSettings: settings.output)
             if native == "iphoneos" || native == "iphonesimulator" {
-                platform = .iOSSimulator
-                isSimulatorPreview = true
-                phase = .building("Preparing the iOS Simulator…")
-                do {
-                    let prepared = try await simulator.prepare(IDESimulatorRequest(
-                        minimumVersion: SwiftPreviewBuildPlan.buildSetting("IPHONEOS_DEPLOYMENT_TARGET", fromBuildSettings: settings.output),
-                        deviceTypeIdentifier: simulatorDeviceTypeID
-                    ), progress: { [weak self] text in
-                        Task { @MainActor [weak self] in
-                            guard let self, self.isCurrent(token) else { return }
-                            self.phase = .building(text)
-                            self.onChange?()
-                        }
-                    })
-                    guard isCurrent(token) else { return }
-                    simulatorTarget = prepared
-                    await leaseSimulator(prepared)
-                    guard isCurrent(token) else { return }
-                    simulatorDeviceTypes = prepared.runtime.deviceTypes.filter {
-                        ($0.productFamily == "iPhone" || $0.productFamily == "iPad")
-                            && IDESwiftUIPreviewSettings.offers(family: $0.productFamily)
-                    }
-                    activeSimulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
-                    simulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
-                    if prepared.wasCreated { append("Created \(prepared.device.name); its first start is the slow one.\n") }
-                    if let warning = IDESwiftUIPreviewToolchainCheck.mismatch(
-                        sdkPath: prepared.sdkPath, compilerPath: toolchain.swiftc
-                    ) {
-                        append(warning + "\n")
-                        toolchainMismatch = warning
-                    } else {
-                        toolchainMismatch = nil
-                    }
-                    // The device boots while the project builds (the first boot is the slow part), or,
-                    // when Settings say so, after it, so the two do not compete for the CPU.
-                    let service = simulator
-                    let live = liveHostBundleIdentifiers()
-                    startSimulatorBoot = {
-                        Task {
-                            try await service.boot(prepared)
-                            // Apps of sessions and runs that are gone would pile up on the device.
-                            await service.removeStaleHosts(on: prepared, keeping: live)
-                        }
-                    }
-                    if IDESwiftUIPreviewSettings.startsSimulatorWithBuild { simulatorBoot = startSimulatorBoot?() }
-                    append("Previewing on \(prepared.device.name) (\(prepared.runtime.name)).\n")
-                } catch {
-                    remedy = (error as? IDESimulatorError)?.remedy
-                    return fail(token, error.localizedDescription)
-                }
+                wantsSimulator = true
+                iosMinimum = SwiftPreviewBuildPlan.buildSetting("IPHONEOS_DEPLOYMENT_TARGET", fromBuildSettings: settings.output)
             }
+        case .swiftPM:
+            canChooseSimulator = package.supportsMac && package.supportsIOS
+            let chosen = IDESwiftUIPreviewPlatformChoice.platform(
+                supportsMac: package.supportsMac, supportsIOS: package.supportsIOS,
+                preference: IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: package.root.path)
+            )
+            wantsSimulator = chosen == .iOSSimulator
+            iosMinimum = package.platforms["ios"].flatMap { $0.isEmpty ? nil : $0 }
+        }
+        if wantsSimulator {
+            platform = .iOSSimulator
+            isSimulatorPreview = true
+            phase = .building("Preparing the iOS Simulator…")
+            guard let prepared = await prepareSimulator(minimumVersion: iosMinimum, token: token, toolchain: toolchain) else { return }
+            simulatorTarget = prepared.target
+            startSimulatorBoot = prepared.startBoot
+            if IDESwiftUIPreviewSettings.startsSimulatorWithBuild { simulatorBoot = startSimulatorBoot?() }
         }
 
         // A macOS target on a session that was on the simulator gives the device back.
@@ -785,6 +790,10 @@ final class IDESwiftUIPreviewSession {
             var message = Self.summary(of: build.output, fallback: "swift build failed.")
             // The host renders macOS SwiftUI, so an iOS target is built against the macOS SDK; when
             // that fails, say why before the compiler's errors read as the project's own fault.
+            if case .xcode(let project) = package.buildSystem,
+               let hint = IDESwiftUIPreviewWorkspaceHint.hint(projectPath: project, output: build.output) {
+                message += "\n" + hint
+            }
             if let platformCommand = plan.platformCommand {
                 let settings = await execute(platformCommand, toolchain: toolchain, directory: root, echo: false)
                 guard isCurrent(token) else { return }
@@ -865,7 +874,13 @@ final class IDESwiftUIPreviewSession {
             phase = .building("Installing the preview on the simulator…")
             if let donor = IDESwiftUIPreviewHostBundle.donor(in: binPath, target: package.target) {
                 IDESwiftUIPreviewHostBundle.copyResources(from: donor, to: bundle)
+                let carried = IDESwiftUIPreviewHostBundle.mergeInfoPlist(from: donor, into: bundle)
+                if !carried.isEmpty { append("Carried from the app's Info.plist: \(carried.joined(separator: ", ")).\n") }
             }
+            // A package's resources are `<Package>_<Target>.bundle` in the products folder; its
+            // `Bundle.module` traps in an app that does not hold them.
+            let packageBundles = IDESwiftUIPreviewHostBundle.copyPackageBundles(fromBin: binPath, to: bundle)
+            if !packageBundles.isEmpty { append("Resource bundles in the app: \(packageBundles.joined(separator: ", ")).\n") }
             let sign = await runner.run(
                 executable: "/usr/bin/codesign", arguments: ["-f", "-s", "-", bundle], workingDirectory: nil, onOutput: { _ in }
             )
@@ -992,6 +1007,76 @@ final class IDESwiftUIPreviewSession {
             return false
         }
         return true
+    }
+
+    // MARK: Platform of a package
+
+    /// Chooses the Mac or the simulator for a package that supports both, remembers it for the
+    /// package, and builds for it: the platforms keep their own build folders, so going back is a
+    /// switch and not a rebuild of everything.
+    func choosePlatform(_ preference: IDESwiftUIPreviewPlatformPreference, deviceTypeID: String? = nil) {
+        guard let file = context.activeFile(), let package = context.package(file.url) else { return }
+        IDESwiftUIPreviewSettings.setPlatformPreference(preference, forPackageRoot: package.root.path)
+        if let deviceTypeID { simulatorDeviceTypeID = deviceTypeID }
+        rebuild()
+    }
+
+    // MARK: Preparing the simulator
+
+    private struct PreparedSimulator {
+        var target: IDESimulatorTarget
+        /// Starts booting the device (and then sweeps stale apps off it). Called while the project
+        /// builds, or after it when Settings say so.
+        var startBoot: () -> Task<Void, Error>
+    }
+
+    /// Finds or creates the device, takes a lease on it and reads what the menu and the build need
+    /// from it. Nil when that failed (the failure is shown, with what to do about it) or the run was
+    /// overtaken.
+    private func prepareSimulator(
+        minimumVersion: String?, token: Int, toolchain: IDESwiftUIPreviewToolchain
+    ) async -> PreparedSimulator? {
+        do {
+            let prepared = try await simulator.prepare(IDESimulatorRequest(
+                minimumVersion: minimumVersion, deviceTypeIdentifier: simulatorDeviceTypeID
+            ), progress: { [weak self] text in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrent(token) else { return }
+                    self.phase = .building(text)
+                    self.onChange?()
+                }
+            })
+            guard isCurrent(token) else { return nil }
+            await leaseSimulator(prepared)
+            guard isCurrent(token) else { return nil }
+            simulatorDeviceTypes = prepared.runtime.deviceTypes.filter {
+                ($0.productFamily == "iPhone" || $0.productFamily == "iPad")
+                    && IDESwiftUIPreviewSettings.offers(family: $0.productFamily)
+            }
+            activeSimulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
+            simulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
+            if prepared.wasCreated { append("Created \(prepared.device.name); its first start is the slow one.\n") }
+            if let warning = IDESwiftUIPreviewToolchainCheck.mismatch(sdkPath: prepared.sdkPath, compilerPath: toolchain.swiftc) {
+                append(warning + "\n")
+                toolchainMismatch = warning
+            } else {
+                toolchainMismatch = nil
+            }
+            let service = simulator
+            let live = liveHostBundleIdentifiers()
+            append("Previewing on \(prepared.device.name) (\(prepared.runtime.name)).\n")
+            return PreparedSimulator(target: prepared, startBoot: {
+                Task {
+                    try await service.boot(prepared)
+                    // Apps of sessions and runs that are gone would pile up on the device.
+                    await service.removeStaleHosts(on: prepared, keeping: live)
+                }
+            })
+        } catch {
+            remedy = (error as? IDESimulatorError)?.remedy
+            fail(token, error.localizedDescription)
+            return nil
+        }
     }
 
     // MARK: Idle
@@ -1721,5 +1806,25 @@ enum IDESwiftUIPreviewToolchainCheck {
 
     private static func xcodeName(_ developerDirectory: String) -> String {
         developerDirectory.split(separator: "/").first { $0.hasSuffix(".app") }.map(String.init) ?? developerDirectory
+    }
+}
+
+/// Says why an Xcode project's target did not build when the cause may be what previews leave out.
+/// They build with `xcodebuild -target`, which ignores workspaces and schemes, so a module that
+/// comes from CocoaPods or from a package only the workspace references is missing.
+enum IDESwiftUIPreviewWorkspaceHint {
+    static func hint(projectPath: String, output: String, fileManager: FileManager = .default) -> String? {
+        let text = output.lowercased()
+        let missingModule = text.contains("no such module") || text.contains("unable to find module dependency")
+            || text.contains("missing required module") || text.contains("could not build module")
+        guard missingModule else { return nil }
+        let directory = (projectPath as NSString).deletingLastPathComponent
+        let entries = (try? fileManager.contentsOfDirectory(atPath: directory)) ?? []
+        let workspace = entries.first { $0.hasSuffix(".xcworkspace") }
+        guard workspace != nil || entries.contains("Podfile") else { return nil }
+        let place = workspace.map { "its workspace (\($0))" } ?? "its Podfile"
+        return "A module is missing. Previews build the project's target alone with xcodebuild -target, which ignores "
+            + "workspaces and schemes, so what comes from \(place) (CocoaPods, packages only the workspace refers to) "
+            + "is not part of the build."
     }
 }

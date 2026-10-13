@@ -84,7 +84,7 @@ extension IDEWorkspace {
         if swiftPM.isActive, let manifest = swiftPM.manifest, let root = swiftPM.rootURL,
            let name = manifest.moduleResolver(root: root)(url), let target = manifest.target(named: name),
            target.kind == .regular || target.kind == .executable {
-            return IDESwiftUIPreviewPackage(root: root, target: target.name)
+            return IDESwiftUIPreviewPackage(root: root, target: target.name, platforms: manifest.platforms)
         }
         if xcode.isActive, let model = xcode.model {
             // A file in several targets (an app and its extension): the first that is not a test.

@@ -52,6 +52,21 @@ enum IDESwiftUIPreviewSettings {
         return family == "iPad" ? offersTablets : phones
     }
 
+    /// Which platform a package that supports both is previewed on, by package root: set by choosing
+    /// "Mac" or a device in the Device menu.
+    static func platformPreference(forPackageRoot root: String) -> IDESwiftUIPreviewPlatformPreference? {
+        let stored = UserDefaults.standard.dictionary(forKey: platformPreferencesKey) as? [String: String]
+        return stored?[root].flatMap(IDESwiftUIPreviewPlatformPreference.init(rawValue:))
+    }
+
+    static func setPlatformPreference(_ preference: IDESwiftUIPreviewPlatformPreference?, forPackageRoot root: String) {
+        var stored = UserDefaults.standard.dictionary(forKey: platformPreferencesKey) as? [String: String] ?? [:]
+        stored[root] = preference?.rawValue
+        UserDefaults.standard.set(stored, forKey: platformPreferencesKey)
+    }
+
+    static let platformPreferencesKey = "umbra.swiftUIPreview.platformByPackage"
+
     /// How long the last cold start of a device took, in seconds: shown while the next one runs.
     static var lastBootSeconds: Double? {
         get {

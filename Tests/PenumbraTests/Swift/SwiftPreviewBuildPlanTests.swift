@@ -196,6 +196,23 @@ final class SwiftPreviewBuildPlanTests: XCTestCase {
         XCTAssertEqual(plan.intermediatesPath, "/cache/scratch-ios/Intermediates")
     }
 
+    func testASwiftPMPackageIsCrossBuiltForTheSimulatorWithItsSDKAndTriple() throws {
+        let plan = try simulatorPlan(buildSystem: .swiftPM)
+        for command in [plan.buildCommand, plan.binPathCommand] {
+            XCTAssertEqual(value(after: "--sdk", in: command.arguments), "/Xcode/iPhoneSimulator27.0.sdk")
+            XCTAssertEqual(value(after: "--triple", in: command.arguments), "arm64-apple-ios27.0-simulator")
+            XCTAssertEqual(value(after: "--scratch-path", in: command.arguments), "/cache/scratch-ios")
+            XCTAssertTrue(command.arguments.contains("-enable-private-imports"), "the preview flags still apply")
+        }
+        XCTAssertEqual(value(after: "--target", in: plan.buildCommand.arguments), "App")
+        // The Mac build is what SwiftPM does by default: no SDK, no triple.
+        let mac = try self.plan(source: counterSource)
+        for command in [mac.buildCommand, mac.binPathCommand] {
+            XCTAssertFalse(command.arguments.contains("--sdk"))
+            XCTAssertFalse(command.arguments.contains("--triple"))
+        }
+    }
+
     func testTheSimulatorHostIsAnAppBundleWithItsOwnIdentifier() throws {
         let plan = try simulatorPlan()
         XCTAssertEqual(plan.hostBundlePath, "/cache/work-ios/host-ios/UmbraPreviewHost.app")

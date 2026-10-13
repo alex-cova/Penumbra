@@ -41,6 +41,15 @@ struct IDESwiftPMManifest: Sendable, Equatable {
     var targets: [Target] = []
     var products: [Product] = []
     var packages: [PackageDependency] = []
+    /// The `platforms:` the package declares, lowercased platform name (`ios`, `macos`) to its
+    /// minimum version (`17.0`, or empty when it could not be read). Empty when it declares none.
+    var platforms: [String: String] = [:]
+
+    /// A package that declares no platforms is built for all of them by SwiftPM; one that declares
+    /// some supports those.
+    func supports(platform name: String) -> Bool {
+        platforms.isEmpty || platforms[name.lowercased()] != nil
+    }
     /// Read from `dump-package`: the manifest was evaluated.
     var isExact = false
 
@@ -107,6 +116,12 @@ struct IDESwiftPMManifest: Sendable, Equatable {
                     let targets = args.first { $0.label == "targets" }.map { elements(of: $0.value).compactMap(string) } ?? []
                     manifest.products.append(Product(name: name, isExecutable: kind == "executable", targets: targets))
                 }
+            case "platforms":
+                for element in elements(of: argument.value) {
+                    guard let call = callNode(element), let platform = calleeName(call) else { continue }
+                    let version = arguments(of: call).first.map { platformVersion($0.value) } ?? ""
+                    manifest.platforms[platform.lowercased()] = version
+                }
             case "dependencies":
                 for element in elements(of: argument.value) {
                     guard let call = callNode(element), calleeName(call) == "package" else { continue }
@@ -153,6 +168,17 @@ struct IDESwiftPMManifest: Sendable, Equatable {
         case "binaryTarget": return .binary
         default: return nil
         }
+    }
+
+    /// `.v17` → `17.0`, `.v10_15` → `10.15`, `"14.2"` → `14.2`; empty when it is neither.
+    private static func platformVersion(_ node: SyntaxNode) -> String {
+        if let literal = string(node) { return literal }
+        var text = node.text.trimmingCharacters(in: .whitespaces)
+        guard text.hasPrefix(".v") else { return "" }
+        text.removeFirst(2)
+        let parts = text.split(separator: "_").map(String.init)
+        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return "" }
+        return parts.count == 1 ? parts[0] + ".0" : parts.joined(separator: ".")
     }
 
     private static func packageDependency(from args: [(label: String?, value: SyntaxNode)]) -> PackageDependency? {
@@ -273,6 +299,11 @@ struct IDESwiftPMManifest: Sendable, Equatable {
             manifest.products.append(Product(
                 name: name, isExecutable: isExecutable, targets: product["targets"] as? [String] ?? []
             ))
+        }
+        for case let platform as [String: Any] in object["platforms"] as? [Any] ?? [] {
+            if let name = platform["platformName"] as? String {
+                manifest.platforms[name.lowercased()] = platform["version"] as? String ?? ""
+            }
         }
         for case let dependency as [String: Any] in object["dependencies"] as? [Any] ?? [] {
             for kind in ["sourceControl", "fileSystem", "registry"] {

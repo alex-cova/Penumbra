@@ -457,6 +457,163 @@ final class IDESimulatorServiceTests: XCTestCase {
         ])
     }
 
+    // MARK: S4: packages, resources, Info.plist
+
+    private func value(after flag: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
+    func testWhichPlatformAPackageIsPreviewedOn() {
+        typealias Choice = IDESwiftUIPreviewPlatformChoice
+        // Both: the Mac, until a device is chosen.
+        XCTAssertEqual(Choice.platform(supportsMac: true, supportsIOS: true, preference: nil), .macOS)
+        XCTAssertEqual(Choice.platform(supportsMac: true, supportsIOS: true, preference: .mac), .macOS)
+        XCTAssertEqual(Choice.platform(supportsMac: true, supportsIOS: true, preference: .simulator), .iOSSimulator)
+        // iOS only: the simulator, whatever was chosen.
+        XCTAssertEqual(Choice.platform(supportsMac: false, supportsIOS: true, preference: nil), .iOSSimulator)
+        XCTAssertEqual(Choice.platform(supportsMac: false, supportsIOS: true, preference: .mac), .iOSSimulator)
+        // macOS only, or neither (tvOS…): the Mac, where a failure explains itself.
+        XCTAssertEqual(Choice.platform(supportsMac: true, supportsIOS: false, preference: .simulator), .macOS)
+        XCTAssertEqual(Choice.platform(supportsMac: false, supportsIOS: false, preference: nil), .macOS)
+
+        let package = IDESwiftUIPreviewPackage(root: URL(fileURLWithPath: "/p"), target: "T", platforms: ["ios": "17.0"])
+        XCTAssertTrue(package.supportsIOS)
+        XCTAssertFalse(package.supportsMac)
+        XCTAssertTrue(IDESwiftUIPreviewPackage(root: URL(fileURLWithPath: "/p"), target: "T").supportsMac, "none declared: every platform")
+    }
+
+    func testThePlatformChoiceIsRememberedPerPackage() {
+        let key = IDESwiftUIPreviewSettings.platformPreferencesKey
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        XCTAssertNil(IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: "/a"))
+        IDESwiftUIPreviewSettings.setPlatformPreference(.simulator, forPackageRoot: "/a")
+        IDESwiftUIPreviewSettings.setPlatformPreference(.mac, forPackageRoot: "/b")
+        XCTAssertEqual(IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: "/a"), .simulator)
+        XCTAssertEqual(IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: "/b"), .mac)
+        IDESwiftUIPreviewSettings.setPlatformPreference(nil, forPackageRoot: "/a")
+        XCTAssertNil(IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: "/a"))
+    }
+
+    func testAPackageForIOSOnlyIsBuiltForTheSimulatorWithItsDeclaredMinimum() async throws {
+        let runner = ScriptedRunner { _, _ in (1, "/p/Kit/Sources/Kit/Card.swift:2:1: error: stop here\n") }
+        let simulator = FakeSimulator()
+        let package = IDESwiftUIPreviewPackage(
+            root: URL(fileURLWithPath: "/p/Kit"), target: "Kit", buildSystem: .swiftPM, platforms: ["ios": "17.0"]
+        )
+        let session = makeSession(runner: runner, simulator: simulator, package: package)
+        session.refresh()
+        let failed = await waitUntil { if case .failed = session.phase { return true } else { return false } }
+        XCTAssertTrue(failed, "\(session.phase)")
+        XCTAssertTrue(session.isSimulatorPreview)
+        XCTAssertFalse(session.canChooseSimulator, "there is no Mac to go back to")
+        let minimums = await simulator.minimums
+        XCTAssertEqual(minimums, ["17.0"])
+        let build = try XCTUnwrap(runner.commands.first)
+        XCTAssertEqual(value(after: "--triple", in: build), "arm64-apple-ios27.0-simulator", "the runtime's version, like the host and the thunk")
+        XCTAssertEqual(value(after: "--sdk", in: build), "/Xcode/iPhoneSimulator27.0.sdk")
+        XCTAssertTrue(build.contains { $0.contains("scratch-ios") }, "its own scratch path")
+    }
+
+    func testAPackageForBothIsOnTheMacUntilADeviceIsChosen() async throws {
+        let key = IDESwiftUIPreviewSettings.platformPreferencesKey
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let package = IDESwiftUIPreviewPackage(
+            root: URL(fileURLWithPath: "/p/Kit"), target: "Kit", buildSystem: .swiftPM,
+            platforms: ["ios": "17.0", "macos": "14.0"]
+        )
+        let runner = ScriptedRunner { _, _ in (1, "error: stop here\n") }
+        let simulator = FakeSimulator()
+        let session = makeSession(runner: runner, simulator: simulator, package: package)
+        session.refresh()
+        _ = await waitUntil { if case .failed = session.phase { return true } else { return false } }
+        XCTAssertFalse(session.isSimulatorPreview)
+        XCTAssertTrue(session.canChooseSimulator, "the Device menu has the Mac and the simulator")
+        let untouched = await simulator.minimums
+        XCTAssertTrue(untouched.isEmpty)
+        XCTAssertNil(runner.commands.first.flatMap { $0.firstIndex(of: "--triple") })
+
+        // Choosing the simulator builds for it and is remembered for this package.
+        session.choosePlatform(.simulator)
+        let moved = await waitUntilAsync { await simulator.minimums == ["17.0"] }
+        XCTAssertTrue(moved)
+        XCTAssertTrue(session.isSimulatorPreview)
+        XCTAssertEqual(IDESwiftUIPreviewSettings.platformPreference(forPackageRoot: "/p/Kit"), .simulator)
+        XCTAssertTrue(runner.commands.contains { $0.contains("--triple") })
+    }
+
+    func testPackageResourceBundlesAreCopiedIntoTheApp() throws {
+        let fm = FileManager.default
+        let bin = directory.appendingPathComponent("bin").path
+        let app = directory.appendingPathComponent("host/UmbraPreviewHost.app").path
+        try fm.createDirectory(atPath: bin + "/Kit_Kit.bundle", withIntermediateDirectories: true)
+        try "hello".write(toFile: bin + "/Kit_Kit.bundle/note.txt", atomically: true, encoding: .utf8)
+        try fm.createDirectory(atPath: bin + "/Other_Other.bundle", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: bin + "/PackageFrameworks", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: bin + "/Shown.app", withIntermediateDirectories: true)
+        try IDESwiftUIPreviewHostBundle.create(at: app, infoPlist: "<plist/>")
+
+        let copied = IDESwiftUIPreviewHostBundle.copyPackageBundles(fromBin: bin, to: app)
+        XCTAssertEqual(copied, ["Kit_Kit.bundle", "Other_Other.bundle"], "bundles only: not PackageFrameworks, not the app")
+        XCTAssertEqual(try String(contentsOfFile: app + "/Kit_Kit.bundle/note.txt", encoding: .utf8), "hello")
+        // A second copy replaces the first.
+        try "newer".write(toFile: bin + "/Kit_Kit.bundle/note.txt", atomically: true, encoding: .utf8)
+        IDESwiftUIPreviewHostBundle.copyPackageBundles(fromBin: bin, to: app)
+        XCTAssertEqual(try String(contentsOfFile: app + "/Kit_Kit.bundle/note.txt", encoding: .utf8), "newer")
+    }
+
+    func testTheAppsInfoPlistCarriesWhatItsCodeDependsOn() throws {
+        let host = ["CFBundleIdentifier": "com.umbra.preview.x", "UIDeviceFamily": [1, 2], "UILaunchScreen": [String: Any]()] as [String: Any]
+        let donor: [String: Any] = [
+            "CFBundleIdentifier": "com.example.App", "CFBundleExecutable": "App",
+            "UIAppFonts": ["Brand-Regular.otf"], "CFBundleLocalizations": ["en", "de"], "CFBundleDevelopmentRegion": "de",
+            "UIUserInterfaceStyle": "Light", "NSCameraUsageDescription": "Scan", "NSAppTransportSecurity": ["NSAllowsArbitraryLoads": true],
+            "UIApplicationSceneManifest": ["x": 1], "UIDeviceFamily": [1], "MinimumOSVersion": "17.0"
+        ]
+        let merged = IDESwiftUIPreviewHostBundle.mergedInfo(host: host, donor: donor)
+        for key in ["UIAppFonts", "CFBundleLocalizations", "CFBundleDevelopmentRegion", "UIUserInterfaceStyle",
+                    "NSCameraUsageDescription", "NSAppTransportSecurity"] {
+            XCTAssertNotNil(merged[key], key)
+        }
+        XCTAssertEqual(merged["CFBundleIdentifier"] as? String, "com.umbra.preview.x", "the host's identity")
+        XCTAssertNil(merged["CFBundleExecutable"])
+        XCTAssertNil(merged["UIApplicationSceneManifest"], "the host's scene delegate is what runs")
+        XCTAssertEqual(merged["UIDeviceFamily"] as? [Int], [1, 2])
+        XCTAssertNil(merged["MinimumOSVersion"])
+
+        // On disk: the bundle's plist gains the keys, the donor's stays as it was.
+        let app = directory.appendingPathComponent("host.app").path
+        let donorApp = directory.appendingPathComponent("donor.app").path
+        try FileManager.default.createDirectory(atPath: donorApp, withIntermediateDirectories: true)
+        try IDESwiftUIPreviewHostBundle.create(at: app, infoPlist: "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>com.umbra.preview.x</string></dict></plist>")
+        (donor as NSDictionary).write(toFile: donorApp + "/Info.plist", atomically: true)
+        let added = IDESwiftUIPreviewHostBundle.mergeInfoPlist(from: donorApp, into: app)
+        XCTAssertTrue(added.contains("UIAppFonts") && added.contains("NSCameraUsageDescription"), "\(added)")
+        let written = try XCTUnwrap(NSDictionary(contentsOfFile: app + "/Info.plist") as? [String: Any])
+        XCTAssertEqual(written["UIAppFonts"] as? [String], ["Brand-Regular.otf"])
+        XCTAssertEqual(written["CFBundleIdentifier"] as? String, "com.umbra.preview.x")
+    }
+
+    func testAMissingModuleNextToAWorkspaceIsExplained() throws {
+        let fm = FileManager.default
+        let project = directory.appendingPathComponent("App/App.xcodeproj").path
+        try fm.createDirectory(atPath: project, withIntermediateDirectories: true)
+        let output = "ContentView.swift:1:8: error: no such module 'Alamofire'"
+        // A project alone: the compiler's message is the whole story.
+        XCTAssertNil(IDESwiftUIPreviewWorkspaceHint.hint(projectPath: project, output: output))
+        try fm.createDirectory(atPath: directory.appendingPathComponent("App/App.xcworkspace").path, withIntermediateDirectories: true)
+        let hint = try XCTUnwrap(IDESwiftUIPreviewWorkspaceHint.hint(projectPath: project, output: output))
+        XCTAssertTrue(hint.contains("App.xcworkspace") && hint.contains("-target"), hint)
+        // Another error is not this one.
+        XCTAssertNil(IDESwiftUIPreviewWorkspaceHint.hint(projectPath: project, output: "error: cannot find 'x' in scope"))
+        // CocoaPods without the workspace generated yet.
+        try fm.removeItem(atPath: directory.appendingPathComponent("App/App.xcworkspace").path)
+        try "target 'App' do end".write(toFile: directory.appendingPathComponent("App/Podfile").path, atomically: true, encoding: .utf8)
+        XCTAssertTrue(IDESwiftUIPreviewWorkspaceHint.hint(projectPath: project, output: output)?.contains("Podfile") == true)
+    }
+
     // MARK: S5b: settings, failures, the device list
 
     func testTheSettingsDefaultToTenIdleMinutesAndEverythingOn() {
@@ -1074,12 +1231,13 @@ final class IDESimulatorServiceTests: XCTestCase {
     private let source = "import SwiftUI\n#Preview { Text(\"a\") }\n"
 
     private func makeSession(
-        runner: any IDESwiftUIPreviewProcessRunning, simulator: any IDESimulatorControlling
+        runner: any IDESwiftUIPreviewProcessRunning, simulator: any IDESimulatorControlling,
+        package: IDESwiftUIPreviewPackage? = nil
     ) -> IDESwiftUIPreviewSession {
         let context = IDESwiftUIPreviewContext(
             activeFile: { [url, source] in (url, source) },
             package: { _ in
-                IDESwiftUIPreviewPackage(
+                package ?? IDESwiftUIPreviewPackage(
                     root: URL(fileURLWithPath: "/p/App"), target: "App", buildSystem: .xcode(project: "/p/App/App.xcodeproj")
                 )
             },
@@ -1506,6 +1664,77 @@ final class IDESimulatorServiceTests: XCTestCase {
         XCTAssertEqual(two.phase, .ready)
         one.stop()
         two.stop()
+    }
+
+    /// A SwiftPM package that declares only iOS, with a resource: built with `--sdk`/`--triple`,
+    /// shown on the simulator, and `Bundle.module` finds its bundle (without it in the app the
+    /// accessor traps: measured in the S4 spike).
+    func testAnIOSOnlyPackageWithResourcesIsPreviewedOnTheSimulator() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let runtimes = await IDESimulatorService().runtimesForTests()
+        try XCTSkipIf(runtimes.isEmpty, "no iOS Simulator runtime is installed")
+
+        let fm = FileManager.default
+        let root = directory.appendingPathComponent("Kit", isDirectory: true)
+        let sources = root.appendingPathComponent("Sources/Kit", isDirectory: true)
+        try fm.createDirectory(at: sources.appendingPathComponent("Resources"), withIntermediateDirectories: true)
+        try """
+        // swift-tools-version: 6.0
+        import PackageDescription
+        let package = Package(
+            name: "Kit",
+            platforms: [.iOS(.v17)],
+            products: [.library(name: "Kit", targets: ["Kit"])],
+            targets: [.target(name: "Kit", resources: [.process("Resources")])]
+        )
+        """.write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        try "hello".write(to: sources.appendingPathComponent("Resources/note.txt"), atomically: true, encoding: .utf8)
+        let stateFile = directory.appendingPathComponent("resource.txt")
+        let file = sources.appendingPathComponent("Card.swift")
+        let text = #"""
+        import SwiftUI
+
+        public struct Card: View {
+            public init() {}
+            public var body: some View {
+                VStack {
+                    Text("Card")
+                    Color(.systemGroupedBackground).frame(height: 40)
+                }
+                .navigationBarTitleDisplayMode(.inline)
+                .onAppear {
+                    let found = Bundle.module.url(forResource: "note", withExtension: "txt") != nil
+                    try? (found ? "found" : "missing").write(toFile: "\#(stateFile.path)", atomically: true, encoding: .utf8)
+                }
+            }
+        }
+
+        #Preview { NavigationStack { Card() } }
+        """#
+        try text.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let context = IDESwiftUIPreviewContext(
+            activeFile: { (file, text) },
+            package: { _ in IDESwiftUIPreviewPackage(root: root, target: "Kit", buildSystem: .swiftPM, platforms: ["ios": "17.0"]) },
+            ensureTrusted: { _ in true },
+            toolchain: { .beside(swift: swift) },
+            publishDiagnostics: { _ in },
+            bufferText: { _ in nil }
+        )
+        let session = IDESwiftUIPreviewSession(context: context, cacheRoot: directory.appendingPathComponent("cache"))
+        session.setViewport(CGSize(width: 320, height: 200))
+        session.refresh()
+        let built = await waitUntil(seconds: 420) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(built, "phase \(session.phase)\n\(session.log.suffix(30).joined(separator: "\n"))")
+        XCTAssertTrue(session.isSimulatorPreview, "a package for iOS only has no Mac to be shown on")
+        XCTAssertGreaterThan(session.frameSize.height, session.frameSize.width)
+        XCTAssertTrue(session.log.joined().contains("Resource bundles in the app: Kit_Kit.bundle"), session.log.suffix(20).joined(separator: "\n"))
+        let found = await waitUntil(seconds: 15) { (try? String(contentsOf: stateFile, encoding: .utf8)) == "found" }
+        XCTAssertTrue(found, "Bundle.module in the app: \((try? String(contentsOf: stateFile, encoding: .utf8)) ?? "never ran")")
+        saveSnapshot(session.frame, named: "package-ios")
+        session.stop()
     }
 
     /// Input on a real simulator (`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3, exit): a button, a switch, a

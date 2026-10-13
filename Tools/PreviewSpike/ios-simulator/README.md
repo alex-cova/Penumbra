@@ -13,6 +13,16 @@
 - `UIWindow.drawHierarchy` gives a pixel-exact iOS frame (3x on iPhone 17: 1206 × 2622); the status bar is
   not in it.
 
+## SwiftPM packages and resources (S4)
+
+A scratch iOS-only package (`platforms: [.iOS(.v17)]`, `resources: [.process("Resources")]`) was built with
+`swift build --sdk <iphonesimulator SDK> --triple arm64-apple-ios17.0-simulator --target …` plus the preview
+flags. `--show-bin-path` takes the same flags and answers `<scratch>/out/Products/Debug-iphonesimulator`, which
+holds `<Module>.o`, `<Module>.swiftmodule/` and `<Package>_<Target>.bundle`. A host app linked with that
+object **traps in `Bundle.module` unless the `.bundle` is inside the app**; copied in, it resolves
+`App.app/<Package>_<Target>.bundle/note.txt`. Not scripted: the commands are in
+`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §5.
+
 ## Input (S3.0): `input.sh`, `input-host.swift`
 
 What can a host do about taps, scrolling and typing from inside the app with public API only?

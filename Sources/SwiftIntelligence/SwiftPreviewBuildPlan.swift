@@ -204,7 +204,7 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             return SwiftPreviewCommand(tool: .swift, arguments: [
                 "build", "--package-path", job.packageRoot, "--scratch-path", job.scratchPath,
                 "--target", job.targetName
-            ] + Self.compilerFlags)
+            ] + swiftPMPlatformArguments + Self.compilerFlags)
         case .xcode(let project):
             // Products and intermediates in a directory of their own, for the host's architecture
             // only (a fat build would leave two of every object), unsigned. Always the SDK of the
@@ -273,7 +273,15 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         SwiftPreviewCommand(tool: .swift, arguments: [
             "build", "--package-path", job.packageRoot, "--scratch-path", job.scratchPath,
             "--show-bin-path"
-        ] + Self.compilerFlags)
+        ] + swiftPMPlatformArguments + Self.compilerFlags)
+    }
+
+    /// A package built for the simulator is cross-built: `--sdk` and `--triple` (measured in the S4
+    /// spike: `--show-bin-path` takes the same flags and answers `…/Products/Debug-iphonesimulator`).
+    /// Nothing for the Mac, which is what SwiftPM builds for by default.
+    var swiftPMPlatformArguments: [String] {
+        guard job.platform == .iOSSimulator, let sdk = job.sdkPath else { return [] }
+        return ["--sdk", sdk, "--triple", targetTriple]
     }
 
     /// The support module as a dylib and a `.swiftmodule`. Compiled with implicit dynamic so a thunk

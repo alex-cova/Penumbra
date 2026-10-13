@@ -93,6 +93,40 @@ final class IDESwiftPMProjectSystemTests: XCTestCase {
         XCTAssertNil(IDESwiftPMManifest.parse(source: "let x = 1\n", folderName: "f"))
     }
 
+    func testDeclaredPlatformsAreReadFromTheManifestAndFromDumpPackage() throws {
+        let source = """
+        // swift-tools-version: 6.0
+        import PackageDescription
+        let package = Package(
+            name: "Mixed",
+            platforms: [.iOS(.v17), .macOS("14.2"), .macCatalyst(.v13_1)],
+            targets: [.target(name: "Mixed")]
+        )
+        """
+        let manifest = try XCTUnwrap(IDESwiftPMManifest.parse(source: source, folderName: "f"))
+        XCTAssertEqual(manifest.platforms, ["ios": "17.0", "macos": "14.2", "maccatalyst": "13.1"])
+        XCTAssertTrue(manifest.supports(platform: "iOS"))
+        XCTAssertTrue(manifest.supports(platform: "macOS"))
+        XCTAssertFalse(manifest.supports(platform: "tvOS"))
+
+        let iosOnly = try XCTUnwrap(IDESwiftPMManifest.parse(
+            source: "import PackageDescription\nlet package = Package(name: \"K\", platforms: [.iOS(.v16)], targets: [])\n", folderName: "f"
+        ))
+        XCTAssertTrue(iosOnly.supports(platform: "ios"))
+        XCTAssertFalse(iosOnly.supports(platform: "macos"))
+
+        // No `platforms:` is every platform, as SwiftPM treats it.
+        let none = try XCTUnwrap(IDESwiftPMManifest.parse(
+            source: "import PackageDescription\nlet package = Package(name: \"K\", targets: [])\n", folderName: "f"
+        ))
+        XCTAssertTrue(none.platforms.isEmpty)
+        XCTAssertTrue(none.supports(platform: "macos") && none.supports(platform: "ios"))
+
+        let dump = Data(#"{"name":"D","platforms":[{"platformName":"ios","version":"17.0","options":[]},{"platformName":"macos","version":"14.0"}],"targets":[],"products":[],"dependencies":[]}"#.utf8)
+        let exact = try XCTUnwrap(IDESwiftPMManifest.parse(dumpPackage: dump, folderName: "f"))
+        XCTAssertEqual(exact.platforms, ["ios": "17.0", "macos": "14.0"])
+    }
+
     func testDumpPackageJSONIsExactAndToleratesVersions() throws {
         let json = """
         {"name":"Dyn","targets":[
