@@ -245,11 +245,22 @@ actor IDESimulatorService: IDESimulatorControlling {
         guard status.succeeded else {
             throw IDESimulatorError.commandFailed("Waiting for \(target.device.name) to start", output: status.output)
         }
+        // SwiftUI vends its accessibility tree only to an app that launched with this preference on, and
+        // the host taps through that tree (Tools/PreviewSpike/ios-simulator/input-host.swift: a running
+        // app does not notice a later change). It is a device of our own, so the preference is ours to
+        // set; a failure only costs input, so it does not fail the boot.
+        _ = await simctl(Self.accessibilityPreferenceArguments(udid: udid))
         // The oldest of its own devices go, so the Mac does not end up running one per phone tried.
         while bootedByUs.count > Self.maximumBooted, let oldest = bootedByUs.first(where: { $0 != udid }) {
             bootedByUs.removeAll { $0 == oldest }
             _ = await simctl(["shutdown", oldest])
         }
+    }
+
+    /// `simctl spawn <udid> defaults write …`: turns on the preference Accessibility Inspector and
+    /// XCUITest turn on, which makes a SwiftUI app publish its accessibility elements.
+    static func accessibilityPreferenceArguments(udid: String) -> [String] {
+        ["spawn", udid, "defaults", "write", "com.apple.Accessibility", "ApplicationAccessibilityEnabled", "-bool", "true"]
     }
 
     func install(bundlePath: String, on target: IDESimulatorTarget) async throws {

@@ -252,6 +252,29 @@ final class IDESimulatorServiceTests: XCTestCase {
         XCTAssertTrue(runner.commands.contains(["simctl", "bootstatus", "UDID-1"]), "it waits until the device is ready")
     }
 
+    func testABootTurnsOnTheAccessibilityPreferenceBeforeAnAppCanLaunch() async throws {
+        let runner = ScriptedRunner { _, _ in (0, "") }
+        let target = try await FakeSimulator().target
+        try await IDESimulatorService(runner: runner).boot(target)
+        let write = ["simctl", "spawn", "UDID-1", "defaults", "write", "com.apple.Accessibility",
+                     "ApplicationAccessibilityEnabled", "-bool", "true"]
+        let commands = runner.commands
+        let status = try XCTUnwrap(commands.firstIndex(of: ["simctl", "bootstatus", "UDID-1"]))
+        let preference = try XCTUnwrap(commands.firstIndex(of: write), "SwiftUI publishes its tree only to an app launched with it on")
+        XCTAssertLessThan(status, preference, "set on a device that is up, and before the host is launched on it")
+        // A booted device is written again: the app that launches next reads it at launch.
+        try await IDESimulatorService(runner: runner).boot(target)
+        XCTAssertEqual(runner.commands.filter { $0 == write }.count, 2)
+    }
+
+    func testAFailedPreferenceWriteCostsInputNotTheBoot() async throws {
+        let runner = ScriptedRunner { _, arguments in
+            arguments.starts(with: ["simctl", "spawn"]) ? (1, "spawn failed\n") : (0, "")
+        }
+        let target = try await FakeSimulator().target
+        try await IDESimulatorService(runner: runner).boot(target)
+    }
+
     func testABootThatFailsReportsTheReason() async throws {
         let runner = ScriptedRunner { _, arguments in
             arguments.starts(with: ["simctl", "boot"]) ? (1, "Unable to boot: Operation not permitted\n") : (0, "")
@@ -704,6 +727,168 @@ final class IDESimulatorServiceTests: XCTestCase {
         XCTAssertLessThan(still.luminance, 0.2, "still dark")
         XCTAssertGreaterThan(still.centroidX, 0.5, "still right to left")
         print("S2 timings: first build \(String(format: "%.1f", build)) s, move to \(other.name) \(String(format: "%.1f", move)) s")
+        session.stop()
+    }
+
+    /// Input on a real simulator (`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3, exit): a button, a switch, a
+    /// sheet, a `NavigationLink`, a list of 50 rows and a text field, driven the way the panel drives
+    /// them. The app writes its state (and where its controls are) to a file the test reads, so the
+    /// assertions are about what the app did, not about pixels.
+    func testTapsScrollsAndTypingReachTheAppOnARealSimulator() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let runtimes = await IDESimulatorService().runtimesForTests()
+        try XCTSkipIf(runtimes.isEmpty, "no iOS Simulator runtime is installed")
+
+        let stateFile = directory.appendingPathComponent("state.txt")
+        let fixture = try makeIOSFixture { _ in
+            #"""
+            import SwiftUI
+            import Foundation
+
+            struct ContentView: View {
+                @State private var taps = 0
+                @State private var on = false
+                @State private var sheet = false
+                @State private var path: [Int] = []
+                @State private var name = ""
+                @State private var row = 0
+                @State private var lastRow = 0
+                @State private var frames: [String: CGRect] = [:]
+
+                private var summary: String {
+                    var lines = ["taps=\(taps)", "on=\(on)", "sheet=\(sheet)", "pushed=\(path.count)",
+                                 "name=\(name)", "row=\(row)", "lastRow=\(lastRow)"]
+                    for (key, f) in frames.sorted(by: { $0.key < $1.key }) {
+                        lines.append("frame.\(key)=\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))")
+                    }
+                    return lines.joined(separator: "\n")
+                }
+
+                private func mark(_ id: String) -> some ViewModifier { Mark(id: id, frames: $frames) }
+
+                var body: some View {
+                    NavigationStack(path: $path) {
+                        List {
+                            Button("Tap me") { taps += 1 }.modifier(mark("tap"))
+                            Toggle("Switch", isOn: $on).modifier(mark("switch"))
+                            Button("Show sheet") { sheet = true }.modifier(mark("sheet"))
+                            NavigationLink("Push", value: 1).modifier(mark("push"))
+                            TextField("Name", text: $name).modifier(mark("field"))
+                            ForEach(0..<50, id: \.self) { i in
+                                Button("Row \(i)") { row = i + 1 }
+                                    .onAppear { lastRow = max(lastRow, i) }
+                                    .modifier(mark("row\(i)"))
+                            }
+                        }
+                        .navigationTitle("Input")
+                        .navigationDestination(for: Int.self) { _ in Text("Detail") }
+                        .sheet(isPresented: $sheet) {
+                            Button("Close") { sheet = false }.padding(40).modifier(mark("close"))
+                        }
+                    }
+                    .onAppear { save() }
+                    .onChange(of: summary) { save() }
+                }
+
+                private func save() {
+                    try? summary.write(toFile: "\#(stateFile.path)", atomically: true, encoding: .utf8)
+                }
+            }
+
+            struct Mark: ViewModifier {
+                let id: String
+                @Binding var frames: [String: CGRect]
+                func body(content: Content) -> some View {
+                    content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frames[id] = $0 }
+                }
+            }
+
+            #Preview { ContentView() }
+            """#
+        }
+        let text = fixture.source("")
+        try text.write(to: fixture.file, atomically: true, encoding: .utf8)
+        let session = try makeSimulatorSession(root: fixture.root, project: fixture.project, file: fixture.file, current: { text })
+        session.setViewport(CGSize(width: 320, height: 200))
+        session.refresh()
+        let built = await waitUntil(seconds: 420) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(built, "phase \(session.phase)\n\(session.log.suffix(30).joined(separator: "\n"))")
+
+        func state() -> [String: String] {
+            guard let text = try? String(contentsOf: stateFile, encoding: .utf8) else { return [:] }
+            var result: [String: String] = [:]
+            for line in text.split(separator: "\n") {
+                let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+                if parts.count == 2 { result[parts[0]] = parts[1] }
+            }
+            return result
+        }
+        func frame(_ id: String) -> CGRect? {
+            let numbers = state()["frame." + id]?.split(separator: ",").compactMap { Double($0) }
+            guard let n = numbers, n.count == 4 else { return nil }
+            return CGRect(x: n[0], y: n[1], width: n[2], height: n[3])
+        }
+        func center(_ id: String, dx: Double = 0.5) -> CGPoint? {
+            frame(id).map { CGPoint(x: $0.minX + $0.width * dx, y: $0.midY) }
+        }
+        func eventually(_ what: String, _ condition: @MainActor () -> Bool) async {
+            let ok = await waitUntil(seconds: 15, condition)
+            XCTAssertTrue(ok, "\(what): \(state())")
+        }
+
+        await eventually("the app reports where its controls are") { frame("tap") != nil && frame("row0") != nil }
+
+        // A button, a switch (by its label: the row's text side), a field.
+        session.click(at: try XCTUnwrap(center("tap")))
+        await eventually("a tap on a button runs its action") { state()["taps"] == "1" }
+        session.click(at: try XCTUnwrap(center("switch", dx: 0.5)))
+        await eventually("a tap on a toggle's row flips it") { state()["on"] == "true" }
+
+        // A sheet: it is drawn, and a button inside it is reachable.
+        let beforeSheet = session.frame?.tiffRepresentation
+        session.click(at: try XCTUnwrap(center("sheet")))
+        await eventually("the sheet is presented") { state()["sheet"] == "true" }
+        await eventually("the frame shows it") { session.frame?.tiffRepresentation != beforeSheet }
+        saveSnapshot(session.frame, named: "input-sheet")
+        await eventually("the sheet's button is placed") { frame("close") != nil }
+        session.click(at: try XCTUnwrap(center("close")))
+        await eventually("a button inside the sheet dismisses it") { state()["sheet"] == "false" }
+
+        // Text: focus by tap, type, delete.
+        session.click(at: try XCTUnwrap(center("field")))
+        try await Task.sleep(for: .milliseconds(600))
+        session.type("hello")
+        await eventually("typing reaches the focused field") { state()["name"] == "hello" }
+        session.perform(command: "deleteBackward:")
+        await eventually("an editing command reaches it too") { state()["name"] == "hell" }
+
+        // Scrolling: by the wheel, and by dragging; lazy rows appear and can then be tapped.
+        let lastBefore = Int(state()["lastRow"] ?? "0") ?? 0
+        let anchor = CGPoint(x: session.frameSize.width / 2, y: session.frameSize.height / 2)
+        session.scroll(at: anchor, dx: 0, dy: 800)
+        await eventually("a scroll brings later rows in") { (Int(state()["lastRow"] ?? "0") ?? 0) > lastBefore + 8 }
+        let visible = try XCTUnwrap((0..<50).first { i in
+            frame("row\(i)").map { $0.midY > 160 && $0.midY < Double(session.frameSize.height) - 120 } ?? false
+        }, "a row on screen after the scroll")
+        let before = try XCTUnwrap(frame("row\(visible)")).minY
+        session.drag(from: CGPoint(x: anchor.x, y: anchor.y + 150), to: CGPoint(x: anchor.x, y: anchor.y - 100))
+        await eventually("a drag moves the list with the pointer") {
+            frame("row\(visible)").map { $0.minY < before - 150 } ?? false
+        }
+        let tapped = try XCTUnwrap((0..<50).first { i in
+            frame("row\(i)").map { $0.midY > 160 && $0.midY < Double(session.frameSize.height) - 120 } ?? false
+        })
+        session.click(at: try XCTUnwrap(center("row\(tapped)")))
+        await eventually("a row that scrolled into view can be tapped") { state()["row"] == "\(tapped + 1)" }
+        saveSnapshot(session.frame, named: "input-scrolled")
+
+        // A NavigationLink last: the list is no longer under the pointer afterwards.
+        session.scroll(at: anchor, dx: 0, dy: -4000)
+        await eventually("back at the top") { (frame("push")?.midY ?? 9999) < 400 }
+        session.click(at: try XCTUnwrap(center("push")))
+        await eventually("a NavigationLink pushes") { state()["pushed"] == "1" }
+        saveSnapshot(session.frame, named: "input-pushed")
         session.stop()
     }
 

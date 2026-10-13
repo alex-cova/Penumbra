@@ -156,7 +156,11 @@ struct IDESwiftUIPreviewPanel: View {
                 if session.frame != nil { zoomControls(scale: scale) }
             }
             .overlay(alignment: .bottomLeading) {
-                if let ignored = session.ignoredFrame, session.dropsPreviewFrame { ignoredFrameNote(ignored) }
+                if let ignored = session.ignoredFrame, session.dropsPreviewFrame {
+                    ignoredFrameNote(ignored)
+                } else if session.isSimulatorPreview, session.frame != nil {
+                    limitedInputNote
+                }
             }
             .gesture(
                 MagnifyGesture()
@@ -195,6 +199,20 @@ struct IDESwiftUIPreviewPanel: View {
         } else {
             screen
         }
+    }
+
+    /// An iOS preview is driven from inside the app with public API only, so some input has no route.
+    /// Says so where the frame is, with the list a tap away (`docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3).
+    private var limitedInputNote: some View {
+        Label("Limited input", systemImage: "hand.tap")
+            .font(.system(size: 10))
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: Capsule())
+            .padding(10)
+            .help(IDESwiftUIPreviewSession.limitedInputExplanation)
     }
 
     /// Says why the preview takes the chosen size and not the one its own code asks for.

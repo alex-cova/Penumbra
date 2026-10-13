@@ -12,3 +12,21 @@
   the Mac user can write, and `dlopen`s a simulator-built dylib by absolute path.
 - `UIWindow.drawHierarchy` gives a pixel-exact iOS frame (3x on iPhone 17: 1206 × 2622); the status bar is
   not in it.
+
+## Input (S3.0): `input.sh`, `input-host.swift`
+
+What can a host do about taps, scrolling and typing from inside the app with public API only?
+`input.sh [ax-off|ax-on|ax-app|ax-live]` builds `input-host.swift` (a SwiftUI fixture and an in-app
+probe), installs it on a device Umbra created (never the user's: it picks the first `Umbra Preview` one),
+prints what each route did and leaves frames in the folder it names. Results and the design that follows
+are in `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3. In short:
+
+- **SwiftUI publishes its accessibility tree only to an app launched with
+  `com.apple.Accessibility ApplicationAccessibilityEnabled` on** (`ax-off`: 0 elements; `ax-app`: 45; `ax-live`,
+  flipped while the app runs: still 0). With it, `accessibilityActivate()` of the element under a point runs
+  buttons, toggles, `NavigationLink`s, toolbar items and a sheet's buttons synchronously.
+- Tab bar items and the back button answer `UIControl.sendActions(.touchUpInside)`, not activation.
+- Scroll is `setContentOffset` (lazy rows follow); text is `becomeFirstResponder` on the `UITextField` found
+  under the point, then `UIKeyInput`.
+- No public route: `DragGesture`, long press, `onTapGesture` on a non-button, alert buttons, menu items, and a
+  hand-made `UITouch`. The software keyboard is not in `drawHierarchy`; sheets, alerts and open menus are.

@@ -230,6 +230,22 @@ final class SwiftPreviewBuildPlanTests: XCTestCase {
         XCTAssertFalse(host.contains("import AppKit"))
     }
 
+    func testTheSimulatorHostDrivesInputThroughPublicRoutesOnly() throws {
+        let host = try simulatorPlan().hostSource
+        // The routes the spike measured (Tools/PreviewSpike/ios-simulator/input-host.swift).
+        for route in ["accessibilityActivate()", "sendActions(for: .touchUpInside)", "becomeFirstResponder()",
+                      "setContentOffset(", "insertText(", "deleteBackward()", "adjustedContentInset"] {
+            XCTAssertTrue(host.contains(route), route)
+        }
+        // Input is no longer acknowledged and dropped, and nothing private is used to produce a touch.
+        XCTAssertFalse(host.contains("case \"mouse\", \"scroll\", \"key\""))
+        for forbidden in ["IOHID", "SimulatorKit", "_touchesEvent", "setPhase", "performSelector", "value(forKey"] {
+            XCTAssertFalse(host.contains(forbidden), forbidden)
+        }
+        // Every reply says which route handled the input.
+        XCTAssertTrue(host.contains("send([\"event\": \"ack\", \"route\": route])"))
+    }
+
     func testTheSimulatorThunkHandsOverAViewController() throws {
         let text = try simulatorPlan().thunkSource(mode: .copy)
         XCTAssertTrue(text.contains("import UIKit"))

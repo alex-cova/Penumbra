@@ -15,7 +15,19 @@
 ///   guide are the system's, so `safeTop` and `safeBottom` are not used.
 /// - A frame is `UIWindow.drawHierarchy` at the screen's scale (or the requested one, if finer):
 ///   presented sheets are part of the window's hierarchy and are in it. The status bar is not.
-/// - `mouse`, `scroll` and `key` are answered with `ack` and do nothing yet (plan §9, S3).
+/// - Input is public API only, from inside the app (the routes and what each cannot do are measured
+///   in `Tools/PreviewSpike/ios-simulator/input-host.swift` and tabulated in
+///   `docs/SWIFTUI_PREVIEW_IOS_PLAN.md` §3). A tap (`mouse` down and up without travel) goes to a text
+///   field's `becomeFirstResponder`, else `accessibilityActivate()` of the smallest accessibility
+///   element under the point, else `sendActions(.touchUpInside)` of the `UIControl` under it. SwiftUI
+///   vends its accessibility tree only when the device's `ApplicationAccessibilityEnabled` preference
+///   was on when the app launched (`IDESimulatorService.boot` sets it), so without it only
+///   `UIControl`s and text fields respond. A `dragged` and a `scroll` move the innermost
+///   `UIScrollView` under the point that can move that way. `key` goes to the first responder through
+///   `UIKeyInput` and `UITextInput`. Every `ack` carries a `route` (`text`, `accessibility`, `control`,
+///   `scroll`, `action` or `none`). Not reachable: drag and long-press gestures, `onTapGesture` on a
+///   view that is not a button, the buttons of an alert and the items of a menu (UIKit tracks those
+///   touches itself), pinch, and the software keyboard (it is another window, not in the frame).
 ///
 /// The simulator process is a Mac process: it binds the socket, loads the thunk by its absolute
 /// path and writes the PNG anywhere the Mac user can write.
@@ -64,6 +76,17 @@ public enum SwiftPreviewIOSHostSource {
     import SwiftUI
     import UIKit
     import UmbraPreviewSupport
+
+    extension UIResponder {
+        private static weak var capturedFirstResponder: UIResponder?
+        @objc func umbraCaptureFirstResponder() { UIResponder.capturedFirstResponder = self }
+        /// The public way to find the first responder: send an action to nobody and see who answers.
+        static func currentFirstResponder() -> UIResponder? {
+            capturedFirstResponder = nil
+            UIApplication.shared.sendAction(#selector(umbraCaptureFirstResponder), to: nil, from: nil, for: nil)
+            return capturedFirstResponder
+        }
+    }
 
     @MainActor
     final class PreviewHost {
@@ -126,10 +149,222 @@ public enum SwiftPreviewIOSHostSource {
             switch object["cmd"] as? String {
             case "load": load(object)
             case "render": render(object)
-            case "mouse", "scroll", "key": send(["event": "ack"])
+            case "mouse": ack(mouse(object))
+            case "scroll": ack(scroll(object))
+            case "key": ack(key(object))
             case "quit": exit(0)
             default: send(["event": "error", "message": "unknown command"])
             }
+        }
+
+        func ack(_ route: String) {
+            send(["event": "ack", "route": route])
+        }
+
+        // MARK: Input
+
+        /// Where a press began, and how far the pointer has gone since: a press that travels is a
+        /// scroll, one that does not is a tap at its release.
+        var pressPoint: CGPoint?
+        var lastPoint: CGPoint?
+        var travelled = false
+        static let tapSlop: CGFloat = 6
+
+        func mouse(_ object: [String: Any]) -> String {
+            guard let x = object["x"] as? Double, let y = object["y"] as? Double else { return "none" }
+            let point = CGPoint(x: x, y: y)
+            switch object["type"] as? String {
+            case "down":
+                pressPoint = point
+                lastPoint = point
+                travelled = false
+                return "none"
+            case "dragged":
+                guard let start = pressPoint, let last = lastPoint else { return "none" }
+                if !travelled, hypot(point.x - start.x, point.y - start.y) < PreviewHost.tapSlop { return "none" }
+                travelled = true
+                lastPoint = point
+                // The content follows the pointer: a pointer moving up brings later content in.
+                return scroll(at: start, dx: last.x - point.x, dy: last.y - point.y)
+            case "up":
+                let wasTap = pressPoint != nil && !travelled
+                pressPoint = nil
+                lastPoint = nil
+                travelled = false
+                return wasTap ? tap(at: point) : "none"
+            default:
+                return "none"
+            }
+        }
+
+        func tap(at point: CGPoint) -> String {
+            guard let window else { return "none" }
+            if let field = textInput(at: point) {
+                return field.becomeFirstResponder() ? "text" : "none"
+            }
+            // The tree is read for this tap only: it follows the hierarchy, not the document.
+            let screenPoint = window.convert(point, to: window.screen.coordinateSpace)
+            var elements: [NSObject] = []
+            var seen = Set<ObjectIdentifier>()
+            collectAccessibilityElements(window, depth: 0, into: &elements, seen: &seen)
+            let smallest = elements
+                .filter { $0.accessibilityFrame.contains(screenPoint) }
+                .min { $0.accessibilityFrame.width * $0.accessibilityFrame.height < $1.accessibilityFrame.width * $1.accessibilityFrame.height }
+            if let smallest, smallest.accessibilityActivate() { return "accessibility" }
+            var view = window.hitTest(point, with: nil)
+            while let current = view {
+                if let control = current as? UIControl, control.isEnabled {
+                    control.sendActions(for: .touchUpInside)
+                    return "control"
+                }
+                view = current.superview
+            }
+            return "none"
+        }
+
+        func collectAccessibilityElements(
+            _ object: NSObject, depth: Int, into out: inout [NSObject], seen: inout Set<ObjectIdentifier>
+        ) {
+            guard depth < 60, seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if object.isAccessibilityElement { out.append(object) }
+            if let list = object.accessibilityElements {
+                for case let element as NSObject in list {
+                    collectAccessibilityElements(element, depth: depth + 1, into: &out, seen: &seen)
+                }
+                return
+            }
+            let count = object.accessibilityElementCount()
+            if count != NSNotFound, count > 0 {
+                for index in 0..<count {
+                    if let element = object.accessibilityElement(at: index) as? NSObject {
+                        collectAccessibilityElements(element, depth: depth + 1, into: &out, seen: &seen)
+                    }
+                }
+            }
+            if let view = object as? UIView {
+                for subview in view.subviews {
+                    collectAccessibilityElements(subview, depth: depth + 1, into: &out, seen: &seen)
+                }
+            }
+        }
+
+        /// The text field or text view under the point. SwiftUI's `TextField` is a `UITextField` that
+        /// the hit test does not return (its hosting view does), so each ancestor's subtree is searched.
+        func textInput(at point: CGPoint) -> UIView? {
+            guard let window else { return nil }
+            func search(_ view: UIView) -> UIView? {
+                guard !view.isHidden, view.alpha > 0.01 else { return nil }
+                for subview in view.subviews.reversed() {
+                    if let found = search(subview) { return found }
+                }
+                if view is UITextField || view is UITextView,
+                   view.canBecomeFirstResponder, view.convert(view.bounds, to: window).contains(point) {
+                    return view
+                }
+                return nil
+            }
+            var ancestor = window.hitTest(point, with: nil)
+            while let current = ancestor {
+                if let found = search(current) { return found }
+                ancestor = current.superview
+            }
+            return nil
+        }
+
+        func scroll(_ object: [String: Any]) -> String {
+            guard let x = object["x"] as? Double, let y = object["y"] as? Double else { return "none" }
+            let dx = CGFloat(object["dx"] as? Double ?? 0), dy = CGFloat(object["dy"] as? Double ?? 0)
+            return scroll(at: CGPoint(x: x, y: y), dx: dx, dy: dy)
+        }
+
+        /// Moves the innermost scroll view under the point that can move that way, by points
+        /// (positive `dy`: later content comes into view), as the macOS host does.
+        func scroll(at point: CGPoint, dx: CGFloat, dy: CGFloat) -> String {
+            guard let window, dx != 0 || dy != 0 else { return "none" }
+            var view = window.hitTest(point, with: nil)
+            while let current = view {
+                if let scrollView = current as? UIScrollView, scrollView.isScrollEnabled,
+                   move(scrollView, dx: dx, dy: dy) {
+                    return "scroll"
+                }
+                view = current.superview
+            }
+            return "none"
+        }
+
+        /// False when the scroll view cannot move that way (the next one out is tried).
+        func move(_ scrollView: UIScrollView, dx: CGFloat, dy: CGFloat) -> Bool {
+            let inset = scrollView.adjustedContentInset
+            let minimum = CGPoint(x: -inset.left, y: -inset.top)
+            let maximum = CGPoint(
+                x: max(minimum.x, scrollView.contentSize.width - scrollView.bounds.width + inset.right),
+                y: max(minimum.y, scrollView.contentSize.height - scrollView.bounds.height + inset.bottom)
+            )
+            let old = scrollView.contentOffset
+            let target = CGPoint(
+                x: min(max(old.x + dx, minimum.x), maximum.x),
+                y: min(max(old.y + dy, minimum.y), maximum.y)
+            )
+            guard target != old else { return false }
+            scrollView.setContentOffset(target, animated: false)
+            return true
+        }
+
+        func key(_ object: [String: Any]) -> String {
+            let responder = UIResponder.currentFirstResponder()
+            switch object["kind"] as? String {
+            case "text":
+                guard let text = object["text"] as? String, !text.isEmpty, let input = responder as? UIKeyInput else { return "none" }
+                input.insertText(text)
+                return "text"
+            case "command":
+                guard let name = object["selector"] as? String else { return "none" }
+                return command(name, on: responder)
+            case "action":
+                guard let name = object["selector"] as? String else { return "none" }
+                return UIApplication.shared.sendAction(Selector(name), to: nil, from: nil, for: nil) ? "action" : "none"
+            default:
+                return "none"
+            }
+        }
+
+        /// The macOS host's editing selectors, as `UIKeyInput` and `UITextInput` express them.
+        func command(_ name: String, on responder: UIResponder?) -> String {
+            guard let responder else { return "none" }
+            let input = responder as? UIKeyInput
+            let text = responder as? UITextInput
+            func moveCaret(by offset: Int) {
+                guard let text, let range = text.selectedTextRange else { return }
+                let from = offset < 0 ? range.start : range.end
+                guard let position = text.position(from: from, offset: offset) else { return }
+                text.selectedTextRange = text.textRange(from: position, to: position)
+            }
+            switch name {
+            case "deleteBackward:":
+                input?.deleteBackward()
+            case "deleteForward:":
+                guard let text, let end = text.selectedTextRange?.end,
+                      let next = text.position(from: end, offset: 1) else { return "none" }
+                text.selectedTextRange = text.textRange(from: end, to: next)
+                input?.deleteBackward()
+            case "insertNewline:":
+                input?.insertText("\n")
+            case "insertTab:":
+                input?.insertText("\t")
+            case "cancelOperation:":
+                _ = responder.resignFirstResponder()
+            case "moveLeft:":
+                moveCaret(by: -1)
+            case "moveRight:":
+                moveCaret(by: 1)
+            case "moveToBeginningOfLine:":
+                if let text { text.selectedTextRange = text.textRange(from: text.beginningOfDocument, to: text.beginningOfDocument) }
+            case "moveToEndOfLine:":
+                if let text { text.selectedTextRange = text.textRange(from: text.endOfDocument, to: text.endOfDocument) }
+            default:
+                return "none"
+            }
+            return "text"
         }
 
         func load(_ object: [String: Any]) {

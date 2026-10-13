@@ -373,6 +373,16 @@ final class IDESwiftUIPreviewSession {
         scheduleRender(after: .milliseconds(120))
     }
 
+    /// What an iOS preview cannot be driven to do: the host acts from inside the app with public
+    /// API (accessibility activation, controls, scroll views, the first responder), so these have no route.
+    static let limitedInputExplanation = """
+        Taps on buttons, toggles, links, tabs and fields, scrolling, dragging a list, typing and \
+        sheets work.
+        Not reachable from a preview: drag and long-press gestures, onTapGesture on a view that is \
+        not a button, the buttons of an alert and the items of a menu, pinch, and the software keyboard \
+        (it is not part of the frame).
+        """
+
     /// A click at a point of the frame, in points.
     func click(at point: CGPoint) {
         send([.mouse(type: "down", x: point.x, y: point.y), .mouse(type: "up", x: point.x, y: point.y)])
