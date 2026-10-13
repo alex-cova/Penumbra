@@ -91,7 +91,8 @@ swift run Umbra --open path/to/file.swift
 Example/
 ├── Umbra/               # App source — SwiftUI shell, views, IDEWorkspace, and UmbraApp.swift (@main)
 ├── Umbra.xcodeproj/      # Thin Xcode project for Previews/Run/Debug (dev convenience, not for release)
-├── umbra.icon/           # App icon (Icon Composer); compiled at build time
+├── UmbraIcon.icon/       # App icon (Icon Composer); compiled at build time
+├── umbra.png             # The mark on the welcome page and the `swift run` Dock icon
 └── Resources/             # Info.plist, entitlements
 ```
 
@@ -121,7 +122,7 @@ This script:
 
 1. Builds the `Umbra` target in release configuration.
 2. Assembles `dist/Umbra.app` (bundle ID `com.umbra.editor`).
-3. Compiles `Example/umbra.icon` via `actool` into `Assets.car` (macOS 26+ Liquid Glass) and `umbra.icns` (fallback).
+3. Compiles `Example/UmbraIcon.icon` via `actool` into `Assets.car` (macOS 26+ Liquid Glass) and `UmbraIcon.icns` (fallback).
 4. Writes `dist/Umbra-<version>-macOS.zip`.
 
 Open the result:
@@ -132,7 +133,7 @@ open dist/Umbra.app
 
 ### App icon
 
-The icon lives at [`umbra.icon`](umbra.icon/) (Apple Icon Composer format). Edit it in Icon Composer, then rebuild — `build-app.sh` picks it up automatically. Do not hand-edit generated `Assets.car` or `umbra.icns` in `dist/`.
+The icon lives at [`UmbraIcon.icon`](UmbraIcon.icon/) (Apple Icon Composer format). Edit it in Icon Composer, then rebuild — `build-app.sh` picks it up automatically. Do not hand-edit generated `Assets.car` or `UmbraIcon.icns` in `dist/`.
 
 ### Code signing and notarization
 

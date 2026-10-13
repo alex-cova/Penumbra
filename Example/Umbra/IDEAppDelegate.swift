@@ -91,7 +91,7 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// `swift run` and the Xcode dev target ship no `umbra.icns` in the bundle, so the dock falls
+    /// `swift run` and the Xcode dev target ship no `UmbraIcon.icns` in the bundle, so the dock falls
     /// back to the generic executable icon even though release `build-app.sh` bundles one.
     private static func installApplicationIconIfNeeded() {
         guard NSApp.applicationIconImage == nil else { return }
@@ -112,11 +112,11 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func loadApplicationIcon(from bundle: Bundle) -> NSImage? {
-        if let url = bundle.url(forResource: "umbra", withExtension: "icns"),
+        if let url = bundle.url(forResource: "UmbraIcon", withExtension: "icns"),
            let image = NSImage(contentsOf: url) {
             return image
         }
-        if let url = bundle.url(forResource: "Umbra", withExtension: "jpeg"),
+        if let url = bundle.url(forResource: "umbra", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
             image.size = NSSize(width: 512, height: 512)
             return image

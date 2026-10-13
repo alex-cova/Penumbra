@@ -244,7 +244,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar"),
-                .copy("../umbra.icon/Assets/Umbra.jpeg")
+                .copy("../umbra.png")
             ],
             swiftSettings: swift6
         ),

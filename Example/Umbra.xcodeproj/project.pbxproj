@@ -26,7 +26,7 @@
 		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
 		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
 		000000000000000000000090 /* XcodeProjectFormat in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000092 /* XcodeProjectFormat */; };
-		00000000000000000000000E /* Umbra.jpeg in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* Umbra.jpeg */; };
+		00000000000000000000000E /* umbra.png in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* umbra.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,7 +34,7 @@
 		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00000000000000000000000C /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
-		00000000000000000000000D /* Umbra.jpeg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = Umbra.jpeg; path = umbra.icon/Assets/Umbra.jpeg; sourceTree = "<group>"; };
+		00000000000000000000000D /* umbra.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = umbra.png; path = umbra.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -150,7 +150,7 @@
 			children = (
 				000000000000000000000009 /* Umbra */,
 				00000000000000000000000A /* Resources */,
-				00000000000000000000000D /* Umbra.jpeg */,
+				00000000000000000000000D /* umbra.png */,
 				000000000000000000000016 /* java-debug-adapter.jar */,
 				000000000000000000000003 /* Products */,
 			);
@@ -264,7 +264,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				00000000000000000000000E /* Umbra.jpeg in Resources */,
+				00000000000000000000000E /* umbra.png in Resources */,
 				000000000000000000000017 /* java-debug-adapter.jar in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

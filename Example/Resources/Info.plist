@@ -47,9 +47,9 @@
 	<key>CFBundleExecutable</key>
 	<string>Umbra</string>
 	<key>CFBundleIconFile</key>
-	<string>umbra</string>
+	<string>UmbraIcon</string>
 	<key>CFBundleIconName</key>
-	<string>umbra</string>
+	<string>UmbraIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.umbra.editor</string>
 	<key>CFBundleInfoDictionaryVersion</key>

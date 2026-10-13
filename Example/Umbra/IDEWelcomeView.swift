@@ -175,15 +175,44 @@ private struct IDEWelcomeBrandHeader: View {
                     .font(IDEAppearance.Typography.brandTitle)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
             } icon: {
-                Image(systemName: "text.alignleft")
-                    .font(.title2)
-                    .foregroundStyle(IDEAppearance.ColorToken.accent)
+                IDEWelcomeMark()
             }
             .labelStyle(.titleAndIcon)
 
             Text("A lightweight code editor for macOS")
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+    }
+}
+
+/// Umbra's mark (`umbra.png`) beside the welcome title. `Bundle.module` holds it under SwiftPM and
+/// `Bundle.main` in the Xcode target; the old symbol stays as the fallback if neither has it.
+private struct IDEWelcomeMark: View {
+    private static let image: NSImage? = {
+        var bundles = [Bundle.main]
+        #if SWIFT_PACKAGE
+        bundles.append(Bundle.module)
+        #endif
+        for bundle in bundles {
+            if let url = bundle.url(forResource: "umbra", withExtension: "png"),
+               let image = NSImage(contentsOf: url) {
+                return image
+            }
+        }
+        return nil
+    }()
+
+    var body: some View {
+        if let image = Self.image {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+        } else {
+            Image(systemName: "text.alignleft")
+                .font(.title2)
+                .foregroundStyle(IDEAppearance.ColorToken.accent)
         }
     }
 }

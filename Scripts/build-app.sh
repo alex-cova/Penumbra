@@ -12,7 +12,7 @@ DIST_DIR="${DIST_DIR:-$root/dist}"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 ENTITLEMENTS="$root/Example/Resources/Umbra.entitlements"
 INFO_PLIST_TEMPLATE="$root/Example/Resources/Info.plist"
-ICON_SOURCE="$root/Example/umbra.icon"
+ICON_SOURCE="$root/Example/UmbraIcon.icon"
 
 # The generated `Bundle.module` accessor depends on the build system. The native one only looks in
 # `Bundle.main.bundleURL` (the .app root, where codesign rejects loose bundles) and then in the build
@@ -84,24 +84,24 @@ cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"
 
 if [[ -d "$ICON_SOURCE" ]]; then
-  echo "==> Compiling app icon from umbra.icon…"
+  echo "==> Compiling app icon from UmbraIcon.icon…"
   ICON_STAGING="$(mktemp -d)"
   xcrun actool "$ICON_SOURCE" \
     --compile "$ICON_STAGING" \
-    --app-icon umbra \
+    --app-icon UmbraIcon \
     --output-partial-info-plist "$ICON_STAGING/partial.plist" \
     --include-all-app-icons \
     --target-device mac \
     --minimum-deployment-target 14.0 \
     --platform macosx
-  for artifact in Assets.car umbra.icns; do
+  for artifact in Assets.car UmbraIcon.icns; do
     if [[ -f "$ICON_STAGING/$artifact" ]]; then
       cp "$ICON_STAGING/$artifact" "$APP_DIR/Contents/Resources/"
     fi
   done
   rm -rf "$ICON_STAGING"
 elif [[ -f "$ICON_SOURCE" ]]; then
-  cp "$ICON_SOURCE" "$APP_DIR/Contents/Resources/umbra.icns"
+  cp "$ICON_SOURCE" "$APP_DIR/Contents/Resources/UmbraIcon.icns"
 fi
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"

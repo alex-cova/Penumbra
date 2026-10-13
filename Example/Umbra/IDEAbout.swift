@@ -62,11 +62,11 @@ enum IDEAbout {
             return image
         }
         for bundle in resourceBundles {
-            if let url = bundle.url(forResource: "umbra", withExtension: "icns"),
+            if let url = bundle.url(forResource: "UmbraIcon", withExtension: "icns"),
                let image = NSImage(contentsOf: url) {
                 return image
             }
-            if let url = bundle.url(forResource: "Umbra", withExtension: "jpeg"),
+            if let url = bundle.url(forResource: "umbra", withExtension: "png"),
                let image = NSImage(contentsOf: url) {
                 image.size = NSSize(width: 512, height: 512)
                 return image
