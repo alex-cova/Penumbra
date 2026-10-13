@@ -27,6 +27,7 @@
 		00000000000000000000007E /* LocalModelStore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007D /* LocalModelStore */; };
 		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
 		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
+		00000000000000000000009A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000099 /* Sparkle */; };
 		000000000000000000000090 /* XcodeProjectFormat in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000092 /* XcodeProjectFormat */; };
 		00000000000000000000000E /* umbra.png in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* umbra.png */; };
 /* End PBXBuildFile section */
@@ -146,6 +147,7 @@
 				000000000000000000000080 /* SwiftTerm in Frameworks */,
 				000000000000000000000082 /* DiagramKit in Frameworks */,
 				000000000000000000000090 /* XcodeProjectFormat in Frameworks */,
+				00000000000000000000009A /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -221,6 +223,7 @@
 				00000000000000000000007F /* SwiftTerm */,
 				000000000000000000000081 /* DiagramKit */,
 				000000000000000000000092 /* XcodeProjectFormat */,
+				000000000000000000000099 /* Sparkle */,
 			);
 			productName = Umbra;
 			productReference = 000000000000000000000004 /* Umbra.app */;
@@ -256,6 +259,7 @@
 				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */,
 				000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */,
+				000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 000000000000000000000003 /* Products */;
@@ -472,6 +476,14 @@
 				minimumVersion = 0.1.0;
 			};
 		};
+		000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -564,6 +576,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */;
 			productName = XcodeProjectFormat;
+		};
+		000000000000000000000099 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
