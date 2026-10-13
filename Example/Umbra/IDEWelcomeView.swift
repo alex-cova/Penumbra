@@ -301,6 +301,14 @@ private struct IDEWelcomeActionRow: View {
     let shortcut: String?
     let action: () -> Void
 
+    @State private var isHovering = false
+
+    /// Translucent so the welcome backdrop shows through, tinted with the foreground color so it
+    /// stays visible on any scheme.
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: IDEAppearance.Spacing.md) {
@@ -317,11 +325,12 @@ private struct IDEWelcomeActionRow: View {
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(IDEAppearance.ColorToken.tabActive)
-            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
-            .contentShape(Rectangle())
+            .background(IDEAppearance.ColorToken.foreground.opacity(isHovering ? 0.14 : 0.08), in: shape)
+            .overlay(shape.strokeBorder(IDEAppearance.ColorToken.foreground.opacity(0.12), lineWidth: 1))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
         .accessibilityHint(shortcut.map { "Keyboard shortcut \($0)" } ?? "")
     }
 }
