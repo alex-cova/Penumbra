@@ -20,10 +20,10 @@
   (name) @type)
 
 (directive_definition
-  (name) @type)
+  (name) @attribute)
 
 (directive_definition
-  "@" @type)
+  "@" @attribute)
 
 (scalar_type_extension
   (name) @type)
@@ -46,12 +46,17 @@
 (named_type
   (name) @type)
 
-(directive) @type
+(directive) @attribute
 
 ; Properties
 ;-----------
 
 (field
+  (name) @property)
+
+; A one-line HTTP body that the HTTP grammar splits can inject a selection
+; missing its closing brace. Recovery then leaves the first field name here.
+(ERROR
   (name) @property)
 
 (field
@@ -98,7 +103,13 @@
 ; Constants
 ;----------
 
+; Listed before the string fallback so a description wins that range.
+(description
+  (string_value) @comment)
+
 (string_value) @string
+
+(null_value) @constant.builtin
 
 (int_value) @number
 
@@ -108,8 +119,6 @@
 
 ; Literals
 ;---------
-
-(description) @comment
 
 (comment) @comment
 
@@ -158,6 +167,7 @@
 "|" @punctuation.delimiter
 "&" @punctuation.delimiter
 ":" @punctuation.delimiter
+(comma) @punctuation.delimiter
 
 "..." @punctuation.special
 "!" @punctuation.special

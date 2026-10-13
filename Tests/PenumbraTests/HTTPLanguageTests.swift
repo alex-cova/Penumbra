@@ -84,7 +84,7 @@ final class HTTPLanguageTests: XCTestCase {
     }
 
     func testHTTPJSONBodyInjection() {
-        let text = """
+        let names = captureNames(in: """
         POST https://example.com/api HTTP/1.1
         Content-Type: application/json
 
@@ -92,7 +92,150 @@ final class HTTPLanguageTests: XCTestCase {
           "ok": true,
           "count": 42
         }
+        """)
+
+        XCTAssertTrue(names.contains("property"), "Expected property capture, got \(names)")
+        XCTAssertTrue(names.contains("string"), "Expected string capture, got \(names)")
+        XCTAssertTrue(names.contains("number"), "Expected number capture, got \(names)")
+        XCTAssertTrue(names.contains("punctuation.delimiter"), "Expected punctuation.delimiter capture, got \(names)")
+        XCTAssertEqual(paintedCapture(in: """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {
+          "ok": true,
+          "count": 42
+        }
+        """, covering: "}", backwards: true), "punctuation.bracket")
+    }
+
+    func testHTTPJSONArrayBodyInjection() {
+        let names = captureNames(in: """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        [1, true, null]
+
+        """)
+
+        XCTAssertTrue(names.contains("number"), "Expected number capture, got \(names)")
+        XCTAssertTrue(names.contains("boolean"), "Expected boolean capture, got \(names)")
+        XCTAssertTrue(names.contains("constant.builtin"), "Expected constant.builtin capture, got \(names)")
+        let lastLine = """
+        POST https://example.com/api HTTP/1.1
+
+        [1, true, null]
         """
+        XCTAssertEqual(paintedCapture(in: lastLine, covering: "true"), "boolean")
+        XCTAssertEqual(paintedCapture(in: lastLine, covering: "null"), "constant.builtin")
+    }
+
+    func testHTTPURLStaysAURL() {
+        let text = """
+        GET https://example.com/api HTTP/1.1
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "https://example.com/api"), "string.special.url")
+        XCTAssertEqual(paintedCapture(in: "GET query.example.com/x HTTP/1.1\n", covering: "query.example.com/x"), "string.special.url")
+    }
+
+    func testHTTPCompactJSONBodyInjection() {
+        let names = captureNames(in: """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {"ok": true}
+
+        """)
+
+        XCTAssertTrue(names.contains("property"), "Expected property capture, got \(names)")
+    }
+
+    func testHTTPCompactJSONOnTheLastLine() {
+        let names = captureNames(in: """
+        POST https://dev.exanple.com/stock-reports/v1/history
+        Authorization: auth
+        Content-Type: application/json
+
+        {"productUuid":"3KcGtoRg0BpI3vFyCnshk7J2J3c","from":"2026-10-12","until":"2026-10-12"}
+        """)
+
+        XCTAssertTrue(names.contains("property"), "Expected property capture, got \(names)")
+        XCTAssertTrue(names.contains("string"), "Expected string capture, got \(names)")
+        XCTAssertTrue(names.contains("punctuation.delimiter"), "Expected punctuation.delimiter capture, got \(names)")
+        XCTAssertEqual(paintedCapture(in: """
+        POST https://dev.exanple.com/stock-reports/v1/history
+        Authorization: auth
+        Content-Type: application/json
+
+        {"productUuid":"3KcGtoRg0BpI3vFyCnshk7J2J3c","from":"2026-10-12","until":"2026-10-12"}
+        """, covering: "}", backwards: true), "punctuation.bracket")
+    }
+
+    func testHTTPGraphQLOperationInjection() {
+        let names = captureNames(in: """
+        POST https://example.com/graphql HTTP/1.1
+
+        query {
+          user {
+            name
+          }
+        }
+        """)
+
+        XCTAssertTrue(names.contains("keyword"), "Expected keyword capture, got \(names)")
+        XCTAssertTrue(names.contains("property"), "Expected property capture, got \(names)")
+    }
+
+    func testHTTPAnonymousGraphQLSelectionInjection() {
+        let names = captureNames(in: """
+        GRAPHQL https://example.com/graphql
+
+        { me { id } }
+
+        """)
+
+        XCTAssertTrue(names.contains("property"), "Expected property capture, got \(names)")
+        XCTAssertFalse(names.contains("string"), "Anonymous GraphQL should not be highlighted as JSON, got \(names)")
+        XCTAssertEqual(paintedCapture(in: """
+        GRAPHQL https://example.com/graphql
+
+        { me { id } }
+        """, covering: "me"), "property")
+    }
+
+    func testHTTPGraphQLSubscriptionInjection() {
+        let names = captureNames(in: """
+        POST https://example.com/graphql HTTP/1.1
+
+        subscription {
+          event {
+            id
+          }
+        }
+        """)
+
+        XCTAssertTrue(names.contains("keyword"), "Expected keyword capture, got \(names)")
+    }
+
+    func testHTTPGraphQLVariablesInjection() {
+        let text = """
+        POST https://example.com/graphql HTTP/1.1
+
+        query {
+          user {
+            name
+          }
+        }
+
+        {
+          "id": "1"
+        }
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "\"id\""), "property")
+        XCTAssertEqual(paintedCapture(in: text, covering: "}", backwards: true), "punctuation.bracket")
+    }
+
+    private func captureNames(in text: String) -> Set<String> {
         let language = TreeSitterLanguage.http
         let stringView = StringView(string: text)
         let lineManager = LineManager(stringView: stringView)
@@ -105,10 +248,31 @@ final class HTTPLanguageTests: XCTestCase {
         )
         languageMode.parse()
         let byteRange = ByteRange(from: 0, to: text.byteCount)
-        let captures = languageMode.captures(in: byteRange)
-        let names = Set(captures.map(\.name))
+        return Set(languageMode.captures(in: byteRange).map(\.name))
+    }
 
-        XCTAssertTrue(names.contains("property") || names.contains("string") || names.contains("number"),
-                      "Expected JSON captures from injected json_body, got \(names)")
+    /// The capture painted on `word`. Captures arrive outermost first, so the last one that
+    /// covers the word and has a theme color is the one the highlighter leaves in place.
+    private func paintedCapture(in text: String, covering word: String, backwards: Bool = false) -> String? {
+        let stringView = StringView(string: text)
+        let lineManager = LineManager(stringView: stringView)
+        lineManager.rebuild()
+        let languageMode = TreeSitterInternalLanguageMode(
+            language: TreeSitterLanguage.http.internalLanguage,
+            languageProvider: BundledLanguageProvider(),
+            stringView: stringView,
+            lineManager: lineManager
+        )
+        languageMode.parse()
+        let ns = text as NSString
+        let found = ns.range(of: word, options: backwards ? .backwards : [])
+        guard found.location != NSNotFound else { return nil }
+        let theme = DefaultTheme()
+        let captures = languageMode.captures(in: ByteRange(from: 0, to: text.byteCount))
+        return captures.last { capture in
+            let range = NSRange(capture.byteRange)
+            guard range.location <= found.location, range.upperBound >= found.upperBound else { return false }
+            return theme.textColor(for: capture.name) != nil
+        }?.name
     }
 }

@@ -21,8 +21,11 @@
   name: (_) @keyword)
 
 ; Literals
+; injections.scm highlights a body the grammar stored in the URL. This capture
+; would paint a lone `}` as a string, and that name wins over punctuation.
 (request
-  url: (_) @string.special.url)
+  url: (_) @string.special.url
+  (#not-match? @string.special.url "^\\s*(\\{\\s*\\S|\\[\\s*(\"|[0-9tfn\\[{]|-|])|[}\\]\\s]+)"))
 
 (http_version) @constant
 
