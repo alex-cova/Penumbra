@@ -1,15 +1,30 @@
+; Keys before the string fallback so a key wins when both captures cover the same range.
 (pair
-  key: (_) @string.special.key)
+  key: (string) @property)
 
 (string) @string
 
 (number) @number
 
 [
-  (null)
   (true)
   (false)
-] @constant.builtin
+] @boolean
+
+(null) @constant.builtin
 
 (escape_sequence) @string.escape
 
+[
+  "["
+  "]"
+  "{"
+  "}"
+] @punctuation.bracket
+
+[
+  ","
+  ":"
+] @punctuation.delimiter
+
+"\"" @punctuation.delimiter
