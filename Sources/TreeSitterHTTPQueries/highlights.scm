@@ -46,6 +46,12 @@
 (external_body
   path: (_) @string.special.path)
 
+; `###@scheme:<url>` names the GraphQL schema that completion reads. The grammar makes
+; everything after `###` one value; Umbra's semantic tokens split the keyword from the URL.
+(request_separator
+  value: (_) @keyword
+  (#match? @keyword "^\\s*@scheme\\s*:"))
+
 ; Comments
 [
   (comment)

@@ -32,6 +32,41 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
         static var markdown: Language { Language(make: { .markdown }, provider: MarkdownLanguageProvider()) }
         static var javaScript: Language { Language(make: { .javaScript }, provider: nil, configuration: .javaScript) }
         static var html: Language { Language(make: { .html }, provider: BundledLanguageProvider()) }
+        static var http: Language { Language(make: { .http }, provider: BundledLanguageProvider()) }
+    }
+
+    // MARK: - HTTP
+
+    func testEditingAboveABodyWithTemplates() {
+        let text = """
+        GET https://example.com/a
+
+        ###
+
+        POST https://example.com/api
+        Content-Type: application/json
+
+        {
+          "id": {{id}},
+          "name": "x"
+        }
+
+        """
+        assertConsistent(text, .http, edits: [.type("/more", at: offset(of: "/a\n", in: text) + 2)])
+    }
+
+    func testTypingATemplateInsideABody() {
+        let text = """
+        POST https://example.com/api
+        Content-Type: application/json
+
+        {
+          "id": 1,
+          "name": "x"
+        }
+
+        """
+        assertConsistent(text, .http, edits: [.replace(NSRange(location: offset(of: "1,", in: text), length: 1), with: "{{id}}")])
     }
 
     // MARK: - Markdown

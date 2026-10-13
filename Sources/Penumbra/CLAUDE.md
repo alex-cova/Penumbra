@@ -59,6 +59,7 @@ Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour note
 - `EmphasisManager` for transient highlights (search matches, bracket pairs, diagnostics).
 - Bracket-pair matching with flash/emphasis at caret (`BracketMatchingController`).
 - `syntaxNode(at:)` for querying the AST at a byte offset.
+- Injection queries (`injections.scm`) take `#set! injection.language "<name>"` and `#set! injection.exclude "<ICU regex>"`: text the regex matches inside the injected node is left out of the injected parse (`TreeSitterInjectedLanguageMapper` splits the node into included ranges, byte offsets and rows computed from the node's own text; a node that is entirely excluded is not injected). `TreeSitterLanguageLayer` keeps those ranges and moves them with `TreeSitterTextRange.applying(_:)` (the rules of `ts_range_edit`) when an edit lands before the layer, instead of reading the injected tree's root, which spans the excluded text. Umbra's HTTP grammar uses it to keep `{{name}}` out of JSON and GraphQL bodies. Tests: `HTTPLanguageTests`, `IncrementalHighlightConsistencyTests`.
 
 **Code folding**
 - IntelliJ-style layers: `FoldingProviding` / `FoldingDescriptor` in `EditorIntelligence`, `CodeFoldingManager` (async descriptor fetch with generation stamp), `FoldingModel` / `FoldRegion` in Penumbra (`isLineFoldingEnabled`).

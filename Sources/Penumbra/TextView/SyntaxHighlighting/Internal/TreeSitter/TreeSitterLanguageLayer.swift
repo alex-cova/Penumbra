@@ -28,6 +28,10 @@ final class TreeSitterLanguageLayer {
     /// Included ranges for the root language layer under ``SyntaxParsePolicy/viewport``.
     /// Empty means parse the whole document. Child layers ignore this and use injection ranges.
     private var rootIncludedRanges: [TreeSitterTextRange] = []
+    /// What a child layer was last parsed over when its injection left text out (`injection.exclude`).
+    /// `nil` means the whole injected node, which `applyEditPreservingIncludedRange` reads back from
+    /// the tree's root.
+    private var excludedIncludedRanges: [TreeSitterTextRange]?
     private var isEmpty: Bool {
         if let rootNode = tree?.rootNode {
             return rootNode.endByte - rootNode.startByte <= ByteCount(0)
@@ -70,7 +74,8 @@ extension TreeSitterLanguageLayer {
         let injectedLanguages = injectedLanguages(from: captures)
         for injectedLanguage in injectedLanguages {
             if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
-                childLanguageLayer.parseUsingReader(ranges: [injectedLanguage.textRange])
+                childLanguageLayer.excludedIncludedRanges = injectedLanguage.hasExcludedText ? injectedLanguage.textRanges : nil
+                childLanguageLayer.parseUsingReader(ranges: injectedLanguage.textRanges)
             }
         }
     }
@@ -142,7 +147,14 @@ extension TreeSitterLanguageLayer {
     func applyEditPreservingIncludedRange(_ edit: TreeSitterInputEdit) -> LineChangeSet {
         let oldTree = tree
         tree?.apply(edit)
-        let ranges = [tree?.rootNode.textRange].compactMap { $0 }
+        let ranges: [TreeSitterTextRange]
+        if let excluded = excludedIncludedRanges {
+            // The root spans the text that was left out too, so move the ranges themselves.
+            ranges = excluded.map { $0.applying(edit) }
+            excludedIncludedRanges = ranges
+        } else {
+            ranges = [tree?.rootNode.textRange].compactMap { $0 }
+        }
         return completeApply(oldTree: oldTree, parsing: ranges, childEdit: edit)
     }
 
@@ -339,7 +351,8 @@ private extension TreeSitterLanguageLayer {
         }
         for injectedLanguage in injectedLanguages {
             if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
-                let childLineChangeSet = childLanguageLayer.apply(edit, parsing: [injectedLanguage.textRange])
+                childLanguageLayer.excludedIncludedRanges = injectedLanguage.hasExcludedText ? injectedLanguage.textRanges : nil
+                let childLineChangeSet = childLanguageLayer.apply(edit, parsing: injectedLanguage.textRanges)
                 lineChangeSet.union(with: childLineChangeSet)
             }
         }

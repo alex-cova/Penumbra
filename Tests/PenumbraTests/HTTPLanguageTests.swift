@@ -235,6 +235,72 @@ final class HTTPLanguageTests: XCTestCase {
         XCTAssertEqual(paintedCapture(in: text, covering: "}", backwards: true), "punctuation.bracket")
     }
 
+    func testTemplateInAJSONValueKeepsTheOtherColors() {
+        let text = """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {
+          "id": {{id}},
+          "name": "x",
+          "count": 42
+        }
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "\"name\""), "property")
+        XCTAssertEqual(paintedCapture(in: text, covering: "42"), "number")
+        XCTAssertEqual(paintedCapture(in: text, covering: "}", backwards: true), "punctuation.bracket")
+    }
+
+    func testTemplateInACompactJSONBody() {
+        let text = """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {"id": {{id}}, "name": "x"}
+
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "\"name\""), "property")
+    }
+
+    func testTemplateInAGraphQLArgumentKeepsTheSelectionColored() {
+        let text = """
+        POST https://example.com/graphql HTTP/1.1
+
+        query {
+          user(id: {{id}}) {
+            name
+          }
+        }
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "query"), "keyword")
+        XCTAssertEqual(paintedCapture(in: text, covering: "name"), "property")
+    }
+
+    func testSchemeDirectiveLineIsNotAPlainComment() {
+        let text = """
+        ###@scheme:https://example.com/graphql
+        GRAPHQL https://example.com/graphql
+
+        { me { id } }
+        """
+        XCTAssertEqual(paintedCapture(in: text, covering: "@scheme"), "keyword")
+        let separator = """
+        ### Create a user
+        POST https://example.com/users
+        """
+        XCTAssertEqual(paintedCapture(in: separator, covering: "Create"), "comment")
+    }
+
+    func testBodyThatIsOnlyATemplateIsNotInjected() {
+        let names = captureNames(in: """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {{payload}}
+        """)
+        XCTAssertFalse(names.contains("property"), "A lone template has no language, got \(names)")
+    }
+
     private func captureNames(in text: String) -> Set<String> {
         let language = TreeSitterLanguage.http
         let stringView = StringView(string: text)
