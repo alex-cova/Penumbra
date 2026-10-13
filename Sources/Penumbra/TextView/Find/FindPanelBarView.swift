@@ -5,7 +5,7 @@ import Foundation
 /// members (see `Theme.swift`) via `apply(theme:)`, so it always matches the host app's palette
 /// instead of falling back to stock AppKit chrome — no bezeled/bordered system text fields,
 /// titled `NSButton`s, or checkboxes.
-final class FindPanelBarView: NSView {
+final class FindPanelBarView: NSView, NSTextFieldDelegate {
     var onFindTextChanged: ((String) -> Void)?
     var onReplaceTextChanged: ((String) -> Void)?
     var onPrevious: (() -> Void)?
@@ -82,6 +82,10 @@ final class FindPanelBarView: NSView {
         }
         findField.onEscape = { [weak self] in self?.onClose?() }
         replaceField.onEscape = { [weak self] in self?.onClose?() }
+        // While a field is being edited the window's field editor is first responder, so the
+        // fields' own `keyDown` never sees Return or Escape; the delegate's command hook does.
+        findField.delegate = self
+        replaceField.delegate = self
         matchLabel.font = .systemFont(ofSize: 11)
         [previousButton, nextButton, closeButton].forEach { $0.target = self }
         previousButton.action = #selector(previousClicked)
@@ -252,6 +256,24 @@ final class FindPanelBarView: NSView {
     }
 
     @objc private func previousClicked() { onPrevious?() }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            onClose?()
+            return true
+        case #selector(NSResponder.insertNewline(_:)) where control === findField:
+            let shiftHeld = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+            if shiftHeld {
+                onPrevious?()
+            } else {
+                onNext?()
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
     @objc private func nextClicked() { onNext?() }
     @objc private func replaceClicked() { onReplace?() }
     @objc private func replaceAllClicked() { onReplaceAll?() }
