@@ -1376,8 +1376,7 @@ public final class EditorIntelligenceController {
                 segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
             }
             guard !Task.isCancelled else { return }
-            let result = segments ?? []
-            self.publishBreadcrumbs(result)
+            self.publishBreadcrumbs(BreadcrumbBarModel.capped(segments ?? []))
         }
     }
 

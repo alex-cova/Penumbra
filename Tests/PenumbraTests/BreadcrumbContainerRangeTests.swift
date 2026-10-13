@@ -75,4 +75,39 @@ final class BreadcrumbContainerRangeTests: XCTestCase {
         let crumbs = BreadcrumbProvider.breadcrumbLocations(from: [inner, outer], cursorOffset: 20)
         XCTAssertEqual(crumbs.map { $0.displayName }, ["Outer", "inner"])
     }
+
+    /// Select All leaves the caret at offset 0. Indexed words and the file name are stored with an
+    /// empty range there, so that used to turn every word of the buffer into a crumb.
+    func testCaretAtTheOriginDoesNotListIndexedWords() {
+        let doc = DocumentID()
+        func pos(_ offset: Int) -> TextPosition { TextPosition(line: 0, column: offset, utf16Offset: offset) }
+        let empty = TextRange(start: pos(0), end: pos(0))
+        let words = ["com", "mongodb", "MongoQueryException", "FindOperation", "list"].map { name in
+            EditorIntelligence.Symbol(name: name, kind: .word, documentID: doc, range: empty)
+        }
+        let file = EditorIntelligence.Symbol(name: "New file", kind: .fileName, documentID: doc, range: empty)
+        let crumbs = BreadcrumbProvider.breadcrumbLocations(from: words + [file], cursorOffset: 0)
+        XCTAssertTrue(crumbs.isEmpty)
+    }
+
+    func testOverlappingRangesCollapseToTheInnermostChain() {
+        let doc = DocumentID()
+        func pos(_ offset: Int) -> TextPosition { TextPosition(line: 0, column: offset, utf16Offset: offset) }
+        func symbol(_ name: String, _ start: Int, _ end: Int) -> EditorIntelligence.Symbol {
+            EditorIntelligence.Symbol(
+                name: name, kind: .function, documentID: doc,
+                range: TextRange(start: pos(start), end: pos(start + 1)),
+                containerRange: TextRange(start: pos(start), end: pos(end))
+            )
+        }
+        // Three declarations that all cover the caret, as a broken parse does, plus the real nest.
+        let symbols = [
+            symbol("whole", 0, 200),
+            symbol("alsoWhole", 0, 200),
+            symbol("outer", 0, 100),
+            symbol("inner", 10, 40)
+        ]
+        let crumbs = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: 20)
+        XCTAssertEqual(crumbs.map(\.displayName), ["whole", "outer", "inner"])
+    }
 }

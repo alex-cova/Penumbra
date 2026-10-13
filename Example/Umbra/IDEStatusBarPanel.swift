@@ -232,12 +232,15 @@ private struct IDEStatusBarBreadcrumbSegment: View {
             Text(item.title)
                 .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
                 .foregroundStyle(isLast || isHovering || isMenuOpen ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .padding(.horizontal, 3)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
                         .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
                 )
         }
+        .frame(maxWidth: 240, alignment: .leading)
         .buttonStyle(.plain)
         .background(IDEMenuAnchorView(anchor: anchor))
         .onHover { isHovering = $0 }

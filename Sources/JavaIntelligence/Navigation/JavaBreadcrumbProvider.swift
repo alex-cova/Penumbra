@@ -23,9 +23,9 @@ public actor JavaBreadcrumbProvider: BreadcrumbProviding {
         let text = JavaNavigationText.fullText(of: document)
         guard let entries = outline(of: text) else { return nil }
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: document.cursor.position.utf16Offset, in: text)
-        return entries
-            .filter { $0.bytes.contains(byteOffset) || $0.bytes.upperBound == byteOffset }
-            .map { BreadcrumbSegment(title: $0.title, range: JavaNavigationText.textRange(for: $0.nameBytes, in: text)) }
+        return Self.chain(entries, containing: byteOffset).map { entry in
+            BreadcrumbSegment(title: entry.title, range: JavaNavigationText.textRange(for: entry.nameBytes, in: text))
+        }
     }
 
     // MARK: - Outline
@@ -44,6 +44,27 @@ public actor JavaBreadcrumbProvider: BreadcrumbProviding {
         "class_declaration", "interface_declaration", "enum_declaration",
         "record_declaration", "annotation_type_declaration"
     ]
+
+    /// The declarations around `byteOffset`, outermost first. A declaration whose range merely
+    /// overlaps the caret is not a crumb: the next segment has to sit strictly inside the last,
+    /// so a broken parse that gives every method the whole file does not fill the bar.
+    private static func chain(_ entries: [Entry], containing byteOffset: Int) -> [Entry] {
+        var remaining = entries.filter { entry in
+            guard !entry.bytes.isEmpty, !entry.title.contains(where: \.isNewline) else { return false }
+            return entry.bytes.contains(byteOffset) || entry.bytes.upperBound == byteOffset
+        }
+        var innermostFirst: [Entry] = []
+        while innermostFirst.count < BreadcrumbBarModel.maximumSegments,
+              let inner = remaining.min(by: { $0.bytes.count < $1.bytes.count }) {
+            innermostFirst.append(inner)
+            remaining = remaining.filter { outer in
+                outer.bytes.lowerBound <= inner.bytes.lowerBound
+                    && inner.bytes.upperBound <= outer.bytes.upperBound
+                    && outer.bytes.count > inner.bytes.count
+            }
+        }
+        return innermostFirst.reversed()
+    }
 
     /// Depth-first, so an enclosing declaration always precedes what it contains.
     private func collect(_ node: SyntaxNode, into entries: inout [Entry]) {

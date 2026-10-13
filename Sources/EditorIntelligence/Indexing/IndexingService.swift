@@ -49,6 +49,8 @@ public actor IndexingService {
         // The parse can outlive its document: a close or a newer edit cancels this task meanwhile.
         guard !Task.isCancelled else { return }
         var symbols = tree.symbols.filter { $0.name.count <= Self.maxNameLength }
+        // The range is a placeholder: a word has no position in the buffer. Breadcrumbs treat an
+        // empty range as enclosing nothing, so a caret at offset 0 does not list every word.
         let wordSymbols = tree.words.filter { $0.count <= Self.maxNameLength }.map { word in
             Symbol(
                 name: word,
