@@ -1,5 +1,6 @@
 import EditorIntelligence
 import Foundation
+import JavaIntelligence
 import Observation
 
 /// What the Problems tab lists: diagnostics from the active editors (duplicate symbols, LSP…) and
@@ -26,6 +27,9 @@ final class IDEProblemsStore {
     /// owns its own bucket, so a SwiftPM build never replaces Gradle's results or the reverse.
     static let gradleBuildSource = "gradle"
     static let swiftPMBuildSource = "swiftpm"
+    static let xcodeBuildSource = "xcode"
+    /// The builds a SwiftUI preview runs: their own bucket, so a preview never replaces a package build's problems.
+    static let swiftUIPreviewBuildSource = "swiftui-preview"
 
     /// Every source's build problems, merged per file (sources in name order, so it is stable).
     /// Editor, javac and inspection buckets are not build output.
@@ -42,6 +46,12 @@ final class IDEProblemsStore {
     private static func isLanguageSource(_ source: String) -> Bool {
         source == editorSource || source == compilerSource || source == inspectionSource
     }
+
+    /// Project-level messages from the last Gradle run (failed tasks, dependency errors, test summary).
+    private(set) var buildMessages: [GradleProblem] = []
+    /// Called when the user opens a test-failure summary from the Problems list.
+    var onShowTestResults: (() -> Void)?
+
     var visibleSeverities: Set<DiagnosticSeverity> = [.error, .warning, .information, .hint]
 
     /// Every file with problems, ignoring the severity filter -- the basis for the badge counts.
@@ -57,9 +67,27 @@ final class IDEProblemsStore {
         )
     }
 
-    var errorCount: Int { DiagnosticGrouping.counts(in: allFiles).errors }
-    var warningCount: Int { DiagnosticGrouping.counts(in: allFiles).warnings }
-    var isEmpty: Bool { bySource.isEmpty }
+    var errorCount: Int {
+        DiagnosticGrouping.counts(in: allFiles).errors + buildMessages.filter { $0.severity == .error }.count
+    }
+    var warningCount: Int {
+        DiagnosticGrouping.counts(in: allFiles).warnings + buildMessages.filter { $0.severity == .warning }.count
+    }
+    var isEmpty: Bool { bySource.isEmpty && buildMessages.isEmpty }
+
+    var visibleBuildMessages: [GradleProblem] {
+        buildMessages.filter { message in
+            switch message.severity {
+            case .error: visibleSeverities.contains(.error)
+            case .warning: visibleSeverities.contains(.warning)
+            case .info: visibleSeverities.contains(.information)
+            }
+        }
+    }
+
+    func setBuildMessages(_ messages: [GradleProblem]) {
+        buildMessages = messages
+    }
 
     /// Takes an active editor's report. Compiler results in it are the service's cached ones for
     /// that file (which is how a re-opened file gets its problems back); the rest are the editor's.
@@ -110,6 +138,7 @@ final class IDEProblemsStore {
             for source in bySource.keys where !Self.isLanguageSource(source) {
                 bySource[source] = nil
             }
+            buildMessages = []
         }
     }
 

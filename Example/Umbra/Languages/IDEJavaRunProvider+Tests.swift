@@ -133,24 +133,18 @@ extension IDEJavaRunProvider {
     private func applyBuildOutput(_ result: IDEProjectTaskReport) {
         guard let host else { return }
         let projectRoot = result.root
-        let messages = JavacOutputParser.parse(result.stderr) + JavacOutputParser.parse(result.stdout)
-        let javacByFile = JavacDiagnosticsMapper.diagnostics(
-            from: messages, source: "gradle", baseDirectory: projectRoot
+        let command = GradleCommandResult(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+        let matches = GradleProblemMatcher.match(
+            command,
+            source: IDEProblemsStore.gradleBuildSource,
+            baseDirectory: projectRoot
         ) { [weak host] url in
             host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
         }
-        let gradleProblems = GradleProblemMatcher.parse(
-            result.output,
-            baseDirectory: projectRoot,
-            model: gradle.model
-        )
-        let gradleByFile = GradleProblemMatcher.diagnostics(from: gradleProblems, baseDirectory: projectRoot)
-        var merged = javacByFile
-        for (url, diagnostics) in gradleByFile {
-            merged[url, default: []].append(contentsOf: diagnostics)
-        }
-        host.problems.setBuildDiagnostics(merged, source: IDEProblemsStore.gradleBuildSource)
-        if merged.values.contains(where: { $0.contains { $0.severity == .error } }) {
+        host.problems.setBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.gradleBuildSource)
+        host.problems.setBuildMessages(matches.problems)
+        if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
+            || matches.problems.contains(where: { $0.severity == .error }) {
             host.showProblems()
         }
     }

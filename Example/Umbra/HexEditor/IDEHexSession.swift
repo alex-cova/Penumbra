@@ -721,8 +721,8 @@ final class IDEHexSession {
                     expected: identity,
                     overwriteChanged: force,
                     cancellation: cancellation,
-                    progress: { [weak self] written, total in
-                        Task { @MainActor in
+                    progress: { written, total in
+                        Task { @MainActor [weak self = self] in
                             guard let self, self.saveGeneration == generation else { return }
                             self.noteSaveProgress(written: written, total: total)
                         }

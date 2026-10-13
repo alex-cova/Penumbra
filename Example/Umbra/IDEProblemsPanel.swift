@@ -1,4 +1,5 @@
 import EditorIntelligence
+import JavaIntelligence
 import SwiftUI
 
 /// The bottom panel's Problems tab: diagnostics grouped by file, errors first. Clicking a row opens
@@ -9,12 +10,16 @@ struct IDEProblemsPanel: View {
 
     var body: some View {
         let files = workspace.problems.files
+        let messages = workspace.problems.visibleBuildMessages
         Group {
-            if files.isEmpty {
+            if files.isEmpty && messages.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(messages) { message in
+                            IDEBuildMessageRowView(message: message) { workspace.openBuildMessage(message) }
+                        }
                         ForEach(files) { file in
                             fileHeader(file)
                             if !collapsedFiles.contains(file.url) {
@@ -77,6 +82,57 @@ struct IDEProblemsPanel: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(file.url.lastPathComponent), \(file.rows.count) problems")
         .accessibilityHint(isCollapsed ? "Expand" : "Collapse")
+    }
+}
+
+/// A project-level Gradle message (failed task, dependency error, test summary).
+private struct IDEBuildMessageRowView: View {
+    let message: GradleProblem
+    let onOpen: () -> Void
+
+    @State private var isHovering = false
+
+    private var severity: DiagnosticSeverity {
+        switch message.severity {
+        case .error: .error
+        case .warning: .warning
+        case .info: .information
+        }
+    }
+
+    private var text: String {
+        // Plain until the host wires `onShowTestResults`; the suffix names what a click does.
+        message.kind == .testFailures ? "\(message.message) \u{2014} Show Test Results" : message.message
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: IDEProblemStyle.symbol(for: severity))
+                    .font(.system(size: 11))
+                    .foregroundStyle(IDEProblemStyle.color(for: severity))
+                    .frame(width: 14)
+                Text(text)
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                if let task = message.task {
+                    Text(task)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, IDEAppearance.Spacing.md)
+            .padding(.vertical, 3)
+            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel("Build \(severity): \(text)")
     }
 }
 

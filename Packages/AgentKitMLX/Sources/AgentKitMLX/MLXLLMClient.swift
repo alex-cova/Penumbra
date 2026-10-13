@@ -140,11 +140,20 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
             }
         }
 
-        for try await event in session.streamDetails(to: MLXConversation.messages(pending)) {
+        var stopFilter = StopMarkerFilter()
+
+        streaming: for try await event in session.streamDetails(to: MLXConversation.messages(pending)) {
             try Task.checkCancellation()
             switch event {
             case .chunk(let text):
-                forward(parser.consume(text))
+                let visible = stopFilter.consume(text)
+                if !visible.isEmpty { forward(parser.consume(visible)) }
+                if stopFilter.stopped {
+                    // The model wrote an end-of-turn token as text and would carry on with an invented
+                    // turn. End here; the session's transcript holds that text, so the next request rebuilds.
+                    recoveredACall = true
+                    break streaming
+                }
             case .toolCall(let call):
                 let id = call.id ?? Self.newCallID()
                 let arguments = MLXBridge.argumentsText(call)
@@ -170,6 +179,8 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                 out.yield(.unreadableToolCall(detail: "\(rejected.reason.rawValue)\(detail)", raw: rejected.rawTextPreview))
             }
         }
+        let leftover = stopFilter.finish()
+        if !leftover.isEmpty { forward(parser.consume(leftover)) }
         forward(parser.finish())
         try Task.checkCancellation()
 

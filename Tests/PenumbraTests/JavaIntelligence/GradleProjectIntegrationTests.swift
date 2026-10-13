@@ -34,6 +34,9 @@ final class GradleProjectIntegrationTests: XCTestCase {
         let app = try XCTUnwrap(model.subprojects.first { $0.path == ":app" })
         let appMain = try XCTUnwrap(app.sourceSets.first { $0.name == "main" })
         let appTest = try XCTUnwrap(app.sourceSets.first { $0.name == "test" })
+        let testTask = try XCTUnwrap(app.testTasks.first { $0.path == ":app:test" }, "format 6 must record :app:test")
+        XCTAssertEqual(testTask.sourceSetName, "test")
+        XCTAssertTrue(testTask.resultsDir?.path.hasSuffix("app/build/test-results/test") == true, "got \(String(describing: testTask.resultsDir))")
         XCTAssertTrue(
             appMain.sourceDirs.contains { $0.path.hasSuffix("app/src/main/java") },
             "expected :app's src/main/java, got \(appMain.sourceDirs)"

@@ -84,4 +84,20 @@ final class GradleBuildFingerprintTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    func testChangedFilesComparesStamps() {
+        typealias Stamp = GradleBuildFingerprint.FileStamp
+        let old = GradleBuildFingerprint(scriptFormatVersion: 1, files: [
+            Stamp(relativePath: "build.gradle", size: 10, modificationDate: 1),
+            Stamp(relativePath: "settings.gradle", size: 5, modificationDate: 1),
+            Stamp(relativePath: "app/build.gradle", size: 7, modificationDate: 1)
+        ])
+        let new = GradleBuildFingerprint(scriptFormatVersion: 1, files: [
+            Stamp(relativePath: "build.gradle", size: 10, modificationDate: 2),
+            Stamp(relativePath: "settings.gradle", size: 5, modificationDate: 1),
+            Stamp(relativePath: "lib/build.gradle", size: 3, modificationDate: 1)
+        ])
+        XCTAssertEqual(GradleBuildFingerprint.changedFiles(from: old, to: new), ["app/build.gradle", "build.gradle", "lib/build.gradle"])
+        XCTAssertEqual(GradleBuildFingerprint.changedFiles(from: old, to: old), [])
+    }
 }

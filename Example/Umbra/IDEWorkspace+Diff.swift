@@ -151,6 +151,9 @@ extension IDEWorkspace {
         session.applyIndexPatch = { [weak self] patch, reverse in
             await self?.gitStatus.applyHunk(patch, reverse: reverse) ?? "The window was closed."
         }
+        session.confirmOverwrite = { path in
+            IDEWorkspace.askToOverwriteChangedFile(named: (path as NSString).lastPathComponent)
+        }
         session.onSaved = { [weak self] _ in
             // Clean editor tabs of the file pick up the new text; git sees the change.
             self?.gitStatus.onWorkingTreeChanged?()

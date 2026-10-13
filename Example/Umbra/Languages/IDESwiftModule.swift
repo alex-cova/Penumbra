@@ -20,6 +20,17 @@ struct IDESwiftModule: IDELanguageModule {
                 action: { [weak workspace] in workspace?.showSwiftClassDiagram() }
             ),
             EditorCommand(
+                id: "swift.toggleSwiftUIPreview", title: "Swift: Toggle SwiftUI Preview", group: "Swift",
+                action: { [weak workspace] in workspace?.toggleSwiftUIPreview() }
+            ),
+            EditorCommand(
+                id: "swift.refreshSwiftUIPreview", title: "Swift: Refresh SwiftUI Preview", group: "Swift",
+                action: { [weak workspace] in
+                    guard let workspace, workspace.isSwiftUIPreviewVisible else { return }
+                    workspace.swiftUIPreview?.refresh()
+                }
+            ),
+            EditorCommand(
                 id: "swiftpm.showTargets", title: "SwiftPM: Show Targets", group: "Swift",
                 action: { [weak workspace] in workspace?.showSwiftPMTargets() }
             ),
@@ -36,6 +47,18 @@ struct IDESwiftModule: IDELanguageModule {
                 action: { [weak workspace] in workspace?.swiftPM.runTasks(["resolve"]) }
             )
         ]
+    }
+
+    func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
+        guard workspace.statusLanguage == "swift", workspace.canPreviewSwiftUI || workspace.isSwiftUIPreviewVisible else { return [] }
+        return [.previewToggle(
+            id: "swift.preview", isVisible: workspace.isSwiftUIPreviewVisible, help: "Toggle SwiftUI Preview", workspace: workspace
+        )]
+    }
+
+    func viewMenuItems(for workspace: IDEWorkspace) -> [IDEViewMenuContribution] {
+        guard workspace.statusLanguage == "swift", workspace.canPreviewSwiftUI || workspace.isSwiftUIPreviewVisible else { return [] }
+        return [.previewMenuItem(id: "swift.preview", title: "SwiftUI Preview", systemImage: "swift")]
     }
 
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? {

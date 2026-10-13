@@ -79,6 +79,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// open) saw, outside of a sync. A save of an unchanged file, `touch` and attribute writes don't
     /// count, and reverting an edit clears it. Cleared by Reload or Dismiss.
     private(set) var hasConfigurationChanges = false
+    /// Relative paths of build files that differ from the baseline, when ``hasConfigurationChanges``.
+    var changedConfigurationFilePaths: [String] { changedBuildFiles.sorted() }
     /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
     private(set) var isRunningTasks = false
     private(set) var runningTasks: [String] = []
@@ -108,8 +110,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// Build-file events in that window are dropped so the save that triggered a reload doesn't
     /// immediately raise the banner again.
     @ObservationIgnored private var syncInFlight = false
-    @ObservationIgnored private var buildFileWatcher: FSEventsFileSystemWatcher?
-    @ObservationIgnored private var buildFileWatchTask: Task<Void, Never>?
+    /// Whether ``filesDidChange(_:)`` compares build files: the open folder is a Gradle project.
+    @ObservationIgnored private var watchesBuildFiles = false
     /// The build files as the last sync, project open or Dismiss saw them. `nil` while it is being
     /// read; events in that window are skipped, because the snapshot is taken after them.
     @ObservationIgnored private var buildFileBaseline: GradleBuildFileSnapshot?
@@ -755,35 +757,21 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
 
     private func startBuildFileWatcher(root: URL) {
         stopBuildFileWatcher()
-        // FSEvents reports `realpath` paths (`/private/var/…`), so the prefix the filter and the
-        // comparison strip is the root's `realpath` too.
-        let rootPath = GradleBuildFiles.canonicalRootPath(for: root)
-        let canonicalRoot = URL(fileURLWithPath: rootPath, isDirectory: true)
-        let watcher = FSEventsFileSystemWatcher(root: canonicalRoot, latency: 0.4) { path in
-            GradleBuildFiles.matches(path: path, root: rootPath)
-        }
-        buildFileWatcher = watcher
+        watchesBuildFiles = true
         resetBuildFileBaseline()
-        buildFileWatchTask = Task { [weak self] in
-            await watcher.start()
-            for await event in watcher.events {
-                guard let self, !Task.isCancelled else { return }
-                guard self.buildFileWatcher === watcher else { return }
-                if self.syncInFlight { continue }
-                if case .syncing = self.syncState { continue }
-                let url: URL
-                switch event {
-                case let .fileAdded(changed), let .fileRemoved(changed), let .fileChanged(changed):
-                    url = changed
-                }
-                let prefix = rootPath + "/"
-                guard url.path.hasPrefix(prefix) else { continue }
-                await self.compareBuildFile(
-                    relativePath: String(url.path.dropFirst(prefix.count)),
-                    root: canonicalRoot,
-                    watcher: watcher
-                )
-            }
+    }
+
+    /// Re-judges the build files among `paths`, which the project watcher reported in the open
+    /// folder's own path space. Events while a sync runs are dropped, so the save that triggered a
+    /// reload doesn't raise the banner again.
+    func filesDidChange(_ paths: Set<String>) {
+        guard watchesBuildFiles, let root = projectRootURL, !syncInFlight else { return }
+        if case .syncing = syncState { return }
+        let rootPath = root.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        for path in paths where GradleBuildFiles.matches(path: path, root: rootPath) {
+            let relativePath = String(path.dropFirst(prefix.count))
+            Task { await self.compareBuildFile(relativePath: relativePath, root: root) }
         }
     }
 
@@ -808,13 +796,13 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
 
     /// Raises or clears the banner for one build file by comparing its bytes with the baseline. A
     /// file edited and then restored clears itself. Does nothing while the baseline is being read.
-    private func compareBuildFile(relativePath: String, root: URL, watcher: FSEventsFileSystemWatcher) async {
+    private func compareBuildFile(relativePath: String, root: URL) async {
         guard let baseline = buildFileBaseline else { return }
         let token = baselineGeneration
         let differs = await Task.detached(priority: .utility) {
             baseline.differs(relativePath: relativePath, projectRoot: root)
         }.value
-        guard buildFileWatcher === watcher, baselineGeneration == token else { return }
+        guard watchesBuildFiles, projectRootURL == root, baselineGeneration == token else { return }
         if differs {
             changedBuildFiles.insert(relativePath)
         } else {
@@ -827,13 +815,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         baselineGeneration += 1
         buildFileBaseline = nil
         changedBuildFiles.removeAll()
-        buildFileWatchTask?.cancel()
-        buildFileWatchTask = nil
-        let watcher = buildFileWatcher
-        buildFileWatcher = nil
-        if let watcher {
-            Task { await watcher.stop() }
-        }
+        watchesBuildFiles = false
     }
 
     // MARK: - Chrome

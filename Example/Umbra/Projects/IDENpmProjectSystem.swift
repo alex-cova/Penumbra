@@ -56,7 +56,8 @@ final class IDENpmProjectSystem: IDEProjectSystem {
     @ObservationIgnored private var projectGeneration = 0
     @ObservationIgnored private var runGeneration = 0
     @ObservationIgnored private var runTask: Task<Void, Never>?
-    @ObservationIgnored private var manifestWatcher: (any DispatchSourceFileSystemObject)?
+    /// Whether ``filesDidChange(_:)`` compares the manifest: it existed when the project loaded or reloaded.
+    @ObservationIgnored private var watchesManifest = false
     @ObservationIgnored private var statusMessage: String?
 
     static var defaultTrustStoreURL: URL {
@@ -145,7 +146,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         runTask = nil
         isRunningTasks = false
         runningTasks = []
-        stopManifestWatcher()
+        watchesManifest = false
         hasConfigurationChanges = false
         console = IDEProjectConsoleLog()
         let standardized = root?.standardizedFileURL
@@ -159,7 +160,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         }
         applyManifest(at: standardized)
         if FileManager.default.fileExists(atPath: standardized.appendingPathComponent("package.json").path) {
-            startManifestWatcher(root: standardized)
+            watchesManifest = true
         }
     }
 
@@ -168,9 +169,9 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         hasConfigurationChanges = false
         applyManifest(at: root)
         if manifest != nil {
-            startManifestWatcher(root: root)
+            watchesManifest = true
         } else {
-            stopManifestWatcher()
+            watchesManifest = false
         }
         guard manifest != nil, !trustStore.isTrusted(root) else { return }
         let generation = projectGeneration
@@ -291,7 +292,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         runTask = nil
         isRunningTasks = false
         runningTasks = []
-        stopManifestWatcher()
+        watchesManifest = false
         projectRootURL = nil
         manifest = nil
         manifestBaseline = nil
@@ -397,39 +398,14 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         }
     }
 
-    private func startManifestWatcher(root: URL) {
-        stopManifestWatcher()
+    /// Raises or clears the reload banner from the bytes of package.json after the project watcher
+    /// reported it. An event says the file was touched, not that it changed: compare the bytes. A
+    /// file that is gone differs from one that was there.
+    func filesDidChange(_ paths: Set<String>) {
+        guard watchesManifest, let root = projectRootURL else { return }
         let file = root.appendingPathComponent("package.json")
-        let fd = open(file.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .extend, .delete, .rename, .revoke],
-            queue: .main
-        )
-        source.setCancelHandler { close(fd) }
-        let watched = root.standardizedFileURL
-        source.setEventHandler { [weak self, weak source] in
-            let flags = source?.data ?? []
-            Task { @MainActor in
-                guard let self, self.projectRootURL?.standardizedFileURL == watched else { return }
-                // An event says the file was touched, not that it changed: compare the bytes. A
-                // file that is gone differs from one that was there.
-                let current = try? Data(contentsOf: watched.appendingPathComponent("package.json"))
-                self.hasConfigurationChanges = current != self.manifestBaseline
-                if flags.contains(.delete) || flags.contains(.rename) || flags.contains(.revoke) {
-                    self.startManifestWatcher(root: watched)
-                }
-            }
-        }
-        manifestWatcher = source
-        source.resume()
-    }
-
-    private func stopManifestWatcher() {
-        let source = manifestWatcher
-        manifestWatcher = nil
-        source?.cancel()
+        guard paths.contains(file.path) else { return }
+        hasConfigurationChanges = (try? Data(contentsOf: file)) != manifestBaseline
     }
 
     // MARK: - Process

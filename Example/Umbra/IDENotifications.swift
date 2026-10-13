@@ -9,6 +9,8 @@ enum IDENotificationAction: Equatable {
     case showProblems
     /// Open the agent panel on this chat.
     case showAgentChat(UUID)
+    /// Show this file's tab (opening it if it was closed).
+    case openFile(String)
 }
 
 enum IDENotificationCategory: String, CaseIterable, Identifiable {

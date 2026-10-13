@@ -12,6 +12,8 @@ enum ViewportParseWindow {
         fullParseLimit: Int = TreeSitterPerformanceConstants.maxSyncContentLength,
         maxWindowLength: Int = TreeSitterPerformanceConstants.maxViewportParseUTF16Length
     ) -> NSRange {
+        // Reads `LineManager`, which the main thread mutates; a background caller would race it.
+        assert(Thread.isMainThread, "ViewportParseWindow reads LineManager; call it on the main thread")
         guard stringLength > 0 else {
             return NSRange(location: 0, length: 0)
         }
@@ -57,6 +59,7 @@ enum ViewportParseWindow {
     }
 
     static func textRange(for utf16Range: NSRange, lineManager: LineManager) -> TreeSitterTextRange? {
+        assert(Thread.isMainThread, "ViewportParseWindow reads LineManager; call it on the main thread")
         guard utf16Range.length > 0,
               let startPosition = lineManager.linePosition(at: utf16Range.location) else {
             return nil

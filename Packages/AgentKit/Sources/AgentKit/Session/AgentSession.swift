@@ -47,6 +47,9 @@ public actor AgentSession {
     /// Paths of successful edits in the current run, for verify-before-stopping.
     private var filesEditedThisRun: [String] = []
     private var verifiedSinceEdit = false
+    private var editCallsThisRun = 0
+    private var failedEditCallsThisRun = 0
+    private let unappliedEditsPolicy = UnappliedEditsPolicy()
     /// Tokens reported during the current run. The budget uses this, not the session total, so
     /// “continue” starts a fresh allowance.
     private var runUsage = TokenUsage()
@@ -263,6 +266,10 @@ public actor AgentSession {
         await editFailures.reset()
         filesEditedThisRun = []
         verifiedSinceEdit = false
+        editCallsThisRun = 0
+        failedEditCallsThisRun = 0
+        unappliedEditsPolicy.reset()
+        verifyPolicy.reset()
         runUsage = TokenUsage()
         out.yield(.runStarted(runID))
         let ending = await loop(out)
@@ -278,6 +285,7 @@ public actor AgentSession {
         var callCounts: [String: Int] = [:]
         var compactedAfterOverflow = false
         var unreadableCalls = 0
+        var emptyTurns = 0
         var iteration = 0
         /// Set when this turn is the last one: no tools, then the run ends with this reason.
         var closing: RunEnding?
@@ -361,6 +369,19 @@ public actor AgentSession {
                     return .failed("The model kept writing tool calls that could not be read (\(turn.unreadable[0].detail)).")
                 }
             }
+            // A turn with no answer and no calls is not a finished run: ask once, then say so. (A local model
+            // that wrote only a stop token, or a provider that returned nothing, would otherwise end "completed".)
+            if turn.calls.isEmpty, turn.unreadable.isEmpty,
+               turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                emptyTurns += 1
+                if emptyTurns > Self.maxEmptyTurns {
+                    return .failed("The model produced no output.")
+                }
+                items.append(.user(Self.editorNote(
+                    "Your last response was empty. Answer the request, or call a tool.")))
+                iteration += 1
+                continue
+            }
             if turn.calls.isEmpty, turn.unreadable.isEmpty {
                 switch await combined(policies, turnState(iteration: iteration, started: started), ending: true) {
                 case .note(let text):
@@ -413,6 +434,7 @@ public actor AgentSession {
                 graceTurn: configuration.graceTurnAtCap),
         ]
         if configuration.verifyBeforeStopping { policies.append(verifyPolicy) }
+        policies.append(unappliedEditsPolicy)
         policies.append(contentsOf: configuration.policies)
         return policies
     }
@@ -422,7 +444,8 @@ public actor AgentSession {
             iteration: iteration, maxIterations: configuration.maxIterations, usage: runUsage,
             elapsed: Date().timeIntervalSince(started), contextWindow: configuration.contextWindow,
             estimatedTokens: estimatedContextTokens(), filesEdited: filesEditedThisRun,
-            verifiedSinceEdit: verifiedSinceEdit, mode: mode)
+            verifiedSinceEdit: verifiedSinceEdit, mode: mode,
+            editCalls: editCallsThisRun, failedEditCalls: failedEditCallsThisRun)
     }
 
     /// The first terminal decision wins. Notes and a compaction are folded when nobody ends the run.
@@ -448,6 +471,8 @@ public actor AgentSession {
     }
 
     static let maxUnreadableCalls = 3
+    /// Empty turns in one run that are retried before the run fails.
+    static let maxEmptyTurns = 1
 
     /// Adds the messages the user wrote during the run. Only ever between a call's output and the next
     /// request (or after a turn with no calls), so no message lands inside a call and its output.
@@ -800,6 +825,10 @@ public actor AgentSession {
             for (index, output) in batch {
                 outputs[index] = output
                 out.yield(.toolCallFinished(id: calls[index].id, name: calls[index].name, output: output))
+                if case .run(let tool, _, _) = plans[index], tool.risk == .edit {
+                    editCallsThisRun += 1
+                    if output.isError { failedEditCallsThisRun += 1 }
+                }
                 guard !output.isError, case .run(let tool, let arguments, _) = plans[index] else { continue }
                 if tool.risk == .edit {
                     changedFiles = true

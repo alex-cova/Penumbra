@@ -76,6 +76,28 @@ final class IDEAgentSlashInvocationTests: XCTestCase {
             XCTAssertTrue(markdown.contains(expected), "missing \(expected)\n\(markdown)")
         }
     }
+
+    func testExportShowsWhatAFileToolReturnedSoARefusedWriteIsNotMistakenForOne() {
+        var refused = IDEAgentEntry(kind: .toolCall(name: "write_file"), text: #"{"path":"A.swift","content":"x"}"#, callID: "w")
+        refused.output = ToolOutput("A.swift was not read in this session. Call read_file first.", isError: true)
+        var applied = IDEAgentEntry(kind: .toolCall(name: "edit_file"), text: #"{"path":"A.swift"}"#, callID: "e")
+        applied.output = ToolOutput("Edited A.swift (1 replacement)\nmore detail")
+        var read = IDEAgentEntry(kind: .toolCall(name: "read_file"), text: #"{"path":"A.swift"}"#, callID: "r")
+        read.output = ToolOutput("1\tlet secret = 1\n")
+        var problems = IDEAgentEntry(kind: .toolCall(name: "diagnostics"), text: #"{"path":"A.swift"}"#, callID: "d")
+        problems.output = ToolOutput((1...8).map { "A.swift:\($0): error" }.joined(separator: "\n"))
+        let markdown = IDEAgentTranscriptExport.markdown(
+            title: "Edits", entries: [refused, applied, read, problems], exportedAt: Date(timeIntervalSince1970: 0))
+        for expected in [
+            "  - Failed: A.swift was not read in this session.",
+            "  - Result: Edited A.swift (1 replacement)\n",
+            "  - A.swift:6: error", "… 2 more lines",
+        ] {
+            XCTAssertTrue(markdown.contains(expected), "missing \(expected)\n\(markdown)")
+        }
+        XCTAssertFalse(markdown.contains("more detail"), "only an edit's first line is kept")
+        XCTAssertFalse(markdown.contains("let secret"), "a read's content is not exported")
+    }
 }
 
 @MainActor
@@ -249,6 +271,21 @@ final class IDEAgentCommandRunTests: XCTestCase {
         for command in IDEAgentBuiltInCommand.allCases { XCTAssertTrue(help.contains("/\(command.rawValue)"), "/\(command.rawValue)") }
         XCTAssertTrue(help.contains("/lint"))
         XCTAssertEqual(controller.draft, "", "the command left the field")
+    }
+
+    func testALoneUnknownSlashWordIsSentAndSaysSo() async {
+        let (controller, client) = makeController([.text("ok")])
+        type(controller, "/redesign-existing-projects")
+        XCTAssertEqual(lastNotice(controller), IDEAgentController.unknownCommandNotice("redesign-existing-projects"))
+        await waitFor("sent") { !controller.isRunning && client.requests.count == 1 }
+        XCTAssertTrue(controller.entries.contains { $0.kind == .user && $0.text == "/redesign-existing-projects" })
+    }
+
+    func testASentenceThatStartsWithASlashGetsNoNotice() async {
+        let (controller, client) = makeController([.text("ok")])
+        type(controller, "/etc is missing")
+        await waitFor("sent") { !controller.isRunning && client.requests.count == 1 }
+        XCTAssertNil(lastNotice(controller))
     }
 
     func testBuiltInsWorkBeforeTheUserHasAcceptedTheDisclosure() {

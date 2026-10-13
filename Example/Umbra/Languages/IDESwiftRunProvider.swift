@@ -123,6 +123,12 @@ final class IDESwiftRunProvider: IDERunProvider {
         for declaration in parsed.model.declarations where declaration.kind == .function && declaration.attributes.contains("Test") {
             locations.append(IDERunnableLocation(kind: .test, line: line(of: declaration.nameBytes), title: "\(declaration.name)()"))
         }
+        // SwiftUI previews of a file in a code target: the gutter opens the canvas on one.
+        if let url = document.url, workspace.canPreviewSwiftUI(file: url) {
+            for block in SwiftPreviewExtractor.extract(from: parsed) {
+                locations.append(IDERunnableLocation(kind: .preview(index: block.index), line: block.line, title: block.displayName))
+            }
+        }
         return locations.sorted { $0.line < $1.line }
     }
 
@@ -151,6 +157,8 @@ final class IDESwiftRunProvider: IDERunProvider {
             guard mode == .run else { return }
             let filter = testFilter(for: location, in: document)
             runTests(title: location.title, filters: [filter])
+        case .preview(let index):
+            workspace?.showSwiftUIPreview(blockIndex: index)
         }
     }
 
@@ -159,8 +167,13 @@ final class IDESwiftRunProvider: IDERunProvider {
         let locations = await runnableLocations(in: document)
         guard let parsed = SwiftAnalysis.parse(document.text) else { return false }
         let caretLine = parsed.text.position(utf16: document.caretUTF16Offset).line + 1
-        // The nearest place at or above the caret: a test method inside a class beats the class.
-        if let location = locations.last(where: { $0.line <= caretLine }) {
+        // The nearest place at or above the caret: a test method inside a class beats the class. A
+        // preview is not something to run.
+        let runnable = locations.filter {
+            if case .preview = $0.kind { return false }
+            return true
+        }
+        if let location = runnable.last(where: { $0.line <= caretLine }) {
             if mode == .debug, location.kind != .entryPoint { return false }
             run(document, location: location, mode: mode)
             return true

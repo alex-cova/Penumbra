@@ -24,11 +24,14 @@ public struct TurnState: Sendable, Equatable {
     public var filesEdited: [String]
     public var verifiedSinceEdit: Bool
     public var mode: PermissionMode
+    /// Calls to a file-changing tool this run that ran, and how many of them returned an error.
+    public var editCalls: Int
+    public var failedEditCalls: Int
 
     public init(
         iteration: Int, maxIterations: Int, usage: TokenUsage, elapsed: TimeInterval,
         contextWindow: Int?, estimatedTokens: Int, filesEdited: [String], verifiedSinceEdit: Bool,
-        mode: PermissionMode
+        mode: PermissionMode, editCalls: Int = 0, failedEditCalls: Int = 0
     ) {
         self.iteration = iteration
         self.maxIterations = maxIterations
@@ -39,6 +42,8 @@ public struct TurnState: Sendable, Equatable {
         self.filesEdited = filesEdited
         self.verifiedSinceEdit = verifiedSinceEdit
         self.mode = mode
+        self.editCalls = editCalls
+        self.failedEditCalls = failedEditCalls
     }
 }
 
@@ -102,16 +107,44 @@ public final class VerifyBeforeStoppingPolicy: TurnPolicy, @unchecked Sendable {
 
     public init() {}
 
+    /// A new run asks again.
+    public func reset() { lock.withLock { asked = false } }
+
     public func beforeTurn(_ state: TurnState) async -> TurnDecision { .proceed }
 
     public func beforeEnding(_ state: TurnState) async -> TurnDecision {
-        let already = lock.withLock { () -> Bool in
-            if asked { return true }
-            return false
-        }
+        let already = lock.withLock { asked }
         guard !already, state.mode != .plan, !state.filesEdited.isEmpty, !state.verifiedSinceEdit else { return .proceed }
         lock.withLock { asked = true }
         return .note(
             "You changed files and have not checked them since the last edit. Call diagnostics, run_tests or gradle if one of them is available, or say why you cannot.")
+    }
+}
+
+/// If the run tried to change files and every attempt failed, say so before the run ends, once: the
+/// answer that follows would otherwise claim a change that was never made. A run with at least one
+/// applied edit is left alone, and so is plan mode, where nothing is meant to change.
+public final class UnappliedEditsPolicy: TurnPolicy, @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = false
+
+    public init() {}
+
+    /// A new run may be told again.
+    public func reset() { lock.withLock { asked = false } }
+
+    public func beforeTurn(_ state: TurnState) async -> TurnDecision { .proceed }
+
+    public func beforeEnding(_ state: TurnState) async -> TurnDecision {
+        guard state.mode != .plan, state.editCalls > 0, state.failedEditCalls == state.editCalls,
+              state.filesEdited.isEmpty else { return .proceed }
+        let already = lock.withLock { () -> Bool in
+            defer { asked = true }
+            return asked
+        }
+        guard !already else { return .proceed }
+        return .note(
+            "Every edit you attempted in this run failed, so no file was changed. Do not tell the user the change was made. "
+                + "Fix the error and try again, or say plainly that it did not apply and why.")
     }
 }

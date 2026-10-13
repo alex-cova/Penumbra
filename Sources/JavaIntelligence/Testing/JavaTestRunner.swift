@@ -124,6 +124,8 @@ public enum JavaTestRunner {
     /// in every project that defines it.
     public static func projectTestTaskPaths(model: JavaGradleProjectModel?) -> [String] {
         guard let model else { return ["test"] }
+        let fromModel = model.subprojects.flatMap(\.testTasks).map(\.path)
+        if !fromModel.isEmpty { return fromModel }
         let listed = model.subprojects.flatMap(\.tasks)
         if !listed.isEmpty {
             var paths: [String] = []
@@ -199,6 +201,9 @@ public enum JavaTestRunner {
         guard let taskName = components.last else { return [] }
         let projectPath = components.count > 1 ? ":" + components.dropLast().joined(separator: ":") : ":"
         guard let subproject = model.subprojects.first(where: { $0.path == projectPath }) else { return [] }
+        if let resultsDir = subproject.testTasks.first(where: { $0.path == taskPath })?.resultsDir {
+            return [resultsDir]
+        }
         guard let sourceSet = subproject.sourceSets.first(where: { $0.name == taskName }) else { return [] }
         var dirs: [URL] = []
         for output in sourceSet.outputDirs {

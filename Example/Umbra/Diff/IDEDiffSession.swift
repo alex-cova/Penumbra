@@ -106,6 +106,12 @@ final class IDEDiffSession {
     @ObservationIgnored var applyIndexPatch: (@MainActor (String, Bool) async -> String?)?
     /// Called after the right side was written to disk.
     @ObservationIgnored var onSaved: (@MainActor (String) -> Void)?
+    /// Asked before a save writes over a file that changed on disk since it was loaded here; true
+    /// overwrites. Without a handler the save goes ahead.
+    @ObservationIgnored var confirmOverwrite: (@MainActor (String) -> Bool)?
+    /// The working tree's text as this session last read or wrote it, to tell whether someone else
+    /// changed the file before a save.
+    @ObservationIgnored private var loadedWorkingTreeText: String?
     /// Called when Previous/Next File swapped the request, so the tab can retitle.
     @ObservationIgnored var onRequestChanged: (@MainActor () -> Void)?
     /// The viewer's hooks: new texts to show, new chunks to paint, options to apply.
@@ -158,6 +164,7 @@ final class IDEDiffSession {
                 self.chunks = []
                 self.onTextsLoaded?()
             case (.text(let leftText), .text(let rightText)):
+                if request.workingTreePath != nil { self.loadedWorkingTreeText = rightText }
                 let readOnlyReason = request.workingTreePath.flatMap { self.readOnlyReasonProvider?($0) }
                 if self.state == .ready, leftText == self.left.string, rightText == self.right.string {
                     // Nothing moved (a refresh after an unrelated change): keep the views as they are.
@@ -262,8 +269,17 @@ final class IDEDiffSession {
     /// Writes the right side to disk when it was edited here.
     func save() {
         guard isRightDirty, let path = request.workingTreePath, let text = currentRightText?() else { return }
+        let url = URL(fileURLWithPath: path)
+        // A missing or undecodable file is not a conflict: there is nothing readable to lose.
+        if let loaded = loadedWorkingTreeText,
+           let data = try? Data(contentsOf: url), let disk = String(data: data, encoding: .utf8),
+           disk != loaded, !(confirmOverwrite?(path) ?? true) {
+            message = "Not saved: \((path as NSString).lastPathComponent) changed on disk."
+            return
+        }
         do {
-            try text.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            loadedWorkingTreeText = text
             isRightDirty = false
             message = nil
             onSaved?(path)

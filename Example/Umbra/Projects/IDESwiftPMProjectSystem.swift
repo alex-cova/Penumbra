@@ -74,7 +74,8 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
     @ObservationIgnored private var runGeneration = 0
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var refineTask: Task<Void, Never>?
-    @ObservationIgnored private var manifestWatcher: (any DispatchSourceFileSystemObject)?
+    /// Whether ``filesDidChange(_:)`` compares the manifest: it existed when the project loaded or reloaded.
+    @ObservationIgnored private var watchesManifest = false
     @ObservationIgnored private var statusMessage: String?
 
     static var defaultTrustStoreURL: URL {
@@ -112,6 +113,21 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         return trustStore.isTrusted(rootURL)
     }
 
+    /// True when the folder is trusted, asking first when it is not; a yes is remembered. A
+    /// SwiftUI preview builds and runs the package's code outside `run(_:)`, so it asks here.
+    func ensureTrusted() async -> Bool {
+        guard let root = rootURL else { return false }
+        if trustStore.isTrusted(root) { return true }
+        let token = projectGeneration
+        guard let prompt = trustPrompt, await prompt(root), projectGeneration == token else { return false }
+        trustStore.setTrusted(true, for: root)
+        if case .untrusted = syncState, let manifest {
+            syncState = .synced(modules: manifest.targets.count, dependencies: manifest.dependencyCount)
+        }
+        refineManifest(root: root)
+        return true
+    }
+
     // MARK: Lifecycle
 
     func projectDidChange(root: URL?) {
@@ -124,7 +140,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         refineTask = nil
         isRunningTasks = false
         runningTasks = []
-        stopManifestWatcher()
+        watchesManifest = false
         hasConfigurationChanges = false
         console = IDEProjectConsoleLog()
         let standardized = root?.standardizedFileURL
@@ -137,7 +153,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         }
         applyManifest(at: standardized)
         if FileManager.default.fileExists(atPath: standardized.appendingPathComponent("Package.swift").path) {
-            startManifestWatcher(root: standardized)
+            watchesManifest = true
         }
         // A folder the user trusted before is evaluated for the exact model, as a trusted Gradle project syncs.
         if manifest != nil, trustStore.decision(for: standardized) == true {
@@ -150,9 +166,9 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         hasConfigurationChanges = false
         applyManifest(at: root)
         if manifest != nil {
-            startManifestWatcher(root: root)
+            watchesManifest = true
         } else {
-            stopManifestWatcher()
+            watchesManifest = false
         }
         guard manifest != nil else { return }
         if trustStore.isTrusted(root) {
@@ -196,7 +212,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         refineTask = nil
         isRunningTasks = false
         runningTasks = []
-        stopManifestWatcher()
+        watchesManifest = false
         rootURL = nil
         setManifest(nil, root: nil)
         manifestBaseline = nil
@@ -391,38 +407,14 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         }
     }
 
-    private func startManifestWatcher(root: URL) {
-        stopManifestWatcher()
+    /// Raises or clears the reload banner from the bytes of Package.swift after the project watcher
+    /// reported it. An event says the file was touched, not that it changed: compare the bytes. A
+    /// file that is gone differs from one that was there.
+    func filesDidChange(_ paths: Set<String>) {
+        guard watchesManifest, let root = rootURL else { return }
         let file = root.appendingPathComponent("Package.swift")
-        let fd = open(file.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .extend, .delete, .rename, .revoke],
-            queue: .main
-        )
-        source.setCancelHandler { close(fd) }
-        let watched = root.standardizedFileURL
-        source.setEventHandler { [weak self, weak source] in
-            let flags = source?.data ?? []
-            Task { @MainActor in
-                guard let self, self.rootURL?.standardizedFileURL == watched else { return }
-                // An event says the file was touched, not that it changed: compare the bytes.
-                let current = try? Data(contentsOf: watched.appendingPathComponent("Package.swift"))
-                self.hasConfigurationChanges = current != self.manifestBaseline
-                if flags.contains(.delete) || flags.contains(.rename) || flags.contains(.revoke) {
-                    self.startManifestWatcher(root: watched)
-                }
-            }
-        }
-        manifestWatcher = source
-        source.resume()
-    }
-
-    private func stopManifestWatcher() {
-        let source = manifestWatcher
-        manifestWatcher = nil
-        source?.cancel()
+        guard paths.contains(file.path) else { return }
+        hasConfigurationChanges = (try? Data(contentsOf: file)) != manifestBaseline
     }
 
     // MARK: Process
@@ -436,7 +428,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         request.processGroup = true
         request.killGroupOnExit = true
         request.timeout = nil
-        let buffer = IDESwiftPMOutputBuffer()
+        let buffer = IDEProjectOutputBuffer()
         let projectToken = projectGeneration
         let onOutput: @Sendable (Data, SubprocessOutputSource) -> Void = { [weak self] data, source in
             let lines = buffer.consume(data, source: source)
@@ -563,7 +555,8 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
 }
 
 /// Splits live process output into lines. One buffer per stream; a partial line waits for its newline.
-private final class IDESwiftPMOutputBuffer: @unchecked Sendable {
+/// Shared by the project systems that run a child process.
+final class IDEProjectOutputBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var stdout = Data()
     private var stderr = Data()
@@ -615,32 +608,27 @@ struct IDESwiftPMSidebarPanel: View {
             } else if system.manifest == nil {
                 pinned("No Package.swift")
             } else {
-                GeometryReader { proxy in
-                    ScrollView([.vertical, .horizontal]) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            section("Tasks")
-                            ForEach(system.tasks, id: \.path) { task in
-                                taskRow(task, system: system)
-                            }
-                            if let manifest = system.manifest, !manifest.targets.isEmpty {
-                                section("Targets")
-                                ForEach(manifest.targets, id: \.name) { target in
-                                    infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
-                                }
-                            }
-                            if let manifest = system.manifest, !manifest.packages.isEmpty {
-                                section("Dependencies")
-                                ForEach(manifest.packages, id: \.name) { package in
-                                    infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
-                                }
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        section("Tasks")
+                        ForEach(system.tasks, id: \.path) { task in
+                            taskRow(task, system: system)
+                        }
+                        if let manifest = system.manifest, !manifest.targets.isEmpty {
+                            section("Targets")
+                            ForEach(manifest.targets, id: \.name) { target in
+                                infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
                             }
                         }
-                        .padding(.vertical, IDEAppearance.Spacing.xs)
-                        // A two-axis ScrollView proposes no width and centers content narrower than
-                        // the viewport, which squeezed the rows into a column; same fix as the
-                        // Gradle and npm panels.
-                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+                        if let manifest = system.manifest, !manifest.packages.isEmpty {
+                            section("Dependencies")
+                            ForEach(manifest.packages, id: \.name) { package in
+                                infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
+                            }
+                        }
                     }
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             if case .untrusted = system.syncState {
@@ -681,8 +669,6 @@ struct IDESwiftPMSidebarPanel: View {
         Text(title.uppercased())
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
             .padding(.bottom, 2)
@@ -705,7 +691,6 @@ struct IDESwiftPMSidebarPanel: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -726,13 +711,11 @@ struct IDESwiftPMSidebarPanel: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
             if !detail.isEmpty {
                 Text(detail)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
             }
             Spacer(minLength: 0)
         }

@@ -441,6 +441,29 @@ final class IDEJavaSupport {
         }
     }
 
+    /// Applies a root delta to the name index: unchanged roots keep their loaded shards.
+    private func updateNameIndex(plan: JavaGradleProjectModel.ApplyPlan, generation: Int) {
+        nameIndexTask?.cancel()
+        nameIndexRoots = plan.nameRoots.map(\.standardizedFileURL)
+        let searchRoots = nameIndexRoots
+        Task { [findUsagesProvider, callHierarchyProvider] in
+            await findUsagesProvider.setProjectRoots(searchRoots)
+            await callHierarchyProvider.setProjectRoots(searchRoots)
+        }
+        let renameRoots = nameIndexRoots
+        Task { [renameProvider, refactoringProvider] in
+            await renameProvider.setRoots(renameRoots)
+            await refactoringProvider.setRoots(renameRoots)
+        }
+        let adding = plan.addedNameRoots
+        let removing = plan.removedNameRoots
+        nameIndexTask = Task { [nameIndex] in
+            for await _ in await nameIndex.updateRoots(adding: adding, removing: removing) {
+                guard isCurrent(generation) else { return }
+            }
+        }
+    }
+
     /// `.java` files changed on disk (from `IDEProjectWatcher`): update the identifier index for
     /// them and rebuild the stub shard of every source root that changed, bypassing the
     /// directory-mtime stamp (which does not move when a file is merely edited).
@@ -529,11 +552,17 @@ final class IDEJavaSupport {
         let shouldFullRebuild = previousModel == nil
             || diff.shouldForceFullRebuild(totalSourceRoots: sourceTargets.count, totalJars: jarTargets.count)
 
+        let nameIndexPlan = JavaGradleProjectModel.applyPlan(
+            for: model,
+            paths: paths,
+            loadedShardPaths: shouldFullRebuild ? [] : Set((projectSources + jarSources).map(\.shardPath).filter { !$0.isEmpty }),
+            loadedNameRoots: shouldFullRebuild ? [] : Set(nameIndexRoots.map(\.path))
+        )
         if shouldFullRebuild {
-            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+            buildNameIndex(roots: nameIndexPlan.nameRoots, generation: generation)
             await indexAllTargets(sourceTargets + jarTargets, model: model, generation: generation, logToConsole: logToConsole)
         } else if !diff.isEmpty {
-            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+            updateNameIndex(plan: nameIndexPlan, generation: generation)
             for directory in diff.removedSourceDirectories {
                 try? FileManager.default.removeItem(at: paths.projectSourcesShard(for: directory))
             }
@@ -551,7 +580,7 @@ final class IDEJavaSupport {
             // `indexAllTargets` publishes readers for every model target, not just the reindexed ones.
             await indexAllTargets(reindexSources + reindexJars, model: model, generation: generation, logToConsole: logToConsole)
         } else {
-            buildNameIndex(roots: model.existingSourceDirectories, generation: generation)
+            updateNameIndex(plan: nameIndexPlan, generation: generation)
         }
 
         guard isCurrent(generation) else { return }

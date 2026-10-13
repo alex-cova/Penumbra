@@ -45,6 +45,35 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
             targets.append((key, directory, shardURL))
         }
         roots = next
+        return sync(targets: targets)
+    }
+
+    /// Changes the root set by a delta: `removing` roots are unloaded (their shards stay on disk for
+    /// a later return), `adding` roots are synced and loaded. Roots in neither list, and adding a
+    /// root that is already loaded, keep their loaded shard and are not touched.
+    public func updateRoots(adding: [URL], removing: [URL]) -> AsyncStream<JavaIndexScheduler.Progress> {
+        for url in removing {
+            let key = url.standardizedFileURL.path
+            roots[key] = nil
+            let prefix = key.hasSuffix("/") ? key : key + "/"
+            overlay = overlay.filter { !$0.key.hasPrefix(prefix) }
+        }
+        var targets: [(key: String, directory: URL, shardURL: URL)] = []
+        for url in adding {
+            let directory = url.standardizedFileURL
+            let key = directory.path
+            guard roots[key] == nil else { continue }
+            let shardURL = paths.projectNameIndexShard(for: directory)
+            roots[key] = RootState(directory: directory, shardURL: shardURL, reader: nil)
+            targets.append((key, directory, shardURL))
+        }
+        return sync(targets: targets)
+    }
+
+    /// The standardized paths of the currently loaded roots.
+    public func rootPaths() -> Set<String> { Set(roots.keys) }
+
+    private func sync(targets: [(key: String, directory: URL, shardURL: URL)]) -> AsyncStream<JavaIndexScheduler.Progress> {
         paths.ensureDirectoryExists()
         let limit = maxConcurrency
 

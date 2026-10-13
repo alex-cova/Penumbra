@@ -83,6 +83,13 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private var parseInFlight = false
     /// Invalidates an in-flight parse so it cannot publish a tree built against a stale buffer.
     private var parseEpoch: UInt = 0
+    /// The ``StringView/contentGeneration`` the tree (and ``parseEpoch``) were last brought in step
+    /// with: set when the mode is told about an edit, invalidated or fully parsed. A buffer edit
+    /// reaches the mode in two steps, the text first and `textDidChange` after; a parse that
+    /// publishes between them has read the new text with a tree that was never `ts_tree_edit`ed
+    /// for it, and the edit is then applied on top of that tree, which leaves nodes ending in the
+    /// wrong place (a heading running over the empty line below it). Guarded by `parseLock`.
+    private var syncedContentGeneration: UInt64
     /// UTF-16 window currently fed to `ts_parser_set_included_ranges`. `nil` means a full-document tree.
     private(set) var parsedUTF16Range: NSRange?
     /// Rows whose syntax tree changed in the last background parse that had a previous tree.
@@ -96,6 +103,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     init(language: TreeSitterInternalLanguage, languageProvider: TreeSitterLanguageProvider?, stringView: StringView, lineManager: LineManager) {
         self.stringView = stringView
         self.lineManager = lineManager
+        self.syncedContentGeneration = stringView.contentGenerationSnapshot
         operationQueue.name = "TreeSitterLanguageMode"
         operationQueue.qualityOfService = .default
         operationQueue.maxConcurrentOperationCount = 1
@@ -129,6 +137,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         cancelParse()
         parseLock.withLock {
             parseEpoch += 1
+            syncedContentGeneration = stringView.contentGenerationSnapshot
             hasCompletedInitialParse = false
             parsedUTF16Range = nil
             captureWindows.removeAll()
@@ -144,6 +153,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
 
     func parseFromBuffer() {
         parseLock.withLock {
+            syncedContentGeneration = stringView.contentGenerationSnapshot
             captureWindows.removeAll()
             // This parse covers (and records) the whole document; a window left from an earlier
             // viewport parse or edit would otherwise limit it.
@@ -165,10 +175,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 }
                 return
             }
-            self.parseUsingReader(
-                coveringUTF16Range: NSRange(location: 0, length: self.stringView.length),
-                isCancelled: { operation.isCancelled }
-            )
+            // `nil` is the whole document. Passing `NSRange(0, stringView.length)` read the length
+            // twice (here and in `setRootIncludedUTF16Range`); an edit in between made the range
+            // look like a window and sent this background thread into the line manager.
+            self.parseUsingReader(includedRange: nil, coveringUTF16Range: nil, isCancelled: { operation.isCancelled })
             DispatchQueue.main.async {
                 completion(!operation.isCancelled && self.isSyntaxTreeReady)
             }
@@ -176,8 +186,13 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         operationQueue.addOperation(operation)
     }
 
+    /// Main thread only: the window is converted to line/column points here, because the
+    /// background parse must not read `LineManager` while the main thread edits it. A buffer edit
+    /// before the parse runs cancels it (`textDidChange`) or makes its publish drop, so a window
+    /// that went stale in between is never published.
     func parse(coveringUTF16Range range: NSRange, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         operationQueue.cancelAllOperations()
+        let includedRange = rootLanguageLayer.rootIncludedTextRange(for: range, stringLength: stringView.length)
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation, weak self] in
             guard let self = self, let operation = operation, !operation.isCancelled else {
@@ -186,7 +201,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 }
                 return
             }
-            self.parseUsingReader(coveringUTF16Range: range, isCancelled: { operation.isCancelled })
+            self.parseUsingReader(includedRange: includedRange, coveringUTF16Range: range, isCancelled: { operation.isCancelled })
             DispatchQueue.main.async {
                 completion(!operation.isCancelled && self.isSyntaxTreeReady)
             }
@@ -203,12 +218,19 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
     }
 
-    private func parseUsingReader(coveringUTF16Range range: NSRange, isCancelled: (() -> Bool)?) {
+    /// `range == nil` parses the whole document. `includedRange` is `range` already converted on
+    /// the main thread; this runs on a background thread and must not read `LineManager`.
+    private func parseUsingReader(
+        includedRange: TreeSitterTextRange?,
+        coveringUTF16Range range: NSRange?,
+        isCancelled: (() -> Bool)?
+    ) {
         runBackgroundParse(isCancelled: isCancelled) {
-            self.rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: self.stringView.length)
+            self.rootLanguageLayer.setRootIncludedRange(includedRange)
             self.rootLanguageLayer.parseUsingReader()
         } publish: {
-            range
+            // Read under `parseLock`; an edit since the parse started drops the result instead.
+            range ?? NSRange(location: 0, length: self.stringView.length)
         }
     }
 
@@ -236,7 +258,12 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         parseInFlight = false
         treeSnapshotDuringParse = nil
         parser.shouldCancel = nil
-        if isCancelled?() == true || epoch != parseEpoch || parser.lastParseAborted {
+        // The buffer moved on and the mode has not been told yet (`textDidChange` is the next call
+        // on the main thread): this tree was built from text the edit has not been applied to.
+        // Dropping it leaves `tree` nil, which `textDidChange` handles like an in-flight parse, and
+        // the caller restarts the parse after the edit.
+        let bufferAheadOfTree = stringView.contentGenerationSnapshot != syncedContentGeneration
+        if isCancelled?() == true || epoch != parseEpoch || parser.lastParseAborted || bufferAheadOfTree {
             parser.reset()
             rootLanguageLayer.invalidateTree()
             hasCompletedInitialParse = false
@@ -303,6 +330,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         // Highlight queries copy the tree under this lock and run off it, so a keystroke is not
         // blocked by an in-flight capture. Tree mutation still takes the lock.
         return parseLock.withLock {
+            syncedContentGeneration = stringView.contentGenerationSnapshot
             if parseInFlight || rootLanguageLayer.tree == nil {
                 // Do not wait for the in-flight parse: bump the epoch so its result is discarded
                 // and let the caller reschedule against the edited buffer.

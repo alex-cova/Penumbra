@@ -1,7 +1,7 @@
 import Foundation
 import TreeSitter
 
-final class TreeSitterTextRange {
+final class TreeSitterTextRange: Sendable {
     let rawValue: TSRange
     var startPoint: TreeSitterTextPoint {
         TreeSitterTextPoint(row: rawValue.start_point.row, column: rawValue.start_point.column)

@@ -177,7 +177,8 @@ public enum HexInspector {
         if negative {
             let limit: UInt64 = bits >= 64 ? UInt64(Int64.max) &+ 1 : 1 << UInt64(bits - 1)
             guard magnitude <= limit else { return nil }
-            let wrapped = (~magnitude &+ 1)
+            // Two's-complement negation.
+            let wrapped = 0 &- magnitude
             if bits >= 64 { return wrapped }
             return wrapped & ((UInt64(1) << UInt64(bits)) - 1)
         }

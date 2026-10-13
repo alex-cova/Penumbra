@@ -49,6 +49,15 @@ final class IDENpmProjectSystemTests: XCTestCase {
         return (npm, store)
     }
 
+    /// The window's one watcher, feeding `npm` as `IDEWorkspace` does. Opens `root` in both.
+    private func watch(_ npm: IDENpmProjectSystem, root: URL) -> IDEProjectWatcher {
+        let watcher = IDEProjectWatcher()
+        watcher.onBatch = [{ [weak npm] batch in npm?.filesDidChange(batch.paths) }]
+        watcher.setRoot(root.standardizedFileURL)
+        npm.projectDidChange(root: root)
+        return watcher
+    }
+
     /// An executable named `npm` whose PATH entry comes first. `/bin` and `/usr/bin` stay so `sleep` resolves.
     private func installNpm(script: String, in directory: URL) throws -> [String: String] {
         let bin = directory.appendingPathComponent("bin", isDirectory: true)
@@ -569,7 +578,9 @@ final class IDENpmProjectSystemTests: XCTestCase {
         defer { npm.stop() }
         let root = directory.appendingPathComponent("app", isDirectory: true)
         try writePackage(#"{"scripts":{"start":"node index.js"}}"#, in: root)
-        npm.projectDidChange(root: root)
+        let watcher = watch(npm, root: root)
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(npm.hasConfigurationChanges)
         let file = root.appendingPathComponent("package.json")
         let handle = try FileHandle(forWritingTo: file)
@@ -592,7 +603,9 @@ final class IDENpmProjectSystemTests: XCTestCase {
         let root = directory.appendingPathComponent("app", isDirectory: true)
         let json = #"{"scripts":{"start":"node index.js"}}"#
         try writePackage(json, in: root)
-        npm.projectDidChange(root: root)
+        let watcher = watch(npm, root: root)
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(300))
         let file = root.appendingPathComponent("package.json")
 
         try json.write(to: file, atomically: false, encoding: .utf8)
@@ -618,7 +631,9 @@ final class IDENpmProjectSystemTests: XCTestCase {
         let root = directory.appendingPathComponent("app", isDirectory: true)
         let json = #"{"scripts":{"start":"node index.js"}}"#
         try writePackage(json, in: root)
-        npm.projectDidChange(root: root)
+        let watcher = watch(npm, root: root)
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(300))
         let file = root.appendingPathComponent("package.json")
 
         try #"{"scripts":{"start":"node server.js"}}"#.write(to: file, atomically: true, encoding: .utf8)
@@ -639,7 +654,9 @@ final class IDENpmProjectSystemTests: XCTestCase {
         defer { npm.stop() }
         let root = directory.appendingPathComponent("app", isDirectory: true)
         try writePackage(#"{"scripts":{"start":"node index.js"}}"#, in: root)
-        npm.projectDidChange(root: root)
+        let watcher = watch(npm, root: root)
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(300))
         let file = root.appendingPathComponent("package.json")
 
         let edited = #"{"scripts":{"start":"node index.js","lint":"eslint ."}}"#

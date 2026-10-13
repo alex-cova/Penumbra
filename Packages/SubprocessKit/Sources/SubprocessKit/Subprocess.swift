@@ -46,8 +46,12 @@ enum Subprocess {
             try check(posix_spawn_file_actions_adddup2(&actions, stdout.write, 1))
             try check(posix_spawn_file_actions_adddup2(&actions, (stderr ?? stdout).write, 2))
             if let directory = request.workingDirectory {
-                // The `_np` spelling: the plain one needs a newer SDK than this package's macOS 14.
-                try check(posix_spawn_file_actions_addchdir_np(&actions, directory.path))
+                // `addchdir` is macOS 26. The `_np` entry point covers this package's macOS 14 deployment.
+                if #available(macOS 26, *) {
+                    try check(posix_spawn_file_actions_addchdir(&actions, directory.path))
+                } else {
+                    try check(posix_spawn_file_actions_addchdir_np(&actions, directory.path))
+                }
             }
 
             var attributes: posix_spawnattr_t? = nil

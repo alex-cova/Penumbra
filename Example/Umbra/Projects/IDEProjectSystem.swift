@@ -147,6 +147,9 @@ protocol IDEProjectSystem: AnyObject {
 
     /// The folder changed (or closed). Synchronous, so what the caller reads next reflects it.
     func projectDidChange(root: URL?)
+    /// Files changed on disk inside the open folder, as one batch of the window's project watcher.
+    /// Systems never watch files themselves; they judge the paths they care about here.
+    func filesDidChange(_ paths: Set<String>)
     /// Syncs again, asking for trust even if the user declined before.
     func reload()
     func dismissConfigurationChanges()
@@ -179,6 +182,7 @@ protocol IDEProjectSystem: AnyObject {
 }
 
 extension IDEProjectSystem {
+    func filesDidChange(_: Set<String>) {}
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] { [] }
     var consoleTab: IDEBottomPanelTab? { nil }
     var showsConsole: Bool { isActive && (isBusy || !console.lines.isEmpty) }
@@ -266,6 +270,11 @@ final class IDEProjectSystems {
     func projectDidChange(root: URL?) {
         self.root = root
         for system in systems { system.projectDidChange(root: root) }
+    }
+
+    func filesDidChange(_ paths: Set<String>) {
+        guard !paths.isEmpty else { return }
+        for system in systems where system.isActive { system.filesDidChange(paths) }
     }
 
     func stop() {

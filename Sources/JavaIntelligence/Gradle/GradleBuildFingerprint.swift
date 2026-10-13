@@ -23,6 +23,17 @@ public struct GradleBuildFingerprint: Codable, Hashable, Sendable {
         self.scriptFormatVersion = scriptFormatVersion
         self.files = files.sorted { $0.relativePath < $1.relativePath }
     }
+
+    /// Relative paths of files that were added, removed, or whose size or modification date differ
+    /// between `old` and `new`, sorted. Empty when the stamps are identical.
+    public static func changedFiles(from old: GradleBuildFingerprint, to new: GradleBuildFingerprint) -> [String] {
+        let before = Dictionary(old.files.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(new.files.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
+        var changed = Set<String>()
+        for (path, stamp) in after where before[path] != stamp { changed.insert(path) }
+        for path in before.keys where after[path] == nil { changed.insert(path) }
+        return changed.sorted()
+    }
 }
 
 public enum GradleBuildFingerprintCollector {

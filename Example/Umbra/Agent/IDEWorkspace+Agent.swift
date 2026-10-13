@@ -239,7 +239,7 @@ extension IDEWorkspace: IDEAgentHost {
     /// only add to the tool list a small model has to read.
     func agentJavaNavigator() -> (any IDEAgentNavigating)? {
         let extensions = ["java", "swift", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
-        let hasSource = gradle.isActive || swiftPM.isActive || npm.isActive
+        let hasSource = gradle.isActive || swiftPM.isActive || xcode.isActive || npm.isActive
             || workbench.allDocuments().contains { extensions.contains($0.url?.pathExtension.lowercased() ?? "") }
         guard hasSource else { return nil }
         return IDEEngineAgentNavigator(engine: navigationEngine)
