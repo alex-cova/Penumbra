@@ -11,8 +11,11 @@
 ///   the first thunk creates the view; a later one has replaced `UmbraPreview.content()`, and
 ///   `UmbraReload.reset()` makes the root create it again
 /// - `{"cmd":"render","generation":1,"width":400,"height":300,"scale":2,"scheme":"dark","output":"/p/f.png"}`
-///   (optional `dynamicType`: a `DynamicTypeSize` case name, `locale`: an identifier, `rightToLeft`: a Bool)
-///   → `{"event":"frame","generation":1,"path":"/p/f.png","width":800,"height":600}`
+///   (optional `dynamicType`: a `DynamicTypeSize` case name, `locale`: an identifier, `rightToLeft`: a Bool,
+///   `fit`: a Bool, true when the window should take the view's own ideal size, not `width` and `height`;
+///   `safeTop` and `safeBottom`: points the content keeps clear at the top and bottom, default 0)
+///   → `{"event":"frame","generation":1,"path":"/p/f.png","width":800,"height":600,"pointWidth":400,"pointHeight":300}`
+///   (`width` and `height` are pixels, `pointWidth` and `pointHeight` the window's size in points)
 /// - `{"cmd":"mouse","type":"down|up|dragged|moved","x":10,"y":20}` → `{"event":"ack"}`
 /// - `{"cmd":"scroll","x":10,"y":20,"dx":0,"dy":120}` scrolls the innermost scroll view under the
 ///   point that can move that way, by points (positive `dy`: later content comes into view)
@@ -24,6 +27,12 @@
 /// Behaviour measured in `Tools/PreviewSpike` and recorded in `docs/SWIFTUI_PREVIEW_PLAN.md` (P0):
 /// the capture goes through `CALayer.render(in:)` into a flipped context, the window gets an explicit
 /// appearance, and mouse input is synthesized with `NSWindow.sendEvent`.
+///
+/// A sheet or an alert is a window of its own, so the window's layer does not hold it, and AppKit
+/// pulls the window it belongs to onto the screen. The host puts the window back offscreen each time
+/// that happens (the sheet follows it), draws the sheets over the frame itself (the window dimmed,
+/// the sheet with its shadow), and sends input to the topmost sheet while there is one, as the
+/// window server does. Popovers and menus are not handled (not measured).
 public enum SwiftPreviewHostSource {
     public static let fileName = "main.swift"
 
@@ -31,6 +40,7 @@ public enum SwiftPreviewHostSource {
     import AppKit
     import Darwin
     import Foundation
+    import SwiftUI
     import UmbraPreviewSupport
 
     @MainActor
@@ -40,12 +50,110 @@ public enum SwiftPreviewHostSource {
         var size = NSSize(width: 400, height: 300)
         var hasPreviewView = false
 
+        /// Where the window lives: far from every screen.
+        static let parked = NSPoint(x: -20000, y: -20000)
+
         init() {
-            window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 400, height: 300),
+            window = NSWindow(contentRect: NSRect(origin: PreviewHost.parked, size: NSSize(width: 400, height: 300)),
                               styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.backgroundColor = NSColor.windowBackgroundColor
             window.orderFrontRegardless()
+            // Showing a sheet makes AppKit move its parent onto a screen (measured: it happens many
+            // times while the sheet comes up). Moving the window back takes the sheet with it.
+            NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [unowned self] _ in
+                MainActor.assumeIsolated { self.parkIfNeeded() }
+            }
+        }
+
+        func parkIfNeeded() {
+            let frame = window.frame
+            guard frame.maxX > -10000 || frame.maxY > -10000 else { return }
+            window.setFrameOrigin(PreviewHost.parked)
+        }
+
+        // MARK: Sheets
+
+        /// The sheets on the window, outermost first (an alert is one too).
+        func attachedSheets() -> [NSWindow] {
+            var sheets: [NSWindow] = []
+            var current = window
+            while let sheet = current.attachedSheet, !sheets.contains(where: { $0 === sheet }) {
+                sheets.append(sheet)
+                current = sheet
+            }
+            return sheets
+        }
+
+        /// Where a sheet sits over the frame, in points with y down. AppKit places it relative to the
+        /// window, so the two frames say where, whatever the window's own position.
+        func sheetRect(_ sheet: NSWindow) -> NSRect {
+            let parent = window.frame, frame = sheet.frame
+            return NSRect(x: frame.minX - parent.minX, y: parent.maxY - frame.maxY, width: frame.width, height: frame.height)
+        }
+
+        /// A sheet is a window of its own and does not take the preview window's explicit appearance.
+        func syncSheetAppearance() {
+            for sheet in attachedSheets() where sheet.appearance !== window.appearance {
+                sheet.appearance = window.appearance
+            }
+        }
+
+        /// Draws what the screen would show over the window's frame: the window dimmed, then each
+        /// sheet with a shadow. `context` is the frame's, in points with y down.
+        func drawSheets(in context: CGContext) {
+            let sheets = attachedSheets()
+            guard !sheets.isEmpty else { return }
+            let scale = context.ctm.a
+            context.saveGState()
+            context.setFillColor(CGColor(gray: 0, alpha: 0.18))
+            context.fill(CGRect(origin: .zero, size: size))
+            context.restoreGState()
+            for sheet in sheets {
+                guard let content = sheet.contentView else { continue }
+                content.wantsLayer = true
+                content.layoutSubtreeIfNeeded()
+                content.displayIfNeeded()
+                guard let layer = content.layer else { continue }
+                let rect = sheetRect(sheet)
+                let shape = CGPath(roundedRect: rect, cornerWidth: 12, cornerHeight: 12, transform: nil)
+                var background = NSColor.windowBackgroundColor.cgColor
+                (sheet.appearance ?? window.effectiveAppearance).performAsCurrentDrawingAppearance {
+                    background = NSColor.windowBackgroundColor.cgColor
+                }
+                // The shadow is not part of any layer: a filled shape casts it, the content goes over it.
+                context.saveGState()
+                context.setShadow(offset: CGSize(width: 0, height: -6 * scale), blur: 24 * scale,
+                                  color: CGColor(gray: 0, alpha: 0.35))
+                context.setFillColor(background)
+                context.addPath(shape)
+                context.fillPath()
+                context.restoreGState()
+                context.saveGState()
+                context.addPath(shape)
+                context.clip()
+                context.translateBy(x: rect.minX, y: rect.minY)
+                // A flipped view's layer is drawn upright in this context (as the window's is); an
+                // unflipped one, such as an alert's, needs the other orientation.
+                if !content.isFlipped {
+                    context.translateBy(x: 0, y: rect.height)
+                    context.scaleBy(x: 1, y: -1)
+                }
+                layer.render(in: context)
+                context.restoreGState()
+            }
+        }
+
+        /// Where input at a point of the frame goes: the topmost sheet while there is one (the window
+        /// ignores input then, as on screen), else the window. `point` is in the view's own coordinates.
+        func inputTarget(x: Double, y: Double) -> (window: NSWindow, view: NSView, point: NSPoint)? {
+            guard let root = window.contentView else { return nil }
+            guard let sheet = attachedSheets().last, let view = sheet.contentView else {
+                return (window, root, NSPoint(x: x, y: y))
+            }
+            let rect = sheetRect(sheet)
+            let down = y - rect.minY
+            return (sheet, view, NSPoint(x: x - rect.minX, y: view.isFlipped ? down : rect.height - down))
         }
 
         func send(_ object: [String: Any]) {
@@ -106,6 +214,7 @@ public enum SwiftPreviewHostSource {
                 size = NSSize(width: width, height: height)
             }
             window.appearance = NSAppearance(named: (object["scheme"] as? String) == "dark" ? .darkAqua : .aqua)
+            syncSheetAppearance()
             let environment = UmbraEnvironment.shared
             let dynamicType = object["dynamicType"] as? String ?? "large"
             let locale = object["locale"] as? String ?? ""
@@ -113,6 +222,25 @@ public enum SwiftPreviewHostSource {
             if environment.dynamicTypeSize != dynamicType { environment.dynamicTypeSize = dynamicType }
             if environment.localeIdentifier != locale { environment.localeIdentifier = locale }
             if environment.rightToLeft != rightToLeft { environment.rightToLeft = rightToLeft }
+            let safeTop = object["safeTop"] as? Double ?? 0
+            let safeBottom = object["safeBottom"] as? Double ?? 0
+            if environment.safeAreaTop != safeTop { environment.safeAreaTop = safeTop }
+            if environment.safeAreaBottom != safeBottom { environment.safeAreaBottom = safeBottom }
+            if (object["fit"] as? Bool) == true, let view = window.contentView {
+                // The view's own ideal size (`.frame(width:height:)`, text, images). The thunk turns the
+                // hosting view's sizing off (the window decides, and `fittingSize` is zero then), so the
+                // ideal size is switched on for this measurement only (measured: the window keeps its size).
+                let hosting = view as? NSHostingView<AnyView>
+                let previous = hosting?.sizingOptions
+                hosting?.sizingOptions = [.intrinsicContentSize]
+                view.layoutSubtreeIfNeeded()
+                let ideal = view.fittingSize
+                if let hosting, let previous { hosting.sizingOptions = previous }
+                if ideal.width > 0, ideal.height > 0 {
+                    size = NSSize(width: min(max(ideal.width.rounded(.up), 44), 4096),
+                                  height: min(max(ideal.height.rounded(.up), 44), 4096))
+                }
+            }
             window.setContentSize(size)
             guard let view = window.contentView, let output = object["output"] as? String else {
                 return send(["event": "frame", "generation": generation, "ok": false, "error": "nothing loaded"])
@@ -123,7 +251,10 @@ public enum SwiftPreviewHostSource {
                 view.displayIfNeeded()
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
             }
-            let scale = (object["scale"] as? Double).map { CGFloat($0) } ?? window.backingScaleFactor
+            var scale = (object["scale"] as? Double).map { CGFloat($0) } ?? window.backingScaleFactor
+            // A large window at a high scale is a large bitmap: stay under about 36 megapixels.
+            let area = size.width * size.height
+            if area * scale * scale > 36_000_000 { scale = (36_000_000 / area).squareRoot() }
             let pixelWidth = Int(size.width * scale), pixelHeight = Int(size.height * scale)
             guard let layer = view.layer,
                   let context = CGContext(data: nil, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8,
@@ -133,6 +264,7 @@ public enum SwiftPreviewHostSource {
             context.translateBy(x: 0, y: CGFloat(pixelHeight))
             context.scaleBy(x: scale, y: -scale)
             layer.render(in: context)
+            drawSheets(in: context)
             guard let image = context.makeImage(),
                   let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
             else { return send(["event": "frame", "generation": generation, "ok": false, "error": "no image"]) }
@@ -144,15 +276,18 @@ public enum SwiftPreviewHostSource {
                 return send(["event": "frame", "generation": generation, "ok": false, "error": "\(error)"])
             }
             send(["event": "frame", "generation": generation, "ok": true, "path": output,
-                  "width": pixelWidth, "height": pixelHeight])
+                  "width": pixelWidth, "height": pixelHeight,
+                  "pointWidth": Double(size.width), "pointHeight": Double(size.height)])
         }
 
         func scroll(_ object: [String: Any]) {
             defer { send(["event": "ack"]) }
-            guard let view = window.contentView, let x = object["x"] as? Double, let y = object["y"] as? Double else { return }
+            guard let x = object["x"] as? Double, let y = object["y"] as? Double,
+                  let target = inputTarget(x: x, y: y) else { return }
+            let view = target.view
             let dx = CGFloat(object["dx"] as? Double ?? 0), dy = CGFloat(object["dy"] as? Double ?? 0)
             guard dx != 0 || dy != 0 else { return }
-            let point = view.convert(NSPoint(x: x, y: y), to: view.superview)
+            let point = view.convert(target.point, to: view.superview)
             var candidate = view.hitTest(point)
             while let current = candidate {
                 if let scrollView = current as? NSScrollView, scroll(scrollView, dx: dx, dy: dy) { return }
@@ -176,7 +311,9 @@ public enum SwiftPreviewHostSource {
 
         func key(_ object: [String: Any]) {
             defer { send(["event": "ack"]) }
-            let responder = window.firstResponder
+            // Keys go to the topmost sheet while there is one, as on screen.
+            let active = attachedSheets().last ?? window
+            let responder = active.firstResponder
             switch object["kind"] as? String {
             case "text":
                 guard let text = object["text"] as? String, !text.isEmpty else { return }
@@ -184,10 +321,10 @@ public enum SwiftPreviewHostSource {
                     client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
                 } else if let event = NSEvent.keyEvent(
                     with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text,
+                    windowNumber: active.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text,
                     isARepeat: false, keyCode: 0
                 ) {
-                    window.sendEvent(event)
+                    active.sendEvent(event)
                 }
             case "command":
                 guard let name = object["selector"] as? String else { return }
@@ -201,7 +338,8 @@ public enum SwiftPreviewHostSource {
         }
 
         func mouse(_ object: [String: Any]) {
-            guard let view = window.contentView, let x = object["x"] as? Double, let y = object["y"] as? Double else {
+            guard let x = object["x"] as? Double, let y = object["y"] as? Double,
+                  let target = inputTarget(x: x, y: y) else {
                 return send(["event": "ack"])
             }
             let type: NSEvent.EventType
@@ -211,12 +349,12 @@ public enum SwiftPreviewHostSource {
             case "dragged": type = .leftMouseDragged
             default: type = .mouseMoved
             }
-            let location = view.convert(NSPoint(x: x, y: y), to: nil)
+            let location = target.view.convert(target.point, to: nil)
             if let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                windowNumber: target.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
             ) {
-                window.sendEvent(event)
+                target.window.sendEvent(event)
             }
             send(["event": "ack"])
         }

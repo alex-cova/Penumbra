@@ -15,7 +15,7 @@ public enum SwiftPreviewSupportSource {
     public static let moduleName = "UmbraPreviewSupport"
     public static let fileName = "UmbraPreviewSupport.swift"
     /// Part of the directory name: a change to the source below must change this.
-    public static let version = 4
+    public static let version = 6
 
     public static let text = #"""
     import Observation
@@ -37,6 +37,10 @@ public enum SwiftPreviewSupportSource {
         /// Empty: the system's.
         public var localeIdentifier = ""
         public var rightToLeft = false
+        /// Space the content keeps clear at the top and bottom, in points (a phone's status bar and
+        /// home indicator). 0 is no safe area.
+        public var safeAreaTop = 0.0
+        public var safeAreaBottom = 0.0
 
         var typeSize: DynamicTypeSize {
             switch dynamicTypeSize {
@@ -70,6 +74,9 @@ public enum SwiftPreviewSupportSource {
                 .environment(\.dynamicTypeSize, environment.typeSize)
                 .environment(\.layoutDirection, environment.rightToLeft ? .rightToLeft : .leftToRight)
                 .environment(\.locale, environment.localeIdentifier.isEmpty ? Locale.current : Locale(identifier: environment.localeIdentifier))
+                // Plain padding: a `NavigationSplitView` ignores `safeAreaPadding` (measured), every view obeys this.
+                .padding(.top, environment.safeAreaTop)
+                .padding(.bottom, environment.safeAreaBottom)
         }
     }
     """#

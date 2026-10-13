@@ -52,8 +52,11 @@ final class IDESwiftUIPreviewInputView: NSView {
 
     // MARK: Mouse
 
+    /// Where the event is in the preview's own points: the frame may be shown zoomed.
     private func point(of event: NSEvent) -> CGPoint {
-        convert(event.locationInWindow, from: nil)
+        let local = convert(event.locationInWindow, from: nil)
+        guard let session else { return local }
+        return IDESwiftUIPreviewLayout.framePoint(local, viewSize: bounds.size, frameSize: session.frameSize)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -73,7 +76,9 @@ final class IDESwiftUIPreviewInputView: NSView {
         // `scrollingDeltaY` is positive when the content is to move down (already in the user's
         // direction setting); the host's `dy` brings later content in, so the sign flips. A wheel
         // without precise deltas counts in lines.
-        let unit: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        var unit: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        // Shown zoomed, a point on the canvas is more or less than a point of the preview.
+        if let session, bounds.width > 0, session.frameSize.width > 0 { unit *= session.frameSize.width / bounds.width }
         session?.scroll(
             at: point(of: event),
             dx: Double(-event.scrollingDeltaX * unit),

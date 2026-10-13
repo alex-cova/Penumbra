@@ -38,6 +38,15 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         case xcode(project: String)
     }
 
+    /// What the preview host runs on.
+    public enum Platform: Sendable, Equatable {
+        /// A macOS process (an AppKit host, `NSHostingView`).
+        case macOS
+        /// An app in the iOS Simulator (a UIKit host in a bundle, `UIHostingController`), started
+        /// and reached through `simctl`; the project is built against the simulator SDK.
+        case iOSSimulator
+    }
+
     public struct Job: Sendable, Equatable {
         /// The directory of `Package.swift`, or of the `.xcodeproj` for an Xcode project.
         public var packageRoot: String
@@ -54,16 +63,28 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         /// `import` lines of that file, as written.
         public var imports: [String]
         public var block: SwiftPreviewBlock
-        /// `14.0`: the lowest macOS the thunks and the host are compiled for.
+        /// `14.0`: the OS version the thunks and the host are compiled for: macOS's, or for the
+        /// simulator the runtime's (at least what the project's objects were built for).
         public var deploymentTarget: String
         public var architecture: String
         public var buildSystem: BuildSystem
+        /// Leave out the last modifier of the preview body when it is a fixed `.frame(width:height:)`,
+        /// so the size the preview is shown at (a device, a window) is not overridden by it. The
+        /// file is not changed; only the thunk's copy of the body is.
+        public var dropsOuterFrame: Bool
+        public var platform: Platform
+        /// `-sdk` of every swiftc call for the simulator (`xcrun --sdk iphonesimulator --show-sdk-path`).
+        public var sdkPath: String?
 
         public init(
             packageRoot: String, scratchPath: String, workDirectory: String, targetName: String,
             sourcePath: String, sourceText: String, imports: [String], block: SwiftPreviewBlock,
-            deploymentTarget: String = "14.0", architecture: String = "arm64", buildSystem: BuildSystem = .swiftPM
+            deploymentTarget: String = "14.0", architecture: String = "arm64", buildSystem: BuildSystem = .swiftPM,
+            dropsOuterFrame: Bool = false, platform: Platform = .macOS, sdkPath: String? = nil
         ) {
+            self.platform = platform
+            self.sdkPath = sdkPath
+            self.dropsOuterFrame = dropsOuterFrame
             self.packageRoot = packageRoot
             self.scratchPath = scratchPath
             self.workDirectory = workDirectory
@@ -100,8 +121,21 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
 
     public var moduleName: String { Self.moduleName(forTarget: job.targetName) }
 
-    /// The macOS target triple of every command.
-    public var targetTriple: String { "\(job.architecture)-apple-macos\(job.deploymentTarget)" }
+    /// The target triple of every swiftc command: macOS's, or the simulator's.
+    public var targetTriple: String {
+        switch job.platform {
+        case .macOS: return "\(job.architecture)-apple-macos\(job.deploymentTarget)"
+        case .iOSSimulator: return "\(job.architecture)-apple-ios\(job.deploymentTarget)-simulator"
+        }
+    }
+
+    /// `-sdk <path>`: the default SDK of swiftc is macOS's, which a simulator target cannot use.
+    var sdkArguments: [String] {
+        job.platform == .iOSSimulator ? job.sdkPath.map { ["-sdk", $0] } ?? [] : []
+    }
+
+    /// The module whose view type the thunk hands to the host.
+    var uiModule: String { job.platform == .macOS ? "AppKit" : "UIKit" }
 
     // MARK: Paths
 
@@ -116,7 +150,29 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
     public var socketPath: String { job.workDirectory + "/host.sock" }
 
     /// The shared module, per version of its source, so a changed source never meets an old dylib.
-    public var supportDirectory: String { job.workDirectory + "/support-v\(SwiftPreviewSupportSource.version)" }
+    public var supportDirectory: String {
+        job.workDirectory + "/support-v\(SwiftPreviewSupportSource.version)" + (job.platform == .macOS ? "" : "-ios")
+    }
+
+    /// The simulator host's app bundle (`UmbraPreviewHost.app`); nil for macOS, where the host is a bare executable.
+    public var hostBundlePath: String? {
+        job.platform == .iOSSimulator ? job.workDirectory + "/host-ios/UmbraPreviewHost.app" : nil
+    }
+
+    /// The bundle identifier of the simulator host: one per work directory, so two projects'
+    /// hosts live side by side and a rerun replaces only its own.
+    public var hostBundleIdentifier: String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in job.workDirectory.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        let hex = String(hash, radix: 16)
+        return "com.umbra.preview." + String(repeating: "0", count: 16 - hex.count) + hex
+    }
+
+    /// The executable the host is linked to. Beside the objects for macOS, so `Bundle.module` finds
+    /// the resource bundles; inside the app bundle for the simulator.
+    public func hostExecutablePath(binPath: String) -> String {
+        (hostBundlePath ?? binPath) + "/UmbraPreviewHost"
+    }
 
     public var supportSourcePath: String { supportDirectory + "/" + SwiftPreviewSupportSource.fileName }
 
@@ -144,9 +200,12 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             ] + Self.compilerFlags)
         case .xcode(let project):
             // Products and intermediates in a directory of their own, for the host's architecture
-            // only (a fat build would leave two of every object), unsigned.
+            // only (a fat build would leave two of every object), unsigned. Always the SDK of the
+            // host's platform, never the project's own: an object built for `iphoneos` links into
+            // neither a macOS process nor a simulator one (an app template's default is `iphoneos`).
             return SwiftPreviewCommand(tool: .xcodebuild, arguments: [
                 "-project", project, "-target", job.targetName, "-configuration", "Debug",
+                "-sdk", job.platform == .macOS ? "macosx" : "iphonesimulator",
                 "SYMROOT=" + job.scratchPath + "/Products", "OBJROOT=" + job.scratchPath + "/Intermediates",
                 "ARCHS=" + job.architecture, "ONLY_ACTIVE_ARCH=YES", "ENABLE_TESTABILITY=YES",
                 "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=",
@@ -156,9 +215,42 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         }
     }
 
+    /// Prints the Xcode target's own build settings (`PLATFORM_NAME = iphoneos`,
+    /// `IPHONEOS_DEPLOYMENT_TARGET = 18.0`), to choose the host's platform and to explain a build
+    /// that failed. No `-sdk`: the target's own SDK is what is asked about.
+    public static func buildSettingsCommand(project: String, target: String) -> SwiftPreviewCommand {
+        SwiftPreviewCommand(tool: .xcodebuild, arguments: [
+            "-project", project, "-target", target, "-configuration", "Debug", "-showBuildSettings"
+        ])
+    }
+
+    /// ``buildSettingsCommand(project:target:)`` for this job; nil for SwiftPM.
+    public var platformCommand: SwiftPreviewCommand? {
+        guard case .xcode(let project) = job.buildSystem else { return nil }
+        return Self.buildSettingsCommand(project: project, target: job.targetName)
+    }
+
+    /// One setting of `xcodebuild -showBuildSettings` output, by name.
+    public static func buildSetting(_ name: String, fromBuildSettings output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            guard text.hasPrefix(name) else { continue }
+            let parts = text.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, parts[0] == name, !parts[1].isEmpty { return parts[1] }
+        }
+        return nil
+    }
+
+    /// The `PLATFORM_NAME` of `xcodebuild -showBuildSettings` output (`iphoneos`, `macosx`…).
+    public static func platformName(fromBuildSettings output: String) -> String? {
+        buildSetting("PLATFORM_NAME", fromBuildSettings: output)
+    }
+
     /// Where an Xcode build leaves its products, known without asking; nil for SwiftPM.
     public var knownBinPath: String? {
-        if case .xcode = job.buildSystem { return job.scratchPath + "/Products/Debug" }
+        if case .xcode = job.buildSystem {
+            return job.scratchPath + "/Products/" + (job.platform == .macOS ? "Debug" : "Debug-iphonesimulator")
+        }
         return nil
     }
 
@@ -184,7 +276,7 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             "-emit-library", "-emit-module", "-parse-as-library",
             "-module-name", SwiftPreviewSupportSource.moduleName,
             "-emit-module-path", supportDirectory + "/UmbraPreviewSupport.swiftmodule",
-            "-target", targetTriple, "-swift-version", "5",
+            "-target", targetTriple] + sdkArguments + ["-swift-version", "5",
             "-Xfrontend", "-enable-implicit-dynamic",
             "-Xlinker", "-install_name", "-Xlinker", "@rpath/libUmbraPreviewSupport.dylib",
             "-o", supportLibraryPath, supportSourcePath
@@ -195,13 +287,13 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
     /// thunks name is in the process, and the host sits next to them so `Bundle.module` finds the
     /// resource bundles.
     public func hostCommand(binPath: String, objects: [String], modulePaths: [String] = []) -> SwiftPreviewCommand {
-        var arguments = [
-            "-target", targetTriple, "-swift-version", "5",
+        var arguments = ["-target", targetTriple] + sdkArguments + [
+            "-swift-version", "5",
             "-I", binPath, "-L", binPath,
             "-I", supportDirectory, "-L", supportDirectory, "-lUmbraPreviewSupport",
             "-Xlinker", "-rpath", "-Xlinker", binPath,
             "-Xlinker", "-rpath", "-Xlinker", supportDirectory,
-            "-o", binPath + "/UmbraPreviewHost", hostSourcePath
+            "-o", hostExecutablePath(binPath: binPath), hostSourcePath
         ]
         for path in modulePaths { arguments.append(contentsOf: ["-I", path]) }
         arguments.append(contentsOf: objects.sorted())
@@ -217,11 +309,10 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
     /// types) resolve against the host. Each generation has its own module name, so loading a
     /// second one never meets the first one's types.
     public func thunkCommand(binPath: String, generation: Int, modulePaths: [String] = []) -> SwiftPreviewCommand {
-        var arguments = [
-            "-emit-library", "-module-name", "UmbraPreviewThunk\(generation)",
-            "-target", targetTriple, "-swift-version", "5",
-            "-I", binPath, "-F", binPath, "-I", supportDirectory
-        ]
+        var arguments = ["-emit-library", "-module-name", "UmbraPreviewThunk\(generation)", "-target", targetTriple]
+            + sdkArguments + [
+                "-swift-version", "5", "-I", binPath, "-F", binPath, "-I", supportDirectory
+            ]
         for path in modulePaths { arguments.append(contentsOf: ["-I", path]) }
         arguments += [
             "-enable-testing", "-Xfrontend", "-enable-private-imports",
@@ -234,7 +325,16 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
 
     // MARK: Sources
 
-    public var hostSource: String { SwiftPreviewHostSource.text }
+    public var hostSource: String {
+        job.platform == .macOS ? SwiftPreviewHostSource.text : SwiftPreviewIOSHostSource.text
+    }
+
+    /// The simulator host's `Info.plist`; nil for macOS.
+    public var hostInfoPlist: String? {
+        job.platform == .iOSSimulator
+            ? SwiftPreviewIOSHostSource.infoPlist(bundleIdentifier: hostBundleIdentifier, minimumOSVersion: job.deploymentTarget)
+            : nil
+    }
 
     public enum ThunkMode: Sendable, Equatable {
         /// The thunk holds a copy of the whole file, so its types are new ones and show the file as
@@ -262,12 +362,12 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
             lines.append("@testable import \(moduleName)")
         }
         lines.append("import SwiftUI")
-        lines.append("import AppKit")
+        lines.append("import \(uiModule)")
         lines.append("import \(SwiftPreviewSupportSource.moduleName)")
         if mode == .imported {
             for statement in job.imports where Self.importedModule(of: statement) != moduleName {
                 guard let module = Self.importedModule(of: statement),
-                      !["SwiftUI", "AppKit", SwiftPreviewSupportSource.moduleName].contains(module) else { continue }
+                      !["SwiftUI", uiModule, SwiftPreviewSupportSource.moduleName].contains(module) else { continue }
                 if !lines.contains(statement) { lines.append(statement) }
             }
         }
@@ -284,7 +384,11 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         let content: String
         switch job.block.kind {
         case .macro:
-            let text = Self.text(of: job.block.contentBytes, in: job.sourceText)
+            var text = Self.text(of: job.block.contentBytes, in: job.sourceText)
+            if job.dropsOuterFrame, let frame = Self.outerFixedFrame(in: text) {
+                // Blanked, not removed: the lines and columns after it stay where the file has them.
+                text.replaceSubrange(frame.range, with: String(repeating: " ", count: text[frame.range].count))
+            }
             let line = Self.line(ofByte: job.block.contentBytes.lowerBound, in: job.sourceText)
             content = "#sourceLocation(file: \"\(Self.escaped(job.sourcePath))\", line: \(line))\n\(text)\n#sourceLocation()"
         case .provider(let typeName):
@@ -314,13 +418,73 @@ public struct SwiftPreviewBuildPlan: Sendable, Equatable {
         lines.append("@_cdecl(\"umbra_preview_make_view\")")
         lines.append("public func _umbraPreviewMakeView() -> UnsafeMutableRawPointer {")
         lines.append("    MainActor.assumeIsolated {")
-        lines.append("        let view = NSHostingView(rootView: AnyView(UmbraPreviewRoot()))")
-        lines.append("        view.sizingOptions = []")
-        lines.append("        return Unmanaged.passRetained(view as NSView).toOpaque()")
+        switch job.platform {
+        case .macOS:
+            lines.append("        let view = NSHostingView(rootView: AnyView(UmbraPreviewRoot()))")
+            lines.append("        view.sizingOptions = []")
+            lines.append("        return Unmanaged.passRetained(view as NSView).toOpaque()")
+        case .iOSSimulator:
+            // A view controller: the host's window takes it as its root, so safe areas, the
+            // navigation bar's large title and the keyboard guide are the system's own.
+            lines.append("        let controller = UIHostingController(rootView: AnyView(UmbraPreviewRoot()))")
+            lines.append("        return Unmanaged.passRetained(controller as UIViewController).toOpaque()")
+        }
         lines.append("    }")
         lines.append("}")
         lines.append("")
         return lines.joined(separator: "\n")
+    }
+
+    /// The fixed `.frame(width:height:)` that ends a preview body, as `.frame(width: 1100, height: 720)`,
+    /// or nil. Only the last modifier of the last expression counts, and only numeric `width:`,
+    /// `height:` and `alignment:` arguments: `minWidth`, `maxWidth: .infinity`, an inner frame and a
+    /// frame followed by another modifier are the view's own layout and are left alone.
+    static func outerFixedFrame(in body: String) -> (range: Range<String.Index>, text: String)? {
+        var end = body.endIndex
+        while end > body.startIndex, body[body.index(before: end)].isWhitespace { end = body.index(before: end) }
+        guard end > body.startIndex, body[body.index(before: end)] == ")" else { return nil }
+        // The matching "(": count parentheses backwards. Numbers and labels hold none.
+        var depth = 0
+        var index = end
+        var open: String.Index?
+        while index > body.startIndex {
+            index = body.index(before: index)
+            let character = body[index]
+            if character == ")" { depth += 1 }
+            if character == "(" {
+                depth -= 1
+                if depth == 0 {
+                    open = index
+                    break
+                }
+            }
+        }
+        guard let open else { return nil }
+        let prefix = ".frame"
+        guard let nameStart = body.index(open, offsetBy: -prefix.count, limitedBy: body.startIndex),
+              body[nameStart..<open] == prefix else { return nil }
+        let arguments = String(body[body.index(after: open)..<body.index(before: end)])
+        let number = #"[0-9]+(?:\.[0-9]+)?"#
+        let alignment = #"\.?[A-Za-z]+"#
+        let argument = #"(?:(?:width|height):\s*\#(number)|alignment:\s*\#(alignment))"#
+        let pattern = #"^\s*\#(argument)(?:\s*,\s*\#(argument))*\s*$"#
+        guard arguments.range(of: pattern, options: .regularExpression) != nil,
+              arguments.contains("width:") || arguments.contains("height:") else { return nil }
+        // `alignment:` takes no part in the check above beyond its shape; a repeated label is not valid Swift anyway.
+        let range = nameStart..<end
+        return (range, String(body[range]))
+    }
+
+    /// The fixed frame of `block`'s body in `source`, as written; nil when there is none.
+    public static func outerFixedFrame(of block: SwiftPreviewBlock, in source: String) -> String? {
+        guard block.kind == .macro else { return nil }
+        return outerFixedFrame(in: text(of: block.contentBytes, in: source))?.text
+    }
+
+    /// The frame the thunk leaves out, as written; nil when none is dropped.
+    public var droppedFrame: String? {
+        guard job.dropsOuterFrame else { return nil }
+        return Self.outerFixedFrame(of: job.block, in: job.sourceText)
     }
 
     /// `source` with every `#Preview` macro call replaced by spaces, newlines kept.

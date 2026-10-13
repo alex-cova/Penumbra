@@ -777,10 +777,26 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         XCTAssertTrue(command.arguments.contains("OBJROOT=/cache/x/Intermediates"))
         XCTAssertTrue(command.arguments.contains("ARCHS=arm64"))
         XCTAssertTrue(command.arguments.contains("CODE_SIGNING_ALLOWED=NO"))
+        // The macOS SDK even for an iOS app template: its objects would not link into the host, and
+        // its products would land in `Debug-iphoneos`, not where `knownBinPath` says.
+        let sdk = command.arguments.firstIndex(of: "-sdk")
+        XCTAssertEqual(sdk.map { command.arguments[$0 + 1] }, "macosx")
         XCTAssertEqual(plan.knownBinPath, "/cache/x/Products/Debug")
         XCTAssertEqual(plan.intermediatesPath, "/cache/x/Intermediates")
         let flags = command.arguments.first { $0.hasPrefix("OTHER_SWIFT_FLAGS=") } ?? ""
         XCTAssertTrue(flags.contains("$(inherited)") && flags.contains("-enable-testing"))
+    }
+
+    func testThePlatformOfAnXcodeTargetIsReadFromItsBuildSettings() {
+        let output = """
+        Build settings for action build and target App:
+            ONLY_ACTIVE_ARCH = YES
+            PLATFORM_DISPLAY_NAME = iOS
+            PLATFORM_NAME = iphoneos
+            PLATFORM_PREFERRED_ARCH = arm64
+        """
+        XCTAssertEqual(SwiftPreviewBuildPlan.platformName(fromBuildSettings: output), "iphoneos")
+        XCTAssertNil(SwiftPreviewBuildPlan.platformName(fromBuildSettings: "error: nothing"))
     }
 
     func testAnXcodeProjectViewIsPreviewedAndReloaded() async throws {
@@ -1028,5 +1044,226 @@ final class IDESwiftUIPreviewSessionTests: XCTestCase {
         real.stop()
         XCTAssertEqual(real.phase, .idle)
         XCTAssertNil(real.frame)
+    }
+
+    /// A sheet is a window of its own: it has to be drawn into the frame, take the input, and not
+    /// show on the display (the preview window used to be pulled onto the screen with it).
+    func testASheetIsDrawnIntoTheFrameTakesInputAndStaysOffscreen() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let source = """
+        import SwiftUI
+
+        struct SheetHost: View {
+            @State private var shown = false
+            var body: some View {
+                Button("Open") { shown = true }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .sheet(isPresented: $shown) {
+                        Button { shown = false } label: { Color.red }
+                            .buttonStyle(.plain)
+                            .frame(width: 200, height: 120)
+                    }
+            }
+        }
+
+        #Preview { SheetHost() }
+        """
+        let file = sources.appendingPathComponent("SheetHost.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: (file, source), package: (package, "ToyUI"),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 240))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+
+        /// The colour at the middle of the frame, as red, green, blue.
+        func centre() -> (r: Double, g: Double, b: Double)? {
+            guard let data = session.frame?.tiffRepresentation, let rep = NSBitmapImageRep(data: data),
+                  let colour = rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+            else { return nil }
+            return (Double(colour.redComponent), Double(colour.greenComponent), Double(colour.blueComponent))
+        }
+        func isRed(_ value: (r: Double, g: Double, b: Double)?) -> Bool {
+            guard let value else { return false }
+            return value.r > 0.8 && value.g < 0.4 && value.b < 0.4
+        }
+        /// Windows of the host that lie on a display (the parked window is far outside every one).
+        func hostWindowsOnScreen() -> [CGRect] {
+            let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+            return list.compactMap { info in
+                guard (info[kCGWindowOwnerName as String] as? String) == "UmbraPreviewHost",
+                      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] else { return nil }
+                let rect = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
+                return rect.width > 0 && rect.intersects(CGRect(x: -5000, y: -5000, width: 30000, height: 30000)) ? rect : nil
+            }
+        }
+        XCTAssertFalse(isRed(centre()), "the sheet is not open yet")
+
+        // Open the sheet: the button is in the middle of the frame.
+        session.click(at: CGPoint(x: 160, y: 120))
+        let shown = await waitUntil(seconds: 20) { isRed(centre()) }
+        XCTAssertTrue(shown, "the sheet is not in the frame; the middle is \(String(describing: centre()))")
+        XCTAssertEqual(hostWindowsOnScreen(), [], "a preview window is on a display")
+
+        // The sheet takes the input: a click on it closes it.
+        session.click(at: CGPoint(x: 160, y: 120))
+        let closed = await waitUntil(seconds: 20) { !isRed(centre()) }
+        XCTAssertTrue(closed, "a click on the sheet did not reach it")
+        XCTAssertEqual(hostWindowsOnScreen(), [])
+        session.stop()
+    }
+
+    /// "Content Size" takes the view's own size (a `.frame` bigger than the panel is no longer
+    /// cropped), and zooming out in the canvas size makes the window larger instead of scaling a
+    /// window that cuts the view off.
+    func testContentSizeAndZoomReachTheHost() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let source = """
+        import SwiftUI
+
+        struct Big: View {
+            var body: some View {
+                Color.blue.frame(width: 500, height: 300)
+            }
+        }
+
+        #Preview { Big() }
+        """
+        let file = sources.appendingPathComponent("Big.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: (file, source), package: (package, "ToyUI"),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 320, height: 240))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+        XCTAssertEqual(session.frameSize, CGSize(width: 320, height: 240))
+
+        // The view's own size, which is larger than the panel.
+        session.setSizePreset(.content)
+        let content = await waitUntil(seconds: 20) { session.frameSize == CGSize(width: 500, height: 300) }
+        XCTAssertTrue(content, "frame size \(session.frameSize)")
+        XCTAssertEqual(session.frame?.size, CGSize(width: 500, height: 300))
+
+        // A phone: the window has its screen's size.
+        let device = try XCTUnwrap(IDESwiftUIPreviewDevice.all.first { $0.id == "iphone-16" })
+        session.setSizePreset(.device(device))
+        let phone = await waitUntil(seconds: 20) { session.frameSize == CGSize(width: 393, height: 852) }
+        XCTAssertTrue(phone, "frame size \(session.frameSize)")
+        XCTAssertEqual(session.frameDevice, device)
+
+        // The canvas size zoomed out to 50% is a window twice the panel's size.
+        session.setSizePreset(.canvas)
+        session.setZoom(.scale(0.5))
+        let zoomedOut = await waitUntil(seconds: 20) { session.frameSize == CGSize(width: 640, height: 480) }
+        XCTAssertTrue(zoomedOut, "frame size \(session.frameSize)")
+        session.setZoom(.fit)
+        let back = await waitUntil(seconds: 20) { session.frameSize == CGSize(width: 320, height: 240) }
+        XCTAssertTrue(back, "frame size \(session.frameSize)")
+        session.stop()
+    }
+
+    /// A device replaces the size the preview's own `.frame(width:height:)` asks for, keeps the
+    /// content out of the status bar and home indicator, and "keep the frame" brings the frame back.
+    func testADeviceReplacesThePreviewsFrameAndKeepsTheSafeArea() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_PREVIEW_INTEGRATION"] == "1",
+                          "set UMBRA_PREVIEW_INTEGRATION=1 to run the preview pipeline test")
+        let package = directory.appendingPathComponent("Toy")
+        let sources = package.appendingPathComponent("Sources/ToyUI")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try """
+        // swift-tools-version:5.9
+        import PackageDescription
+        let package = Package(name: "Toy", platforms: [.macOS(.v14)], targets: [.target(name: "ToyUI")])
+        """.write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let source = """
+        import SwiftUI
+
+        struct Fill: View {
+            var body: some View {
+                Color.blue.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+
+        #Preview {
+            Fill()
+                .frame(width: 500, height: 300)
+        }
+        """
+        let file = sources.appendingPathComponent("Fill.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+
+        let swift = try XCTUnwrap(IDESwiftPMProjectSystem.resolveSwift(environment: nil))
+        let session = makeSession(
+            file: (file, source), package: (package, "ToyUI"),
+            toolchain: .beside(swift: swift), runner: IDESwiftUIPreviewSubprocessRunner()
+        )
+        session.setViewport(CGSize(width: 640, height: 900))
+        session.refresh()
+        let ready = await waitUntil(seconds: 240) { session.phase == .ready && session.frame != nil }
+        XCTAssertTrue(ready, "phase \(session.phase)\n\(session.log.suffix(20).joined(separator: "\n"))")
+        XCTAssertTrue(session.previewHasOuterFrame)
+
+        /// Whether the point (in points of the frame) is blue, not clear.
+        func isBlue(x: Double, y: Double) -> Bool? {
+            guard let data = session.frame?.tiffRepresentation, let rep = NSBitmapImageRep(data: data),
+                  session.frameSize.width > 0 else { return nil }
+            let pixelsPerPoint = Double(rep.pixelsWide) / Double(session.frameSize.width)
+            guard let colour = rep.colorAt(x: Int(x * pixelsPerPoint), y: Int(y * pixelsPerPoint))?.usingColorSpace(.sRGB)
+            else { return nil }
+            return colour.alphaComponent > 0.9 && colour.blueComponent > 0.8 && colour.redComponent < 0.4
+        }
+        func waitFor(_ condition: @MainActor () -> Bool) async -> Bool { await waitUntil(seconds: 60, condition) }
+
+        // A phone with a 59 pt top and a 34 pt bottom safe area (the iPhone 16): 393 × 852.
+        let device = try XCTUnwrap(IDESwiftUIPreviewDevice.all.first { $0.id == "iphone-16" })
+        XCTAssertEqual(device.safeTop, 59)
+        session.setSizePreset(.device(device))
+        let adapted = await waitFor {
+            session.phase == .ready && session.ignoredFrame != nil && session.frameSize == CGSize(width: 393, height: 852)
+                && isBlue(x: 196, y: 600) == true
+        }
+        XCTAssertTrue(adapted, "phase \(session.phase) ignored \(String(describing: session.ignoredFrame)) size \(session.frameSize)")
+        XCTAssertEqual(session.ignoredFrame, ".frame(width: 500, height: 300)")
+        // The content fills the screen between the safe areas and not the status bar or home indicator.
+        XCTAssertEqual(isBlue(x: 196, y: 400), true)
+        XCTAssertEqual(isBlue(x: 196, y: 30), false, "the status bar area is clear")
+        XCTAssertEqual(isBlue(x: 196, y: 840), false, "the home indicator area is clear")
+
+        // Keep the preview's own frame: 500 × 300 in the safe area, so a point far below it is clear.
+        session.setKeepsPreviewFrame(true)
+        let kept = await waitFor {
+            session.phase == .ready && session.ignoredFrame == nil && isBlue(x: 196, y: 700) == false
+        }
+        XCTAssertTrue(kept, "phase \(session.phase) ignored \(String(describing: session.ignoredFrame))")
+        XCTAssertEqual(isBlue(x: 196, y: 440), true, "the 300 pt frame is in the middle of the safe area")
+        session.stop()
     }
 }

@@ -98,14 +98,20 @@ final class IDESwiftUIPreviewSession {
         ]
     }
 
-    /// How big the preview's window is: the canvas (it fills the panel), or a fixed size.
+    /// How big the preview's window is: the canvas (it fills the panel), the view's own ideal size,
+    /// a phone's screen, or a fixed size.
     enum SizePreset: Hashable, Sendable, Identifiable {
         case canvas
+        /// The size the view asks for (`.frame(width:height:)` and the like); the canvas when it asks for none.
+        case content
+        case device(IDESwiftUIPreviewDevice)
         case fixed(width: Int, height: Int)
 
         var id: String {
             switch self {
             case .canvas: return "canvas"
+            case .content: return "content"
+            case .device(let device): return "device-\(device.id)"
             case .fixed(let width, let height): return "\(width)x\(height)"
             }
         }
@@ -113,14 +119,24 @@ final class IDESwiftUIPreviewSession {
         var title: String {
             switch self {
             case .canvas: return "Fit the Canvas"
+            case .content: return "Content Size"
+            case .device(let device): return device.name
             case .fixed(let width, let height): return "\(width) × \(height)"
             }
         }
 
-        static let all: [SizePreset] = [
-            .canvas, .fixed(width: 320, height: 240), .fixed(width: 480, height: 360),
+        var device: IDESwiftUIPreviewDevice? {
+            if case .device(let device) = self { return device }
+            return nil
+        }
+
+        static let layouts: [SizePreset] = [.canvas, .content]
+        static let devices: [SizePreset] = IDESwiftUIPreviewDevice.all.map { .device($0) }
+        static let windows: [SizePreset] = [
+            .fixed(width: 320, height: 240), .fixed(width: 480, height: 360),
             .fixed(width: 640, height: 480), .fixed(width: 800, height: 600), .fixed(width: 1024, height: 768)
         ]
+        static let all: [SizePreset] = layouts + devices + windows
     }
 
     // MARK: State
@@ -138,10 +154,27 @@ final class IDESwiftUIPreviewSession {
     private(set) var language: Language = .system
     private(set) var isRightToLeft = false
     private(set) var sizePreset: SizePreset = .canvas
+    /// How much the frame is magnified on the canvas.
+    private(set) var zoom: IDESwiftUIPreviewZoom = .fit
+    /// Whether a device's bezel is drawn around the frame.
+    private(set) var showsDeviceFrame = true
+    /// Keep the preview's own trailing `.frame(width:height:)` in a device or window size. Off by
+    /// default: the size that was chosen is the point of choosing it.
+    private(set) var keepsPreviewFrame = false
+    /// The fixed frame the current thunk leaves out, as written; nil when it left none out.
+    private(set) var ignoredFrame: String?
     /// How the frame on the canvas was produced: a build, or the file loaded into the running host.
     private(set) var lastReload: ReloadKind?
 
     enum ReloadKind: Equatable { case build, hotReload }
+
+    /// True while the preview runs in the iOS Simulator (an iOS target): the window is the device's,
+    /// so sizes and windows do not apply, and the device is chosen by type.
+    private(set) var isSimulatorPreview = false
+    /// The phones and tablets the simulator's runtime offers, once a preview has prepared it.
+    private(set) var simulatorDeviceTypes: [IDESimulatorRuntime.DeviceType] = []
+    /// The device type the preview is on (or will be on); nil for the runtime's default phone.
+    private(set) var simulatorDeviceTypeID: String?
 
     /// Forgets how the last frame was made, so a caller waiting for the next reload can tell it from the last.
     func lastReloadReset() { lastReload = nil }
@@ -150,6 +183,7 @@ final class IDESwiftUIPreviewSession {
 
     @ObservationIgnored private let context: IDESwiftUIPreviewContext
     @ObservationIgnored private let runner: any IDESwiftUIPreviewProcessRunning
+    @ObservationIgnored private let simulator: any IDESimulatorControlling
     @ObservationIgnored private let cacheRoot: URL
 
     // MARK: Run state
@@ -163,7 +197,33 @@ final class IDESwiftUIPreviewSession {
     @ObservationIgnored private var viewport = CGSize(width: 360, height: 480)
     @ObservationIgnored private var lastFramePath: String?
     @ObservationIgnored private var currentFixedSize: CGSize?
+
+    /// True when the frame is the panel's own size: zoom then changes the window, not just the scale.
+    var fillsCanvas: Bool { !isSimulatorPreview && sizePreset == .canvas && currentFixedSize == nil }
+
+    /// The device whose bezel is drawn around the frame, if any (a `.fixedLayout` trait is not a device).
+    var frameDevice: IDESwiftUIPreviewDevice? {
+        guard showsDeviceFrame else { return nil }
+        if isSimulatorPreview { return simulatorFrameDevice }
+        guard currentFixedSize == nil else { return nil }
+        return sizePreset.device
+    }
+
+    /// The bezel of the simulator device in use: a known preset's, else a generic modern phone's at the
+    /// size of the frame. Tablets have none.
+    private var simulatorFrameDevice: IDESwiftUIPreviewDevice? {
+        guard let type = simulatorDeviceTypes.first(where: { $0.identifier == simulatorDeviceTypeID }),
+              type.productFamily == "iPhone" || type.name.hasPrefix("iPhone") else { return nil }
+        if let known = IDESwiftUIPreviewDevice.all.first(where: { $0.name == type.name }) { return known }
+        guard frameSize.width > 0, frameSize.height > 0 else { return nil }
+        return IDESwiftUIPreviewDevice(
+            id: type.identifier, name: type.name, width: Int(frameSize.width.rounded()), height: Int(frameSize.height.rounded()),
+            cornerRadius: 55, cutout: .dynamicIsland, safeTop: 0, safeBottom: 0
+        )
+    }
     @ObservationIgnored private var baseline: Baseline?
+    /// The type of the device of the running host (the runtime's default phone when none was chosen).
+    @ObservationIgnored private var activeSimulatorDeviceTypeID: String?
 
     /// What the host process was built from, kept while it runs: what a later save is compared to.
     private struct Baseline {
@@ -175,6 +235,13 @@ final class IDESwiftUIPreviewSession {
         var modulePaths: [String]
         var toolchain: IDESwiftUIPreviewToolchain
         var stamps: [String: FileStamp]
+        var platform: SwiftPreviewBuildPlan.Platform
+        var deploymentTarget: String?
+        var sdkPath: String?
+        /// The device the host runs on; nil for a macOS host.
+        var simulatorTarget: IDESimulatorTarget?
+        /// The dylib of the thunk the host has loaded: what a host started elsewhere loads again.
+        var thunkPath: String
     }
 
     private struct FileStamp: Equatable {
@@ -188,10 +255,12 @@ final class IDESwiftUIPreviewSession {
     init(
         context: IDESwiftUIPreviewContext,
         runner: any IDESwiftUIPreviewProcessRunning = IDESwiftUIPreviewSubprocessRunner(),
+        simulator: (any IDESimulatorControlling)? = nil,
         cacheRoot: URL? = nil
     ) {
         self.context = context
         self.runner = runner
+        self.simulator = simulator ?? IDESimulatorService.shared
         self.cacheRoot = cacheRoot ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.umbra.editor/SwiftUIPreviews", isDirectory: true)
     }
@@ -243,8 +312,56 @@ final class IDESwiftUIPreviewSession {
 
     func setSizePreset(_ preset: SizePreset) {
         guard preset != sizePreset else { return }
+        let dropped = dropsPreviewFrame
         sizePreset = preset
-        scheduleRender()
+        applyFrameChange(from: dropped)
+    }
+
+    func setKeepsPreviewFrame(_ value: Bool) {
+        guard value != keepsPreviewFrame else { return }
+        let dropped = dropsPreviewFrame
+        keepsPreviewFrame = value
+        applyFrameChange(from: dropped)
+    }
+
+    /// A device or a window size replaces what the preview's own frame says.
+    var dropsPreviewFrame: Bool {
+        // The simulator's window is the device's: there is no chosen size for the frame to override.
+        if keepsPreviewFrame || isSimulatorPreview { return false }
+        switch sizePreset {
+        case .device, .fixed: return true
+        case .canvas, .content: return false
+        }
+    }
+
+    /// Whether the preview in front ends in a fixed `.frame(width:height:)`.
+    var previewHasOuterFrame: Bool {
+        guard let file = context.activeFile(), blocks.indices.contains(selectedIndex) else { return false }
+        return SwiftPreviewBuildPlan.outerFixedFrame(of: blocks[selectedIndex], in: file.text) != nil
+    }
+
+    /// The thunk holds the body without that frame, so a change in whether it is dropped loads a
+    /// new thunk (about a second, no build); anything else is only a new frame.
+    private func applyFrameChange(from wasDropped: Bool) {
+        if dropsPreviewFrame != wasDropped, phase == .ready, previewHasOuterFrame {
+            refresh()
+        } else {
+            scheduleRender()
+        }
+    }
+
+    /// A new zoom. In the canvas size it changes the window too (zoomed out, the window is larger
+    /// and shows more), so the frame is drawn again; otherwise only its resolution follows.
+    func setZoom(_ newZoom: IDESwiftUIPreviewZoom) {
+        let value: IDESwiftUIPreviewZoom
+        if let factor = newZoom.factor { value = .scale(IDESwiftUIPreviewZoom.clamped(factor)) } else { value = .fit }
+        guard value != zoom else { return }
+        zoom = value
+        scheduleRender(after: .milliseconds(60))
+    }
+
+    func setShowsDeviceFrame(_ value: Bool) {
+        showsDeviceFrame = value
     }
 
     /// The size the canvas has, in points. A change re-renders after a short pause.
@@ -304,7 +421,14 @@ final class IDESwiftUIPreviewSession {
             for command in commands { _ = try await connection.request(command) }
             await self?.render(counter: counter)
         }
+        // What the input started has not happened yet when that frame is drawn: a SwiftUI sheet was
+        // measured attaching about 290 ms after the click, and an animation runs for its duration.
+        // One more frame once things settle; typing and dragging only push it back.
+        scheduleRender(after: Self.settleDelay)
     }
+
+    /// How long after input the preview is drawn again.
+    static let settleDelay: Duration = .milliseconds(450)
 
     /// Everything said to the host goes through one queue: replies are matched to requests by
     /// order, so two tasks talking at once could swap them.
@@ -418,11 +542,52 @@ final class IDESwiftUIPreviewSession {
         }
         guard isCurrent(token) else { return }
 
+        // 2b. Which platform the target is for. A macOS target keeps the AppKit host; an iOS one is
+        // built for the simulator and shown by an app there (`docs/SWIFTUI_PREVIEW_PLAN.md` §9).
+        var platform = SwiftPreviewBuildPlan.Platform.macOS
+        isSimulatorPreview = false
+        var simulatorTarget: IDESimulatorTarget?
+        var simulatorBoot: Task<Void, Error>?
+        if case .xcode(let project) = package.buildSystem {
+            phase = .building("Reading the target's settings…")
+            let command = SwiftPreviewBuildPlan.buildSettingsCommand(project: project, target: package.target)
+            let settings = await execute(
+                command, toolchain: toolchain, directory: URL(fileURLWithPath: package.root.path), echo: false
+            )
+            guard isCurrent(token) else { return }
+            let native = SwiftPreviewBuildPlan.platformName(fromBuildSettings: settings.output)
+            if native == "iphoneos" || native == "iphonesimulator" {
+                platform = .iOSSimulator
+                isSimulatorPreview = true
+                phase = .building("Preparing the iOS Simulator…")
+                do {
+                    let prepared = try await simulator.prepare(IDESimulatorRequest(
+                        minimumVersion: SwiftPreviewBuildPlan.buildSetting("IPHONEOS_DEPLOYMENT_TARGET", fromBuildSettings: settings.output),
+                        deviceTypeIdentifier: simulatorDeviceTypeID
+                    ))
+                    guard isCurrent(token) else { return }
+                    simulatorTarget = prepared
+                    simulatorDeviceTypes = prepared.runtime.deviceTypes.filter {
+                        $0.productFamily == "iPhone" || $0.productFamily == "iPad"
+                    }
+                    activeSimulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
+                    simulatorDeviceTypeID = prepared.device.deviceTypeIdentifier
+                    // The device boots while the project builds: the first boot is the slow part.
+                    let service = simulator
+                    simulatorBoot = Task { try await service.boot(prepared) }
+                    append("Previewing on \(prepared.device.name) (\(prepared.runtime.name)).\n")
+                } catch {
+                    return fail(token, error.localizedDescription)
+                }
+            }
+        }
+
         // 3. The recipe.
         let directory = workDirectory(for: package.root)
         let plan = makePlan(
             root: package.root, directory: directory, target: package.target, buildSystem: package.buildSystem,
-            url: url, text: text, imports: read.1, block: block
+            url: url, text: text, imports: read.1, block: block,
+            platform: platform, simulator: simulatorTarget
         )
         let fileManager = FileManager.default
         do {
@@ -443,7 +608,18 @@ final class IDESwiftUIPreviewSession {
         guard isCurrent(token) else { return }
         publish(build.output, root: package.root)
         guard build.succeeded else {
-            return fail(token, Self.summary(of: build.output, fallback: "swift build failed."))
+            var message = Self.summary(of: build.output, fallback: "swift build failed.")
+            // The host renders macOS SwiftUI, so an iOS target is built against the macOS SDK; when
+            // that fails, say why before the compiler's errors read as the project's own fault.
+            if let platformCommand = plan.platformCommand {
+                let settings = await execute(platformCommand, toolchain: toolchain, directory: root, echo: false)
+                guard isCurrent(token) else { return }
+                if let platform = SwiftPreviewBuildPlan.platformName(fromBuildSettings: settings.output), platform != "macosx" {
+                    message = "\(package.target) is an \(platform) target, and previews render with macOS SwiftUI, "
+                        + "so API that only exists on \(platform) does not compile.\n" + message
+                }
+            }
+            return fail(token, message)
         }
         let binPath: String
         var located: IDESwiftUIPreviewArtifacts.Located
@@ -498,12 +674,36 @@ final class IDESwiftUIPreviewSession {
         }
         do {
             try plan.hostSource.write(toFile: plan.hostSourcePath, atomically: true, encoding: .utf8)
+            // The simulator's host is an app: its bundle exists before the executable is linked into it.
+            if let bundle = plan.hostBundlePath, let infoPlist = plan.hostInfoPlist {
+                try IDESwiftUIPreviewHostBundle.create(at: bundle, infoPlist: infoPlist)
+            }
         } catch {
             return fail(token, "Could not write the preview sources: \(error.localizedDescription)")
         }
         let link = await execute(plan.hostCommand(binPath: binPath, objects: objects, modulePaths: modulePaths), toolchain: toolchain, directory: root)
         guard isCurrent(token) else { return }
         guard link.succeeded else { return fail(token, Self.summary(of: link.output, fallback: "Linking the preview failed.")) }
+        if let bundle = plan.hostBundlePath, let simulatorTarget {
+            phase = .building("Installing the preview on the simulator…")
+            if let donor = IDESwiftUIPreviewHostBundle.donor(in: binPath, target: package.target) {
+                IDESwiftUIPreviewHostBundle.copyResources(from: donor, to: bundle)
+            }
+            let sign = await runner.run(
+                executable: "/usr/bin/codesign", arguments: ["-f", "-s", "-", bundle], workingDirectory: nil, onOutput: { _ in }
+            )
+            guard isCurrent(token) else { return }
+            guard sign.succeeded else { return fail(token, Self.summary(of: sign.output, fallback: "Signing the preview host failed.")) }
+            do {
+                // Boot first, then install: the device takes apps only once it has started.
+                try await simulatorBoot?.value
+                guard isCurrent(token) else { return }
+                try await simulator.install(bundlePath: bundle, on: simulatorTarget)
+            } catch {
+                guard isCurrent(token) else { return }
+                return fail(token, error.localizedDescription)
+            }
+        }
         phase = .building("Compiling the preview…")
         let thunk = await compileThunk(
             plan: plan, token: token, binPath: binPath, modulePaths: modulePaths, toolchain: toolchain,
@@ -518,42 +718,11 @@ final class IDESwiftUIPreviewSession {
 
         // 6. A fresh host for the new objects, and the first frame.
         phase = .building("Starting the preview…")
-        endHost()
-        let socket = Self.socketPath(for: directory, generation: token)
-        socketPath = socket
-        do {
-            let process = try runner.startHost(
-                executable: binPath + "/UmbraPreviewHost", arguments: ["--socket", socket],
-                workingDirectory: URL(fileURLWithPath: binPath),
-                onOutput: { [weak self] text in
-                    Task { @MainActor [weak self] in self?.append(text) }
-                }
-            )
-            host = process
-            let connection = try await IDESwiftUIPreviewHostConnection.connect(path: socket)
-            guard isCurrent(token) else {
-                connection.close()
-                process.terminate()
-                if host === process { host = nil }
-                return
-            }
-            self.connection = connection
-            let ready = try await connection.nextEvent()
-            guard ready.name == "ready" else { return fail(token, "The preview host did not start.") }
-            let loaded = try await connection.request(
-                .load(dylib: plan.thunkLibraryPath(generation: token), generation: token)
-            )
-            guard isCurrent(token) else { return }
-            guard loaded.isOK else {
-                return fail(token, "The preview could not be loaded: \(loaded.error ?? "unknown error")")
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            guard isCurrent(token) else { return }
-            append("Host connection failed: \(error)\n")
-            return fail(token, "The preview host stopped unexpectedly (\(error)).")
-        }
+        let thunkPath = plan.thunkLibraryPath(generation: token)
+        guard await startHost(
+            plan: plan, token: token, binPath: binPath, simulatorTarget: simulatorTarget,
+            thunkPath: thunkPath, directory: directory
+        ) else { return }
         framePrefix = plan.framePath(generation: token)
         lastReload = .build
         let stamps = await Task.detached(priority: .userInitiated) { [root = package.root] in
@@ -561,8 +730,128 @@ final class IDESwiftUIPreviewSession {
         }.value
         baseline = Baseline(
             url: url, packageRoot: package.root, target: package.target, buildSystem: package.buildSystem,
-            binPath: binPath, modulePaths: modulePaths, toolchain: toolchain, stamps: stamps
+            binPath: binPath, modulePaths: modulePaths, toolchain: toolchain, stamps: stamps,
+            platform: platform, deploymentTarget: plan.job.deploymentTarget, sdkPath: plan.job.sdkPath,
+            simulatorTarget: simulatorTarget, thunkPath: thunkPath
         )
+        phase = .ready
+        await renderSerially()
+        onChange?()
+    }
+
+    /// Starts the host of `plan` (a macOS process, or the app on `simulatorTarget`), waits for it and
+    /// loads `thunkPath` into it. False when that did not happen: the failure is shown, or the run was
+    /// overtaken.
+    private func startHost(
+        plan: SwiftPreviewBuildPlan, token: Int, binPath: String, simulatorTarget: IDESimulatorTarget?,
+        thunkPath: String, directory: URL
+    ) async -> Bool {
+        endHost()
+        let socket = Self.socketPath(for: directory, generation: token)
+        socketPath = socket
+        do {
+            let onOutput: @Sendable (String) -> Void = { [weak self] text in
+                Task { @MainActor [weak self] in self?.append(text) }
+            }
+            let process: any IDESwiftUIPreviewHostProcess
+            if let simulatorTarget {
+                process = try simulator.launch(
+                    bundleIdentifier: plan.hostBundleIdentifier, arguments: ["--socket", socket],
+                    on: simulatorTarget, onOutput: onOutput
+                )
+            } else {
+                process = try runner.startHost(
+                    executable: plan.hostExecutablePath(binPath: binPath), arguments: ["--socket", socket],
+                    workingDirectory: URL(fileURLWithPath: binPath), onOutput: onOutput
+                )
+            }
+            host = process
+            // An app starts in about a second once installed; allow for a slow first launch of the device.
+            let connection = try await IDESwiftUIPreviewHostConnection.connect(
+                path: socket, attempts: simulatorTarget == nil ? 100 : 400
+            )
+            guard isCurrent(token) else {
+                connection.close()
+                process.terminate()
+                if host === process { host = nil }
+                return false
+            }
+            self.connection = connection
+            let ready = try await connection.nextEvent()
+            guard ready.name == "ready" else {
+                fail(token, "The preview host did not start.")
+                return false
+            }
+            let loaded = try await connection.request(.load(dylib: thunkPath, generation: token))
+            guard isCurrent(token) else { return false }
+            guard loaded.isOK else {
+                fail(token, "The preview could not be loaded: \(loaded.error ?? "unknown error")")
+                return false
+            }
+        } catch is CancellationError {
+            return false
+        } catch {
+            guard isCurrent(token) else { return false }
+            append("Host connection failed: \(error)\n")
+            fail(token, "The preview host stopped unexpectedly (\(error)).")
+            return false
+        }
+        return true
+    }
+
+    // MARK: Device
+
+    /// Shows the preview on another simulator device. A running preview moves there without a build:
+    /// the host app is installed on that device, started, and loads the thunk it had.
+    func setSimulatorDeviceType(_ identifier: String) {
+        guard identifier != simulatorDeviceTypeID else { return }
+        simulatorDeviceTypeID = identifier
+        // Without a built host the choice is used by the next build.
+        guard isSimulatorPreview, let baseline, baseline.simulatorTarget != nil, phase == .ready else { return }
+        generation += 1
+        let token = generation
+        pipeline?.cancel()
+        renderTask?.cancel()
+        pipeline = Task { [weak self] in await self?.move(to: identifier, from: baseline, token: token) }
+    }
+
+    private func move(to identifier: String, from saved: Baseline, token: Int) async {
+        guard let previous = saved.simulatorTarget, blocks.indices.contains(selectedIndex) else { return }
+        let directory = workDirectory(for: saved.packageRoot)
+        let plan = makePlan(
+            root: saved.packageRoot, directory: directory, target: saved.target, buildSystem: saved.buildSystem,
+            url: saved.url, text: context.activeFile()?.text ?? "", imports: [], block: blocks[selectedIndex],
+            platform: saved.platform, deploymentTarget: saved.deploymentTarget, sdkPath: saved.sdkPath
+        )
+        guard let bundle = plan.hostBundlePath else { return }
+        phase = .building("Moving the preview to the new device…")
+        onChange?()
+        let target: IDESimulatorTarget
+        do {
+            target = try await simulator.prepare(IDESimulatorRequest(
+                runtimeIdentifier: previous.runtime.identifier, deviceTypeIdentifier: identifier
+            ))
+            guard isCurrent(token) else { return }
+            try await simulator.boot(target)
+            guard isCurrent(token) else { return }
+            try await simulator.install(bundlePath: bundle, on: target)
+        } catch {
+            guard isCurrent(token) else { return }
+            return fail(token, error.localizedDescription)
+        }
+        guard isCurrent(token) else { return }
+        append("Previewing on \(target.device.name) (\(target.runtime.name)).\n")
+        guard await startHost(
+            plan: plan, token: token, binPath: saved.binPath, simulatorTarget: target,
+            thunkPath: saved.thunkPath, directory: directory
+        ) else { return }
+        var moved = saved
+        moved.simulatorTarget = target
+        baseline = moved
+        activeSimulatorDeviceTypeID = target.device.deviceTypeIdentifier
+        simulatorDeviceTypeID = target.device.deviceTypeIdentifier
+        framePrefix = plan.framePath(generation: token)
+        lastReload = .build
         phase = .ready
         await renderSerially()
         onChange?()
@@ -578,15 +867,25 @@ final class IDESwiftUIPreviewSession {
 
     private func makePlan(
         root: URL, directory: URL, target: String, buildSystem: SwiftPreviewBuildPlan.BuildSystem,
-        url: URL, text: String, imports: [String], block: SwiftPreviewBlock
+        url: URL, text: String, imports: [String], block: SwiftPreviewBlock,
+        platform: SwiftPreviewBuildPlan.Platform = .macOS, simulator: IDESimulatorTarget? = nil,
+        deploymentTarget: String? = nil, sdkPath: String? = nil
     ) -> SwiftPreviewBuildPlan {
-        SwiftPreviewBuildPlan(job: .init(
+        // The simulator has a scratch path and a work directory of its own: the two platforms'
+        // intermediates (`Objects-normal/arm64`) would otherwise be linked together.
+        let suffix = platform == .macOS ? "" : "-ios"
+        let plan = SwiftPreviewBuildPlan(job: .init(
             packageRoot: root.path,
-            scratchPath: directory.appendingPathComponent("scratch").path,
-            workDirectory: directory.appendingPathComponent("work").path,
+            scratchPath: directory.appendingPathComponent("scratch" + suffix).path,
+            workDirectory: directory.appendingPathComponent("work" + suffix).path,
             targetName: target, sourcePath: url.path, sourceText: text,
-            imports: imports, block: block, deploymentTarget: Self.deploymentTarget, buildSystem: buildSystem
+            imports: imports, block: block,
+            deploymentTarget: deploymentTarget ?? simulator?.runtime.version ?? Self.deploymentTarget,
+            buildSystem: buildSystem, dropsOuterFrame: dropsPreviewFrame,
+            platform: platform, sdkPath: sdkPath ?? simulator?.sdkPath
         ))
+        ignoredFrame = plan.droppedFrame
+        return plan
     }
 
     /// Writes and compiles the thunk, trying each mode in turn. The result is the first that
@@ -644,7 +943,8 @@ final class IDESwiftUIPreviewSession {
         let directory = workDirectory(for: baseline.packageRoot)
         let plan = makePlan(
             root: baseline.packageRoot, directory: directory, target: baseline.target,
-            buildSystem: baseline.buildSystem, url: url, text: text, imports: imports, block: block
+            buildSystem: baseline.buildSystem, url: url, text: text, imports: imports, block: block,
+            platform: baseline.platform, deploymentTarget: baseline.deploymentTarget, sdkPath: baseline.sdkPath
         )
         phase = .building("Reloading…")
         onChange?()
@@ -675,6 +975,7 @@ final class IDESwiftUIPreviewSession {
         publish("", root: baseline.packageRoot)
         currentFixedSize = plan.fixedSize.map { CGSize(width: $0.width, height: $0.height) }
         framePrefix = plan.framePath(generation: token)
+        self.baseline?.thunkPath = plan.thunkLibraryPath(generation: token)
         lastReload = .hotReload
         phase = .ready
         await renderSerially()
@@ -731,16 +1032,44 @@ final class IDESwiftUIPreviewSession {
     private func render(counter: Int) async {
         guard let connection, counter == renderCounter else { return }
         var size = viewport
-        if case .fixed(let width, let height) = sizePreset { size = CGSize(width: width, height: height) }
+        var fitsContent = false
+        switch sizePreset {
+        case .canvas: size = IDESwiftUIPreviewLayout.canvasWindowSize(viewport: viewport, zoom: zoom)
+        case .content: fitsContent = true
+        case .device(let device): size = device.size
+        case .fixed(let width, let height): size = CGSize(width: width, height: height)
+        }
         // A `.fixedLayout` trait on the preview itself wins.
-        if let currentFixedSize { size = currentFixedSize }
+        if let currentFixedSize {
+            size = currentFixedSize
+            fitsContent = false
+        }
+        // The simulator's window is the device's whatever is asked; the host reports what it drew.
+        if isSimulatorPreview {
+            size = viewport
+            fitsContent = false
+        }
+        // Pixels per point. The canvas window is the panel divided by the zoom, so the factor keeps
+        // the image at the panel's own resolution; a fixed frame is only drawn finer when zoomed in.
+        let backing = Double(NSScreen.main?.backingScaleFactor ?? 2)
+        let factor = zoom.factor ?? 1
+        let scale = backing * (fillsCanvas ? factor : max(1, min(factor, 3)))
+        // A phone's content keeps clear of its status bar and home indicator.
+        let safeArea = currentFixedSize == nil && !isSimulatorPreview
+            ? (top: sizePreset.device?.safeTop ?? 0, bottom: sizePreset.device?.safeBottom ?? 0) : (top: 0, bottom: 0)
         let path = framePrefix.replacingOccurrences(of: ".png", with: "-\(counter).png")
         do {
             let reply = try await connection.request(.render(
                 generation: generation, width: size.width, height: size.height,
-                scale: Double(NSScreen.main?.backingScaleFactor ?? 2), scheme: colorScheme.rawValue,
-                dynamicType: textSize.rawValue, locale: language.identifier, rightToLeft: isRightToLeft, output: path
+                scale: scale, scheme: colorScheme.rawValue,
+                dynamicType: textSize.rawValue, locale: language.identifier, rightToLeft: isRightToLeft,
+                fitsContent: fitsContent, safeTop: safeArea.top, safeBottom: safeArea.bottom, output: path
             ))
+            // The host says what size it drew when it chose one (the content's own).
+            if let width = reply["pointWidth"] as? Double, let height = reply["pointHeight"] as? Double,
+               width > 0, height > 0 {
+                size = CGSize(width: width, height: height)
+            }
             // A newer render or a new run took over while this one was drawing.
             guard counter == renderCounter, self.connection === connection else { return }
             guard reply.isOK, let image = NSImage(contentsOfFile: path) else {

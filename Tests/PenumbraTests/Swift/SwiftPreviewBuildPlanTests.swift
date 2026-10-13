@@ -162,6 +162,96 @@ final class SwiftPreviewBuildPlanTests: XCTestCase {
         guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
         return arguments[index + 1]
     }
+
+    // MARK: iOS Simulator
+
+    private func simulatorPlan(
+        buildSystem: SwiftPreviewBuildPlan.BuildSystem = .xcode(project: "/p/App/App.xcodeproj")
+    ) throws -> SwiftPreviewBuildPlan {
+        let source = "import SwiftUI\n#Preview { Text(\"a\") }\n"
+        let block = try XCTUnwrap(SwiftPreviewExtractor.extract(from: source).first)
+        return SwiftPreviewBuildPlan(job: .init(
+            packageRoot: "/p/App", scratchPath: "/cache/scratch-ios", workDirectory: "/cache/work-ios",
+            targetName: "App", sourcePath: "/p/App/App/ContentView.swift", sourceText: source,
+            imports: ["import SwiftUI"], block: block, deploymentTarget: "27.0", buildSystem: buildSystem,
+            platform: .iOSSimulator, sdkPath: "/Xcode/iPhoneSimulator27.0.sdk"
+        ))
+    }
+
+    func testTheSimulatorCommandsUseTheSimulatorTripleAndSDK() throws {
+        let plan = try simulatorPlan()
+        XCTAssertEqual(plan.targetTriple, "arm64-apple-ios27.0-simulator")
+        for command in [plan.supportCommand, plan.hostCommand(binPath: "/b", objects: ["/b/a.o"]), plan.thunkCommand(binPath: "/b", generation: 1)] {
+            XCTAssertEqual(value(after: "-target", in: command.arguments), "arm64-apple-ios27.0-simulator")
+            XCTAssertEqual(value(after: "-sdk", in: command.arguments), "/Xcode/iPhoneSimulator27.0.sdk")
+        }
+        // The macOS plan has no `-sdk` for swiftc (its default SDK is macOS's).
+        XCTAssertFalse(try self.plan(source: counterSource).hostCommand(binPath: "/b", objects: []).arguments.contains("-sdk"))
+    }
+
+    func testAnXcodeBuildForTheSimulatorUsesItsSDKAndProductsFolder() throws {
+        let plan = try simulatorPlan()
+        XCTAssertEqual(value(after: "-sdk", in: plan.buildCommand.arguments), "iphonesimulator")
+        XCTAssertEqual(plan.knownBinPath, "/cache/scratch-ios/Products/Debug-iphonesimulator")
+        XCTAssertEqual(plan.intermediatesPath, "/cache/scratch-ios/Intermediates")
+    }
+
+    func testTheSimulatorHostIsAnAppBundleWithItsOwnIdentifier() throws {
+        let plan = try simulatorPlan()
+        XCTAssertEqual(plan.hostBundlePath, "/cache/work-ios/host-ios/UmbraPreviewHost.app")
+        XCTAssertEqual(plan.hostExecutablePath(binPath: "/b"), "/cache/work-ios/host-ios/UmbraPreviewHost.app/UmbraPreviewHost")
+        XCTAssertEqual(value(after: "-o", in: plan.hostCommand(binPath: "/b", objects: []).arguments), plan.hostExecutablePath(binPath: "/b"))
+        XCTAssertTrue(plan.supportDirectory.hasSuffix("-ios"))
+        // Stable per work directory, different between two.
+        XCTAssertTrue(plan.hostBundleIdentifier.hasPrefix("com.umbra.preview."))
+        XCTAssertEqual(plan.hostBundleIdentifier, try simulatorPlan().hostBundleIdentifier)
+        var other = plan
+        other.job.workDirectory = "/cache/other"
+        XCTAssertNotEqual(other.hostBundleIdentifier, plan.hostBundleIdentifier)
+        // The macOS host is a bare executable beside the objects.
+        let mac = try self.plan(source: counterSource)
+        XCTAssertNil(mac.hostBundlePath)
+        XCTAssertEqual(mac.hostExecutablePath(binPath: "/b"), "/b/UmbraPreviewHost")
+        XCTAssertNil(mac.hostInfoPlist)
+    }
+
+    func testTheSimulatorHostAdoptsTheSceneLifecycle() throws {
+        let plan = try simulatorPlan()
+        let info = try XCTUnwrap(plan.hostInfoPlist)
+        // iOS 27 traps at launch without a scene manifest (Tools/PreviewSpike/ios-simulator).
+        XCTAssertTrue(info.contains("UIApplicationSceneManifest"))
+        XCTAssertTrue(info.contains("<string>UmbraSceneDelegate</string>"))
+        XCTAssertTrue(info.contains("<string>\(plan.hostBundleIdentifier)</string>"))
+        XCTAssertTrue(info.contains("<key>MinimumOSVersion</key><string>27.0</string>"))
+        let host = plan.hostSource
+        XCTAssertTrue(host.contains("UIWindowSceneDelegate"))
+        XCTAssertTrue(host.contains("@objc(UmbraSceneDelegate)"))
+        XCTAssertTrue(host.contains("drawHierarchy"))
+        XCTAssertFalse(host.contains("import AppKit"))
+    }
+
+    func testTheSimulatorThunkHandsOverAViewController() throws {
+        let text = try simulatorPlan().thunkSource(mode: .copy)
+        XCTAssertTrue(text.contains("import UIKit"))
+        XCTAssertFalse(text.contains("import AppKit"))
+        XCTAssertTrue(text.contains("UIHostingController(rootView: AnyView(UmbraPreviewRoot()))"))
+        XCTAssertFalse(text.contains("NSHostingView"))
+        XCTAssertTrue(text.contains("@_cdecl(\"umbra_preview_make_view\")"))
+    }
+
+    func testBuildSettingsAreReadByName() {
+        let output = """
+        Build settings for action build and target App:
+            IPHONEOS_DEPLOYMENT_TARGET = 18.0
+            PLATFORM_NAME = iphoneos
+            PRODUCT_NAME = App
+        """
+        XCTAssertEqual(SwiftPreviewBuildPlan.buildSetting("IPHONEOS_DEPLOYMENT_TARGET", fromBuildSettings: output), "18.0")
+        XCTAssertEqual(SwiftPreviewBuildPlan.buildSetting("PRODUCT_NAME", fromBuildSettings: output), "App")
+        // A longer name that starts with the one asked for is not it.
+        XCTAssertNil(SwiftPreviewBuildPlan.buildSetting("PLATFORM", fromBuildSettings: output))
+        XCTAssertNil(SwiftPreviewBuildPlan.buildSetting("MACOSX_DEPLOYMENT_TARGET", fromBuildSettings: output))
+    }
 }
 
 /// The whole pipeline against a real toolchain: build a package, link the host, compile a thunk,
@@ -357,5 +447,64 @@ final class SwiftPreviewPipelineIntegrationTests: XCTestCase {
             }
         }
         return false
+    }
+
+    // MARK: The preview's own frame
+
+    func testAFixedFrameThatEndsTheBodyIsFound() {
+        func frame(_ body: String) -> String? { SwiftPreviewBuildPlan.outerFixedFrame(in: body)?.text }
+        XCTAssertEqual(frame("Dashboard()\n    .frame(width: 1100, height: 720)\n"), ".frame(width: 1100, height: 720)")
+        XCTAssertEqual(frame("Dashboard().frame(width: 320.5, height: 480, alignment: .topLeading)"),
+                       ".frame(width: 320.5, height: 480, alignment: .topLeading)")
+        XCTAssertEqual(frame("Text(\"x\").frame(width: 200)"), ".frame(width: 200)")
+        XCTAssertEqual(frame("Text(\"x\")\n  .frame(height: 60)  "), ".frame(height: 60)")
+        XCTAssertEqual(frame("NavigationStack { Home() }.frame(width: 400, height: 300)"), ".frame(width: 400, height: 300)")
+    }
+
+    func testOnlyAnOuterFixedFrameIsTaken() {
+        func frame(_ body: String) -> String? { SwiftPreviewBuildPlan.outerFixedFrame(in: body)?.text }
+        // The view's own layout.
+        XCTAssertNil(frame("Home().frame(maxWidth: .infinity)"))
+        XCTAssertNil(frame("Home().frame(minWidth: 200, minHeight: 100)"))
+        XCTAssertNil(frame("Home().frame(width: 300, maxHeight: .infinity)"))
+        XCTAssertNil(frame("Home().frame(width: size, height: size)"))
+        // Another modifier follows, or the frame is inside a container.
+        XCTAssertNil(frame("Home().frame(width: 300, height: 200).padding()"))
+        XCTAssertNil(frame("VStack { Text(\"a\").frame(width: 10, height: 10) }"))
+        XCTAssertNil(frame("Home()"))
+        XCTAssertNil(frame("Home().frame()"))
+        XCTAssertNil(frame(""))
+    }
+
+    func testTheThunkLeavesOutTheFrameOnlyWhenAsked() throws {
+        let source = """
+        import SwiftUI
+
+        #Preview {
+            Dashboard()
+                .frame(width: 1100, height: 720)
+        }
+        """
+        func thunk(drops: Bool) throws -> (text: String, plan: SwiftPreviewBuildPlan) {
+            let block = try XCTUnwrap(SwiftPreviewExtractor.extract(from: source).first)
+            let plan = SwiftPreviewBuildPlan(job: .init(
+                packageRoot: "/p/Pkg", scratchPath: "/cache/pv", workDirectory: "/cache/work",
+                targetName: "ToyUI", sourcePath: "/p/Pkg/Sources/ToyUI/Dashboard.swift",
+                sourceText: source, imports: ["import SwiftUI"], block: block, dropsOuterFrame: drops
+            ))
+            return (plan.thunkSource(mode: .copy), plan)
+        }
+        let kept = try thunk(drops: false)
+        XCTAssertTrue(kept.text.contains(".frame(width: 1100, height: 720)"))
+        XCTAssertNil(kept.plan.droppedFrame)
+
+        let dropped = try thunk(drops: true)
+        // In the thunk's own copy of the body only: the file's text before it is as written.
+        XCTAssertTrue(dropped.text.contains("Dashboard()"))
+        XCTAssertFalse(dropped.text.contains(".frame(width: 1100, height: 720)"))
+        XCTAssertEqual(dropped.plan.droppedFrame, ".frame(width: 1100, height: 720)")
+        // Same number of lines either way, so diagnostics still point at the right line.
+        XCTAssertEqual(kept.text.split(separator: "\n", omittingEmptySubsequences: false).count,
+                       dropped.text.split(separator: "\n", omittingEmptySubsequences: false).count)
     }
 }
