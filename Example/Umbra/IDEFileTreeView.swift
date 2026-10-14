@@ -15,6 +15,7 @@ struct IDEFileTreeActions {
     var openOnWeb: (_ url: URL, _ copy: Bool) -> Void
     var addToIgnoreFile: (_ url: URL, _ localOnly: Bool) -> Void
     var showClassDiagram: (URL) -> Void
+    var inspectCode: (URL) -> Void
 }
 
 struct IDEFileTreeView: View {
@@ -443,6 +444,9 @@ private struct IDEFileTreeRow: View {
             }
             if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
                 Button("Show Class Diagram") { selectAndRun { actions.showClassDiagram(node.url) } }
+            }
+            if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
+                Button("Inspect Code…") { selectAndRun { actions.inspectCode(node.url) } }
             }
             if node.isDirectory {
                 Button("Find in Files Here…") { selectAndRun { actions.findInFiles(node.url) } }

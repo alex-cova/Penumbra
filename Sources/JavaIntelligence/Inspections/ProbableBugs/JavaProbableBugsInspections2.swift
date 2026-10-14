@@ -64,6 +64,7 @@ enum JavaIntegerDivisionInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let division = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let left = division.child(byFieldName: "left") else { return [] }

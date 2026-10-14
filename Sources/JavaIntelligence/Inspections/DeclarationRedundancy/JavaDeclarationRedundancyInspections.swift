@@ -12,6 +12,7 @@ enum JavaDuplicateThrowsInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         for type in ["type_identifier", "scoped_type_identifier"] {
             guard let node = JavaInspectionSupport.node(of: type, for: diagnostic, tree: tree, source: source),
@@ -38,6 +39,7 @@ enum JavaEmptyClassInitializerInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Empty class initializer", node: node, fixTitle: "Remove initializer"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         for type in nodeTypes {
             guard let node = JavaInspectionSupport.node(of: type, for: diagnostic, tree: tree, source: source) else { continue }
@@ -69,6 +71,7 @@ enum JavaRedundantCloseInspection: JavaNodeInspection {
         return names.contains(object.text) ? last : nil
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let statement = JavaInspectionSupport.node(of: "expression_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaJumpStatements.removeFix(title: "Remove 'close()'", node: statement, in: tree)

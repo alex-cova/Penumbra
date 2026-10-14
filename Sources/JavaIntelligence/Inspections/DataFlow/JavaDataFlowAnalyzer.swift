@@ -725,7 +725,7 @@ final class JavaDataFlowAnalyzer {
         guard let value = state.values[key] else { return }
         switch value.nullness {
         case .null:
-            report(.nullDereference, "Variable '\(node.text)' is always null here: this throws a NullPointerException", at: node, severity: .error)
+            report(.nullDereference, "Variable '\(node.text)' is always null here: this throws a NullPointerException", at: node)
         case .nullable:
             report(.nullableDereference, "Variable '\(node.text)' may be null here", at: node)
         default:

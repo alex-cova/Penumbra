@@ -69,6 +69,7 @@ enum JavaRedundantIfStatementInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "if_statement", for: diagnostic, tree: tree, source: source),
               let (end, condition, returnsTrue) = analyze(node), !JavaBooleanSyntax.hasComment(node) else { return [] }
@@ -97,6 +98,7 @@ enum JavaSimplifiableConditionalInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "ternary_expression", for: diagnostic, tree: tree, source: source),
               let replacement = replacement(for: node) else { return [] }
@@ -195,6 +197,7 @@ enum JavaPointlessBooleanInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let outcome = outcome(of: node), let replacement = replacement(for: outcome) else { return [] }

@@ -34,6 +34,7 @@ enum JavaStringComparisonInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaIdentityComparison.equalsFix(title: "Replace with 'equals()'", for: node, in: tree)
@@ -53,6 +54,7 @@ enum JavaNumberComparisonInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaIdentityComparison.equalsFix(title: "Replace with 'equals()'", for: node, in: tree)
@@ -71,6 +73,7 @@ enum JavaArrayComparisonInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let (left, right, negated) = JavaIdentityComparison.operands(of: node) else { return [] }

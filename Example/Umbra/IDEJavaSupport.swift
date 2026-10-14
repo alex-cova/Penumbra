@@ -117,10 +117,9 @@ final class IDEJavaSupport {
     private var appliedInspectionConfiguration: InspectionConfiguration?
 
     private struct InspectionConfiguration: Equatable {
-        let enabled: Set<JavaInspectionRule>
-        let severities: [JavaInspectionRule: JavaInspection.Severity]
-        let thresholds: JavaInspectionThresholds
-        let projectOptions: JavaProjectInspectionOptions
+        let profile: JavaInspectionProfile
+        let projectRoot: URL?
+        let testRoots: [URL]
     }
     @ObservationIgnored private var compilerConfigurationTask: Task<Void, Never>?
 
@@ -240,32 +239,39 @@ final class IDEJavaSupport {
     }
 
     /// Applies the code-insight settings the Java services own: how long a file rests before its
-    /// inspections run again, which inspections run and at what severity, and what a Suppress
-    /// quick fix writes.
+    /// inspections run again, which inspection profile applies (with the project root and test
+    /// source directories its per-scope exceptions are judged against), and what a Suppress quick
+    /// fix writes.
     func applyCodeInsightPreferences(
         autoreparseDelay: Duration,
         suppressionStyle: JavaSuppressionStyle,
-        enabledInspections: Set<JavaInspectionRule>,
-        inspectionSeverities: [JavaInspectionRule: JavaInspection.Severity],
-        inspectionThresholds: JavaInspectionThresholds,
-        projectInspectionOptions: JavaProjectInspectionOptions
+        inspectionProfile: JavaInspectionProfile,
+        projectRoot: URL?,
+        testRoots: [URL]
     ) {
-        let configuration = InspectionConfiguration(
-            enabled: enabledInspections, severities: inspectionSeverities, thresholds: inspectionThresholds, projectOptions: projectInspectionOptions
-        )
+        let configuration = InspectionConfiguration(profile: inspectionProfile, projectRoot: projectRoot, testRoots: testRoots)
         let previous = appliedInspectionConfiguration
         appliedInspectionConfiguration = configuration
         let changed = previous != configuration
         Task { [inspectionService, codeActionProvider] in
             await inspectionService.setIdleDelay(autoreparseDelay)
             await codeActionProvider.setSuppressionStyle(suppressionStyle)
+            await codeActionProvider.setQuietFindingsSource { url in await inspectionService.quietFindings(for: url) }
             guard changed else { return }
-            await inspectionService.setEnabledRules(enabledInspections)
-            await inspectionService.setSeverityOverrides(inspectionSeverities)
-            await inspectionService.setThresholds(inspectionThresholds)
-            await inspectionService.setProjectOptions(projectInspectionOptions)
+            await inspectionService.setProfile(inspectionProfile, projectRoot: projectRoot, testRoots: testRoots)
             // The first application only installs the saved settings; there is nothing to refresh.
             if previous != nil { onInspectionConfigurationChanged?() }
+        }
+    }
+
+    /// A batch runner (Inspect Code, Run Inspection by Name, the commit check) over this window's
+    /// index, with each file seeing the shards of its Gradle source set.
+    func makeBatchInspector() -> JavaBatchInspector {
+        let model = gradle.model
+        let paths = paths
+        return JavaBatchInspector(index: javaIndex, usageProvider: findUsagesProvider) { url in
+            guard let model else { return nil }
+            return model.visibleShardPaths(forFile: url, paths: paths)
         }
     }
 

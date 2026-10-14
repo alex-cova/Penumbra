@@ -89,6 +89,7 @@ enum JavaJavadocMissingParamInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         for type in ["identifier", "type_identifier"] {
             guard let name = JavaInspectionSupport.node(of: type, for: diagnostic, tree: tree, source: source),
@@ -117,6 +118,7 @@ enum JavaJavadocMissingReturnInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Missing '@return' tag", node: type, fixTitle: canFix ? "Add '@return'" : nil))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         let range = ProblemLocator.nsRange(for: diagnostic.range, in: source)
         let start = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location, in: source)

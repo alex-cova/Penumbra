@@ -247,6 +247,22 @@ public struct IDERootView: View {
                     .preferredColorScheme(IDEAppearance.preferredColorScheme)
             }
         }
+        .sheet(item: Binding(
+            get: { workspace.inspectionRuns.pendingScopeRequest },
+            set: { workspace.inspectionRuns.pendingScopeRequest = $0 }
+        )) { request in
+            IDEInspectCodeSheet(request: request)
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
+        .sheet(isPresented: Binding(
+            get: { workspace.inspectionRuns.isNamePickerPresented },
+            set: { workspace.inspectionRuns.isNamePickerPresented = $0 }
+        )) {
+            IDEInspectionByNameSheet()
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .sheet(isPresented: Binding(
             get: { workspace.isNewProjectSheetPresented },
             set: { workspace.isNewProjectSheetPresented = $0 }

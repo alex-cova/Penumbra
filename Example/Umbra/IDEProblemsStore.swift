@@ -67,6 +67,20 @@ final class IDEProblemsStore {
         )
     }
 
+    /// Error, warning and weaker (information, hint) counts of one file across every source, ignoring
+    /// the severity filter: what the editor's inspection widget shows.
+    func counts(for url: URL) -> (errors: Int, warnings: Int, weaker: Int) {
+        let key = url.standardizedFileURL
+        let buckets = [editorDiagnostics, compilerDiagnostics, inspectionDiagnostics, buildDiagnostics]
+            .map { source in source.filter { $0.key == key } }
+        let rows = DiagnosticGrouping.files(from: buckets).flatMap(\.rows)
+        return (
+            rows.filter { $0.diagnostic.severity == .error }.count,
+            rows.filter { $0.diagnostic.severity == .warning }.count,
+            rows.filter { $0.diagnostic.severity == .information || $0.diagnostic.severity == .hint }.count
+        )
+    }
+
     var errorCount: Int {
         DiagnosticGrouping.counts(in: allFiles).errors + buildMessages.filter { $0.severity == .error }.count
     }

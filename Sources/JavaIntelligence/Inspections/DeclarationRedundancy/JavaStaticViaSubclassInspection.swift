@@ -47,6 +47,7 @@ enum JavaStaticViaSubclassInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let qualifier = JavaInspectionSupport.node(of: "identifier", for: diagnostic, tree: tree, source: source),
               let parent = qualifier.parent, let (_, owner) = resolve(parent) else { return [] }

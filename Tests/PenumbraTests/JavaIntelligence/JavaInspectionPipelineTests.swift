@@ -104,6 +104,53 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertTrue(actions.contains { $0.title.hasPrefix("Suppress 'string-comparison-identity'") })
     }
 
+    func testNoHighlightingKeepsTheFixButPublishesNothing() async throws {
+        let service = JavaInspectionService(index: JavaIndex(), enabledRules: indexFreeRules, idleDelay: .milliseconds(10))
+        await service.setSeverityOverrides([.stringComparisonIdentity: .noHighlighting])
+        let box = DiagnosticBox()
+        await service.setResultHandler { _, diagnostics in box.set(diagnostics) }
+        await service.analyzeNow(document(comparing), force: true)
+        XCTAssertEqual(box.value.map(\.code), [])
+        let quiet = await service.quietFindings(for: url)
+        XCTAssertEqual(quiet.map(\.code), ["string-comparison-identity"])
+        let provider = JavaCodeActionProvider(index: JavaIndex())
+        await provider.setQuietFindingsSource { [service] url in await service.quietFindings(for: url) }
+        let actions = await provider.codeActions(for: document(comparing), at: quiet[0].range.start, diagnostics: [])
+        XCTAssertTrue(actions.contains { $0.title == "Replace with 'equals()'" })
+        XCTAssertTrue(actions.contains { $0.command?.id == JavaInspectionCommand.disable })
+    }
+
+    func testProfileScopeSilencesARuleOnlyInTests() async throws {
+        let service = JavaInspectionService(index: JavaIndex(), enabledRules: indexFreeRules, idleDelay: .milliseconds(10))
+        var profile = JavaInspectionProfile.standard()
+        profile.setEnabled(false, for: .unresolvedType)
+        profile.setEnabled(false, for: .unresolvedImport)
+        profile.scopedOverrides = [.init(code: "string-comparison-identity", scope: .tests, isEnabled: false)]
+        await service.setProfile(profile, projectRoot: URL(fileURLWithPath: "/proj"), testRoots: [URL(fileURLWithPath: "/proj/t")])
+        let box = DiagnosticBox()
+        await service.setResultHandler { _, diagnostics in box.set(diagnostics) }
+        await service.analyzeNow(document(comparing), force: true)
+        XCTAssertEqual(box.value.map(\.code), ["string-comparison-identity"])
+        await service.setProfile(profile, projectRoot: URL(fileURLWithPath: "/"), testRoots: [URL(fileURLWithPath: "/proj")])
+        await service.analyzeNow(document(comparing), force: true)
+        XCTAssertEqual(box.value.map(\.code), [])
+    }
+
+    func testFixAllInFileIsOfferedWhenARuleHasSeveralFindings() async throws {
+        let twice = """
+        class T {
+            boolean f(String a, String b) { return a == b; }
+            boolean g(String a, String b) { return a == b; }
+        }
+        """
+        let diagnostics = await analyze(twice)
+        XCTAssertEqual(diagnostics.count, 2)
+        let provider = JavaCodeActionProvider(index: JavaIndex())
+        let actions = await provider.codeActions(for: document(twice), at: diagnostics[0].range.start, diagnostics: diagnostics)
+        let all = try XCTUnwrap(actions.first { $0.kind == "quickfix.fixAll" })
+        XCTAssertEqual(all.edits.count, 2)
+    }
+
     func testNoFixIsOfferedAwayFromTheDiagnostic() async throws {
         let diagnostics = await analyze(comparing)
         let provider = JavaCodeActionProvider(index: JavaIndex())

@@ -57,6 +57,7 @@ enum JavaThrowableNotThrownInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "'\(typeName)' is created but not thrown", node: creation, fixTitle: "Add 'throw'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let creation = JavaInspectionSupport.node(of: "object_creation_expression", for: diagnostic, tree: tree, source: source) else { return [] }
         let edit = JavaInspectionSupport.edit(replacingBytes: creation.startByte..<creation.startByte, with: "throw ", in: tree)
@@ -90,6 +91,7 @@ enum JavaStringBuilderCharArgumentInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let literal = JavaInspectionSupport.node(of: "character_literal", for: diagnostic, tree: tree, source: source) else { return [] }
         var inner = String(literal.text.dropFirst().dropLast())
@@ -113,6 +115,7 @@ enum JavaArrayObjectMethodInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "method_invocation", for: diagnostic, tree: tree, source: source),
               let name = node.child(byFieldName: "name")?.text, let object = node.child(byFieldName: "object"),

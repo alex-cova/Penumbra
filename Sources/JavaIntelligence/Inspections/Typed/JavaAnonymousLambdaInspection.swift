@@ -138,6 +138,7 @@ enum JavaAnonymousCanBeLambdaInspection: JavaTypedInspection {
         return nil
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = creation(for: diagnostic, tree: tree, source: source), let shape = shape(of: node) else { return [] }
         let parameters = shape.parameterNames.count == 1 ? shape.parameterNames[0] : "(\(shape.parameterNames.joined(separator: ", ")))"

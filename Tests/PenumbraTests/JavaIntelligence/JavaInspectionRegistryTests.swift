@@ -36,7 +36,11 @@ final class JavaInspectionRegistryTests: XCTestCase {
 
     func testNoisyStyleRulesStartDisabled() {
         let off = Set(JavaInspectionRule.allCases.filter { !$0.isEnabledByDefault })
-        XCTAssertEqual(off, [.publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass, .declarationUsesConcreteClass, .classMayBeInterface])
+        XCTAssertEqual(off, [
+            .publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass, .declarationUsesConcreteClass,
+            .classMayBeInterface, .literalEqualsReversed, .redundantFieldInitializer, .hardcodedCredential,
+            .floatingPointEquality,
+        ])
         XCTAssertEqual(JavaInspectionRule.enabledByDefault, Set(JavaInspectionRule.allCases).subtracting(off))
     }
 

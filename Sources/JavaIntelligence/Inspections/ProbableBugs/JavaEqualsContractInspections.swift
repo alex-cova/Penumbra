@@ -94,6 +94,7 @@ enum JavaEqualInsteadOfEqualsInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Method 'equal()' is probably meant to be 'equals()'", node: name, fixTitle: "Rename to 'equals'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let name = JavaInspectionSupport.node(of: "identifier", for: diagnostic, tree: tree, source: source) else { return [] }
         let edit = JavaInspectionSupport.edit(replacingBytes: name.byteRange, with: "equals", in: tree)

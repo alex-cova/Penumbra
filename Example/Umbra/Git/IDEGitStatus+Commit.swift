@@ -50,6 +50,20 @@ extension IDEGitStatusModel {
         })
     }
 
+    private var analyzeKey: String? {
+        repositoryRootPath.map { "umbra.git.analyzeBeforeCommit.\($0)" }
+    }
+
+    /// Whether a commit first inspects its staged Java files (IntelliJ's "Analyze code" commit
+    /// check). Per repository, off by default.
+    var analyzesCodeBeforeCommit: Bool {
+        get { analyzeKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false }
+        set {
+            guard let key = analyzeKey else { return }
+            if newValue { UserDefaults.standard.set(true, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+    }
+
     private func commitFacts(options: IDEGitCommitOptions) async -> IDEGitCommitFacts {
         var facts = IDEGitCommitFacts()
         facts.isAmend = options.amend
@@ -73,6 +87,12 @@ extension IDEGitStatusModel {
             facts.crlfPaths = paths.filter { endings[$0] == .crlf || endings[$0] == .mixed }
         }
         let root = rootURL.path
+        if analyzesCodeBeforeCommit, let provider = codeAnalysisProvider {
+            let javaFiles = staged.filter { $0.relativePath.hasSuffix(".java") }
+                .map { URL(fileURLWithPath: (root as NSString).appendingPathComponent($0.relativePath)) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            if !javaFiles.isEmpty { facts.codeAnalysis = await provider(javaFiles) }
+        }
         for change in staged where change.staged != nil {
             let absolute = (root as NSString).appendingPathComponent(change.relativePath)
             if let size = (try? FileManager.default.attributesOfItem(atPath: absolute))?[.size] as? Int,

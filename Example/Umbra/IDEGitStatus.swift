@@ -112,6 +112,9 @@ final class IDEGitStatusModel {
     var commitMessage = ""
     /// Amend, sign-off and skip-hooks, kept between commits in this window.
     var commitOptions = IDEGitCommitOptions()
+    /// Inspects the given staged Java files for the commit check ("Analyze Code"); set by the window,
+    /// which owns the Java index and the inspection profile.
+    @ObservationIgnored var codeAnalysisProvider: (@MainActor (_ files: [URL]) async -> IDEGitCommitFacts.CodeAnalysis?)?
     /// The row that drives the diff. It is always a member of `selectedChangePaths` when set.
     var selectedChangePath: String?
     /// Every selected row, for actions that take several files (Revert…).

@@ -37,6 +37,7 @@ enum JavaEmptyStatementBodyInspection: JavaNodeInspection {
         return found
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let semicolon = JavaInspectionSupport.node(of: ";", for: diagnostic, tree: tree, source: source) else { return [] }
         let braces = JavaInspectionSupport.edit(replacingBytes: semicolon.byteRange, with: "{}", in: tree)

@@ -52,6 +52,7 @@ enum JavaSizeComparisonWithZeroInspection: JavaTypedInspection {
         return methods.contains { $0.parameters.isEmpty && !$0.modifiers.contains(.staticFlag) }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let (call, empty) = analyze(node), let object = call.child(byFieldName: "object") else { return [] }
@@ -135,6 +136,7 @@ enum JavaRedundantTypeCastInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "cast_expression", for: diagnostic, tree: tree, source: source),
               let value = redundantOperand(of: node) else { return [] }
@@ -166,6 +168,7 @@ enum JavaDeprecatedBoxedConstructorInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "object_creation_expression", for: diagnostic, tree: tree, source: source),
               let (name, argument) = wrapper(of: node), name != "Float" else { return [] }
@@ -191,6 +194,7 @@ enum JavaEqualsEmptyStringInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "'equals(\"\")' can be replaced with 'isEmpty()'", node: node, fixTitle: "Replace with 'isEmpty()'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "method_invocation", for: diagnostic, tree: tree, source: source),
               let object = receiver(of: node) else { return [] }
@@ -222,6 +226,7 @@ enum JavaExplicitTypeArgumentsInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Explicit type arguments can be replaced with '<>'", node: arguments, fixTitle: "Replace with '<>'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let arguments = JavaInspectionSupport.node(of: "type_arguments", for: diagnostic, tree: tree, source: source),
               let creation = arguments.parent?.parent, creation.type == "object_creation_expression",

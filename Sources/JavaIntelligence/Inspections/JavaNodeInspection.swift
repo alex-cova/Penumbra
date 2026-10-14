@@ -12,9 +12,12 @@ protocol JavaNodeInspection {
     /// Quick fixes for one of this rule's diagnostics. `Diagnostic` carries no edits, so they are
     /// rebuilt from the diagnostic's range against a fresh tree of the same text.
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction]
+    /// Whether `fixes` can ever return something, so "Fix all" is offered only where it can work.
+    static var providesFixes: Bool { get }
 }
 
 extension JavaNodeInspection {
+    static var providesFixes: Bool { false }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] { [] }
 }
 
@@ -26,9 +29,11 @@ protocol JavaTypedInspection {
     static var nodeTypes: Set<String> { get }
     static func check(nodes: [SyntaxNode], context: JavaInspectionContext, report: (JavaInspection) -> Void) async
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction]
+    static var providesFixes: Bool { get }
 }
 
 extension JavaTypedInspection {
+    static var providesFixes: Bool { false }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] { [] }
 }
 
@@ -126,6 +131,36 @@ enum JavaInspectionRegistry {
         JavaSortedCollectionNonComparableInspection.self,
         JavaSuspiciousToArrayInspection.self,
         JavaListRemoveInLoopInspection.self,
+        // More probable bugs and redundancy
+        JavaOptionalGetWithoutCheckInspection.self,
+        JavaSwitchFallThroughInspection.self,
+        JavaDuplicateConditionInspection.self,
+        JavaThreadRunCallInspection.self,
+        JavaFormatArgumentCountInspection.self,
+        JavaBigDecimalEqualsInspection.self,
+        JavaLambdaCanBeMethodReferenceInspection.self,
+        JavaLambdaBodyCanBeExpressionInspection.self,
+        JavaLiteralEqualsReversedInspection.self,
+        JavaRedundantFieldInitializerInspection.self,
+        JavaUnnecessarySuperCallInspection.self,
+        JavaRedundantInterfaceModifierInspection.self,
+        JavaStringLengthZeroCheckInspection.self,
+        // Threading, security and more probable bugs
+        JavaSplitRegexSpecialCharInspection.self,
+        JavaExceptionCauseLostInspection.self,
+        JavaFloatingPointEqualityInspection.self,
+        JavaShiftOutOfRangeInspection.self,
+        JavaAssignmentAsConditionInspection.self,
+        JavaPatternCompileInLoopInspection.self,
+        JavaVolatileNonAtomicUpdateInspection.self,
+        JavaWaitNotifyOutsideSynchronizedInspection.self,
+        JavaStaticNonThreadSafeFormatInspection.self,
+        JavaDoubleCheckedLockingInspection.self,
+        JavaWeakCryptographicAlgorithmInspection.self,
+        JavaSqlStringConcatenationInspection.self,
+        JavaRuntimeExecConcatenationInspection.self,
+        JavaHardcodedCredentialInspection.self,
+        JavaAssertEqualsArgumentOrderInspection.self,
         // Control flow
         JavaRedundantIfStatementInspection.self,
         JavaSimplifiableConditionalInspection.self,
@@ -152,6 +187,8 @@ enum JavaInspectionRegistry {
         JavaUnusedPrivateMemberInspection.self,
         JavaForCanBeForeachInspection.self,
         JavaTryFinallyCanBeTryWithResourcesInspection.self,
+        JavaUnusedLocalVariableInspection.self,
+        JavaFieldCanBeFinalInspection.self,
         // Metrics
         JavaCyclomaticComplexityInspection.self,
         JavaNestingDepthInspection.self,

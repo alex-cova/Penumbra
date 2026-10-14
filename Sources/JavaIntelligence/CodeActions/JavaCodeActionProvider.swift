@@ -8,6 +8,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
     private var suppressionStyle: JavaSuppressionStyle = .annotation
+    private var quietFindingsSource: (@Sendable (URL) async -> [Diagnostic])?
 
     /// Most import candidates offered for one unresolved name.
     private static let maxImportCandidates = 8
@@ -28,6 +29,12 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         suppressionStyle = style
     }
 
+    /// Where findings set to "No highlighting (fix available)" come from (the inspection service),
+    /// so their fixes are still offered although nothing is drawn.
+    public func setQuietFindingsSource(_ source: (@Sendable (URL) async -> [Diagnostic])?) {
+        quietFindingsSource = source
+    }
+
     public func codeActions(
         for document: Document,
         at position: TextPosition,
@@ -37,11 +44,13 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         let text = JavaNavigationText.fullText(of: document)
         guard !text.isEmpty else { return [] }
         let scope = scope(for: document.url)
-        return await JavaIndex.$queryScope.withValue(scope) {
+        var diagnostics = diagnostics
+        if let source = quietFindingsSource, let url = document.url {
+            diagnostics.append(contentsOf: await source(url))
+        }
+        return await JavaIndex.$queryScope.withValue(scope) { [diagnostics] in
             var actions = await importActions(in: text, at: position, diagnostics: diagnostics)
-            actions.append(contentsOf: overrideActions(in: text, at: position, diagnostics: diagnostics))
-            actions.append(contentsOf: inspectionImportFixes(in: text, at: position, diagnostics: diagnostics))
-            actions.append(contentsOf: registeredInspectionFixes(in: text, at: position, diagnostics: diagnostics))
+            actions.append(contentsOf: inspectionFixes(in: text, at: position, diagnostics: diagnostics))
             actions.append(contentsOf: suppressionActions(in: text, at: position, diagnostics: diagnostics))
             let organized = JavaImportOrganizer.edits(in: text)
             if !organized.isEmpty {
@@ -56,67 +65,48 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         }
     }
 
-    private func overrideActions(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
-        guard let tree = JavaSyntaxParser().parse(text) else { return [] }
+    /// Fixes for the `java-inspection` findings on the caret's line (the rule's own quick fixes,
+    /// then "Fix all" when the rule has more findings in the file and the commands to disable it or
+    /// turn its highlighting off), each rule's group once.
+    private func inspectionFixes(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
         let ns = text as NSString
         let caret = min(max(0, position.utf16Offset), ns.length)
         let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
-        var actions: [CodeAction] = []
-        for diagnostic in diagnostics where diagnostic.source == "java-inspection" && diagnostic.code == "missing-override" {
-            let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
-            guard NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0 else { continue }
-            let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location, in: text)
-            guard let methodNode = enclosingMethodNode(at: byteOffset, in: tree) else { continue }
-            let insertByte = methodNode.startByte
-            let indent = leadingIndent(of: methodNode, in: tree)
-            let replacement = "@Override\n\(indent)"
-            let edit = TextEdit(
-                range: TextRange(
-                    start: JavaImportInserter.textPosition(forByteOffset: insertByte, in: tree.sourceBytes),
-                    end: JavaImportInserter.textPosition(forByteOffset: insertByte, in: tree.sourceBytes)
-                ),
-                replacement: replacement
-            )
-            actions.append(CodeAction(title: "Add @Override", kind: "quickfix", edits: [edit], isPreferred: true))
-        }
-        return actions
-    }
-
-    private func inspectionImportFixes(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
-        let ns = text as NSString
-        let caret = min(max(0, position.utf16Offset), ns.length)
-        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
-        var actions: [CodeAction] = []
-        for diagnostic in diagnostics where diagnostic.source == "java-inspection" {
-            let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
-            guard NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0 else {
-                continue
-            }
-            switch diagnostic.code {
-            case "unused-import", "duplicate-import", "unresolved-import":
-                guard let title = diagnostic.message.contains("import") ? removeImportTitle(for: diagnostic.code ?? "") : nil else { continue }
-                let edit = TextEdit(range: diagnostic.range, replacement: "")
-                actions.append(CodeAction(title: title, kind: "quickfix", edits: [edit], isPreferred: true))
-            default:
-                continue
-            }
-        }
-        return actions
-    }
-
-    /// Fixes from `JavaInspectionRegistry` for the `java-inspection` warnings on the caret's line.
-    private func registeredInspectionFixes(in text: String, at position: TextPosition, diagnostics: [Diagnostic]) -> [CodeAction] {
-        let ns = text as NSString
-        let caret = min(max(0, position.utf16Offset), ns.length)
-        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
-        let candidates = diagnostics.filter { diagnostic in
-            guard diagnostic.source == "java-inspection", let code = diagnostic.code,
-                  let rule = JavaInspectionRule(code: code), JavaInspectionRegistry.isRegistered(rule) else { return false }
+        let inspections = diagnostics.filter { $0.source == "java-inspection" && $0.code != nil }
+        let candidates = inspections.filter { diagnostic in
             let range = ProblemLocator.nsRange(for: diagnostic.range, in: text)
             return NSIntersectionRange(ns.lineRange(for: NSRange(location: range.location, length: 0)), caretLine).length > 0
         }
         guard !candidates.isEmpty, let tree = JavaSyntaxParser().parse(text) else { return [] }
-        return candidates.flatMap { JavaInspectionRegistry.fixes(for: $0, tree: tree, source: text) }
+        var actions: [CodeAction] = []
+        var seenCodes = Set<String>()
+        for diagnostic in candidates {
+            let fixes = JavaInspectionFixes.fixes(for: diagnostic, tree: tree, source: text)
+            actions.append(contentsOf: fixes)
+            guard let code = diagnostic.code, let rule = JavaInspectionRule(code: code), seenCodes.insert(code).inserted else { continue }
+            let sameRule = inspections.filter { $0.code == code }
+            if rule.hasQuickFix, sameRule.count > 1 {
+                let edits = JavaBatchFixer.allEdits(for: sameRule, tree: tree, source: text)
+                if edits.count > 1 {
+                    actions.append(CodeAction(
+                        title: "Fix all '\(rule.title)' problems in file", kind: "quickfix.fixAll", edits: edits
+                    ))
+                }
+            }
+            actions.append(CodeAction(
+                title: "Turn off highlighting for '\(rule.title)' (keep fix)", kind: "inspection",
+                edits: [], command: CodeActionCommand(id: JavaInspectionCommand.quiet, arguments: [code])
+            ))
+            actions.append(CodeAction(
+                title: "Disable inspection '\(rule.title)'", kind: "inspection",
+                edits: [], command: CodeActionCommand(id: JavaInspectionCommand.disable, arguments: [code])
+            ))
+            actions.append(CodeAction(
+                title: "Edit inspection settings…", kind: "inspection",
+                edits: [], command: CodeActionCommand(id: JavaInspectionCommand.configure, arguments: [code])
+            ))
+        }
+        return actions
     }
 
     /// "Suppress for method / class…" (or a `//noinspection` comment) for each warning on the
@@ -143,30 +133,6 @@ public actor JavaCodeActionProvider: CodeActionProviding {
             ))
         }
         return actions
-    }
-
-    private func removeImportTitle(for code: String) -> String? {
-        switch code {
-        case "unused-import": return "Remove unused import"
-        case "duplicate-import": return "Remove duplicate import"
-        case "unresolved-import": return "Remove import"
-        default: return nil
-        }
-    }
-
-    private func enclosingMethodNode(at byteOffset: Int, in tree: JavaSyntaxTree) -> SyntaxNode? {
-        var current: SyntaxNode? = tree.node(atByteOffset: byteOffset)
-        while let walk = current {
-            if walk.type == "method_declaration" { return walk }
-            current = walk.parent
-        }
-        return nil
-    }
-
-    private func leadingIndent(of methodNode: SyntaxNode, in tree: JavaSyntaxTree) -> String {
-        let lineStart = tree.sourceBytes[..<methodNode.startByte].lastIndex(of: UInt8(ascii: "\n")).map { $0 + 1 } ?? 0
-        let prefix = tree.sourceBytes[lineStart..<methodNode.startByte]
-        return String(decoding: prefix.prefix { $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\t") }, as: UTF8.self)
     }
 
     // MARK: - Import fixes

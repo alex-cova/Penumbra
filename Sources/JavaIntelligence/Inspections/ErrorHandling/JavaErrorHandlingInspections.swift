@@ -94,6 +94,7 @@ enum JavaEmptyFinallyBlockInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let clause = JavaInspectionSupport.node(of: "finally_clause", for: diagnostic, tree: tree, source: source),
               isRemovable(clause), let previous = clause.previousNamedSibling else { return [] }

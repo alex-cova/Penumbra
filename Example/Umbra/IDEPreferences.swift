@@ -601,8 +601,10 @@ public final class IDEPreferences {
         Set(JavaLineMarkerKind.allCases).subtracting(javaDisabledGutterIcons)
     }
 
-    /// Codes of the Java inspections the user turned off (every rule is on by default). Stored by
-    /// code so a renamed enum case cannot lose a choice. Machine-local: not part of `IDEPreferencesSnapshot`.
+    /// Codes of the Java inspections the user turned off (the rules that start switched off are
+    /// listed too). This and the next three keys are the "Default" inspection profile
+    /// (`IDEInspectionProfiles`). Stored by code so a renamed enum case cannot lose a choice.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
     var javaDisabledInspections: Set<String> {
         didSet { UserDefaults.standard.set(javaDisabledInspections.sorted(), forKey: Keys.javaDisabledInspections) }
     }

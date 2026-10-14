@@ -720,6 +720,13 @@ struct IDEGitCommitChecksSheet: View {
                         }
                         .controlSize(.small)
                     }
+                    if finding.kind == .codeAnalysis {
+                        Button("Review Problems") {
+                            workspace.gitStatus.sheets.finish(sheetID)
+                            workspace.reviewCommitAnalysis(relativePaths: finding.paths)
+                        }
+                        .controlSize(.small)
+                    }
                     if finding.kind == .detachedHead {
                         Button("New Branch…") {
                             workspace.gitStatus.sheets.finish(sheetID)

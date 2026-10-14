@@ -82,6 +82,7 @@ enum JavaDeclarationUsesConcreteClassInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let identifier = JavaInspectionSupport.node(of: "type_identifier", for: diagnostic, tree: tree, source: source),
               let interface = interfaces[identifier.text] else { return [] }

@@ -14,6 +14,7 @@ enum JavaSelfAssignmentInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "assignment_expression", for: diagnostic, tree: tree, source: source),
               let statement = node.parent, statement.type == "expression_statement" else { return [] }

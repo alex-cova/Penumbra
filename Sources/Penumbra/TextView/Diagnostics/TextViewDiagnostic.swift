@@ -10,16 +10,21 @@ public struct TextViewDiagnostic: Equatable, Sendable, Identifiable {
     public let message: String
     /// The tool that reported it ("java-inspection", "javac"…), shown after the message.
     public let source: String?
+    /// The reporting tool's id for the problem (an inspection's rule code, javac's lint category).
+    /// The hover can turn it into a readable name.
+    public let code: String?
 
     public init(id: String = UUID().uuidString,
                 range: NSRange,
                 severity: TextViewDiagnosticSeverity,
                 message: String = "",
-                source: String? = nil) {
+                source: String? = nil,
+                code: String? = nil) {
         self.id = id
         self.range = range
         self.severity = severity
         self.message = message
         self.source = source
+        self.code = code
     }
 }

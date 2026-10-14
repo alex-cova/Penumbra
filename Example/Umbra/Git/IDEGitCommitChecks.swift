@@ -26,6 +26,17 @@ struct IDEGitCommitFacts: Equatable, Sendable {
     var conflictMarkerPaths: [String] = []
     /// Files still in a conflicted state.
     var unresolvedPaths: [String] = []
+    /// What the inspection profile found in the staged Java files, when "Analyze Code" is on.
+    var codeAnalysis: CodeAnalysis?
+
+    struct CodeAnalysis: Equatable, Sendable {
+        var errors = 0
+        var warnings = 0
+        /// Project-relative paths of the files with an error or warning.
+        var paths: [String] = []
+
+        var hasProblems: Bool { errors + warnings > 0 }
+    }
 }
 
 struct IDEGitCommitFinding: Identifiable, Equatable, Sendable {
@@ -36,6 +47,7 @@ struct IDEGitCommitFinding: Identifiable, Equatable, Sendable {
         case detachedHead
         case largeFiles
         case lineEndings
+        case codeAnalysis
     }
 
     enum Severity: Sendable {
@@ -107,6 +119,16 @@ enum IDEGitCommitChecks {
                 title: "Windows line endings",
                 detail: "These files have CRLF line endings in the index: \(list(facts.crlfPaths)).",
                 paths: facts.crlfPaths))
+        }
+        if let analysis = facts.codeAnalysis, analysis.hasProblems {
+            var parts: [String] = []
+            if analysis.errors > 0 { parts.append("\(analysis.errors) error\(analysis.errors == 1 ? "" : "s")") }
+            if analysis.warnings > 0 { parts.append("\(analysis.warnings) warning\(analysis.warnings == 1 ? "" : "s")") }
+            findings.append(IDEGitCommitFinding(
+                kind: .codeAnalysis, severity: .warning,
+                title: "Code analysis found problems",
+                detail: "\(parts.joined(separator: " and ")) in: \(list(analysis.paths)).",
+                paths: analysis.paths))
         }
         return findings
     }

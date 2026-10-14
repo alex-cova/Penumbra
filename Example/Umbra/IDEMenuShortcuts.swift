@@ -17,6 +17,7 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case goToFile, goToSymbol, fileStructure, goToLine, recentLocations, commandPalette, nextProblem, previousProblem
     // Java
     case showContextActions, parameterInfo, goToTypeDefinition
+    case inspectCode, runInspectionByName
     case extractVariable, extractField, extractConstant, extractMethod
     case inlineVariable, encapsulateField
     case runLastConfiguration, debugLastConfiguration, runInContext, debugInContext
@@ -85,6 +86,9 @@ enum IDEMenuShortcuts {
         .commandPalette: KeyboardShortcut("p", modifiers: [.command, .shift]),
         .showContextActions: KeyboardShortcut(.return, modifiers: .option),
         .parameterInfo: nil,
+        .inspectCode: nil,
+        // IntelliJ's macOS key for Run Inspection by Name, in every preset.
+        .runInspectionByName: KeyboardShortcut("i", modifiers: [.command, .option, .shift]),
         .replaceInFiles: nil,
         .gitPull: nil,
         .gitPush: nil,

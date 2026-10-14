@@ -34,6 +34,8 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var positions: JavaPositionIndex?
     private var typeParameters: Set<String>?
     private var symbolTable: JavaFileSymbolTable?
+    private var assignedNameSet: Set<String>?
+    private var volatilityTables: [Int: [String: Bool]] = [:]
 
     /// Locals with their uses and every identifier by name, built once per tree on first use.
     func fileSymbols(context: JavaInspectionContext) -> JavaFileSymbolTable {
@@ -45,6 +47,55 @@ final class JavaDeclarationCache: @unchecked Sendable {
         symbolTable = built
         lock.unlock()
         return built
+    }
+
+    /// The simple names assigned anywhere in the file: the target of `x = …`, `x += …`, `x++`,
+    /// `--x` and `this.x = …` / `o.x = …` (the field name). Built once per tree.
+    func assignedNames(root: SyntaxNode) -> Set<String> {
+        lock.lock()
+        if let assignedNameSet { lock.unlock(); return assignedNameSet }
+        lock.unlock()
+        var names = Set<String>()
+        func target(_ node: SyntaxNode?) {
+            guard let node = node?.unparenthesized else { return }
+            switch node.type {
+            case "identifier": names.insert(node.text)
+            case "field_access": if let field = node.child(byFieldName: "field") { names.insert(field.text) }
+            default: break
+            }
+        }
+        var stack = [root]
+        while let node = stack.popLast() {
+            if node.type == "assignment_expression" {
+                target(node.child(byFieldName: "left"))
+            } else if node.type == "update_expression" {
+                target(node.namedChild(at: 0))
+            }
+            stack.append(contentsOf: node.namedChildren)
+        }
+        lock.lock()
+        assignedNameSet = names
+        lock.unlock()
+        return names
+    }
+
+    /// The fields declared directly in a class body, each with whether it is `volatile`.
+    func fieldVolatility(of body: SyntaxNode) -> [String: Bool] {
+        let key = body.startByte
+        lock.lock()
+        if let cached = volatilityTables[key] { lock.unlock(); return cached }
+        lock.unlock()
+        var table: [String: Bool] = [:]
+        for member in body.namedChildren where member.type == "field_declaration" {
+            let isVolatile = member.hasModifier("volatile")
+            for declarator in member.namedChildren(ofType: "variable_declarator") {
+                if let name = declarator.child(byFieldName: "name") { table[name.text] = isVolatile }
+            }
+        }
+        lock.lock()
+        volatilityTables[key] = table
+        lock.unlock()
+        return table
     }
 
     /// Every type-parameter name declared anywhere in the file. Two scopes can reuse a name for

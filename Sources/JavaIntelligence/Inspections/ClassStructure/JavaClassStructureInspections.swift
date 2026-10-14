@@ -118,6 +118,7 @@ enum JavaUtilityClassConstructorInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let owner = JavaClassShape.declaration(for: diagnostic, tree: tree, source: source) else { return [] }
         if owner.type == "constructor_declaration", let token = JavaClassShape.modifierToken("public", in: owner) {
@@ -170,6 +171,7 @@ enum JavaMissingSerialVersionUIDInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let owner = JavaClassShape.declaration(for: diagnostic, tree: tree, source: source), owner.type == "class_declaration" else { return [] }
         let indent = JavaClassShape.memberIndent(of: owner, tree: tree)
@@ -254,6 +256,7 @@ enum JavaFinalMethodInFinalClassInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         JavaFinalClassMembers.removeModifier("final", diagnostic: diagnostic, tree: tree, source: source, title: "Remove 'final'")
     }
@@ -272,6 +275,7 @@ enum JavaProtectedMemberInFinalClassInspection: JavaNodeInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         JavaFinalClassMembers.removeModifier("protected", diagnostic: diagnostic, tree: tree, source: source, title: "Remove 'protected'")
     }

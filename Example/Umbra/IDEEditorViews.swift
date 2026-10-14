@@ -420,6 +420,7 @@ struct IDEEditorPaneView: View {
             IDEExternalChangeBanner(paneID: paneID)
 
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
+                .overlay(alignment: .topTrailing) { IDEInspectionWidget(paneID: paneID) }
                 .overlay {
                     if workspace.activePaneID != paneID {
                         Rectangle()

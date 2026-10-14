@@ -33,6 +33,7 @@ enum JavaRedundantLocalVariableInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let owner = JavaClassShape.declaration(for: diagnostic, tree: tree, source: source), owner.type == "local_variable_declaration",
               let (_, value, terminator) = candidate(owner) else { return [] }
@@ -74,6 +75,7 @@ enum JavaRedundantStringOperationInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Redundant '\(what)' on a String", node: node, fixTitle: "Remove redundant call"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         let node = JavaInspectionSupport.node(of: "method_invocation", for: diagnostic, tree: tree, source: source)
             ?? JavaInspectionSupport.node(of: "object_creation_expression", for: diagnostic, tree: tree, source: source)

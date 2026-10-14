@@ -15,6 +15,10 @@ final class JavaInspectionRulesTests: XCTestCase {
     private static let coveredElsewhere: Set<JavaInspectionRule> = [
         .localCanBeFinal, .unusedAssignment, .mismatchedCollectionQueryUpdate, .unusedPrivateMember, .forCanBeForeach, .tryFinallyCanBeTryWithResources,
         .cyclomaticComplexity, .nestingDepth, .parameterCount, .methodLength, .classLength,
+        // These fire on the sample bodies' unused locals, plain fields and `s.equals("a")`; `JavaMoreInspectionsTests` runs them alone.
+        .unusedLocalVariable, .fieldCanBeFinal, .literalEqualsReversed,
+        // `replaceAll(".", ".")` is both a no-effect replacement and a regex metacharacter.
+        .splitRegexSpecialChar,
     ]
 
     /// Codes of the rule under test only, for sources that trip a neighbouring rule too.

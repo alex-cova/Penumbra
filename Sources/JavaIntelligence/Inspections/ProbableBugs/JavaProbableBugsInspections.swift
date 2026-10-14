@@ -63,6 +63,7 @@ enum JavaConstantAssertInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Condition of 'assert' is always true", node: node, fixTitle: "Remove 'assert'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "assert_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaJumpStatements.removeFix(title: "Remove 'assert'", node: node, in: tree)
@@ -88,6 +89,7 @@ enum JavaNonShortCircuitInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let token = node.child(byFieldName: "operator"), let right = node.child(byFieldName: "right"),

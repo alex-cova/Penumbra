@@ -2,12 +2,16 @@ import EditorIntelligence
 import Foundation
 
 /// One static analysis warning surfaced in the Problems panel.
-public struct JavaInspection: Sendable, Equatable {
-    public enum Severity: String, Sendable, CaseIterable {
+public struct JavaInspection: Sendable, Hashable {
+    public enum Severity: String, Sendable, CaseIterable, Codable {
         case error
         case warning
         case weakWarning
+        /// IntelliJ's "Consideration".
         case info
+        /// IntelliJ's "No highlighting (fix available)": nothing is drawn or listed, but the quick
+        /// fix stays on ⌥↩ (`JavaInspectionService.quietFindings`).
+        case noHighlighting
     }
 
     public let id: String
@@ -28,7 +32,7 @@ public struct JavaInspection: Sendable, Equatable {
         JavaInspection(id: id, message: message, severity: severity, range: range, fixTitle: fixTitle)
     }
 
-    func asDiagnostic() -> Diagnostic {
+    public func asDiagnostic() -> Diagnostic {
         Diagnostic(
             id: UUID(),
             severity: severity.diagnosticSeverity,
@@ -47,6 +51,7 @@ extension JavaInspection.Severity {
         case .warning: return .warning
         case .weakWarning: return .hint
         case .info: return .information
+        case .noHighlighting: return .hint
         }
     }
 }
@@ -59,10 +64,8 @@ public actor JavaInspectionService: DiagnosticProvider {
     private let parseCache: JavaDocumentParseCache
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
-    private var enabledRules: Set<JavaInspectionRule>
-    private var severityOverrides: [JavaInspectionRule: JavaInspection.Severity] = [:]
-    private var thresholds = JavaInspectionThresholds.standard
-    private var projectOptions = JavaProjectInspectionOptions.standard
+    private var profile: JavaInspectionProfile
+    private var classifier = JavaInspectionFileClassifier()
     private let usageProvider: JavaFindUsagesProvider?
     /// Project-wide findings per file, valid for the text they were computed from.
     private var projectResults: [URL: (hash: Int, inspections: [JavaInspection])] = [:]
@@ -74,6 +77,8 @@ public actor JavaInspectionService: DiagnosticProvider {
     private struct CachedResult {
         let textHash: Int
         let diagnostics: [Diagnostic]
+        /// Findings set to "No highlighting (fix available)".
+        let quiet: [Diagnostic]
     }
 
     public init(
@@ -86,7 +91,9 @@ public actor JavaInspectionService: DiagnosticProvider {
         self.usageProvider = usageProvider
         self.index = index
         self.parseCache = parseCache
-        self.enabledRules = enabledRules
+        var profile = JavaInspectionProfile.standard()
+        profile.disabled = Set(JavaInspectionRule.allCases.filter { !enabledRules.contains($0) }.map(\.code))
+        self.profile = profile
         self.idleDelay = idleDelay
     }
 
@@ -98,29 +105,44 @@ public actor JavaInspectionService: DiagnosticProvider {
     /// How long the file must rest before it is analyzed again (IntelliJ's "Autoreparse delay").
     public func setIdleDelay(_ delay: Duration) { idleDelay = delay }
 
-    public func setEnabledRules(_ rules: Set<JavaInspectionRule>) {
-        enabledRules = rules
+    /// The choices every file is analyzed with: rules, severities (with their per-scope
+    /// exceptions), thresholds and project-rule options. `projectRoot` and `testRoots` let scoped
+    /// overrides tell which files are tests.
+    public func setProfile(_ newProfile: JavaInspectionProfile, projectRoot: URL? = nil, testRoots: [URL] = []) {
+        let newClassifier = JavaInspectionFileClassifier(projectRoot: projectRoot, testRoots: testRoots)
+        guard newProfile != profile || newClassifier != classifier else { return }
+        if newProfile.projectOptions != profile.projectOptions { projectResults.removeAll() }
+        profile = newProfile
+        classifier = newClassifier
         cache.removeAll()
+    }
+
+    public var currentProfile: JavaInspectionProfile { profile }
+
+    public func setEnabledRules(_ rules: Set<JavaInspectionRule>) {
+        var updated = profile
+        updated.disabled = Set(JavaInspectionRule.allCases.filter { !rules.contains($0) }.map(\.code))
+        setProfile(updated, projectRoot: classifier.projectRoot, testRoots: classifier.testRoots.map { URL(fileURLWithPath: $0) })
     }
 
     /// Severity per rule where the user changed it from the rule's default.
     public func setSeverityOverrides(_ overrides: [JavaInspectionRule: JavaInspection.Severity]) {
-        severityOverrides = overrides
-        cache.removeAll()
+        var updated = profile
+        updated.severities = Dictionary(uniqueKeysWithValues: overrides.map { ($0.key.code, $0.value.rawValue) })
+        setProfile(updated, projectRoot: classifier.projectRoot, testRoots: classifier.testRoots.map { URL(fileURLWithPath: $0) })
     }
 
     /// The numbers behind the metric rules (complexity, nesting, parameter count, lengths).
     public func setThresholds(_ thresholds: JavaInspectionThresholds) {
-        guard thresholds != self.thresholds else { return }
-        self.thresholds = thresholds
-        cache.removeAll()
+        var updated = profile
+        updated.limits = Dictionary(uniqueKeysWithValues: thresholds.values.map { ($0.key.code, $0.value) })
+        setProfile(updated, projectRoot: classifier.projectRoot, testRoots: classifier.testRoots.map { URL(fileURLWithPath: $0) })
     }
 
     public func setProjectOptions(_ options: JavaProjectInspectionOptions) {
-        guard options != projectOptions else { return }
-        projectOptions = options
-        projectResults.removeAll()
-        cache.removeAll()
+        var updated = profile
+        updated.treatsPublicApiAsUsed = options.treatsPublicApiAsUsed
+        setProfile(updated, projectRoot: classifier.projectRoot, testRoots: classifier.testRoots.map { URL(fileURLWithPath: $0) })
     }
 
     /// Runs the rules that need usages from the whole project (unused declarations, access that
@@ -128,15 +150,17 @@ public actor JavaInspectionService: DiagnosticProvider {
     /// folds their findings into the file's diagnostics. Meant for a save or an index change: one
     /// usage search per declaration. The findings are dropped as soon as the text changes.
     public func runProjectInspections(for document: Document) async {
-        guard let usageProvider, document.languageIdentifier == "java", let url = document.url,
-              !enabledRules.isDisjoint(with: JavaInspectionRegistry.projectRules) else { return }
+        guard let usageProvider, document.languageIdentifier == "java", let url = document.url else { return }
+        let enabled = profile.enabledRules(in: classifier.context(for: url))
+        guard !enabled.isDisjoint(with: JavaInspectionRegistry.projectRules) else { return }
         let text = JavaNavigationText.fullText(of: document)
         let hash = text.hashValue
         let scope = scope(for: url)
+        let options = profile.projectOptions
         let found: [JavaInspection] = await JavaIndex.$queryScope.withValue(scope) {
             guard let tree = await parseCache.tree(for: document, edits: nil) else { return [] }
             return await JavaProjectInspector.inspect(
-                source: text, url: url, tree: tree, provider: usageProvider, enabled: enabledRules, options: projectOptions
+                source: text, url: url, tree: tree, provider: usageProvider, enabled: enabled, options: options
             )
         }
         guard !Task.isCancelled else { return }
@@ -159,6 +183,12 @@ public actor JavaInspectionService: DiagnosticProvider {
         return cache[url]?.diagnostics ?? []
     }
 
+    /// The findings of `url` set to "No highlighting (fix available)". They are not published as
+    /// diagnostics; the code-action provider asks for them so their fixes stay on ⌥↩.
+    public func quietFindings(for url: URL) -> [Diagnostic] {
+        cache[url]?.quiet ?? []
+    }
+
     public func analyzeNow(_ document: Document, force: Bool = false) async {
         guard document.languageIdentifier == "java", let url = document.url else { return }
         let text = JavaNavigationText.fullText(of: document)
@@ -179,6 +209,11 @@ public actor JavaInspectionService: DiagnosticProvider {
 
     private func runAnalysis(url: URL, text: String, hash: Int, document: Document?) async {
         let scope = scope(for: url)
+        let file = classifier.context(for: url)
+        let profile = profile
+        let enabled = profile.enabledRules(in: file)
+        let thresholds = profile.thresholds
+        let stored = projectResults[url].flatMap { $0.hash == hash ? $0.inspections : nil } ?? []
         let inspections = await JavaIndex.$queryScope.withValue(scope) {
             let tree: JavaSyntaxTree?
             if let document {
@@ -186,62 +221,17 @@ public actor JavaInspectionService: DiagnosticProvider {
             } else {
                 tree = JavaSyntaxParser().parse(text)
             }
-            guard let tree, let context = JavaInspectionContext(source: text, tree: tree, url: url, index: index, thresholds: thresholds) else {
-                return [JavaInspection]()
-            }
-            var found: [JavaInspection] = []
-            if enabledRules.contains(.unusedImport) {
-                found.append(contentsOf: JavaUnusedImportInspection.inspect(source: text, tree: tree))
-            }
-            if enabledRules.contains(.duplicateImport) {
-                found.append(contentsOf: JavaDuplicateImportInspection.inspect(source: text, tree: tree))
-            }
-            if enabledRules.contains(.unresolvedImport) {
-                found.append(contentsOf: await JavaUnresolvedImportInspection.inspect(context: context, index: index))
-            }
-            if enabledRules.contains(.missingOverride) {
-                found.append(contentsOf: await JavaMissingOverrideInspection.inspect(source: text, url: url, index: index, tree: tree))
-            }
-            if enabledRules.contains(.unresolvedType) {
-                found.append(contentsOf: await JavaUnresolvedTypeInspection.inspect(source: text, url: url, index: index, walker: context.walker))
-            }
-            if enabledRules.contains(.classFileNameMismatch) {
-                found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
-            }
-            found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabledRules))
-            found.append(contentsOf: JavaInspectionRunner.runFlow(context: context, enabled: enabledRules))
-            if let stored = projectResults[url], stored.hash == hash {
-                found.append(contentsOf: stored.inspections.filter { inspection in
-                    JavaInspectionRule(code: inspection.id).map(enabledRules.contains) == true
-                })
-            }
-            found.append(contentsOf: await JavaInspectionRunner.runTyped(context: context, enabled: enabledRules))
-            return found
+            guard let tree else { return [JavaInspection]() }
+            return await JavaInspectionPipeline.inspect(
+                text: text, url: url, tree: tree, index: index,
+                enabled: enabled, thresholds: thresholds, projectFindings: stored
+            )
         }
-        let diagnostics = applySeverityOverrides(suppressionFiltered(inspections, text: text)).map { $0.asDiagnostic() }
-        cache[url] = CachedResult(textHash: hash, diagnostics: diagnostics)
+        let outcome = JavaInspectionPipeline.finalize(inspections, text: text, profile: profile, file: file)
+        let diagnostics = outcome.visible.map { $0.asDiagnostic() }
+        cache[url] = CachedResult(textHash: hash, diagnostics: diagnostics, quiet: outcome.quiet.map { $0.asDiagnostic() })
         pending[url] = nil
         resultHandler?(url, diagnostics)
-    }
-
-    private func applySeverityOverrides(_ inspections: [JavaInspection]) -> [JavaInspection] {
-        guard !severityOverrides.isEmpty else { return inspections }
-        return inspections.map { inspection in
-            guard let rule = JavaInspectionRule(code: inspection.id), let severity = severityOverrides[rule] else { return inspection }
-            return inspection.withSeverity(severity)
-        }
-    }
-
-    /// Drops what an `@SuppressWarnings` or `//noinspection` in the file silences.
-    private func suppressionFiltered(_ inspections: [JavaInspection], text: String) -> [JavaInspection] {
-        guard !inspections.isEmpty, text.contains("SuppressWarnings") || text.contains("noinspection"),
-              let tree = JavaSyntaxParser().parse(text) else { return inspections }
-        let ns = text as NSString
-        return inspections.filter { inspection in
-            let location = min(max(0, inspection.range.start.utf16Offset), ns.length)
-            let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: location, in: text)
-            return !JavaSuppression.isSuppressed(code: inspection.id, atByteOffset: byteOffset, tree: tree)
-        }
     }
 
     private func scope(for file: URL) -> Set<String>? {

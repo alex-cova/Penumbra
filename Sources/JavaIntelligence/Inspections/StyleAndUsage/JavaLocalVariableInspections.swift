@@ -19,6 +19,7 @@ enum JavaLocalCanBeFinalInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let name = JavaInspectionSupport.node(of: "identifier", for: diagnostic, tree: tree, source: source),
               let declaration = name.parent?.parent, declaration.type == "local_variable_declaration",

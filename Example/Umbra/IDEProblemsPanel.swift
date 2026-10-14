@@ -9,9 +9,74 @@ struct IDEProblemsPanel: View {
     @State private var collapsedFiles: Set<URL> = []
 
     var body: some View {
-        let files = workspace.problems.files
-        let messages = workspace.problems.visibleBuildMessages
-        Group {
+        VStack(spacing: 0) {
+            tabStrip
+            Divider()
+            tabContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var runs: IDEInspectionRunsStore { workspace.inspectionRuns }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        if let run = runs.selectedRun {
+            IDEInspectionResultsView(run: run)
+                .id(run.id)
+        } else {
+            problemList
+        }
+    }
+
+    /// File · Project Errors · one tab per Inspect Code run.
+    private var tabStrip: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            stripButton("File", isSelected: runs.selection == .file) { runs.selection = .file }
+            stripButton("Project Errors", isSelected: runs.selection == .project) { runs.selection = .project }
+            ForEach(runs.runs) { run in
+                HStack(spacing: 4) {
+                    if run.state == .running { ProgressView().controlSize(.mini) }
+                    Text(run.title)
+                        .font(IDEAppearance.Typography.tabLabel)
+                        .lineLimit(1)
+                        .foregroundStyle(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                    Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }
+                        .buttonStyle(.borderless)
+                        .help("Close results")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                .contentShape(Rectangle())
+                .onTapGesture { runs.selection = .run(run.id) }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, 3)
+    }
+
+    private func stripButton(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(isSelected ? IDEAppearance.ColorToken.tabActive : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var problemList: some View {
+        let activeURL = workspace.workbench.activePane.selectedDocument?.url?.standardizedFileURL
+        let all = workspace.problems.files
+        let files = runs.selection == .file ? all.filter { $0.url.standardizedFileURL == activeURL } : all
+        let messages = runs.selection == .file ? [] : workspace.problems.visibleBuildMessages
+        return Group {
             if files.isEmpty && messages.isEmpty {
                 emptyState
             } else {
@@ -24,7 +89,12 @@ struct IDEProblemsPanel: View {
                             fileHeader(file)
                             if !collapsedFiles.contains(file.url) {
                                 ForEach(file.rows) { row in
-                                    IDEProblemRowView(row: row, onOpen: { workspace.openProblem(row) }, onFix: { workspace.fixProblemWithAgent(row) })
+                                    IDEProblemRowView(
+                                        row: row,
+                                        onOpen: { workspace.openProblem(row) },
+                                        onFix: { workspace.fixProblemWithAgent(row) },
+                                        onQuickFixes: row.diagnostic.source == IDEProblemsStore.inspectionSource ? { showQuickFixes(for: row) } : nil
+                                    )
                                 }
                             }
                         }
@@ -34,6 +104,15 @@ struct IDEProblemsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func showQuickFixes(for row: ProblemRow) {
+        Task {
+            let actions = await workspace.quickFixes(for: row)
+            workspace.popUpQuickFixMenu(actions) { action in
+                Task { await workspace.applyQuickFix(action, to: row.url) }
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -140,8 +219,14 @@ private struct IDEProblemRowView: View {
     let row: ProblemRow
     let onOpen: () -> Void
     let onFix: () -> Void
+    var onQuickFixes: (() -> Void)?
 
     @State private var isHovering = false
+
+    /// An inspection's readable name; the tool's id for everything else.
+    private var origin: String {
+        row.diagnostic.code.flatMap { IDEWorkspace.diagnosticTitle(source: row.diagnostic.source, code: $0) } ?? row.diagnostic.source
+    }
 
     var body: some View {
         Button(action: onOpen) {
@@ -156,7 +241,7 @@ private struct IDEProblemRowView: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
-                Text(row.diagnostic.source)
+                Text(origin)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Text("\(row.diagnostic.range.start.line + 1):\(row.diagnostic.range.start.column + 1)")
@@ -187,7 +272,10 @@ private struct IDEProblemRowView: View {
                 .help("Ask the agent to fix this problem")
             }
         }
-        .contextMenu { Button("Fix with Agent", systemImage: "sparkles", action: onFix) }
+        .contextMenu {
+            if let onQuickFixes { Button("Show Quick Fixes…", action: onQuickFixes) }
+            Button("Fix with Agent", systemImage: "sparkles", action: onFix)
+        }
         .accessibilityLabel("\(IDEProblemStyle.label(for: row.diagnostic.severity)) at line \(row.diagnostic.range.start.line + 1): \(row.diagnostic.message)")
     }
 }

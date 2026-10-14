@@ -24,6 +24,7 @@ enum JavaForCanBeForeachInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         let range = ProblemLocator.nsRange(for: diagnostic.range, in: source)
         let start = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.location, in: source)
@@ -273,6 +274,7 @@ enum JavaTryFinallyCanBeTryWithResourcesInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let finally = JavaInspectionSupport.node(of: "finally_clause", for: diagnostic, tree: tree, source: source),
               let node = finally.parent, node.type == "try_statement",

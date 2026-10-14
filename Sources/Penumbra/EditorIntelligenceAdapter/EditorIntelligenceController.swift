@@ -136,6 +136,9 @@ public final class EditorIntelligenceController {
     /// Called when a code action that carries a ``CodeActionCommand`` is chosen, after its edits (if
     /// any) were applied: the host does what the command names (Run, Debug…).
     public var onCodeActionCommand: ((CodeActionCommand) -> Void)?
+    /// Turns a diagnostic's `(source, code)` into a readable name the hover shows before the
+    /// source (an inspection's title for its rule code). `nil` result shows the source alone.
+    public var diagnosticTitleProvider: ((_ source: String, _ code: String) -> String?)?
     /// Vertical range of content the last inlay hint request covered.
     private var inlayHintRequestedYRange: ClosedRange<CGFloat>?
     /// Whether hints are shown. Off clears them; hosts flip it from a preference.
@@ -2220,7 +2223,9 @@ public final class EditorIntelligenceController {
         let anchor = hoverPosition(at: expectedRange.location, in: textView)
         let anchorRange = EditorIntelligence.TextRange(start: anchor, end: anchor)
         if !target.diagnostics.isEmpty {
-            presentHover(markdown: Self.diagnosticMarkdown(target.diagnostics), anchorRange: anchorRange)
+            presentHover(
+                markdown: Self.diagnosticMarkdown(target.diagnostics, title: diagnosticTitleProvider), anchorRange: anchorRange
+            )
             isMouseHoverVisible = true
             return
         }
@@ -2256,12 +2261,18 @@ public final class EditorIntelligenceController {
             return
         }
         let anchor = hoverPosition(at: diagnostics[0].range.location, in: textView)
-        presentHover(markdown: Self.diagnosticMarkdown(diagnostics), anchorRange: EditorIntelligence.TextRange(start: anchor, end: anchor))
+        presentHover(
+            markdown: Self.diagnosticMarkdown(diagnostics, title: diagnosticTitleProvider),
+            anchorRange: EditorIntelligence.TextRange(start: anchor, end: anchor)
+        )
     }
 
     /// The popup text for `diagnostics`: one paragraph each, severity in bold, then the message
     /// and where it came from.
-    static func diagnosticMarkdown(_ diagnostics: [TextViewDiagnostic]) -> String {
+    static func diagnosticMarkdown(
+        _ diagnostics: [TextViewDiagnostic],
+        title: ((_ source: String, _ code: String) -> String?)? = nil
+    ) -> String {
         diagnostics.map { diagnostic in
             let label: String
             switch diagnostic.severity {
@@ -2271,7 +2282,11 @@ public final class EditorIntelligenceController {
             case .hint: label = "Hint"
             }
             let message = diagnostic.message.isEmpty ? "No description available." : diagnostic.message
-            let source = diagnostic.source.map { "  \n*\($0)*" } ?? ""
+            var origin = diagnostic.source ?? ""
+            if let source = diagnostic.source, let code = diagnostic.code, let name = title?(source, code) {
+                origin = "\(name) · \(source)"
+            }
+            let source = origin.isEmpty ? "" : "  \n*\(origin)*"
             return "**\(label):** \(message)\(source)"
         }.joined(separator: "\n\n")
     }

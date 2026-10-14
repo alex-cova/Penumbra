@@ -139,6 +139,10 @@ public final class IDEWorkspace {
     }
 
     public let preferences = IDEPreferences.shared
+    /// Which inspection profile this window analyses with (the project's own or a global one).
+    let inspections = IDEWorkspaceInspections()
+    /// Inspect Code results and which Problems tab shows.
+    let inspectionRuns = IDEInspectionRunsStore()
     let project = IDEProjectModel()
     let gitStatus = IDEGitStatusModel()
     /// Git blame in the editor gutter, per file.
@@ -671,6 +675,8 @@ public final class IDEWorkspace {
         // The blame column and the profiler's line hints share the annotation column; a file with
         // hints is theirs until the user turns them off.
         blame.yieldsAnnotations = { [weak self] url in self?.profileHintsOwnAnnotations(of: url) ?? false }
+        inspections.onChange = { [weak self] in self?.javaInspectionPreferencesChanged() }
+        gitStatus.codeAnalysisProvider = { [weak self] files in await self?.analyzeForCommit(files) }
         applyLaunchConfiguration()
         configureDiskSync()
         subscribeToProjectWatcher()
@@ -3583,15 +3589,20 @@ public final class IDEWorkspace {
 
     /// The code-insight settings that live below the text views: how soon typing triggers a re-read
     /// of the document, and how Java's Suppress fixes silence a warning.
+    /// Directories of the synced Gradle test source sets; files in them are tests for scoped
+    /// inspection settings (without a model, a `src/test` path still counts).
+    var javaTestSourceRoots: [URL] {
+        (javaSupport.gradle.model?.subprojects ?? []).flatMap(\.testSourceDirs)
+    }
+
     func applyCodeInsightPreferences() {
         adapter?.contentRefreshDebounce = TimeInterval(preferences.autoreparseDelayMilliseconds) / 1000
         javaSupport.applyCodeInsightPreferences(
             autoreparseDelay: .milliseconds(preferences.autoreparseDelayMilliseconds),
             suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation,
-            enabledInspections: preferences.enabledJavaInspections,
-            inspectionSeverities: preferences.javaInspectionSeverityOverrides,
-            inspectionThresholds: preferences.javaInspectionThresholds,
-            projectInspectionOptions: JavaProjectInspectionOptions(treatsPublicApiAsUsed: preferences.javaTreatsPublicApiAsUsed)
+            inspectionProfile: inspections.activeProfile,
+            projectRoot: project.rootURL,
+            testRoots: javaTestSourceRoots
         )
     }
 
@@ -3968,6 +3979,7 @@ public final class IDEWorkspace {
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
                 + self.diagramContextMenuItems(url: url)
+                + self.inspectionContextMenuItems(url: url)
                 + self.formatDocumentContextMenuItems(textView: host.textView, paneID: paneID)
                 + self.agentContextMenuItems(context: context, textView: host.textView, url: url)
                 + self.textToolsContextMenuItems(context: context, textView: host.textView)
@@ -4005,7 +4017,10 @@ public final class IDEWorkspace {
             self?.showTypeHierarchy() ?? false
         }
         host.intelligenceController?.onCodeActionCommand = { [weak self] command in
-            self?.performRunCodeAction(command)
+            self?.performCodeActionCommand(command)
+        }
+        host.intelligenceController?.diagnosticTitleProvider = { source, code in
+            IDEWorkspace.diagnosticTitle(source: source, code: code)
         }
         host.intelligenceController?.onRequestRename = { [weak self, weak host] target, completion in
             guard let self, let textView = host?.textView else { return completion(nil) }
@@ -4619,6 +4634,9 @@ public final class IDEWorkspace {
         }
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
             problems.clearEditorDiagnostics(for: closingURL)
+            // Inspections only run on open files; a closed file's rows would be stale (use Inspect
+            // Code to analyse files that are not open).
+            problems.setInspectionDiagnostics([], for: closingURL)
             if closingURL.pathExtension == "java" {
                 let index = javaSupport.nameIndex
                 Task { await index.removeOverlay(closingURL) }
@@ -5028,6 +5046,11 @@ public final class IDEWorkspace {
             self.fileIndexer.handle(batch)
             self.languages.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
             self.projectSystems.filesDidChange(batch.paths)
+            // A teammate's change (a pull) or a hand edit of the shared inspection profile.
+            if batch.paths.contains(where: { $0.hasSuffix("/" + IDEInspectionProfiles.projectRelativePath) }),
+               self.inspections.reloadProjectFile() {
+                self.javaInspectionPreferencesChanged()
+            }
             // A teammate's change (a pull) or a hand edit of a shared run configuration.
             if batch.paths.contains(where: { $0.contains("/\(JavaProjectRunConfigurationFolder.relativePath)/") }) {
                 self.refreshLastRunConfiguration()
@@ -5038,6 +5061,7 @@ public final class IDEWorkspace {
     private func applyProjectRoot(_ url: URL?) {
         // One held access per window, released when the project changes or the window closes.
         projectAccess.begin(url)
+        inspections.setRoot(url)
         project.setRoot(url)
         localHistory.setRoot(url)
         gitStatus.setRoot(url)

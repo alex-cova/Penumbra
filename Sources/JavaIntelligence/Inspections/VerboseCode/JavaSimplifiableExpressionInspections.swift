@@ -23,6 +23,7 @@ enum JavaConcatenationWithEmptyStringInspection: JavaNodeInspection {
         return node.text
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
               let left = node.child(byFieldName: "left"), let right = node.child(byFieldName: "right") else { return [] }
@@ -57,6 +58,7 @@ enum JavaManualMinMaxInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Can be replaced with 'Math.\(function)()'", node: node, fixTitle: "Replace with 'Math.\(function)()'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "ternary_expression", for: diagnostic, tree: tree, source: source),
               let (function, left, right) = analyze(node) else { return [] }
@@ -92,6 +94,7 @@ enum JavaUnnecessarilyEscapedCharacterInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Unnecessarily escaped character '\(escape)'", node: node, fixTitle: "Remove unnecessary escape"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         for type in nodeTypes {
             guard let node = JavaInspectionSupport.node(of: type, for: diagnostic, tree: tree, source: source),
@@ -141,6 +144,7 @@ enum JavaReplacementHasNoEffectInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let call = JavaInspectionSupport.node(of: "method_invocation", for: diagnostic, tree: tree, source: source),
               let receiver = analyze(call) else { return [] }
@@ -201,6 +205,7 @@ enum JavaUnnecessaryEnumDefaultInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let label = JavaInspectionSupport.node(of: "switch_label", for: diagnostic, tree: tree, source: source),
               let rule = label.parent, rule.type == "switch_rule" else { return [] }
@@ -235,6 +240,7 @@ enum JavaRedundantFileCreationInspection: JavaNodeInspection {
         ))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let file = JavaInspectionSupport.node(of: "object_creation_expression", for: diagnostic, tree: tree, source: source),
               let outer = file.parent?.parent, let (_, path) = redundantFile(in: outer), outer.type == "object_creation_expression" else { return [] }

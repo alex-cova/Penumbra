@@ -44,6 +44,7 @@ enum JavaAccessStaticViaInstanceInspection: JavaTypedInspection {
         return !candidates.isEmpty && candidates.allSatisfy { $0.modifiers.contains(.staticFlag) }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         for type in ["identifier", "field_access"] {
             guard let object = JavaInspectionSupport.node(of: type, for: diagnostic, tree: tree, source: source),
@@ -114,6 +115,7 @@ enum JavaRedundantArrayCreationInspection: JavaTypedInspection {
         }
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let creation = JavaInspectionSupport.node(of: "array_creation_expression", for: diagnostic, tree: tree, source: source),
               let initializer = creation.child(byFieldName: "value") else { return [] }

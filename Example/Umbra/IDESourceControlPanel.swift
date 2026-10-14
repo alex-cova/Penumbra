@@ -549,6 +549,11 @@ struct IDEChangesPanel: View {
                 get: { gitStatus.commitOptions.skipHooks },
                 set: { gitStatus.commitOptions.skipHooks = $0 }
             ))
+            Toggle("Analyze Code Before Commit", isOn: Binding(
+                get: { gitStatus.analyzesCodeBeforeCommit },
+                set: { gitStatus.analyzesCodeBeforeCommit = $0 }
+            ))
+            .help("Inspect the staged Java files with the active inspection profile and warn about errors and warnings")
             Divider()
             Menu("Recent Messages") {
                 ForEach(gitStatus.recentCommitMessages, id: \.self) { message in

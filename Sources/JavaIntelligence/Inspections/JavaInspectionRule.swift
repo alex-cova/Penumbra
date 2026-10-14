@@ -15,6 +15,9 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case namingConventions
     case performance
     case javadoc
+    case threading
+    case security
+    case testFrameworks
 
     public var title: String {
         switch self {
@@ -31,6 +34,9 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .namingConventions: return "Naming conventions"
         case .performance: return "Performance"
         case .javadoc: return "Javadoc"
+        case .threading: return "Threading issues"
+        case .security: return "Security"
+        case .testFrameworks: return "Test frameworks"
         }
     }
 }
@@ -170,6 +176,36 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case sortedCollectionNonComparable
     case suspiciousToArray
     case listRemoveInLoop
+    case unusedLocalVariable
+    case fieldCanBeFinal
+    case optionalGetWithoutCheck
+    case lambdaCanBeMethodReference
+    case lambdaBodyCanBeExpression
+    case literalEqualsReversed
+    case redundantFieldInitializer
+    case unnecessarySuperCall
+    case redundantInterfaceModifier
+    case switchFallThrough
+    case duplicateCondition
+    case threadRunCall
+    case stringLengthZeroCheck
+    case formatArgumentCount
+    case bigDecimalEquals
+    case splitRegexSpecialChar
+    case volatileNonAtomicUpdate
+    case exceptionCauseLost
+    case waitNotifyOutsideSynchronized
+    case floatingPointEquality
+    case shiftOutOfRange
+    case assignmentAsCondition
+    case staticNonThreadSafeFormat
+    case patternCompileInLoop
+    case doubleCheckedLocking
+    case weakCryptographicAlgorithm
+    case sqlStringConcatenation
+    case hardcodedCredential
+    case runtimeExecConcatenation
+    case assertEqualsArgumentOrder
 
     private struct Info {
         let code: String
@@ -285,7 +321,7 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .javadocMissingParam: Info(code: "javadoc-missing-param", title: "Missing '@param' tag", group: .javadoc, severity: .weakWarning, summary: "Reports a parameter or type parameter a Javadoc comment does not describe."),
         .javadocMissingReturn: Info(code: "javadoc-missing-return", title: "Missing '@return' tag", group: .javadoc, severity: .weakWarning, summary: "Reports a Javadoc comment of a method that returns a value but has no '@return' tag."),
         .javadocInvalidParam: Info(code: "javadoc-invalid-param", title: "Invalid '@param' tag", group: .javadoc, severity: .warning, summary: "Reports an '@param' tag that names no parameter or type parameter of the method."),
-        .nullDereference: Info(code: "null-dereference", title: "Null pointer dereference", group: .probableBugs, severity: .warning, summary: "Reports a local that is certainly null where a method is called on it or a member is read."),
+        .nullDereference: Info(code: "null-dereference", title: "Null pointer dereference", group: .probableBugs, severity: .error, summary: "Reports a local that is certainly null where a method is called on it or a member is read."),
         .nullableDereference: Info(code: "nullable-dereference", title: "Possible null pointer dereference", group: .probableBugs, severity: .weakWarning, summary: "Reports a local that is null on some path (a 'null' assigned in one branch, a failed null check) where a method is called on it or a member is read."),
         .constantConditionFlow: Info(code: "condition-always-constant", title: "Condition is always true or false", group: .controlFlow, severity: .warning, summary: "Reports a condition that the values assigned earlier in the method already decide."),
         .redundantNullCheck: Info(code: "redundant-null-check", title: "Redundant null check", group: .controlFlow, severity: .warning, summary: "Reports a comparison with null whose result is known from earlier assignments or checks."),
@@ -314,6 +350,36 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .sortedCollectionNonComparable: Info(code: "sorted-collection-non-comparable", title: "Sorted collection with non-comparable elements", group: .probableBugs, severity: .warning, summary: "Reports a TreeSet, TreeMap or PriorityQueue without a comparator whose element class in this file is not Comparable."),
         .suspiciousToArray: Info(code: "suspicious-to-array", title: "Suspicious 'Collection.toArray()' call", group: .probableBugs, severity: .warning, summary: "Reports (T[]) c.toArray(), which always fails, and toArray(new T[0]) with an array type that cannot hold the elements."),
         .listRemoveInLoop: Info(code: "list-remove-in-loop", title: "Collection modified while it is iterated", group: .probableBugs, severity: .warning, summary: "Reports remove() or add() on the list a loop is iterating over, which throws or skips elements."),
+        .unusedLocalVariable: Info(code: "unused-local-variable", title: "Unused local variable", group: .declarationRedundancy, severity: .warning, summary: "Reports a local variable that is declared but never read or written again."),
+        .fieldCanBeFinal: Info(code: "field-can-be-final", title: "Field may be 'final'", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a private field that has an initializer and is never assigned anywhere else in the file."),
+        .optionalGetWithoutCheck: Info(code: "optional-get-without-check", title: "'Optional.get()' without 'isPresent()'", group: .probableBugs, severity: .warning, summary: "Reports get() on an Optional variable that is never tested with isPresent() or isEmpty(); get() throws NoSuchElementException on an empty Optional."),
+        .lambdaCanBeMethodReference: Info(code: "lambda-can-be-method-reference", title: "Lambda can be replaced with method reference", group: .verboseCode, severity: .weakWarning, summary: "Reports a lambda that only passes its parameters on to a method or constructor, as in x -> Foo.bar(x) or () -> new Foo()."),
+        .lambdaBodyCanBeExpression: Info(code: "lambda-body-can-be-expression", title: "Statement lambda can be replaced with expression lambda", group: .verboseCode, severity: .weakWarning, summary: "Reports a lambda whose block body is a single return or expression statement."),
+        .literalEqualsReversed: Info(code: "literal-equals-reversed", title: "'equals()' called on a variable with a literal argument", group: .probableBugs, severity: .weakWarning, summary: "Reports s.equals(\"literal\") on a String variable; \"literal\".equals(s) cannot throw a NullPointerException."),
+        .redundantFieldInitializer: Info(code: "redundant-field-initializer", title: "Redundant field initializer", group: .verboseCode, severity: .weakWarning, summary: "Reports a non-final field initialized to the value it has anyway: 0, false, '\\u0000' or null."),
+        .unnecessarySuperCall: Info(code: "unnecessary-super-constructor-call", title: "Unnecessary call to 'super()'", group: .verboseCode, severity: .weakWarning, summary: "Reports a super() call with no arguments as the first statement of a constructor; the compiler adds it."),
+        .redundantInterfaceModifier: Info(code: "redundant-interface-modifier", title: "Redundant modifier in an interface", group: .verboseCode, severity: .weakWarning, summary: "Reports public or abstract on an interface method, public static final on an interface field, and public static on a nested type, which an interface already implies."),
+        .switchFallThrough: Info(code: "switch-fall-through", title: "Fall-through in 'switch' statement", group: .probableBugs, severity: .warning, summary: "Reports a switch case group that runs into the next one because it does not end with break, return, throw or continue. A comment saying 'fall through' silences it."),
+        .duplicateCondition: Info(code: "duplicate-condition", title: "Duplicate condition in 'if' chain", group: .probableBugs, severity: .warning, summary: "Reports an else-if whose condition is the same as an earlier condition of the chain, so its branch can never run."),
+        .threadRunCall: Info(code: "thread-run-call", title: "Call to 'Thread.run()'", group: .probableBugs, severity: .warning, summary: "Reports run() called on a Thread, which runs the body in the current thread; start() runs it in a new one."),
+        .stringLengthZeroCheck: Info(code: "string-length-zero-check", title: "'String.length()' compared with zero", group: .verboseCode, severity: .weakWarning, summary: "Reports s.length() == 0 and its variants where s.isEmpty() says the same."),
+        .formatArgumentCount: Info(code: "format-argument-count", title: "Format string and arguments do not match", group: .probableBugs, severity: .warning, summary: "Reports String.format, printf or formatted with a literal format string whose number of conversions differs from the number of arguments."),
+        .bigDecimalEquals: Info(code: "bigdecimal-equals", title: "'equals()' called on a BigDecimal", group: .probableBugs, severity: .warning, summary: "Reports BigDecimal.equals(), which compares the scale as well: 1.0 is not equal to 1.00. Use compareTo() == 0."),
+        .splitRegexSpecialChar: Info(code: "split-regex-special-char", title: "Regex metacharacter passed to 'split()' or 'replaceAll()'", group: .probableBugs, severity: .warning, summary: "Reports split(\".\"), split(\"|\") and similar: the argument is a regular expression, so the character is not matched literally."),
+        .volatileNonAtomicUpdate: Info(code: "volatile-non-atomic-update", title: "Non-atomic update of a volatile field", group: .threading, severity: .warning, summary: "Reports ++, -- and compound assignment on a volatile field outside synchronized code: the read and the write are separate steps, so concurrent updates are lost."),
+        .exceptionCauseLost: Info(code: "exception-cause-lost", title: "Caught exception is not passed as the cause", group: .errorHandling, severity: .warning, summary: "Reports a throw of a new exception inside a catch block that never uses the caught exception, so the original stack trace is lost."),
+        .waitNotifyOutsideSynchronized: Info(code: "wait-notify-outside-synchronized", title: "'wait()' or 'notify()' outside synchronized code", group: .threading, severity: .warning, summary: "Reports wait(), notify() and notifyAll() called without holding the monitor of their receiver; they throw IllegalMonitorStateException."),
+        .floatingPointEquality: Info(code: "floating-point-equality", title: "Floating-point equality comparison", group: .probableBugs, severity: .weakWarning, summary: "Reports == and != on float or double values; rounding makes exact equality unreliable. Comparisons with zero, NaN and infinities are not reported."),
+        .shiftOutOfRange: Info(code: "shift-out-of-range", title: "Shift distance out of range", group: .probableBugs, severity: .warning, summary: "Reports a shift by a constant that is negative or not smaller than the width of the type (32 for int, 64 for long); only the low bits of the distance are used."),
+        .assignmentAsCondition: Info(code: "assignment-as-condition", title: "Assignment used as a condition", group: .probableBugs, severity: .warning, summary: "Reports if (flag = value): an assignment where a comparison was probably meant."),
+        .staticNonThreadSafeFormat: Info(code: "static-non-thread-safe-format", title: "Static field of a non-thread-safe format class", group: .threading, severity: .warning, summary: "Reports a static SimpleDateFormat, DateFormat, NumberFormat, DecimalFormat or Calendar, which keep internal state and break when shared between threads."),
+        .patternCompileInLoop: Info(code: "pattern-compile-in-loop", title: "'Pattern.compile()' of a constant in a loop", group: .performance, severity: .weakWarning, summary: "Reports Pattern.compile with a literal pattern inside a loop; compile it once into a static field."),
+        .doubleCheckedLocking: Info(code: "double-checked-locking", title: "Double-checked locking", group: .threading, severity: .warning, summary: "Reports lazy initialization that tests a field, locks, and tests again when the field is not volatile; another thread can see a partly constructed object."),
+        .weakCryptographicAlgorithm: Info(code: "weak-cryptographic-algorithm", title: "Weak cryptographic algorithm", group: .security, severity: .warning, summary: "Reports MessageDigest MD2, MD4, MD5 and SHA-1, and Cipher transformations that use DES, 3DES, RC2, RC4 or ECB mode (AES without a mode is ECB)."),
+        .sqlStringConcatenation: Info(code: "sql-string-concatenation", title: "SQL built by string concatenation", group: .security, severity: .warning, summary: "Reports a query passed to executeQuery, prepareStatement and similar that is concatenated from a literal and a variable; use query parameters to prevent SQL injection."),
+        .hardcodedCredential: Info(code: "hardcoded-credential", title: "Hard-coded credential", group: .security, severity: .warning, summary: "Reports a variable or field named password, secret, apiKey or similar that is initialized with a string literal."),
+        .runtimeExecConcatenation: Info(code: "runtime-exec-concatenation", title: "Command built by string concatenation", group: .security, severity: .warning, summary: "Reports Runtime.exec with a command concatenated from a literal and a variable, which allows command injection."),
+        .assertEqualsArgumentOrder: Info(code: "assert-equals-argument-order", title: "JUnit assertion arguments in the wrong order", group: .testFrameworks, severity: .weakWarning, summary: "Reports assertEquals(actual, expected-literal): JUnit takes the expected value first, so a failure message would name the wrong value."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
@@ -336,6 +402,12 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     private static let disabledByDefault: Set<JavaInspectionRule> = [
         .publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass,
         .declarationUsesConcreteClass, .classMayBeInterface,
+        // Style preferences: the JDK's own sources trip them hundreds of times.
+        .literalEqualsReversed, .redundantFieldInitializer,
+        // Name-based guess; on by choice.
+        .hardcodedCredential,
+        // Exact comparison is deliberate in numeric code (the JDK's own math trips it 37 times).
+        .floatingPointEquality,
     ]
 
     /// The rules a new service or fresh preferences run with.

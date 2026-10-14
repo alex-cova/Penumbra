@@ -37,6 +37,7 @@ enum JavaUnnecessaryReturnInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "'return' is unnecessary as the last statement", node: node, fixTitle: "Remove 'return'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "return_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaJumpStatements.removeFix(title: "Remove 'return'", node: node, in: tree)
@@ -54,6 +55,7 @@ enum JavaUnnecessaryContinueInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "'continue' is unnecessary as the last statement in a loop", node: node, fixTitle: "Remove 'continue'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "continue_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaJumpStatements.removeFix(title: "Remove 'continue'", node: node, in: tree)
@@ -70,6 +72,7 @@ enum JavaUnnecessaryBreakInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "'break' is unnecessary at the end of a switch rule", node: node, fixTitle: "Remove 'break'"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "break_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         return JavaJumpStatements.removeFix(title: "Remove 'break'", node: node, in: tree)
@@ -101,6 +104,7 @@ enum JavaUnnecessaryLabelOnBreakInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Unnecessary label '\(JavaJumpStatements.label(of: node)?.text ?? "")' on 'break'", node: node, fixTitle: "Remove label"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "break_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         let edit = JavaInspectionSupport.edit(replacingBytes: node.byteRange, with: "break;", in: tree)
@@ -117,6 +121,7 @@ enum JavaUnnecessaryLabelOnContinueInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Unnecessary label '\(JavaJumpStatements.label(of: node)?.text ?? "")' on 'continue'", node: node, fixTitle: "Remove label"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "continue_statement", for: diagnostic, tree: tree, source: source) else { return [] }
         let edit = JavaInspectionSupport.edit(replacingBytes: node.byteRange, with: "continue;", in: tree)
@@ -141,6 +146,7 @@ enum JavaUnusedLabelInspection: JavaNodeInspection {
         report(JavaInspectionSupport.inspection(rule, message: "Label '\(label.text)' is never used", node: label, fixTitle: "Remove label"))
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let label = JavaInspectionSupport.node(of: "identifier", for: diagnostic, tree: tree, source: source),
               let statement = label.parent, statement.type == "labeled_statement", let body = statement.namedChild(at: 1) else { return [] }

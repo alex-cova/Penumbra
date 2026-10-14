@@ -72,6 +72,7 @@ enum JavaUnusedPrivateMemberInspection: JavaNodeInspection {
         return false
     }
 
+    static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let name = JavaInspectionSupport.node(of: "identifier", for: diagnostic, tree: tree, source: source) else { return [] }
         var declaration = name.parent

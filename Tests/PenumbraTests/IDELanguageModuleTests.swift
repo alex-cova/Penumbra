@@ -23,7 +23,8 @@ final class IDELanguageModuleTests: XCTestCase {
     func testJavaContributesItsCommandsInOrder() {
         let commands = IDEJavaModule().commands(for: makeWorkspace())
         XCTAssertEqual(commands.map(\.id), [
-            "app.java.buildGradleProject", "app.java.runTests", "app.java.runLastConfiguration",
+            "app.java.buildGradleProject", "app.java.inspectCode", "app.java.runInspectionByName",
+            "app.java.runTests", "app.java.runLastConfiguration",
             "app.java.runWithCoverage", "app.java.runTestsWithCoverage", "app.java.clearCoverage",
             "app.java.profile", "app.java.profileTests", "app.java.openProfilerRecording",
             "app.java.editRunConfiguration", "app.java.reloadGradleProject", "app.java.showGradleOutput",

@@ -9,7 +9,8 @@ extension TextViewDiagnostic {
                                  length: max(0, diagnostic.range.end.utf16Offset - diagnostic.range.start.utf16Offset)),
                   severity: TextViewDiagnosticSeverity(diagnostic.severity),
                   message: diagnostic.message,
-                  source: diagnostic.source)
+                  source: diagnostic.source,
+                  code: diagnostic.code)
     }
 
     /// Resolves line/column through the live text view so LSP positions whose `utf16Offset`
@@ -21,7 +22,8 @@ extension TextViewDiagnostic {
             range: TextEditApplicator.nsRange(for: diagnostic.range, in: textView),
             severity: TextViewDiagnosticSeverity(diagnostic.severity),
             message: diagnostic.message,
-            source: diagnostic.source
+            source: diagnostic.source,
+            code: diagnostic.code
         )
     }
 }
