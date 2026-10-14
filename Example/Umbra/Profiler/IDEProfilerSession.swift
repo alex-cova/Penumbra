@@ -250,15 +250,15 @@ final class IDEProfilerSession {
                 // The header read is quick and tells how big the import is before the stacks stream.
                 if let first = recordings.first,
                    let summary = try? await JavaRecordingImporter.summary(jfr: jfr, recording: first) {
-                    await self?.setSummary(summary, generation: current)
+                    self?.setSummary(summary, generation: current)
                 }
                 guard !Task.isCancelled else { return }
-                await self?.setPhase(.reading(lines: 0), generation: current)
+                self?.setPhase(.reading(lines: 0), generation: current)
                 do {
                     let profile = try await JavaRecordingImporter.importProfile(
                         jfr: jfr, recordings: recordings, progress: progress
                     )
-                    await self?.setProfile(profile, generation: current)
+                    self?.setProfile(profile, generation: current)
                     return
                 } catch JavaRecordingImportError.cancelled {
                     return
@@ -266,7 +266,7 @@ final class IDEProfilerSession {
                     lastFailure = error.localizedDescription
                 }
             }
-            await self?.setPhase(.failed(lastFailure), generation: current)
+            self?.setPhase(.failed(lastFailure), generation: current)
         }
     }
 
