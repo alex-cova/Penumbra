@@ -92,6 +92,11 @@ struct IDEStatusToast: View {
                                 .lineLimit(2)
                                 .truncationMode(.tail)
                         }
+                        if let link = notification.action?.linkTitle {
+                            Text(link)
+                                .foregroundStyle(IDEAppearance.ColorToken.accent)
+                                .underline()
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

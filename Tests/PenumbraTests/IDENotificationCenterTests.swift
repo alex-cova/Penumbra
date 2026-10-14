@@ -164,4 +164,12 @@ final class IDENotificationCenterTests: XCTestCase {
         XCTAssertTrue(windowB.items.isEmpty)
         XCTAssertNil(windowB.toast)
     }
+
+    func testRevealInFinderNotificationCarriesALink() {
+        let center = makeCenter()
+        center.post("PDF saved", detail: "Notes.pdf in Documents", severity: .success, action: .revealInFinder("/tmp/Notes.pdf"))
+        XCTAssertEqual(center.items.first?.action, .revealInFinder("/tmp/Notes.pdf"))
+        XCTAssertEqual(center.items.first?.action?.linkTitle, "Reveal in Finder")
+        XCTAssertNil(IDENotificationAction.openFile("/tmp/a").linkTitle, "other actions show no link")
+    }
 }

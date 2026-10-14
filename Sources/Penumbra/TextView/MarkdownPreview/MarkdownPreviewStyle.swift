@@ -1,5 +1,11 @@
 @preconcurrency import AppKit
 
+/// A fixed light or dark look for the markdown preview, independent of the editor theme.
+public enum MarkdownPreviewAppearance: String, Sendable {
+    case light
+    case dark
+}
+
 /// Typography and colors for the markdown preview, typically derived from the host editor.
 ///
 /// AppKit font and color references are main-actor resources. For async mermaid rendering,
@@ -112,6 +118,43 @@ public struct MarkdownPreviewStyle: Equatable {
     /// Font used for a footnote entry's body text (`bodyFont` scaled by `footnoteFontScale`).
     public func footnoteFont(for bodyFont: NSFont) -> NSFont {
         NSFontManager.shared.convert(bodyFont, toSize: bodyFont.pointSize * footnoteFontScale)
+    }
+
+    /// A copy with a white page and dark text, for output that is printed or shared (PDF export).
+    /// Fonts and spacing are unchanged so the layout matches what is on screen; the dynamic
+    /// colors (link, quote tints) are left to resolve under the light appearance the export draws in.
+    public func lightForExport() -> MarkdownPreviewStyle {
+        withAppearance(.light)
+    }
+
+    /// A copy with the page and text colors of `appearance`, whatever the host theme is. Fonts and
+    /// spacing are unchanged. The dynamic colors (link, quote tints, the checkbox accent) stay
+    /// dynamic, so draw them under the matching `NSAppearance`.
+    public func withAppearance(_ appearance: MarkdownPreviewAppearance) -> MarkdownPreviewStyle {
+        var style = self
+        switch appearance {
+        case .light:
+            style.backgroundColor = .white
+            style.bodyColor = NSColor(white: 0.1, alpha: 1)
+            style.codeBackgroundColor = NSColor.black.withAlphaComponent(0.05)
+            style.tableBorderColor = NSColor.black.withAlphaComponent(0.15)
+        case .dark:
+            style.backgroundColor = NSColor(white: 0.12, alpha: 1)
+            style.bodyColor = NSColor(white: 0.9, alpha: 1)
+            style.codeBackgroundColor = NSColor.white.withAlphaComponent(0.07)
+            style.tableBorderColor = NSColor.white.withAlphaComponent(0.18)
+        }
+        style.linkColor = .linkColor
+        return style
+    }
+
+    /// Whether the page reads as dark: the background's brightness resolved under `appearance`.
+    public func isDark(under appearance: NSAppearance) -> Bool {
+        var brightness: CGFloat = 1
+        appearance.performAsCurrentDrawingAppearance {
+            brightness = backgroundColor.usingColorSpace(.deviceRGB)?.brightnessComponent ?? 1
+        }
+        return brightness < 0.5
     }
 
     /// Sendable color snapshot for off-main mermaid rasterization.

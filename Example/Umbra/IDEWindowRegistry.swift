@@ -286,6 +286,17 @@ final class IDEWindowRegistry {
         }
     }
 
+    /// The Markdown preview's light/dark choice was flipped in one window; the others follow.
+    func applyMarkdownPreviewAppearanceToAllWindows(including workspace: IDEWorkspace) {
+        var targets = workspaces
+        if !targets.contains(where: { $0 === workspace }) {
+            targets.append(workspace)
+        }
+        for target in targets {
+            target.applyMarkdownPreviewAppearanceToOwnHosts()
+        }
+    }
+
     /// Like `applyPreferencesToAllWindows`, for the settings that live below the text views.
     func applyCodeInsightPreferencesToAllWindows(including workspace: IDEWorkspace) {
         var targets = workspaces

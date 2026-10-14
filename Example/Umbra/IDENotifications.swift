@@ -13,6 +13,19 @@ enum IDENotificationAction: Equatable {
     case showAgentChat(UUID)
     /// Show this file's tab (opening it if it was closed).
     case openFile(String)
+    /// Select this file in Finder.
+    case revealInFinder(String)
+}
+
+extension IDENotificationAction {
+    /// The link shown under a notification whose click does something a panel title would not
+    /// say; nil when the title and detail are enough.
+    var linkTitle: String? {
+        switch self {
+        case .revealInFinder: "Reveal in Finder"
+        default: nil
+        }
+    }
 }
 
 enum IDENotificationCategory: String, CaseIterable, Identifiable {

@@ -633,6 +633,113 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertFalse(controller.previewView.highlightedCode.isEmpty)
     }
 
+    /// A dark editor exports a white page, and exporting leaves the on-screen preview as it was.
+    @MainActor
+    func testExportPDFIsLightAndLeavesLivePreviewUntouched() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.setState(TextViewState(text: "# Title\n\n```javascript\nconst x = 1\n```", theme: DefaultTheme()))
+        textView.backgroundColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.1, alpha: 1)
+        textView.languageIdentifier = "markdown"
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.parseDebounceNanoseconds = 10_000_000
+        controller.codeBlockLanguageResolver = { TreeSitterLanguage.bundled(forIdentifier: $0) }
+        controller.previewView.frame = CGRect(x: 0, y: 0, width: 320, height: 240)
+        XCTAssertTrue(controller.toggle())
+        await controller.waitForPendingWork()
+
+        let liveBackground = controller.previewView.style.backgroundColor
+        let liveCode = controller.previewView.highlightedCode
+        XCTAssertFalse(liveCode.isEmpty)
+
+        let exported = await controller.exportPDFData()
+        let data = try XCTUnwrap(exported)
+        let rep = try XCTUnwrap(NSPDFImageRep(data: data))
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        let corner = try XCTUnwrap(bitmap.colorAt(x: 1, y: 1)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(corner.brightnessComponent, 0.9)
+
+        XCTAssertEqual(controller.previewView.style.backgroundColor, liveBackground)
+        XCTAssertLessThan(
+            liveBackground.usingColorSpace(.deviceRGB)?.brightnessComponent ?? 1, 0.3,
+            "the on-screen preview stays dark"
+        )
+        XCTAssertEqual(controller.previewView.highlightedCode.keys.sorted(), liveCode.keys.sorted())
+        for (index, code) in liveCode {
+            XCTAssertTrue(controller.previewView.highlightedCode[index] === code, "live highlighted code is not replaced")
+        }
+    }
+
+    /// The on-screen look can be pinned light or dark; the button flips it and tells the host.
+    @MainActor
+    func testAppearanceOverrideAndToggle() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.setState(TextViewState(text: "# Title", theme: DefaultTheme()))
+        textView.backgroundColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.1, alpha: 1)
+        textView.languageIdentifier = "markdown"
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.parseDebounceNanoseconds = 10_000_000
+        controller.embed(editorView: NSView())
+        controller.previewView.frame = CGRect(x: 0, y: 0, width: 320, height: 240)
+        controller.showsAppearanceToggle = true
+        let toggle = controller.debugAppearanceToggle
+        XCTAssertTrue(toggle.isHidden, "no button while the preview is closed")
+
+        XCTAssertTrue(controller.toggle())
+        await controller.waitForPendingWork()
+        XCTAssertFalse(toggle.isHidden)
+        let appearance = controller.previewView.effectiveAppearance
+        XCTAssertTrue(controller.previewView.style.isDark(under: appearance), "follows the dark editor")
+        XCTAssertEqual(toggle.toolTip, "Switch Preview to Light Mode")
+
+        var reported: [MarkdownPreviewAppearance?] = []
+        controller.onAppearanceOverrideChange = { reported.append($0) }
+        toggle.performClick(nil)
+        await controller.waitForPendingWork()
+        XCTAssertEqual(controller.appearanceOverride, .light)
+        XCTAssertEqual(reported, [.light])
+        XCTAssertFalse(controller.previewView.style.isDark(under: appearance))
+        XCTAssertEqual(toggle.toolTip, "Switch Preview to Dark Mode")
+
+        // The page is still exported light, and a pinned dark look does not change that.
+        toggle.performClick(nil)
+        await controller.waitForPendingWork()
+        XCTAssertEqual(controller.appearanceOverride, .dark)
+        XCTAssertTrue(controller.previewView.style.isDark(under: appearance))
+        let exported = await controller.exportPDFData()
+        let data = try XCTUnwrap(exported)
+        let rep = try XCTUnwrap(NSPDFImageRep(data: data))
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        let corner = try XCTUnwrap(bitmap.colorAt(x: 1, y: 1)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(corner.brightnessComponent, 0.9)
+
+        // Setting it in code (a stored choice, another window) does not report back.
+        controller.appearanceOverride = nil
+        XCTAssertEqual(reported, [.light, .dark])
+    }
+
+    @MainActor
+    func testAppearanceToggleStaysHiddenUnlessAskedFor() async {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.languageIdentifier = "markdown"
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.embed(editorView: NSView())
+        XCTAssertTrue(controller.toggle())
+        XCTAssertTrue(controller.debugAppearanceToggle.isHidden)
+    }
+
+    @MainActor
+    func testExportPDFIsNilWhilePreviewIsHidden() async {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.languageIdentifier = "markdown"
+        let controller = MarkdownPreviewController(textView: textView)
+        let data = await controller.exportPDFData()
+        XCTAssertNil(data)
+    }
+
     func testMermaidFenceExtractor() {
         let segments = MermaidFenceExtractor.segments(in: "text\n```mermaid\ngraph TD\nA-->B\n```\ntail")
         XCTAssertEqual(segments.count, 3)

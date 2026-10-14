@@ -3411,19 +3411,43 @@ public final class IDEWorkspace {
     }
 
     /// Exports the currently visible markdown preview to a PDF the user picks a location for.
-    /// No-op when the preview isn't shown (there's nothing rendered to export yet).
+    /// The PDF is always light (white page, dark text), whatever the editor theme. No-op when the
+    /// preview isn't shown (there's nothing rendered to export yet).
     public func exportMarkdownPreviewToPDF() {
         guard let host = hostCache.peek(workbench.activePaneID),
-              let data = host.markdownPreviewController.exportPDFData(),
+              host.markdownPreviewController.isVisible,
               let document = workbench.activePane.selectedDocument else { return }
+        let controller = host.markdownPreviewController
+        let name = (document.displayName as NSString).deletingPathExtension
 
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.pdf]
-        panel.nameFieldStringValue = (document.displayName as NSString).deletingPathExtension
+        // The light diagrams are rendered before the panel opens; cached ones make this immediate.
+        Task { @MainActor in
+            guard let data = await controller.exportPDFData() else { return }
 
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            try? data.write(to: url)
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.pdf]
+            panel.nameFieldStringValue = name
+
+            panel.begin { [weak self] response in
+                guard response == .OK, let url = panel.url else { return }
+                do {
+                    try data.write(to: url, options: .atomic)
+                } catch {
+                    self?.notifications.post(
+                        "Could not save PDF",
+                        detail: error.localizedDescription,
+                        severity: .error
+                    )
+                    return
+                }
+                let folder = url.deletingLastPathComponent().lastPathComponent
+                self?.notifications.post(
+                    "PDF saved",
+                    detail: "\(url.lastPathComponent) in \(folder)",
+                    severity: .success,
+                    action: .revealInFinder(url.path)
+                )
+            }
         }
     }
 
@@ -3546,6 +3570,14 @@ public final class IDEWorkspace {
         applyCodeInsightPreferences()
         if let textView = adapter?.textView {
             updateStatus(from: textView)
+        }
+    }
+
+    /// The Markdown preview's light/dark look follows the stored choice in this window's open panes.
+    func applyMarkdownPreviewAppearanceToOwnHosts() {
+        let appearance = IDEMarkdownPreviewAppearance.stored
+        for pane in workbench.panes {
+            hostCache.peek(pane.id)?.markdownPreviewController.appearanceOverride = appearance
         }
     }
 
@@ -3945,6 +3977,13 @@ public final class IDEWorkspace {
             guard let self, let host else { return }
             self.notePreviewVisibility(of: host)
         }
+        host.markdownPreviewController.showsAppearanceToggle = true
+        host.markdownPreviewController.appearanceOverride = IDEMarkdownPreviewAppearance.stored
+        host.markdownPreviewController.onAppearanceOverrideChange = { [weak self] appearance in
+            IDEMarkdownPreviewAppearance.stored = appearance
+            guard let self else { return }
+            IDEWindowRegistry.shared.applyMarkdownPreviewAppearanceToAllWindows(including: self)
+        }
         host.onCSVTableClosed = { [weak self, weak host] in
             guard let self, let host else { return }
             self.notePreviewVisibility(of: host)
@@ -4314,6 +4353,8 @@ public final class IDEWorkspace {
             agent.showPanel()
         case .openFile(let path):
             Task { await openDocument(from: URL(fileURLWithPath: path)) }
+        case .revealInFinder(let path):
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case nil: break
         }
     }

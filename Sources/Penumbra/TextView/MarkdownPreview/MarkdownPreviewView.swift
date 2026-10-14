@@ -256,16 +256,58 @@ public final class MarkdownPreviewView: NSView {
         scheduleRelayout()
     }
 
-    /// Renders the full (unclipped) document into a single-page PDF via the same CG drawing path
-    /// used on screen, so this reflects what's currently shown regardless of whether the Metal
-    /// path is active for live display. `nil` when nothing has been parsed yet.
+    /// Renders the full (unclipped) `document` into a single-page PDF with `style` and the given
+    /// rasters, always under the light (aqua) appearance, whatever the on-screen preview shows.
+    /// Lays the document out afresh at the view's current width with a throwaway measure cache,
+    /// so the live layout and its cached typesetting (which hold the on-screen colors) are
+    /// untouched. `nil` for an empty layout.
     ///
-    /// Draws straight from the layout into a PDF context: while Metal is active `contentView` is
-    /// hidden, and a hidden view contributes nothing to `dataWithPDF`, which produced a blank page.
-    func renderedDocumentPDFData() -> Data? {
-        guard document != nil else { return nil }
-        layoutSubtreeIfNeeded()
-        let size = contentView.layout.contentSize
+    /// Draws straight from the layout into a PDF context, via the same CG path used on screen:
+    /// while Metal is active `contentView` is hidden, and a hidden view contributes nothing to
+    /// `dataWithPDF`, which produced a blank page.
+    func renderedPDFData(
+        document: MarkdownPreviewDocument,
+        style: MarkdownPreviewStyle,
+        raster: MarkdownPreviewRasterResult
+    ) -> Data? {
+        guard let aqua = NSAppearance(named: .aqua) else { return nil }
+        let width = max(bounds.width, 1)
+        var layout = MarkdownPreviewLayout(blockLayouts: [], contentSize: .zero)
+        aqua.performAsCurrentDrawingAppearance {
+            let heights = Self.rasterHeights(
+                for: document,
+                width: width,
+                contentInset: style.contentInset,
+                rasterImages: raster.images,
+                rasterNaturalSizes: raster.naturalSizes
+            )
+            layout = MarkdownPreviewLayout.layout(
+                document: document,
+                style: style,
+                width: width,
+                mermaidHeights: heights.mermaid,
+                imageHeights: heights.images,
+                highlightedCode: raster.highlightedCode,
+                cache: MarkdownPreviewMeasureCache()
+            )
+        }
+        return pdfData(
+            layout: layout,
+            style: style,
+            rasterImages: raster.images,
+            highlightedCode: raster.highlightedCode,
+            appearance: aqua
+        )
+    }
+
+    private func pdfData(
+        layout: MarkdownPreviewLayout,
+        style: MarkdownPreviewStyle,
+        rasterImages: [Int: CGImage],
+        highlightedCode: [Int: NSAttributedString],
+        appearance: NSAppearance
+    ) -> Data? {
+        let size = layout.contentSize
         guard size.width > 0, size.height > 0 else { return nil }
 
         let data = NSMutableData()
@@ -280,9 +322,9 @@ public final class MarkdownPreviewView: NSView {
         let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = graphicsContext
-        effectiveAppearance.performAsCurrentDrawingAppearance {
+        appearance.performAsCurrentDrawingAppearance {
             MarkdownPreviewCGRenderer.draw(
-                layout: contentView.layout,
+                layout: layout,
                 style: style,
                 rasterImages: rasterImages,
                 highlightedCode: highlightedCode,
@@ -325,9 +367,25 @@ public final class MarkdownPreviewView: NSView {
         for document: MarkdownPreviewDocument,
         width: CGFloat
     ) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
+        Self.rasterHeights(
+            for: document,
+            width: width,
+            contentInset: style.contentInset,
+            rasterImages: rasterImages,
+            rasterNaturalSizes: rasterNaturalSizes
+        )
+    }
+
+    private static func rasterHeights(
+        for document: MarkdownPreviewDocument,
+        width: CGFloat,
+        contentInset: CGFloat,
+        rasterImages: [Int: CGImage],
+        rasterNaturalSizes: [Int: CGSize]
+    ) -> (mermaid: [Int: CGFloat], images: [Int: CGFloat]) {
         var mermaid: [Int: CGFloat] = [:]
         var images: [Int: CGFloat] = [:]
-        let contentWidth = max(width - style.contentInset * 2, 1)
+        let contentWidth = max(width - contentInset * 2, 1)
         for (index, block) in document.blocks.enumerated() {
             guard let image = rasterImages[index] else { continue }
             let height: CGFloat

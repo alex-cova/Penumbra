@@ -20,6 +20,9 @@ public final class MarkdownPreviewController: NSObject {
     /// Rendered diagrams, highlighted fences and decoded images, reused across edits and
     /// document switches.
     private let rasterCache = MarkdownPreviewRasterCache()
+    /// The light copies PDF export renders. Separate from `rasterCache`, which holds one code
+    /// theme and the on-screen diagrams: sharing it would evict those on every export.
+    private let exportRasterCache = MarkdownPreviewRasterCache()
     /// Parsed prose chunks of the last parse, so an edit re-parses only what changed.
     private let parseCache = MarkdownPreviewParseCache()
     private var previewDelegate: PreviewTextViewDelegate?
@@ -34,6 +37,30 @@ public final class MarkdownPreviewController: NSObject {
 
     /// Optional provider for embedded languages inside highlighted code fences.
     public var codeBlockLanguageProvider: TreeSitterLanguageProvider?
+
+    /// A fixed light or dark look for the on-screen preview, whatever the editor theme is; `nil`
+    /// follows the editor. Only the preview is affected: PDF export is always light.
+    public var appearanceOverride: MarkdownPreviewAppearance? {
+        didSet {
+            guard appearanceOverride != oldValue else { return }
+            applyAppearanceOverride()
+        }
+    }
+
+    /// Shows a sun/moon button at the preview's top-right corner that flips between the light and
+    /// dark look (``appearanceOverride``). Off by default: a host that embeds the preview inline
+    /// has no use for it.
+    public var showsAppearanceToggle = false {
+        didSet { updateAppearanceToggle() }
+    }
+
+    /// Called when the user flips the look with the toggle (not when ``appearanceOverride`` is set
+    /// in code), so the host can remember the choice.
+    public var onAppearanceOverrideChange: ((MarkdownPreviewAppearance?) -> Void)?
+
+    private let appearanceToggle = NSButton()
+    /// Test-only hook (`@testable import` visibility).
+    var debugAppearanceToggle: NSButton { appearanceToggle }
 
     /// Debounce interval before re-parsing after a buffer edit. Tests may shorten this.
     var parseDebounceNanoseconds: UInt64 = 200_000_000
@@ -68,6 +95,63 @@ public final class MarkdownPreviewController: NSObject {
         containerStack.translatesAutoresizingMaskIntoConstraints = false
 
         previewDelegate = PreviewTextViewDelegate(controller: self)
+        configureAppearanceToggle()
+    }
+
+    private func configureAppearanceToggle() {
+        appearanceToggle.translatesAutoresizingMaskIntoConstraints = false
+        appearanceToggle.isBordered = false
+        appearanceToggle.bezelStyle = .regularSquare
+        appearanceToggle.imagePosition = .imageOnly
+        appearanceToggle.imageScaling = .scaleProportionallyDown
+        appearanceToggle.focusRingType = .none
+        appearanceToggle.target = self
+        appearanceToggle.action = #selector(toggleAppearance)
+        appearanceToggle.wantsLayer = true
+        appearanceToggle.layer?.cornerRadius = 6
+        appearanceToggle.isHidden = true
+    }
+
+    /// The style the preview shows: the editor's, or the fixed look the host asked for.
+    private func makeStyle(for textView: TextView) -> MarkdownPreviewStyle {
+        let style = MarkdownPreviewStyle.from(textView: textView)
+        guard let appearanceOverride else { return style }
+        return style.withAppearance(appearanceOverride)
+    }
+
+    private func applyAppearanceOverride() {
+        previewView.appearance = appearanceOverride.flatMap {
+            NSAppearance(named: $0 == .dark ? .darkAqua : .aqua)
+        }
+        refreshStyle()
+    }
+
+    @objc private func toggleAppearance() {
+        let switchTo: MarkdownPreviewAppearance = isDisplayingDark ? .light : .dark
+        appearanceOverride = switchTo
+        onAppearanceOverrideChange?(switchTo)
+    }
+
+    private var isDisplayingDark: Bool {
+        previewView.style.isDark(under: previewView.effectiveAppearance)
+    }
+
+    /// Shows the button only while the preview is up, with the icon of the look a click switches to.
+    private func updateAppearanceToggle() {
+        appearanceToggle.isHidden = !(showsAppearanceToggle && isPreviewVisible)
+        let dark = isDisplayingDark
+        let symbol = dark ? "sun.max.fill" : "moon.fill"
+        let label = dark ? "Switch Preview to Light Mode" : "Switch Preview to Dark Mode"
+        appearanceToggle.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        appearanceToggle.toolTip = label
+        appearanceToggle.setAccessibilityLabel(label)
+        // The button sits on the page, so it takes the page's look rather than the window's.
+        appearanceToggle.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        appearanceToggle.contentTintColor = dark ? NSColor(white: 0.85, alpha: 1) : NSColor(white: 0.25, alpha: 1)
+        appearanceToggle.layer?.backgroundColor = (dark
+            ? NSColor.white.withAlphaComponent(0.1)
+            : NSColor.black.withAlphaComponent(0.06)).cgColor
     }
 
     /// Chains preview text/Metal observation ahead of an existing delegate (e.g. EIP forwarding).
@@ -98,7 +182,13 @@ public final class MarkdownPreviewController: NSObject {
         previewView.translatesAutoresizingMaskIntoConstraints = false
         containerStack.addSubview(editorView)
         containerStack.addSubview(previewView)
+        containerStack.addSubview(appearanceToggle)
         NSLayoutConstraint.activate([
+            // Clear of the overlay scroller on the right edge.
+            appearanceToggle.topAnchor.constraint(equalTo: containerStack.topAnchor, constant: 8),
+            appearanceToggle.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor, constant: -18),
+            appearanceToggle.widthAnchor.constraint(equalToConstant: 28),
+            appearanceToggle.heightAnchor.constraint(equalToConstant: 28),
             editorView.topAnchor.constraint(equalTo: containerStack.topAnchor),
             editorView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
             editorView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
@@ -125,11 +215,30 @@ public final class MarkdownPreviewController: NSObject {
         return true
     }
 
-    /// Renders the currently visible preview into PDF data. Returns `nil` when the preview isn't
-    /// shown (nothing rendered to export) or the buffer hasn't parsed yet.
-    public func exportPDFData() -> Data? {
-        guard isPreviewVisible else { return nil }
-        return previewView.renderedDocumentPDFData()
+    /// Renders the currently visible preview into PDF data, always in light mode: a white page with
+    /// dark text, whatever the editor theme or system appearance. Returns `nil` when the preview
+    /// isn't shown (nothing rendered to export) or the buffer hasn't parsed yet.
+    ///
+    /// The on-screen preview is left alone: diagrams and highlighted code are rendered again with
+    /// light colors into `exportRasterCache`, and laid out by a throwaway layout, so nothing the
+    /// live preview caches changes. Cached diagrams make a repeat export immediate.
+    public func exportPDFData() async -> Data? {
+        guard isPreviewVisible, let document = previewView.document else { return nil }
+        let style = previewView.style.lightForExport()
+        var inputs = rasterInputs(style: style)
+        // The shared placeholder's colors are dynamic and have light variants; being one instance,
+        // it also lets the export cache hit on the next export.
+        inputs.syntaxTheme = DefaultTheme.placeholder
+        let work = ExportRasterWork(document: document, inputs: inputs)
+        let cache = exportRasterCache
+        let raster = await Task.detached(priority: .userInitiated) {
+            var pass = MarkdownPreviewRasterWorker.resolve(document: work.document, inputs: work.inputs, cache: cache)
+            let rendered = await MarkdownPreviewRasterWorker.renderMermaid(pass.pendingMermaid, inputs: work.inputs, cache: cache)
+            pass.result.merge(rendered)
+            return pass.result
+        }.value
+        let exported = Self.markingErrors(raster.errors, in: document)
+        return previewView.renderedPDFData(document: exported, style: style, raster: raster)
     }
 
     public func closeIfNotMarkdown() {
@@ -139,8 +248,9 @@ public final class MarkdownPreviewController: NSObject {
 
     public func refreshStyle() {
         guard let textView else { return }
-        previewView.style = MarkdownPreviewStyle.from(textView: textView)
+        previewView.style = makeStyle(for: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
+        updateAppearanceToggle()
         scheduleParse(immediate: true)
     }
 
@@ -169,6 +279,7 @@ public final class MarkdownPreviewController: NSObject {
     private func hidePreview() {
         isPreviewVisible = false
         previewView.isHidden = true
+        updateAppearanceToggle()
         textView?.isSelectable = editorWasSelectableBeforePreview
         parseTask?.cancel()
         cancelMermaidWork()
@@ -208,7 +319,7 @@ public final class MarkdownPreviewController: NSObject {
             }
             guard !Task.isCancelled, let self, self.parseGeneration == generation, let textView = self.textView else { return }
             let source = textView.text
-            let style = MarkdownPreviewStyle.from(textView: textView)
+            let style = self.makeStyle(for: textView)
             let inputs = self.rasterInputs(style: style)
             let cache = self.rasterCache
             let parseCache = self.parseCache
@@ -230,7 +341,9 @@ public final class MarkdownPreviewController: NSObject {
             baseURL: documentBaseURL,
             mermaidContext: style.mermaidRenderingContext,
             contentWidth: max(previewView.bounds.width - style.contentInset * 2, 200),
-            syntaxTheme: textView?.theme ?? DefaultTheme(),
+            // A fixed look brings its own code colors: the editor theme's tokens were chosen for
+            // the editor's background, which the preview no longer has.
+            syntaxTheme: appearanceOverride != nil ? DefaultTheme.placeholder : (textView?.theme ?? DefaultTheme()),
             languageResolver: codeBlockLanguageResolver,
             languageProvider: codeBlockLanguageProvider
         )
@@ -304,6 +417,11 @@ public final class MarkdownPreviewController: NSObject {
         }
         return MarkdownPreviewDocument(blocks: blocks)
     }
+}
+
+private struct ExportRasterWork: @unchecked Sendable {
+    let document: MarkdownPreviewDocument
+    let inputs: MarkdownPreviewRasterInputs
 }
 
 private struct ParsedPreview: @unchecked Sendable {

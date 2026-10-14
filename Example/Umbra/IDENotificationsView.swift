@@ -163,6 +163,12 @@ private struct IDENotificationRow: View {
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(2)
                         }
+                        if let link = item.action?.linkTitle {
+                            Text(link)
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.accent)
+                                .underline()
+                        }
                         Text(item.date, style: .relative)
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(0.7))
