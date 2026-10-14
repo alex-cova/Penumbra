@@ -109,14 +109,26 @@ final class HTTPCompletionTests: XCTestCase {
     }
 }
 
-func makeHTTPContext(_ text: String, caret: Int? = nil, language: String = "http") -> CompletionContext {
+/// `elided` gives the document the snapshot of a file-backed buffer: no text, only a ranged reader.
+func makeHTTPContext(
+    _ text: String, caret: Int? = nil, language: String = "http", elided: Bool = false
+) -> CompletionContext {
     let offset = caret ?? (text as NSString).length
+    let length = (text as NSString).length
+    let snapshot = elided
+        ? TextSnapshot(
+            version: 0, utf16Length: length, text: nil,
+            rangeReader: TextRangeReader(utf16Length: length) { start, count in
+                (text as NSString).substring(with: NSRange(location: start, length: count))
+            }
+        )
+        : TextSnapshot(version: 0, text: text)
     let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
     let document = Document(
         id: DocumentID(),
         url: nil,
         displayName: "request.http",
-        contentSnapshot: TextSnapshot(version: 0, text: text),
+        contentSnapshot: snapshot,
         selection: Selection(range: TextRange(start: position, end: position)),
         cursor: Cursor(position: position),
         viewport: Viewport(x: 0, y: 0, width: 800, height: 600),
@@ -175,6 +187,36 @@ final class HTTPGraphQLCompletionTests: XCTestCase {
         XCTAssertEqual(items.first { $0.label == "id" }?.detail, "ID!")
         XCTAssertEqual(items.first { $0.label == "id" }?.documentation, "The id.")
         XCTAssertEqual(items.first { $0.label == "name" }?.insertText, "name")
+    }
+
+    func testEmptySelectionSetBetweenBracesCompletesRootFields() async throws {
+        let schema = try schemaFile()
+        let provider = try await provider(for: schema)
+        let before = "###@scheme:\(schema.path)\nGRAPHQL https://api.test/graphql\n\n{\n "
+        let text = before + "\n}"
+        let caret = (before as NSString).length
+        XCTAssertEqual(HTTPCompletion.site(in: text, caretUTF16: caret), .graphQL)
+        let context = makeHTTPContext(text, caret: caret)
+        XCTAssertTrue(provider.isPrimary(for: context))
+        let items = await provider.provide(context: context)
+        XCTAssertTrue(items.contains { $0.label == "me" }, "Root fields: \(items.map(\.label))")
+    }
+
+    func testFileBackedBuffersCompleteFromTheirRangedReader() async throws {
+        // A file opened from disk keeps `Document.text` empty; the provider has to read the reader.
+        let schema = try schemaFile()
+        let provider = try await provider(for: schema)
+        let before = "###@scheme:\(schema.path)\nGRAPHQL https://api.test/graphql\n\n{\n "
+        let text = before + "\n}"
+        let context = makeHTTPContext(text, caret: (before as NSString).length, elided: true)
+        XCTAssertEqual(context.document.text, "")
+        XCTAssertTrue(provider.isPrimary(for: context))
+        let items = await provider.provide(context: context)
+        XCTAssertTrue(items.contains { $0.label == "me" }, "Root fields: \(items.map(\.label))")
+
+        let headers = makeHTTPContext("GET https://example.com\nAcc", elided: true)
+        let headerItems = await HTTPCompletionProvider().provide(context: headers)
+        XCTAssertTrue(headerItems.contains { $0.label == "Accept" })
     }
 
     func testNestedClosingBracesKeepTheCaretInsideTheBody() async throws {

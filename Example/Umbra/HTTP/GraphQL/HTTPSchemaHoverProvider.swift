@@ -27,7 +27,7 @@ final class HTTPSchemaHoverProvider: HoverProvider, @unchecked Sendable {
     func provide(context: HoverContext) async -> HoverResult? {
         guard context.document.languageIdentifier == "http" else { return nil }
         let (store, globals) = snapshot()
-        let text = context.document.text
+        let text = context.document.httpText
         let caret = context.cursor.position.utf16Offset
         guard let store,
               let directive = HTTPGraphQLDirective.directive(in: text, caretUTF16: caret),

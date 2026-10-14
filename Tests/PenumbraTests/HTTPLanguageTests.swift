@@ -109,6 +109,29 @@ final class HTTPLanguageTests: XCTestCase {
         """, covering: "}", backwards: true), "punctuation.bracket")
     }
 
+    func testJSONBodyBooleansAndNullGetAThemeColor() {
+        // Umbra paints with `PaletteTheme`, which has to know every name the JSON query emits.
+        let text = """
+        POST https://example.com/api HTTP/1.1
+        Content-Type: application/json
+
+        {
+          "ok": true,
+          "none": null
+        }
+        """
+        let theme = PaletteTheme(
+            size: 13,
+            palette: ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true),
+            font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        )
+        XCTAssertEqual(paintedCapture(in: text, covering: "true"), "boolean")
+        XCTAssertNotNil(theme.textColor(for: "boolean"))
+        XCTAssertEqual(theme.textColor(for: "boolean"), theme.textColor(for: "constant.builtin"))
+        XCTAssertNotNil(theme.textColor(for: "punctuation.bracket"))
+        XCTAssertNotNil(theme.textColor(for: "property"))
+    }
+
     func testHTTPJSONArrayBodyInjection() {
         let names = captureNames(in: """
         POST https://example.com/api HTTP/1.1

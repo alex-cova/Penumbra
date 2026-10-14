@@ -1056,6 +1056,9 @@ public final class IDEWorkspace {
             languageMode = PlainTextLanguageMode()
         }
         host(for: targetPane.id).textView.setLanguageMode(languageMode)
+        host(for: targetPane.id).textView.reservedLineMarkerSlots = reservedLineMarkerSlots(
+            languageIdentifier: identifier, hasMarkerProvider: languages.lineMarkers(for: identifier) != nil
+        )
 
         if targetPane.id == workbench.activePaneID {
             statusLanguage = identifier ?? ""
@@ -3925,7 +3928,10 @@ public final class IDEWorkspace {
                 if let url = document.url { localHistory.recordBaseline(url) }
             }
             Task {
-                try? await workbench.reloadFileBackedDocuments(languageResolver: IDELanguageSupport.fileBackedLanguageResolver)
+                try? await workbench.reloadFileBackedDocuments(
+                    languageResolver: IDELanguageSupport.fileBackedLanguageResolver,
+                    languageProvider: Self.languageProvider
+                )
                 rebuildLayoutHosts()
                 refreshPresentation()
                 showsWelcome = !hasOpenDocuments
@@ -4521,6 +4527,14 @@ public final class IDEWorkspace {
         }
     }
 
+    /// Slots the line-marker column keeps for a language. Java reserves the most markers can take;
+    /// an `.http` file reserves one for its send buttons, so the text does not move when the first
+    /// request is detected (the buttons arrive a debounce after the file opens).
+    private func reservedLineMarkerSlots(languageIdentifier: String?, hasMarkerProvider: Bool) -> Int {
+        if hasMarkerProvider { return TextView.maximumLineMarkerSlots }
+        return languageIdentifier == "http" ? 1 : 0
+    }
+
     /// Refreshes a pane's gutter icons once typing pauses, off the main actor, for a language with a
     /// line marker provider. Like semantic
     /// highlighting, a newer request replaces the pending one and a result for text that changed
@@ -4532,7 +4546,9 @@ public final class IDEWorkspace {
         // The icons arrive later; their column exists from the first layout so the text stays put.
         // Run buttons share it, so it is kept even with every marker kind turned off.
         let provider = languages.lineMarkers(for: languageIdentifier)
-        host.textView.reservedLineMarkerSlots = provider == nil ? 0 : TextView.maximumLineMarkerSlots
+        host.textView.reservedLineMarkerSlots = reservedLineMarkerSlots(
+            languageIdentifier: languageIdentifier, hasMarkerProvider: provider != nil
+        )
         guard let provider, !kinds.isEmpty else {
             lineMarkerTasks[key] = nil
             lineMarkersByEditor[key] = nil
@@ -5673,6 +5689,7 @@ public final class IDEWorkspace {
         let locations = HTTPRequestParser.requestLocations(in: text)
         httpFileCanSend = !locations.isEmpty
         httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
+        textView.reservedLineMarkerSlots = reservedLineMarkerSlots(languageIdentifier: "http", hasMarkerProvider: false)
         textView.setGutterDecorations(locations.map {
             GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn)
         })

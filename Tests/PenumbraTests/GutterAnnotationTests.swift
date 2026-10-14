@@ -157,3 +157,40 @@ final class GutterAnnotationTests: XCTestCase {
         XCTAssertEqual(inkInGutter(of: textView, width: textView.gutterWidth), before)
     }
 }
+
+@MainActor
+final class ReservedLineMarkerSlotTests: XCTestCase {
+    private func makeTextView() -> TextView {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 600, height: 300))
+        textView.theme = DefaultTheme()
+        textView.showLineNumbers = true
+        textView.text = "GET https://example.com\n\nPOST https://example.com\n"
+        textView.layoutIfNeeded()
+        return textView
+    }
+
+    private let sendButton = GutterDecoration(
+        line: 0, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn
+    )
+
+    func testWithoutAReservationTheFirstButtonWidensTheGutter() {
+        let textView = makeTextView()
+        let before = textView.gutterWidth
+        textView.setGutterDecorations([sendButton])
+        textView.layoutIfNeeded()
+        XCTAssertGreaterThan(textView.gutterWidth, before)
+    }
+
+    func testAReservedSlotKeepsTheGutterStillWhenTheFirstButtonArrives() {
+        let textView = makeTextView()
+        textView.reservedLineMarkerSlots = 1
+        textView.layoutIfNeeded()
+        let reserved = textView.gutterWidth
+        textView.setGutterDecorations([sendButton])
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.gutterWidth, reserved, accuracy: 0.5)
+        textView.setGutterDecorations([])
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.gutterWidth, reserved, accuracy: 0.5)
+    }
+}

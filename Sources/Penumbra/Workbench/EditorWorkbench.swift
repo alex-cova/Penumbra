@@ -125,8 +125,12 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     /// For each text document with a `url` that is `isFileBacked` or not dirty, ``WorkbenchDocument/load(contentsOf:language:languageIdentifier:parsePolicy:io:)``
     /// and splice `id`, `documentID`, selection, scroll, and `isDirty` onto the loaded instance
     /// (loaded `pendingState` / `rangeReader` / `isFileBacked` win). Dirty mmap edits are discarded.
+    ///
+    /// `languageProvider` resolves the languages a grammar injects (JSON in an `.http` body,
+    /// JavaScript in HTML, Markdown fences); without it those regions stay uncolored.
     public func reloadFileBackedDocuments(
-        languageResolver: (WorkbenchDocument) -> TreeSitterLanguage? = { _ in nil }
+        languageResolver: (WorkbenchDocument) -> TreeSitterLanguage? = { _ in nil },
+        languageProvider: TreeSitterLanguageProvider? = nil
     ) async throws {
         var replacements: [UUID: WorkbenchDocument] = [:]
         for document in allDocuments() {
@@ -140,7 +144,8 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
             guard let loaded = try? await WorkbenchDocument.load(
                 contentsOf: url,
                 language: languageResolver(document) ?? document.language,
-                languageIdentifier: document.languageIdentifier
+                languageIdentifier: document.languageIdentifier,
+                languageProvider: languageProvider
             ) else {
                 continue
             }
@@ -174,11 +179,12 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     public func restore(
         from state: EditorRestorationState,
         reloadingFileBacked: Bool,
-        languageResolver: (WorkbenchDocumentSnapshot) -> TreeSitterLanguage? = { _ in nil }
+        languageResolver: (WorkbenchDocumentSnapshot) -> TreeSitterLanguage? = { _ in nil },
+        languageProvider: TreeSitterLanguageProvider? = nil
     ) async throws {
         restore(from: state, languageResolver: languageResolver)
         if reloadingFileBacked {
-            try await reloadFileBackedDocuments { $0.language }
+            try await reloadFileBackedDocuments(languageResolver: { $0.language }, languageProvider: languageProvider)
         }
     }
 

@@ -1,5 +1,6 @@
 import XCTest
 import EditorIntelligence
+import PenumbraLanguages
 @testable import Penumbra
 
 final class WorkbenchTests: XCTestCase {
@@ -373,6 +374,34 @@ final class WorkbenchTests: XCTestCase {
         )
         XCTAssertEqual(documents[2].text, "unsaved edits")
         XCTAssertNil(documents[2].pendingState)
+    }
+
+    func testReloadResolvesInjectedLanguagesWithTheProvider() async throws {
+        // A restored `.http` tab is reloaded from disk; its JSON body is an injected language, so
+        // the reload has to carry the host's language provider or the body stays uncolored.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).http")
+        let text = "POST https://example.com/api\nContent-Type: application/json\n\n{\n  \"ok\": true,\n  \"n\": 42\n}\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        func captureNames(provider: TreeSitterLanguageProvider?) async throws -> Set<String> {
+            let bench = EditorWorkbench()
+            bench.openDocument(WorkbenchDocument(
+                url: url, displayName: "request.http", text: "", language: .http, languageIdentifier: "http"
+            ))
+            try await bench.reloadFileBackedDocuments(languageResolver: { $0.language }, languageProvider: provider)
+            let state = try XCTUnwrap(bench.activePane.documents.first?.pendingState)
+            let mode = try XCTUnwrap(state.languageMode as? TreeSitterInternalLanguageMode)
+            mode.parse()
+            let range = ByteRange(from: 0, to: ByteCount((text as NSString).length * 2 + 16))
+            return Set(mode.captures(in: range).map(\.name))
+        }
+
+        let withProvider = try await captureNames(provider: BundledLanguageProvider())
+        XCTAssertTrue(withProvider.contains("property"), "JSON body not injected: \(withProvider)")
+        XCTAssertTrue(withProvider.contains("number"))
+        let without = try await captureNames(provider: nil)
+        XCTAssertFalse(without.contains("property"), "Without a provider the body has no JSON captures")
     }
 
     func testRestorationPreservesSplitLayout() throws {

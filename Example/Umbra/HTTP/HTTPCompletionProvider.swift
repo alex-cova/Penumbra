@@ -40,12 +40,12 @@ final class HTTPCompletionProvider: CompletionProvider, @unchecked Sendable {
 
     func isPrimary(for context: CompletionContext) -> Bool {
         guard context.document.languageIdentifier == "http" else { return false }
-        return HTTPCompletion.site(in: context.document.text, caretUTF16: context.cursor.position.utf16Offset) != nil
+        return HTTPCompletion.site(in: context.document.httpText, caretUTF16: context.cursor.position.utf16Offset) != nil
     }
 
     func provide(context: CompletionContext) async -> [CompletionItem] {
         guard context.document.languageIdentifier == "http" else { return [] }
-        let text = context.document.text
+        let text = context.document.httpText
         let caret = context.cursor.position.utf16Offset
         guard let site = HTTPCompletion.site(in: text, caretUTF16: caret) else { return [] }
         switch site {
@@ -166,6 +166,19 @@ final class HTTPCompletionProvider: CompletionProvider, @unchecked Sendable {
     }
 }
 
+extension Document {
+    /// The whole text of an `.http` file. A file-backed buffer keeps `text` empty and is read
+    /// through its ranged reader, which is how every `.http` provider has to read it.
+    var httpText: String {
+        if let text = contentSnapshot.text {
+            return text
+        }
+        let length = contentSnapshot.utf16Length
+        guard length > 0, length <= HTTPCompletion.maximumTextLength else { return "" }
+        return substring(utf16Offset: 0, length: length)
+    }
+}
+
 enum HTTPCompletion {
     enum Site: Equatable {
         case template
@@ -216,6 +229,10 @@ enum HTTPCompletion {
         Function(label: "$random.email", filter: "$random.email", insert: "$random.email"),
         Function(label: "$historyFolder", filter: "$historyFolder", insert: "$historyFolder", detail: "response folder"),
     ]
+
+    /// Longest `.http` file, in UTF-16 units, that completion reads. Requests are small; a file
+    /// past this answers nothing instead of being copied out of the buffer on every keystroke.
+    static let maximumTextLength = 2_000_000
 
     static func site(in text: String, caretUTF16: Int) -> Site? {
         let ns = text as NSString

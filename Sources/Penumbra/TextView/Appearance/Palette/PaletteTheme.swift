@@ -112,7 +112,7 @@ public final class PaletteTheme: Theme, @unchecked Sendable {
         switch name {
         case "comment":
             return NSColor(rgb: palette.comment)
-        case "constant.builtin", "constant.character", "constant":
+        case "constant.builtin", "constant.character", "constant", "boolean":
             return NSColor(rgb: palette.constant)
         case "constructor", "type":
             return NSColor(rgb: palette.type)
