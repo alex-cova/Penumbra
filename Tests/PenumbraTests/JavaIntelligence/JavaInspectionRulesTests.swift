@@ -22,6 +22,8 @@ final class JavaInspectionRulesTests: XCTestCase {
         // Class-member rules fire on the sample classes' private helpers and plain fields; the fourth
         // batch's own suite runs them alone.
         .unusedParameter, .methodMayBeStatic, .fieldMayBeStatic, .innerClassMayBeStatic, .rawTypeUsage, .uncheckedCast,
+        // Package declarations in samples, and plain fields and parameters of the same name.
+        .packageDirectoryMismatch, .parameterHidesField, .staticFieldWrittenFromInstance,
     ]
 
     /// Codes of the rule under test only, for sources that trip a neighbouring rule too.

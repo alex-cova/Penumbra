@@ -41,6 +41,7 @@ final class JavaInspectionRegistryTests: XCTestCase {
             .classMayBeInterface, .literalEqualsReversed, .redundantFieldInitializer, .hardcodedCredential,
             .floatingPointEquality, .localVariableTypeCanBeVar, .streamToList,
             .collectionsEmptyFactory, .rawTypeUsage, .uncheckedCast, .methodMayBeStatic,
+            .notifyInsteadOfNotifyAll, .systemExitCall, .octalLiteral, .parameterHidesField, .staticFieldWrittenFromInstance,
         ])
         XCTAssertEqual(JavaInspectionRule.enabledByDefault, Set(JavaInspectionRule.allCases).subtracting(off))
     }

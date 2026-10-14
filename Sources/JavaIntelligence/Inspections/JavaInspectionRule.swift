@@ -242,6 +242,21 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case equalsIncompatibleTypes
     case integerOverflowInLongAssignment
     case nonSerializableField
+    case deprecatedConstructorUsage
+    case deprecatedFieldUsage
+    case suspiciousCollectionArgument
+    case fieldHidesSuperclassField
+    case packageDirectoryMismatch
+    case notifyInsteadOfNotifyAll
+    case unsafeThreadMethod
+    case volatileArrayField
+    case cloneWithoutSuperCall
+    case equalsWithoutTypeCheck
+    case toStringReturnsNull
+    case systemExitCall
+    case octalLiteral
+    case parameterHidesField
+    case staticFieldWrittenFromInstance
 
     private struct Info {
         let code: String
@@ -448,6 +463,21 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .equalsIncompatibleTypes: Info(code: "equals-incompatible-types", title: "'equals()' between incompatible types", group: .probableBugs, severity: .warning, summary: "Reports equals() or Objects.equals() on two values whose declared types are different wrapper types or String and a number; the result is always false."),
         .integerOverflowInLongAssignment: Info(code: "integer-overflow-in-long-assignment", title: "Integer arithmetic widened to 'long' after overflow", group: .probableBugs, severity: .warning, summary: "Reports long x = a * b (and a << n) where the operands are int: the product is computed in int and can overflow before it is widened."),
         .nonSerializableField: Info(code: "non-serializable-field", title: "Non-serializable field in a Serializable class", group: .serialization, severity: .warning, summary: "Reports a non-transient instance field of a type that is known not to be Serializable, in a class that implements Serializable."),
+        .deprecatedConstructorUsage: Info(code: "deprecated-constructor-usage", title: "Use of a deprecated constructor", group: .codeMaturity, severity: .warning, summary: "Reports new Foo(...) where every constructor that fits the arguments is marked deprecated."),
+        .deprecatedFieldUsage: Info(code: "deprecated-field-usage", title: "Use of a deprecated field", group: .codeMaturity, severity: .warning, summary: "Reports a read or write of a field the library marks deprecated."),
+        .suspiciousCollectionArgument: Info(code: "suspicious-collection-argument", title: "Argument type does not match the collection's element type", group: .probableBugs, severity: .warning, summary: "Reports contains, indexOf, remove, get and containsKey called with a value of a different wrapper type than the collection holds, such as List<String>.contains(1); the call is always false."),
+        .fieldHidesSuperclassField: Info(code: "field-hides-superclass-field", title: "Field hides a field of a superclass", group: .classStructure, severity: .warning, summary: "Reports a field with the same name as an accessible field of a superclass; code that sees one cannot see the other."),
+        .packageDirectoryMismatch: Info(code: "package-directory-mismatch", title: "Package name does not match the directory", group: .compilerIssues, severity: .warning, summary: "Reports a package declaration that the file's directory does not end with."),
+        .notifyInsteadOfNotifyAll: Info(code: "notify-instead-of-notify-all", title: "'notify()' instead of 'notifyAll()'", group: .threading, severity: .weakWarning, summary: "Reports notify(), which wakes one arbitrary waiter; with several conditions on one monitor the wrong thread may wake."),
+        .unsafeThreadMethod: Info(code: "unsafe-thread-method", title: "Call to an unsafe 'Thread' method", group: .threading, severity: .warning, summary: "Reports Thread.stop(), suspend(), resume() and destroy(), which are deprecated because they leave locks and state inconsistent."),
+        .volatileArrayField: Info(code: "volatile-array-field", title: "Volatile array field", group: .threading, severity: .warning, summary: "Reports a volatile array: only the reference is volatile, not the elements."),
+        .cloneWithoutSuperCall: Info(code: "clone-without-super-call", title: "'clone()' does not call 'super.clone()'", group: .classStructure, severity: .warning, summary: "Reports a clone() that never calls super.clone(), so a subclass's clone returns the wrong class."),
+        .equalsWithoutTypeCheck: Info(code: "equals-without-type-check", title: "'equals()' casts its parameter without checking its type", group: .probableBugs, severity: .warning, summary: "Reports an equals(Object) that casts the argument with no instanceof or getClass() test; it throws ClassCastException for another type."),
+        .toStringReturnsNull: Info(code: "to-string-returns-null", title: "'toString()' returns null", group: .probableBugs, severity: .warning, summary: "Reports return null in toString(); string concatenation and loggers expect a String."),
+        .systemExitCall: Info(code: "system-exit-call", title: "Call to 'System.exit()' or 'Runtime.halt()'", group: .codeMaturity, severity: .weakWarning, summary: "Reports a call that shuts the whole JVM down; it makes the code hard to test and to embed."),
+        .octalLiteral: Info(code: "octal-literal", title: "Octal integer literal", group: .probableBugs, severity: .weakWarning, summary: "Reports 010 and similar, which equals 8 and is easily read as decimal."),
+        .parameterHidesField: Info(code: "parameter-hides-field", title: "Parameter hides a field", group: .classStructure, severity: .weakWarning, summary: "Reports a method parameter named like a field of the same class (constructors and setters are skipped)."),
+        .staticFieldWrittenFromInstance: Info(code: "static-field-written-from-instance", title: "Static field written from an instance method", group: .classStructure, severity: .weakWarning, summary: "Reports an assignment to a non-final static field inside an instance method, which every instance shares."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
@@ -483,6 +513,9 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         // Style and noise: raw types and unchecked casts are legitimate in legacy code, and a private
         // method that could be static is a taste.
         .rawTypeUsage, .uncheckedCast, .methodMayBeStatic,
+        // Style preferences and loud checks: a call to notify() is often right, System.exit belongs to
+        // main methods, octal literals are rare and deliberate, and hiding a field is how constructors work.
+        .notifyInsteadOfNotifyAll, .systemExitCall, .octalLiteral, .parameterHidesField, .staticFieldWrittenFromInstance,
     ]
 
     /// The rules a new service or fresh preferences run with.

@@ -195,6 +195,18 @@ enum JavaInspectionRegistry {
         JavaNonSerializableFieldInspection.self,
         JavaRawTypeUsageInspection.self,
         JavaUncheckedCastInspection.self,
+        // Fifth batch
+        JavaPackageDirectoryMismatchInspection.self,
+        JavaNotifyInsteadOfNotifyAllInspection.self,
+        JavaUnsafeThreadMethodInspection.self,
+        JavaVolatileArrayFieldInspection.self,
+        JavaCloneWithoutSuperCallInspection.self,
+        JavaEqualsWithoutTypeCheckInspection.self,
+        JavaToStringReturnsNullInspection.self,
+        JavaSystemExitCallInspection.self,
+        JavaOctalLiteralInspection.self,
+        JavaParameterHidesFieldInspection.self,
+        JavaStaticFieldWrittenFromInstanceInspection.self,
         // Control flow
         JavaRedundantIfStatementInspection.self,
         JavaSimplifiableConditionalInspection.self,
@@ -237,6 +249,10 @@ enum JavaInspectionRegistry {
 
     nonisolated(unsafe) static let typedInspections: [any JavaTypedInspection.Type] = [
         JavaAccessStaticViaInstanceInspection.self,
+        JavaDeprecatedConstructorUsageInspection.self,
+        JavaDeprecatedFieldUsageInspection.self,
+        JavaSuspiciousCollectionArgumentInspection.self,
+        JavaFieldHidesSuperclassFieldInspection.self,
         JavaRedundantArrayCreationInspection.self,
         JavaSizeComparisonWithZeroInspection.self,
         JavaDeprecatedApiInspection.self,

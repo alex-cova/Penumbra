@@ -46,6 +46,7 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var blockLocalTables: [Range<Int>: [String: [BlockLocal]]] = [:]
     private var floatingMention: Bool?
     private var typeDeclarationRanges: [String: Range<Int>]?
+    private var fieldFlagTables: [Int: [String: (isStatic: Bool, isFinal: Bool)]] = [:]
 
     /// Locals with their uses and every identifier by name, built once per tree on first use.
     func fileSymbols(context: JavaInspectionContext) -> JavaFileSymbolTable {
@@ -87,6 +88,25 @@ final class JavaDeclarationCache: @unchecked Sendable {
         assignedNameSet = names
         lock.unlock()
         return names
+    }
+
+    /// The fields declared directly in a class body with whether each is `static` and `final`.
+    func fieldFlags(of body: SyntaxNode) -> [String: (isStatic: Bool, isFinal: Bool)] {
+        let key = body.startByte
+        lock.lock()
+        if let cached = fieldFlagTables[key] { lock.unlock(); return cached }
+        lock.unlock()
+        var table: [String: (isStatic: Bool, isFinal: Bool)] = [:]
+        for member in body.namedChildren where member.type == "field_declaration" {
+            let flags = (isStatic: member.hasModifier("static"), isFinal: member.hasModifier("final"))
+            for declarator in member.namedChildren(ofType: "variable_declarator") {
+                if let name = declarator.child(byFieldName: "name") { table[name.text] = flags }
+            }
+        }
+        lock.lock()
+        fieldFlagTables[key] = table
+        lock.unlock()
+        return table
     }
 
     /// The first class, record, enum or interface of each name, in document order, as byte ranges
