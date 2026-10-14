@@ -43,6 +43,8 @@ struct IDEPreferencesAppearancePane: View {
                     }
                 }
             }
+
+            IDESettingsToggle("Disable animation", isOn: $preferences.welcomeAnimationDisabled)
         }
     }
 }

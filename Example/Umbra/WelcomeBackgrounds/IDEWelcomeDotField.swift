@@ -3,7 +3,7 @@ import SwiftUI
 /// A Canvas port of React Bits `DotField` (bulge mode, purple gradient, pointer bulge).
 struct IDEWelcomeDotField: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var viewSize: CGSize = .zero
     @State private var dots: [Dot] = []

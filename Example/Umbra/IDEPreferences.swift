@@ -18,6 +18,7 @@ public final class IDEPreferences {
         static let uiFontName = "com.umbra.editor.uiFontName"
         static let uiFontSize = "com.umbra.editor.uiFontSize"
         static let welcomeBackground = "com.umbra.editor.welcomeBackground"
+        static let welcomeAnimationDisabled = "com.umbra.editor.welcomeAnimationDisabled"
         static let uiColorSchemeID = "com.umbra.editor.uiColorSchemeID"
         static let themeID = "com.umbra.editor.themeID"
         static let caretShape = "com.umbra.editor.caretShape"
@@ -138,6 +139,11 @@ public final class IDEPreferences {
     /// Animated backdrop of the welcome page.
     var welcomeBackground: IDEWelcomeBackground {
         didSet { UserDefaults.standard.set(welcomeBackground.rawValue, forKey: Keys.welcomeBackground) }
+    }
+
+    /// Holds the welcome backdrop still, as if Reduce Motion were on, without changing the system setting.
+    var welcomeAnimationDisabled: Bool {
+        didSet { UserDefaults.standard.set(welcomeAnimationDisabled, forKey: Keys.welcomeAnimationDisabled) }
     }
 
     /// Shell chrome colors (sidebars, tabs, panels). Editor syntax themes are separate.
@@ -745,6 +751,7 @@ public final class IDEPreferences {
         uiFontSize = defaults.object(forKey: Keys.uiFontSize) as? Double ?? IDEUIFonts.defaultFontSize
         welcomeBackground = defaults.string(forKey: Keys.welcomeBackground)
             .flatMap(IDEWelcomeBackground.init(rawValue:)) ?? .moltenMetal
+        welcomeAnimationDisabled = defaults.bool(forKey: Keys.welcomeAnimationDisabled)
         let savedUIColorSchemeID = defaults.string(forKey: Keys.uiColorSchemeID)
         uiColorSchemeID = switch savedUIColorSchemeID {
         case "fleet", "fleet-dark-edited": IDEUIColorSchemeCatalog.defaultID

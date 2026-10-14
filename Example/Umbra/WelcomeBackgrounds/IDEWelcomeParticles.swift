@@ -4,7 +4,7 @@ import SwiftUI
 /// Metal point-sprite port of React Bits `Particles.tsx` (200 white particles, hover drift, rotation).
 struct IDEWelcomeParticles: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {

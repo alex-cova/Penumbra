@@ -9,7 +9,7 @@ import SwiftUI
 /// Reduce Motion and while the window isn't active.
 struct IDEWelcomeDeepSpace: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {

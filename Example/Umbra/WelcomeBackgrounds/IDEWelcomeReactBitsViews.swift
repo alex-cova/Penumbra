@@ -2,7 +2,7 @@ import SwiftUI
 
 struct IDEWelcomeGradientWaves: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -14,7 +14,7 @@ struct IDEWelcomeGradientWaves: View {
 
 struct IDEWelcomeMoltenMetal: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -26,7 +26,7 @@ struct IDEWelcomeMoltenMetal: View {
 
 struct IDEWelcomeGalaxy: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -38,7 +38,7 @@ struct IDEWelcomeGalaxy: View {
 
 struct IDEWelcomeLiquidChrome: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -50,7 +50,7 @@ struct IDEWelcomeLiquidChrome: View {
 
 struct IDEWelcomePixelSnow: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -62,7 +62,7 @@ struct IDEWelcomePixelSnow: View {
 
 struct IDEWelcomeEvilEye: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -74,7 +74,7 @@ struct IDEWelcomeEvilEye: View {
 
 struct IDEWelcomeAeroShards: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
@@ -86,7 +86,7 @@ struct IDEWelcomeAeroShards: View {
 
 struct IDEWelcomeBalatro: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {

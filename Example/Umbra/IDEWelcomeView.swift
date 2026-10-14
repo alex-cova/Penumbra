@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// True when the welcome backdrop should hold still: the system's Reduce Motion or Umbra's
+    /// "Disable animation" preference. Set by the backdrop; the background views read this one.
+    @Entry var welcomeReduceMotion = false
+}
+
 /// What animates behind the welcome page.
 enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
     case starfield
@@ -70,7 +76,11 @@ struct IDEWelcomeView: View {
             }
         }
         .background {
-            IDEWelcomeBackdrop(kind: workspace.preferences.welcomeBackground, parallax: parallax)
+            IDEWelcomeBackdrop(
+                kind: workspace.preferences.welcomeBackground,
+                parallax: parallax,
+                animationDisabled: workspace.preferences.welcomeAnimationDisabled
+            )
         }
     }
 
@@ -122,8 +132,15 @@ struct IDEWelcomeView: View {
 private struct IDEWelcomeBackdrop: View {
     let kind: IDEWelcomeBackground
     let parallax: IDEWelcomeParallax
+    let animationDisabled: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
     var body: some View {
+        backdrop
+            .environment(\.welcomeReduceMotion, systemReduceMotion || animationDisabled)
+    }
+
+    @ViewBuilder private var backdrop: some View {
         switch kind {
         case .starfield:
             IDEWelcomeStarfield(parallax: parallax)
@@ -546,7 +563,7 @@ final class IDEWelcomeParallax {
 /// under Reduce Motion and while the window isn't active.
 private struct IDEWelcomeStarfield: View {
     let parallax: IDEWelcomeParallax
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var stars: [Star] = []
 
