@@ -66,6 +66,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     private var classpathPaths: JavaIndexPaths?
     private var profile: JavaInspectionProfile
     private var classifier = JavaInspectionFileClassifier()
+    private var languageLevelResolver: (@Sendable (URL) -> Int?)?
     private let usageProvider: JavaFindUsagesProvider?
     /// Project-wide findings per file, valid for the text they were computed from.
     private var projectResults: [URL: (hash: Int, inspections: [JavaInspection])] = [:]
@@ -118,6 +119,13 @@ public actor JavaInspectionService: DiagnosticProvider {
     }
 
     public var currentProfile: JavaInspectionProfile { profile }
+
+    /// Tells the Java language level of a file (its module's, else the JDK's), for the rules that
+    /// suggest newer syntax. Without one they report nothing.
+    public func setLanguageLevelResolver(_ resolver: (@Sendable (URL) -> Int?)?) {
+        languageLevelResolver = resolver
+        cache.removeAll()
+    }
 
     public func setEnabledRules(_ rules: Set<JavaInspectionRule>) {
         var updated = profile
@@ -213,6 +221,7 @@ public actor JavaInspectionService: DiagnosticProvider {
         let profile = profile
         let enabled = profile.enabledRules(in: file)
         let thresholds = profile.thresholds
+        let level = languageLevelResolver?(url)
         let stored = projectResults[url].flatMap { $0.hash == hash ? $0.inspections : nil } ?? []
         let inspections = await JavaIndex.$queryScope.withValue(scope) {
             let tree: JavaSyntaxTree?
@@ -224,7 +233,7 @@ public actor JavaInspectionService: DiagnosticProvider {
             guard let tree else { return [JavaInspection]() }
             return await JavaInspectionPipeline.inspect(
                 text: text, url: url, tree: tree, index: index,
-                enabled: enabled, thresholds: thresholds, projectFindings: stored
+                enabled: enabled, thresholds: thresholds, projectFindings: stored, languageLevel: level
             )
         }
         let outcome = JavaInspectionPipeline.finalize(inspections, text: text, profile: profile, file: file)

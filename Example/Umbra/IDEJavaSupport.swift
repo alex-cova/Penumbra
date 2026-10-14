@@ -115,6 +115,11 @@ final class IDEJavaSupport {
     /// files can be analysed again without waiting for an edit.
     @ObservationIgnored var onInspectionConfigurationChanged: (@MainActor () -> Void)?
     private var appliedInspectionConfiguration: InspectionConfiguration?
+    /// The Java language level of a file: its Gradle module's, else the selected JDK's. Handed to
+    /// the inspection service and to batch runs so the rules that suggest newer syntax know what
+    /// the project may use.
+    @ObservationIgnored private(set) var inspectionLanguageLevel: @Sendable (URL) -> Int? = { _ in nil }
+    @ObservationIgnored private var languageLevelKey = ""
 
     private struct InspectionConfiguration: Equatable {
         let profile: JavaInspectionProfile
@@ -264,15 +269,38 @@ final class IDEJavaSupport {
         }
     }
 
+    /// Reads the project's language levels and the JDK's feature version again (a sync finished or
+    /// the JDK changed) and tells the inspections; open files are analysed again when it changed.
+    func refreshInspectionLanguageLevel() {
+        let model = gradle.model
+        Task { [weak self] in
+            guard let self else { return }
+            let fallback = await self.jdk.resolve(minimumFeatureVersion: nil)?.installation.featureVersion
+            let levels = (model?.subprojects ?? []).map { "\($0.path)=\($0.languageLevel ?? 0)" }.joined(separator: ",")
+            let key = "\(fallback ?? 0)|\(levels)"
+            let resolver: @Sendable (URL) -> Int? = { url in model?.languageLevel(forFile: url) ?? fallback }
+            self.inspectionLanguageLevel = resolver
+            await self.inspectionService.setLanguageLevelResolver(resolver)
+            guard key != self.languageLevelKey else { return }
+            let isFirst = self.languageLevelKey.isEmpty
+            self.languageLevelKey = key
+            if !isFirst { self.onInspectionConfigurationChanged?() }
+        }
+    }
+
     /// A batch runner (Inspect Code, Run Inspection by Name, the commit check) over this window's
     /// index, with each file seeing the shards of its Gradle source set.
     func makeBatchInspector() -> JavaBatchInspector {
         let model = gradle.model
         let paths = paths
-        return JavaBatchInspector(index: javaIndex, usageProvider: findUsagesProvider) { url in
-            guard let model else { return nil }
-            return model.visibleShardPaths(forFile: url, paths: paths)
-        }
+        return JavaBatchInspector(
+            index: javaIndex, usageProvider: findUsagesProvider,
+            queryScope: { url in
+                guard let model else { return nil }
+                return model.visibleShardPaths(forFile: url, paths: paths)
+            },
+            languageLevel: inspectionLanguageLevel
+        )
     }
 
     /// Analyses `documents` again with the current inspection settings.
@@ -289,6 +317,7 @@ final class IDEJavaSupport {
     /// project until its sync has produced a model (which needs the trust prompt), nor when the
     /// user has turned the preference off, nor when no installed JDK ships a `javac`.
     func refreshCompilerDiagnostics() {
+        refreshInspectionLanguageLevel()
         compilerConfigurationTask?.cancel()
         let generation = projectGeneration
         let root = projectRootURL

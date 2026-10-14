@@ -151,6 +151,25 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertEqual(all.edits.count, 2)
     }
 
+    func testMigrationRulesFollowTheLanguageLevelTheHostSupplies() async throws {
+        let source = "class T {\n    boolean f(java.util.Optional<String> o) { return !o.isPresent(); }\n}\n"
+        let service = JavaInspectionService(index: JavaIndex(), enabledRules: indexFreeRules, idleDelay: .milliseconds(10))
+        let box = DiagnosticBox()
+        await service.setResultHandler { _, diagnostics in box.set(diagnostics) }
+
+        // No resolver: the level is unknown and the rule stays silent.
+        await service.analyzeNow(document(source), force: true)
+        XCTAssertFalse(box.value.contains { $0.code == "optional-is-empty" })
+
+        await service.setLanguageLevelResolver { _ in 8 }
+        await service.analyzeNow(document(source), force: true)
+        XCTAssertFalse(box.value.contains { $0.code == "optional-is-empty" })
+
+        await service.setLanguageLevelResolver { _ in 17 }
+        await service.analyzeNow(document(source), force: true)
+        XCTAssertTrue(box.value.contains { $0.code == "optional-is-empty" })
+    }
+
     func testNoFixIsOfferedAwayFromTheDiagnostic() async throws {
         let diagnostics = await analyze(comparing)
         let provider = JavaCodeActionProvider(index: JavaIndex())

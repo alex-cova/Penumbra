@@ -23,7 +23,8 @@ public enum JavaBatchFixer {
         in original: String,
         url: URL,
         index: JavaIndex,
-        thresholds: JavaInspectionThresholds = .standard
+        thresholds: JavaInspectionThresholds = .standard,
+        languageLevel: Int? = nil
     ) async -> JavaFixAllResult {
         let fixable = rules.filter(\.hasQuickFix)
         guard !fixable.isEmpty else { return JavaFixAllResult(text: original, edits: [], fixedCount: 0) }
@@ -32,7 +33,7 @@ public enum JavaBatchFixer {
         for _ in 0..<maxPasses {
             guard let tree = JavaSyntaxParser().parse(text), !tree.rootNode.hasError else { break }
             let found = await JavaInspectionPipeline.inspect(
-                text: text, url: url, tree: tree, index: index, enabled: fixable, thresholds: thresholds
+                text: text, url: url, tree: tree, index: index, enabled: fixable, thresholds: thresholds, languageLevel: languageLevel
             )
             let live = JavaInspectionPipeline.suppressionFiltered(found, text: text)
             let chosen = chooseEdits(for: live.map { $0.asDiagnostic() }, tree: tree, source: text)

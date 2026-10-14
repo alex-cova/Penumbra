@@ -13,9 +13,12 @@ enum JavaInspectionPipeline {
         index: JavaIndex,
         enabled: Set<JavaInspectionRule>,
         thresholds: JavaInspectionThresholds,
-        projectFindings: [JavaInspection] = []
+        projectFindings: [JavaInspection] = [],
+        languageLevel: Int? = nil
     ) async -> [JavaInspection] {
-        guard let context = JavaInspectionContext(source: text, tree: tree, url: url, index: index, thresholds: thresholds) else {
+        guard let context = JavaInspectionContext(
+            source: text, tree: tree, url: url, index: index, thresholds: thresholds, languageLevel: languageLevel
+        ) else {
             return []
         }
         var found: [JavaInspection] = []

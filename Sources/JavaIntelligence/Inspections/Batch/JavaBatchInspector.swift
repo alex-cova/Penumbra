@@ -40,16 +40,21 @@ public struct JavaBatchInspector: Sendable {
     private let index: JavaIndex
     private let usageProvider: JavaFindUsagesProvider?
     private let queryScope: @Sendable (URL) -> Set<String>?
+    private let languageLevel: @Sendable (URL) -> Int?
 
-    /// - Parameter queryScope: the shard paths a file's source set sees (`nil` sees everything).
+    /// - Parameters:
+    ///   - queryScope: the shard paths a file's source set sees (`nil` sees everything).
+    ///   - languageLevel: the Java language level of a file (`nil` when unknown).
     public init(
         index: JavaIndex,
         usageProvider: JavaFindUsagesProvider? = nil,
-        queryScope: @escaping @Sendable (URL) -> Set<String>? = { _ in nil }
+        queryScope: @escaping @Sendable (URL) -> Set<String>? = { _ in nil },
+        languageLevel: @escaping @Sendable (URL) -> Int? = { _ in nil }
     ) {
         self.index = index
         self.usageProvider = usageProvider
         self.queryScope = queryScope
+        self.languageLevel = languageLevel
     }
 
     /// - Parameter text: a file's current text, open buffer first, else the disk; `nil` skips it.
@@ -103,6 +108,7 @@ public struct JavaBatchInspector: Sendable {
         if let only = options.onlyRules { enabled = only }
         guard !enabled.isEmpty, let tree = JavaSyntaxParser().parse(source) else { return [] }
         let scope = queryScope(url)
+        let level = languageLevel(url)
         let profile = options.profile
         let thresholds = profile.thresholds
         let projectOptions = profile.projectOptions
@@ -118,7 +124,7 @@ public struct JavaBatchInspector: Sendable {
             }
             return await JavaInspectionPipeline.inspect(
                 text: source, url: url, tree: tree, index: index,
-                enabled: enabled, thresholds: thresholds, projectFindings: projectFindings
+                enabled: enabled, thresholds: thresholds, projectFindings: projectFindings, languageLevel: level
             )
         }
         guard !Task.isCancelled else { return [] }

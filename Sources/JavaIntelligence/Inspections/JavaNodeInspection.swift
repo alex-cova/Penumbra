@@ -161,6 +161,18 @@ enum JavaInspectionRegistry {
         JavaRuntimeExecConcatenationInspection.self,
         JavaHardcodedCredentialInspection.self,
         JavaAssertEqualsArgumentOrderInspection.self,
+        // Language-level migration aids (gated by `JavaInspectionContext.languageLevel`)
+        JavaInstanceOfPatternInspection.self,
+        JavaEnhancedSwitchInspection.self,
+        JavaTextBlockInspection.self,
+        JavaLocalVariableTypeCanBeVarInspection.self,
+        JavaCollectionsEmptyFactoryInspection.self,
+        JavaStringIsBlankInspection.self,
+        JavaOptionalIsEmptyInspection.self,
+        JavaStreamToListInspection.self,
+        JavaSequencedCollectionAccessInspection.self,
+        JavaStringFormattedInspection.self,
+        JavaMapGetOrDefaultInspection.self,
         // Control flow
         JavaRedundantIfStatementInspection.self,
         JavaSimplifiableConditionalInspection.self,

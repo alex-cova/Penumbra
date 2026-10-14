@@ -247,6 +247,17 @@ extension JavaGradleProjectModel {
         return best
     }
 
+    /// The language level of the module `file` belongs to: its source set's subproject, else the
+    /// subproject whose directory is the longest prefix. `nil` when none declares one.
+    public func languageLevel(forFile file: URL) -> Int? {
+        if let level = sourceSet(containing: file)?.subproject.languageLevel { return level }
+        let path = file.standardizedFileURL.path
+        return subprojects
+            .filter { path.hasPrefix(Self.directoryPath($0.directory) + "/") }
+            .max { Self.directoryPath($0.directory).count < Self.directoryPath($1.directory).count }?
+            .languageLevel
+    }
+
     /// What a program in `file`'s source set runs with, first entry first: the source set's own
     /// output directories, then those of every project on its runtime classpath, then the resolved
     /// runtime jars. Dependencies come after the code that uses them, as `java -cp` expects.

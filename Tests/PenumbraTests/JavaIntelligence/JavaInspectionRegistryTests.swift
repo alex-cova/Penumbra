@@ -39,7 +39,8 @@ final class JavaInspectionRegistryTests: XCTestCase {
         XCTAssertEqual(off, [
             .publicField, .synchronizationOnThis, .finalMethodInFinalClass, .protectedMemberInFinalClass, .declarationUsesConcreteClass,
             .classMayBeInterface, .literalEqualsReversed, .redundantFieldInitializer, .hardcodedCredential,
-            .floatingPointEquality,
+            .floatingPointEquality, .localVariableTypeCanBeVar, .streamToList,
+            .collectionsEmptyFactory,
         ])
         XCTAssertEqual(JavaInspectionRule.enabledByDefault, Set(JavaInspectionRule.allCases).subtracting(off))
     }

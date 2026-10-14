@@ -213,7 +213,9 @@ extension IDEWorkspace {
         for url in files {
             if Task.isCancelled { break }
             guard let text = await source(url) else { continue }
-            let result = await JavaBatchFixer.fixAll(rules: rules, in: text, url: url, index: index)
+            let result = await JavaBatchFixer.fixAll(
+                rules: rules, in: text, url: url, index: index, languageLevel: javaSupport.inspectionLanguageLevel(url)
+            )
             guard !result.isEmpty, !result.edits.isEmpty else { continue }
             changes[url] = result.edits
             fixed += result.fixedCount

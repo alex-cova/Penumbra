@@ -18,6 +18,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case threading
     case security
     case testFrameworks
+    case migration
 
     public var title: String {
         switch self {
@@ -37,6 +38,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .threading: return "Threading issues"
         case .security: return "Security"
         case .testFrameworks: return "Test frameworks"
+        case .migration: return "Java language level migration aids"
         }
     }
 }
@@ -206,6 +208,17 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case hardcodedCredential
     case runtimeExecConcatenation
     case assertEqualsArgumentOrder
+    case instanceOfPattern
+    case enhancedSwitch
+    case textBlock
+    case localVariableTypeCanBeVar
+    case collectionsEmptyFactory
+    case stringIsBlank
+    case optionalIsEmpty
+    case streamToList
+    case sequencedCollectionAccess
+    case stringFormatted
+    case mapGetOrDefault
 
     private struct Info {
         let code: String
@@ -380,6 +393,17 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .hardcodedCredential: Info(code: "hardcoded-credential", title: "Hard-coded credential", group: .security, severity: .warning, summary: "Reports a variable or field named password, secret, apiKey or similar that is initialized with a string literal."),
         .runtimeExecConcatenation: Info(code: "runtime-exec-concatenation", title: "Command built by string concatenation", group: .security, severity: .warning, summary: "Reports Runtime.exec with a command concatenated from a literal and a variable, which allows command injection."),
         .assertEqualsArgumentOrder: Info(code: "assert-equals-argument-order", title: "JUnit assertion arguments in the wrong order", group: .testFrameworks, severity: .weakWarning, summary: "Reports assertEquals(actual, expected-literal): JUnit takes the expected value first, so a failure message would name the wrong value."),
+        .instanceOfPattern: Info(code: "instanceof-pattern", title: "'instanceof' followed by a cast can use a pattern", group: .migration, severity: .weakWarning, summary: "Reports if (x instanceof Foo) { Foo f = (Foo) x; ... } where a pattern variable (x instanceof Foo f) does the same. Needs Java 16."),
+        .enhancedSwitch: Info(code: "enhanced-switch", title: "Statement 'switch' can be replaced with enhanced 'switch'", group: .migration, severity: .info, summary: "Reports an old-style switch whose groups all end in break, return or throw; the arrow form cannot fall through by mistake. Needs Java 14."),
+        .textBlock: Info(code: "text-block", title: "String concatenation can be replaced with a text block", group: .migration, severity: .weakWarning, summary: "Reports several string literals concatenated line by line with \\n; a text block says it without the escapes. Needs Java 15."),
+        .localVariableTypeCanBeVar: Info(code: "local-variable-type-can-be-var", title: "Local variable type can be omitted", group: .migration, severity: .info, summary: "Reports a local whose declared type repeats the initializer's, as in Foo f = new Foo() or String s = \"x\"; var says it once. Needs Java 10."),
+        .collectionsEmptyFactory: Info(code: "collections-empty-factory", title: "'Collections.emptyList()' can be replaced with 'List.of()'", group: .migration, severity: .weakWarning, summary: "Reports Collections.emptyList(), emptySet() and emptyMap(), which List.of(), Set.of() and Map.of() replace. The new collections throw NullPointerException from contains(null), so it is off by default. Needs Java 9."),
+        .stringIsBlank: Info(code: "string-is-blank", title: "'trim().isEmpty()' can be replaced with 'isBlank()'", group: .migration, severity: .weakWarning, summary: "Reports s.trim().isEmpty() and s.strip().isEmpty() on a String, which s.isBlank() says directly. Needs Java 11."),
+        .optionalIsEmpty: Info(code: "optional-is-empty", title: "'!optional.isPresent()' can be replaced with 'isEmpty()'", group: .migration, severity: .weakWarning, summary: "Reports a negated Optional.isPresent(); Optional.isEmpty() says it directly. Needs Java 11."),
+        .streamToList: Info(code: "stream-to-list", title: "'collect(Collectors.toList())' can be replaced with 'toList()'", group: .migration, severity: .weakWarning, summary: "Reports collect(Collectors.toList()), which Stream.toList() replaces. The result of toList() cannot be modified, so check what the list is used for. Needs Java 16."),
+        .sequencedCollectionAccess: Info(code: "sequenced-collection-access", title: "'get(0)' / 'get(size() - 1)' can use 'getFirst()' / 'getLast()'", group: .migration, severity: .info, summary: "Reports list.get(0) and list.get(list.size() - 1) on a List, ArrayList or LinkedList. An empty list throws NoSuchElementException instead of IndexOutOfBoundsException. Needs Java 21."),
+        .stringFormatted: Info(code: "string-formatted", title: "'String.format()' can be replaced with 'formatted()'", group: .migration, severity: .info, summary: "Reports String.format with a literal format string, which \"...\".formatted(args) replaces. Needs Java 15."),
+        .mapGetOrDefault: Info(code: "map-get-or-default", title: "Conditional can be replaced with 'getOrDefault()'", group: .migration, severity: .weakWarning, summary: "Reports m.containsKey(k) ? m.get(k) : d, which m.getOrDefault(k, d) says directly. Needs Java 8."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
@@ -408,6 +432,10 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .hardcodedCredential,
         // Exact comparison is deliberate in numeric code (the JDK's own math trips it 37 times).
         .floatingPointEquality,
+        // Style and caution: `var` is a taste, and `toList()` returns an unmodifiable list.
+        .localVariableTypeCanBeVar, .streamToList,
+        // `List.of().contains(null)` throws; `Collections.emptyList().contains(null)` does not.
+        .collectionsEmptyFactory,
     ]
 
     /// The rules a new service or fresh preferences run with.
