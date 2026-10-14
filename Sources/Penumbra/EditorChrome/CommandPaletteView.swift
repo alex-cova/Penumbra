@@ -33,7 +33,6 @@ public final class CommandPaletteView: NSView {
     private enum Row {
         case header(String)
         case item(PaletteItem)
-        case empty(String)
     }
 
     private let queryField = PaletteQueryField()
@@ -45,6 +44,8 @@ public final class CommandPaletteView: NSView {
     private let hintLabel = NSTextField(labelWithString: "")
     private let materialView = NSVisualEffectView()
     private let scrollView = NSScrollView()
+    /// Placeholder centered over the results area while no row matches.
+    private let emptyStateView = PaletteEmptyStateView()
     private let tableView = NSTableView()
     private let tabStack = NSStackView()
     private let tabContainer = NSView()
@@ -115,8 +116,10 @@ public final class CommandPaletteView: NSView {
         didSet { editedOnlyToggle.state = editedOnly ? .on : .off }
     }
 
-    /// Shown as a single non-selectable row when every section is empty.
-    public var emptyStateMessage = "No results"
+    /// Shown as a placeholder centered over the results area when every section is empty.
+    public var emptyStateMessage = "No results" {
+        didSet { emptyStateView.message = emptyStateMessage }
+    }
 
     /// Indeterminate spinner in the query row while a debounced search is in flight.
     public var isSearching = false {
@@ -205,10 +208,8 @@ public final class CommandPaletteView: NSView {
                 newRows.append(.item(item))
             }
         }
-        if itemRows.isEmpty {
-            newRows.append(.empty(emptyStateMessage))
-            rowItems.append(-1)
-        }
+        emptyStateView.message = emptyStateMessage
+        emptyStateView.isHidden = !itemRows.isEmpty
         rows = newRows
         itemRowIndices = itemRows
         rowItemIndices = rowItems
@@ -511,6 +512,16 @@ public final class CommandPaletteView: NSView {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         addSubview(scrollView)
+
+        emptyStateView.translatesAutoresizingMaskIntoConstraints = false
+        emptyStateView.isHidden = true
+        addSubview(emptyStateView)
+        NSLayoutConstraint.activate([
+            emptyStateView.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+            emptyStateView.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
+            emptyStateView.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 16),
+            emptyStateView.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -16)
+        ])
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row"))
         column.resizingMask = .autoresizingMask
@@ -893,8 +904,6 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
             return PaletteChromeMetrics.destinationRowHeight
         }
         switch rows[row] {
-        case .empty:
-            return PaletteChromeMetrics.emptyStateRowHeight
         case .header:
             return PaletteChromeMetrics.itemRowHeight + 4
         case .item:
@@ -916,7 +925,6 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
 
     public func tableView(_ tableView: NSTableView, selectionHighlightStyleForRow row: Int) -> NSTableView.SelectionHighlightStyle {
         if tableView === destinationTableView { return .regular }
-        if case .empty = rows[row] { return .none }
         return .regular
     }
 
@@ -974,12 +982,6 @@ extension CommandPaletteView: NSTableViewDataSource, NSTableViewDelegate {
                     .kern: PaletteChromeMetrics.headerTracking
                 ]
             )
-            return cell
-        case .empty(let message):
-            let id = NSUserInterfaceItemIdentifier("emptyCell")
-            let cell = tableView.makeView(withIdentifier: id, owner: self) as? PaletteEmptyStateCell
-                ?? PaletteEmptyStateCell(id: id)
-            cell.apply(message: message)
             return cell
         case .item(let item):
             let id = NSUserInterfaceItemIdentifier("itemCell")
@@ -1118,42 +1120,59 @@ private final class PaletteQueryField: NSTextField {
     }
 }
 
-private final class PaletteEmptyStateCell: NSTableCellView {
+/// The "No results" / "Type to search" placeholder: a magnifying glass over a message, drawn
+/// centered over the results area instead of as a table row, so it never clips and stays centered
+/// at any panel height. It is transparent to the mouse so scrolling and clicks reach the table.
+private final class PaletteEmptyStateView: NSView {
     private let iconView = NSImageView()
     private let messageField = NSTextField(labelWithString: "")
 
-    init(id: NSUserInterfaceItemIdentifier) {
-        super.init(frame: .zero)
-        identifier = id
+    var message = "" {
+        didSet {
+            guard message != oldValue else { return }
+            messageField.stringValue = message
+            setAccessibilityLabel(message)
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
 
         iconView.image = NSImage(
             systemSymbolName: "magnifyingglass",
             accessibilityDescription: nil
         )
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: PaletteChromeMetrics.emptyStateIconSize,
+            weight: .light
+        )
         iconView.contentTintColor = .tertiaryLabelColor
-        iconView.imageScaling = .scaleProportionallyDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.setAccessibilityHidden(true)
-        addSubview(iconView)
 
         messageField.font = .systemFont(ofSize: PaletteChromeMetrics.locationFontSize)
         messageField.textColor = .secondaryLabelColor
         messageField.alignment = .center
         messageField.lineBreakMode = .byTruncatingTail
-        messageField.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(messageField)
+        messageField.maximumNumberOfLines = 1
+        messageField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView(views: [iconView, messageField])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = PaletteChromeMetrics.emptyStateSpacing
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
 
         NSLayoutConstraint.activate([
-            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            iconView.widthAnchor.constraint(equalToConstant: PaletteChromeMetrics.emptyStateIconSize),
-            iconView.heightAnchor.constraint(equalToConstant: PaletteChromeMetrics.emptyStateIconSize),
-
-            messageField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            messageField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            messageField.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 4),
-            messageField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6)
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
     }
 
     @available(*, unavailable)
@@ -1161,11 +1180,7 @@ private final class PaletteEmptyStateCell: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func apply(message: String) {
-        messageField.stringValue = message
-        setAccessibilityElement(true)
-        setAccessibilityLabel(message)
-    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private final class PaletteRowView: NSTableRowView {

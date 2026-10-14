@@ -20,8 +20,8 @@ enum PaletteChromeMetrics {
     static let queryBoxFocusedBorderWidth: CGFloat = 2
     static let queryBoxFillAlpha: CGFloat = 0.25
     static let queryBoxUnfocusedBorderAlpha: CGFloat = 0.55
-    static let emptyStateRowHeight: CGFloat = 44
-    static let emptyStateIconSize: CGFloat = 20
+    static let emptyStateIconSize: CGFloat = 22
+    static let emptyStateSpacing: CGFloat = 8
     static let queryFontSize: CGFloat = 17
     static let navigationTitleFontSize: CGFloat = 15
 
