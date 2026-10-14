@@ -43,7 +43,7 @@ enum JavaLambdaCanBeMethodReferenceInspection: JavaNodeInspection {
                   isStableReceiver(object, parameters: names, context: context) else { return nil }
             return "\(object.text)::\(name.text)"
         case "object_creation_expression":
-            guard body.child(byFieldName: "object") == nil, body.firstNamedChild(ofType: "class_body") == nil,
+            guard !body.isQualifiedCreation, body.firstNamedChild(ofType: "class_body") == nil,
                   let type = body.child(byFieldName: "type"), forwards(names, body.child(byFieldName: "arguments")) else { return nil }
             let text = type.text.replacingOccurrences(of: "<>", with: "")
             return "\(text)::new"

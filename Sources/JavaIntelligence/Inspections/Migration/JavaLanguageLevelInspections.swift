@@ -282,7 +282,7 @@ enum JavaLocalVariableTypeCanBeVarInspection: JavaNodeInspection {
         guard declared != "var", !declared.contains("<>"), type.type != "array_type" else { return false }
         switch value.type {
         case "object_creation_expression":
-            return value.child(byFieldName: "object") == nil && value.firstNamedChild(ofType: "class_body") == nil
+            return !value.isQualifiedCreation && value.firstNamedChild(ofType: "class_body") == nil
                 && value.child(byFieldName: "type")?.text == declared
         case "cast_expression":
             return value.child(byFieldName: "type")?.text == declared

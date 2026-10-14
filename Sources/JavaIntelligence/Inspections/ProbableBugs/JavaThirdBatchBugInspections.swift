@@ -112,7 +112,14 @@ enum JavaFloatingPointEqualityInspection: JavaNodeInspection {
     static let nodeTypes: Set<String> = ["binary_expression"]
     private static let specialFields: Set<String> = ["NaN", "POSITIVE_INFINITY", "NEGATIVE_INFINITY", "MAX_VALUE", "MIN_VALUE"]
 
+    private static let neverFloating: Set<String> = [
+        "null_literal", "string_literal", "character_literal", "true", "false", "this", "method_invocation",
+    ]
+
     private static func isFloating(_ node: SyntaxNode) -> Bool {
+        let inner = node.unparenthesized
+        if neverFloating.contains(inner.type) { return false }
+        if inner.type == "decimal_integer_literal" { return false }
         guard let type = JavaDeclaredTypes.type(of: node), !type.isArray else { return false }
         return type.name == "double" || type.name == "float"
     }
@@ -133,6 +140,7 @@ enum JavaFloatingPointEqualityInspection: JavaNodeInspection {
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
         guard let op = node.operatorText, op == "==" || op == "!=",
+              node.tree.declarationCache.mentionsFloatingPoint(root: node.tree.rootNode),
               let left = node.child(byFieldName: "left"), let right = node.child(byFieldName: "right"),
               isFloating(left) || isFloating(right), !isZero(left), !isZero(right),
               !isSpecial(left), !isSpecial(right), left.text != right.text else { return }

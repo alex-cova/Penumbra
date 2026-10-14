@@ -19,6 +19,9 @@ final class JavaInspectionRulesTests: XCTestCase {
         .unusedLocalVariable, .fieldCanBeFinal, .literalEqualsReversed,
         // `replaceAll(".", ".")` is both a no-effect replacement and a regex metacharacter.
         .splitRegexSpecialChar,
+        // Class-member rules fire on the sample classes' private helpers and plain fields; the fourth
+        // batch's own suite runs them alone.
+        .unusedParameter, .methodMayBeStatic, .fieldMayBeStatic, .innerClassMayBeStatic, .rawTypeUsage, .uncheckedCast,
     ]
 
     /// Codes of the rule under test only, for sources that trip a neighbouring rule too.

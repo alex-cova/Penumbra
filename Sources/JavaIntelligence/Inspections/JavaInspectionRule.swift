@@ -19,6 +19,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
     case security
     case testFrameworks
     case migration
+    case serialization
 
     public var title: String {
         switch self {
@@ -39,6 +40,7 @@ public enum JavaInspectionGroup: String, CaseIterable, Sendable {
         case .security: return "Security"
         case .testFrameworks: return "Test frameworks"
         case .migration: return "Java language level migration aids"
+        case .serialization: return "Serialization issues"
         }
     }
 }
@@ -219,6 +221,27 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case sequencedCollectionAccess
     case stringFormatted
     case mapGetOrDefault
+    case unnecessarySemicolon
+    case unnecessaryToString
+    case stringIndexOfContains
+    case manualArrayCopy
+    case arraysFillLoop
+    case collectionsSortToListSort
+    case deprecatedTagWithoutAnnotation
+    case innerClassMayBeStatic
+    case switchEnumMissingCases
+    case appendConcatenation
+    case lowercaseLongLiteral
+    case emptySynchronizedBlock
+    case sleepWhileHoldingLock
+    case unusedParameter
+    case methodMayBeStatic
+    case fieldMayBeStatic
+    case rawTypeUsage
+    case uncheckedCast
+    case equalsIncompatibleTypes
+    case integerOverflowInLongAssignment
+    case nonSerializableField
 
     private struct Info {
         let code: String
@@ -404,6 +427,27 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .sequencedCollectionAccess: Info(code: "sequenced-collection-access", title: "'get(0)' / 'get(size() - 1)' can use 'getFirst()' / 'getLast()'", group: .migration, severity: .info, summary: "Reports list.get(0) and list.get(list.size() - 1) on a List, ArrayList or LinkedList. An empty list throws NoSuchElementException instead of IndexOutOfBoundsException. Needs Java 21."),
         .stringFormatted: Info(code: "string-formatted", title: "'String.format()' can be replaced with 'formatted()'", group: .migration, severity: .info, summary: "Reports String.format with a literal format string, which \"...\".formatted(args) replaces. Needs Java 15."),
         .mapGetOrDefault: Info(code: "map-get-or-default", title: "Conditional can be replaced with 'getOrDefault()'", group: .migration, severity: .weakWarning, summary: "Reports m.containsKey(k) ? m.get(k) : d, which m.getOrDefault(k, d) says directly. Needs Java 8."),
+        .unnecessarySemicolon: Info(code: "unnecessary-semicolon", title: "Unnecessary semicolon", group: .verboseCode, severity: .weakWarning, summary: "Reports a semicolon between class members or after a type declaration that ends nothing."),
+        .unnecessaryToString: Info(code: "unnecessary-to-string", title: "Unnecessary 'toString()' call", group: .verboseCode, severity: .weakWarning, summary: "Reports x.toString() as an operand of a string concatenation, which converts x anyway (and prints null instead of throwing)."),
+        .stringIndexOfContains: Info(code: "string-index-of-contains", title: "'indexOf()' comparison can be replaced with 'contains()'", group: .verboseCode, severity: .weakWarning, summary: "Reports s.indexOf(str) != -1, >= 0 and their negations on a String, which s.contains(str) says directly."),
+        .manualArrayCopy: Info(code: "manual-array-copy", title: "Manual array copy", group: .performance, severity: .weakWarning, summary: "Reports a loop that copies one array element by element; System.arraycopy() does it faster."),
+        .arraysFillLoop: Info(code: "arrays-fill-loop", title: "Loop can be replaced with 'Arrays.fill()'", group: .verboseCode, severity: .weakWarning, summary: "Reports a loop that stores the same value in every element of an array."),
+        .collectionsSortToListSort: Info(code: "collections-sort-to-list-sort", title: "'Collections.sort()' can be replaced with 'List.sort()'", group: .migration, severity: .info, summary: "Reports Collections.sort(list) and Collections.sort(list, comparator) on a declared List. Needs Java 8."),
+        .deprecatedTagWithoutAnnotation: Info(code: "deprecated-tag-without-annotation", title: "'@deprecated' tag without '@Deprecated' annotation", group: .codeMaturity, severity: .warning, summary: "Reports a declaration whose Javadoc has @deprecated but that is not annotated @Deprecated, so the compiler does not warn its users."),
+        .innerClassMayBeStatic: Info(code: "inner-class-may-be-static", title: "Inner class may be 'static'", group: .classStructure, severity: .weakWarning, summary: "Reports a non-static member class that uses nothing of its enclosing instance; static saves the hidden reference and avoids leaking the outer object."),
+        .switchEnumMissingCases: Info(code: "switch-enum-missing-cases", title: "'switch' over an enum misses constants", group: .probableBugs, severity: .warning, summary: "Reports a switch statement on an enum declared in the same file that has no default and does not name every constant."),
+        .appendConcatenation: Info(code: "append-concatenation", title: "String concatenation as argument to 'append()'", group: .performance, severity: .weakWarning, summary: "Reports sb.append(\"a\" + b), which builds a temporary String; append the parts one by one."),
+        .lowercaseLongLiteral: Info(code: "lowercase-long-literal", title: "Long literal with lowercase 'l'", group: .namingConventions, severity: .weakWarning, summary: "Reports 100l, whose suffix is easily read as the digit 1; use 100L."),
+        .emptySynchronizedBlock: Info(code: "empty-synchronized-block", title: "Empty 'synchronized' block", group: .threading, severity: .weakWarning, summary: "Reports a synchronized block with no statements, which only waits for the lock and is usually a mistake."),
+        .sleepWhileHoldingLock: Info(code: "sleep-while-holding-lock", title: "'Thread.sleep()' while holding a lock", group: .threading, severity: .warning, summary: "Reports Thread.sleep() inside a synchronized block or method, which keeps every other thread out for the whole sleep."),
+        .unusedParameter: Info(code: "unused-parameter", title: "Unused parameter of a private method", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a parameter of a private method that its body never reads."),
+        .methodMayBeStatic: Info(code: "method-may-be-static", title: "Method may be 'static'", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a private method that uses no instance state: no this, no instance fields or methods, no type parameters of the class."),
+        .fieldMayBeStatic: Info(code: "field-may-be-static", title: "Field may be 'static'", group: .declarationRedundancy, severity: .weakWarning, summary: "Reports a final instance field initialized with a literal, which every instance holds a copy of."),
+        .rawTypeUsage: Info(code: "raw-type-usage", title: "Raw use of a parameterized class", group: .compilerIssues, severity: .weakWarning, summary: "Reports List, Map and other generic classes used without type arguments, which turns off generic type checking."),
+        .uncheckedCast: Info(code: "unchecked-cast", title: "Unchecked cast", group: .compilerIssues, severity: .weakWarning, summary: "Reports a cast to a parameterized type such as (List<String>) o, which the runtime cannot check."),
+        .equalsIncompatibleTypes: Info(code: "equals-incompatible-types", title: "'equals()' between incompatible types", group: .probableBugs, severity: .warning, summary: "Reports equals() or Objects.equals() on two values whose declared types are different wrapper types or String and a number; the result is always false."),
+        .integerOverflowInLongAssignment: Info(code: "integer-overflow-in-long-assignment", title: "Integer arithmetic widened to 'long' after overflow", group: .probableBugs, severity: .warning, summary: "Reports long x = a * b (and a << n) where the operands are int: the product is computed in int and can overflow before it is widened."),
+        .nonSerializableField: Info(code: "non-serializable-field", title: "Non-serializable field in a Serializable class", group: .serialization, severity: .warning, summary: "Reports a non-transient instance field of a type that is known not to be Serializable, in a class that implements Serializable."),
     ]
 
     private static let byCode: [String: JavaInspectionRule] = Dictionary(
@@ -436,6 +480,9 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .localVariableTypeCanBeVar, .streamToList,
         // `List.of().contains(null)` throws; `Collections.emptyList().contains(null)` does not.
         .collectionsEmptyFactory,
+        // Style and noise: raw types and unchecked casts are legitimate in legacy code, and a private
+        // method that could be static is a taste.
+        .rawTypeUsage, .uncheckedCast, .methodMayBeStatic,
     ]
 
     /// The rules a new service or fresh preferences run with.

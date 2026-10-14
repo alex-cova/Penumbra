@@ -25,6 +25,12 @@ extension SyntaxNode {
         }
     }
 
+    /// `outer.new Inner()`: an object creation with a qualifier in front of `new`. The qualifier
+    /// has no field name in the grammar, so it is the first child that is not `new`.
+    var isQualifiedCreation: Bool {
+        type == "object_creation_expression" && children.first.map { $0.type != "new" } == true
+    }
+
     /// The operator token of a binary or assignment expression (`==`, `+`, `=`, …).
     var operatorText: String? { child(byFieldName: "operator")?.text }
 

@@ -22,6 +22,12 @@ struct JavaDeclaredType: Equatable {
     var isIntegral: Bool { !isArray && ["int", "long", "short", "byte", "Integer", "Long", "Short", "Byte"].contains(name) }
 }
 
+/// One local variable declaration of a block, as the declared-type lookup needs it.
+struct BlockLocal {
+    let statement: Range<Int>
+    let type: JavaDeclaredType?
+}
+
 /// Per-parse memo for `JavaDeclaredTypes`: each class body's field table is built once, and an
 /// expression's type is resolved once however many rules ask. Without it every `==` in a
 /// 400-member class rescans all 400 members.
@@ -36,6 +42,10 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var symbolTable: JavaFileSymbolTable?
     private var assignedNameSet: Set<String>?
     private var volatilityTables: [Int: [String: Bool]] = [:]
+    private var genericTypes: Set<String>?
+    private var blockLocalTables: [Range<Int>: [String: [BlockLocal]]] = [:]
+    private var floatingMention: Bool?
+    private var typeDeclarationRanges: [String: Range<Int>]?
 
     /// Locals with their uses and every identifier by name, built once per tree on first use.
     func fileSymbols(context: JavaInspectionContext) -> JavaFileSymbolTable {
@@ -75,6 +85,95 @@ final class JavaDeclarationCache: @unchecked Sendable {
         }
         lock.lock()
         assignedNameSet = names
+        lock.unlock()
+        return names
+    }
+
+    /// The first class, record, enum or interface of each name, in document order, as byte ranges
+    /// (a node stored here would keep its tree alive from the tree's own cache). Built once per
+    /// tree: looking a type up used to search the whole file every time, which made a rule that
+    /// asks for every `Foo.bar()` quadratic.
+    func typeDeclarationRanges(root: SyntaxNode) -> [String: Range<Int>] {
+        lock.lock()
+        if let typeDeclarationRanges { lock.unlock(); return typeDeclarationRanges }
+        lock.unlock()
+        let kinds: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
+        var table: [String: Range<Int>] = [:]
+        var stack = [root]
+        while let node = stack.popLast() {
+            if kinds.contains(node.type), let name = node.child(byFieldName: "name")?.text, table[name] == nil {
+                table[name] = node.byteRange
+            }
+            stack.append(contentsOf: node.namedChildren.reversed())
+        }
+        lock.lock()
+        typeDeclarationRanges = table
+        lock.unlock()
+        return table
+    }
+
+    /// Whether the file can hold a floating-point value at all: it says `double` or `float`, or
+    /// has a literal like `1.5`. A rule about floats skips every other file without resolving a
+    /// single operand. Built once per tree.
+    func mentionsFloatingPoint(root: SyntaxNode) -> Bool {
+        lock.lock()
+        if let floatingMention { lock.unlock(); return floatingMention }
+        lock.unlock()
+        let bytes = root.tree.sourceBytes
+        func contains(_ word: StaticString) -> Bool {
+            let count = word.utf8CodeUnitCount
+            guard bytes.count >= count else { return false }
+            return bytes.withUnsafeBufferPointer { buffer in
+                memmem(buffer.baseAddress, buffer.count, word.utf8Start, count) != nil
+            }
+        }
+        var found = contains("double") || contains("float") || contains("Double") || contains("Float")
+        if !found {
+            // A literal such as `0.5` or `1e3` types a `var` without any keyword.
+            var stack = [root]
+            while let node = stack.popLast(), !found {
+                if node.type == "decimal_floating_point_literal" || node.type == "hex_floating_point_literal" { found = true }
+                stack.append(contentsOf: node.namedChildren)
+            }
+        }
+        lock.lock()
+        floatingMention = found
+        lock.unlock()
+        return found
+    }
+
+    /// The local variables declared directly in one block, by name, in source order. Built once
+    /// per block: a lookup used to scan the block's statements, which made a method with n
+    /// statements cost n² for its n assignments.
+    func blockLocals(of scope: SyntaxNode, build: () -> [String: [BlockLocal]]) -> [String: [BlockLocal]] {
+        let key = scope.byteRange
+        lock.lock()
+        if let cached = blockLocalTables[key] { lock.unlock(); return cached }
+        lock.unlock()
+        let built = build()
+        lock.lock()
+        blockLocalTables[key] = built
+        lock.unlock()
+        return built
+    }
+
+    /// Names of the classes, interfaces and records of this file that declare type parameters.
+    func genericTypeNames(root: SyntaxNode) -> Set<String> {
+        lock.lock()
+        if let genericTypes { lock.unlock(); return genericTypes }
+        lock.unlock()
+        var names = Set<String>()
+        let kinds: Set<String> = ["class_declaration", "interface_declaration", "record_declaration"]
+        var stack = [root]
+        while let node = stack.popLast() {
+            if kinds.contains(node.type), node.firstNamedChild(ofType: "type_parameters") != nil,
+               let name = node.child(byFieldName: "name") {
+                names.insert(name.text)
+            }
+            stack.append(contentsOf: node.namedChildren)
+        }
+        lock.lock()
+        genericTypes = names
         lock.unlock()
         return names
     }
@@ -242,8 +341,22 @@ enum JavaDeclaredTypes {
         while let scope = current {
             switch scope.type {
             case "block", "switch_block", "constructor_body":
-                for statement in scope.namedChildren where statement.endByte <= child.startByte || statement.byteRange == child.byteRange {
-                    if statement.type == "local_variable_declaration", let type = declaredType(in: statement, variable: name) { return type }
+                let table = node.tree.declarationCache.blockLocals(of: scope) {
+                    var table: [String: [BlockLocal]] = [:]
+                    for statement in scope.namedChildren where statement.type == "local_variable_declaration" {
+                        guard let typeNode = statement.child(byFieldName: "type") else { continue }
+                        for declarator in statement.namedChildren(ofType: "variable_declarator") {
+                            guard let declared = declarator.child(byFieldName: "name")?.text else { continue }
+                            table[declared, default: []].append(BlockLocal(
+                                statement: statement.byteRange,
+                                type: make(typeNode, dimensions: declarator.child(byFieldName: "dimensions"))
+                            ))
+                        }
+                    }
+                    return table
+                }
+                for entry in table[name] ?? [] where entry.statement.upperBound <= child.startByte || entry.statement == child.byteRange {
+                    if let type = entry.type { return type }
                 }
             case "for_statement":
                 if let initializer = scope.child(byFieldName: "init"), initializer.type == "local_variable_declaration",
@@ -325,6 +438,15 @@ enum JavaDeclaredTypes {
     /// The first class, record, enum or interface called `name` anywhere in the file.
     static func typeDeclaration(named name: String, in root: SyntaxNode) -> SyntaxNode? {
         let declarations: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
+        if root.type == "program" {
+            guard let range = root.tree.declarationCache.typeDeclarationRanges(root: root)[name] else { return nil }
+            var current: SyntaxNode? = root.tree.node(atByteOffset: range.lowerBound)
+            while let node = current {
+                if node.byteRange == range, declarations.contains(node.type) { return node }
+                current = node.parent
+            }
+            return nil
+        }
         var stack = [root]
         while let node = stack.popLast() {
             if declarations.contains(node.type), node.child(byFieldName: "name")?.text == name { return node }
