@@ -35,6 +35,43 @@ enum JavaInstrumentationProfile {
         let folded = profile.cpu.foldedStacks(symbols: profile.symbols).count
         let foldSeconds = Double(DispatchTime.now().uptimeNanoseconds - foldStart) / 1e9
 
+        // What the tab does as the user drags a range, picks a thread, opens the timeline, the line
+        // hints and a comparison: each is a pass over the sample table or the tree, never a re-read.
+        func timed<T>(_ body: () -> T) -> (T, Double) {
+            let begin = DispatchTime.now().uptimeNanoseconds
+            let value = body()
+            return (value, Double(DispatchTime.now().uptimeNanoseconds - begin) / 1e9)
+        }
+        var queryResult = 0
+        if let span = profile.timeSpan {
+            let length = span.upperBound - span.lowerBound
+            let (_, rangeSeconds) = timed {
+                for step in 0 ..< 20 {
+                    let low = span.lowerBound + Int32(step) * length / 40
+                    queryResult &+= profile.tree(of: .cpu, thread: nil, range: low...(low + length / 10)).totalSamples
+                }
+            }
+            let (_, threadSeconds) = timed {
+                for thread in 0 ..< 4 {
+                    queryResult &+= profile.tree(of: .cpu, thread: "worker-\(thread)", range: nil).totalSamples
+                }
+            }
+            let (timeline, timelineSeconds) = timed { JavaProfileTimeline.build(from: profile) }
+            print("stage profile_range_query queries=20 rows=\(profile.cpuSamplesTable.count) seconds_per_query=\(format(rangeSeconds / 20)) "
+                + "thread_seconds_per_query=\(format(threadSeconds / 4)) checksum=\(queryResult)")
+            print("stage profile_timeline lanes=\(timeline?.lanes.count ?? 0) buckets=\(timeline?.bucketCount ?? 0) seconds=\(format(timelineSeconds))")
+        }
+        let (lineProfile, lineSeconds) = timed { JavaLineProfile.build(from: profile.cpu, symbols: profile.symbols) }
+        print("stage profile_line_costs classes=\(lineProfile.classNames.count) seconds=\(format(lineSeconds))")
+        let (comparison, compareSeconds) = timed {
+            JavaProfileComparison.compare(
+                baseline: profile.cpu, baselineSymbols: profile.symbols, target: profile.cpu, targetSymbols: profile.symbols
+            )
+        }
+        print("stage profile_compare nodes=\(comparison.tree.nodeCount) methods=\(comparison.rows.count) seconds=\(format(compareSeconds))")
+        let (collapsed, collapseSeconds) = timed { profile.cpu.collapsingRecursion(symbols: profile.symbols) }
+        print("stage profile_collapse_recursion nodes=\(collapsed.nodeCount) seconds=\(format(collapseSeconds))")
+
         print("stage profile_import samples=\(profile.cpuSamples) dump_mb=\(format(megabytes)) seconds=\(format(imported)) "
             + "mb_per_s=\(format(megabytes / max(imported, 1e-9))) nodes=\(profile.cpu.nodeCount) "
             + "frames=\(profile.symbols.frames.count) folded_samples=\(profile.cpu.foldedSamples)")
@@ -61,7 +98,12 @@ enum JavaInstrumentationProfile {
         out.reserveCapacity(samples * 400)
         for sample in 0 ..< samples {
             out += "jdk.ExecutionSample {\n"
-            out += "  startTime = 12:51:14.809 (2026-10-13)\n"
+            // 10 ms apart, so a recording of 60 000 samples is ten minutes.
+            let millis = sample * 10
+            out += String(
+                format: "  startTime = %02d:%02d:%02d.%03d (2026-10-13)\n",
+                12 + millis / 3_600_000, (millis / 60_000) % 60, (millis / 1000) % 60, millis % 1000
+            )
             out += "  sampledThread = \"worker-\(sample % 4)\" (javaThreadId = \(40 + sample % 4))\n"
             out += "  state = \"STATE_RUNNABLE\"\n"
             out += "  stackTrace = [\n"

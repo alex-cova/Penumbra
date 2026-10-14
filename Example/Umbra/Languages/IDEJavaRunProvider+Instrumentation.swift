@@ -85,6 +85,12 @@ extension IDEJavaRunProvider {
         var jdkFeatureVersion: Int
         var projectRoot: URL?
         var tasks: [String]
+        /// What the preferences said when the run started, which is what the recording holds.
+        var options = JavaFlightRecorderOptions()
+        var startedAt = Date()
+        /// What the live view talks to the running JVM with.
+        var jcmd: URL?
+        var jps: URL?
     }
 
     enum InstrumentationPlan {
@@ -143,10 +149,23 @@ extension IDEJavaRunProvider {
             guard let run = try? Self.artifacts.allocate(kind: .profile, projectHash: hash) else {
                 return .failure(IDEInstrumentationFailure(message: "Could not create a folder for the recording."))
             }
-            return .success(.profile(ProfilePlan(
+            let options = IDEPreferences.shared.currentFlightRecorderOptions()
+            if case .custom(let path) = options.template, !FileManager.default.fileExists(atPath: path) {
+                return .failure(IDEInstrumentationFailure(
+                    message: "The recording settings file is missing: \(path). Choose another under Settings ▸ Java ▸ Profiling."
+                ))
+            }
+            let plan = ProfilePlan(
                 run: run, recordingDirectory: run.directory, label: configuration.displayName,
-                jdkFeatureVersion: jdk.featureVersion, projectRoot: host?.projectRootURL, tasks: tasks
-            )))
+                jdkFeatureVersion: jdk.featureVersion, projectRoot: host?.projectRootURL, tasks: tasks,
+                options: options, startedAt: Date(), jcmd: jdk.jcmd, jps: jdk.jps
+            )
+            // A record of what the run was, so a list of recent profiles can say.
+            try? JavaProfileRunInfo(
+                label: plan.label, startedAt: plan.startedAt, jdkFeatureVersion: plan.jdkFeatureVersion,
+                settings: options.summary, tasks: tasks
+            ).write(to: run.directory)
+            return .success(.profile(plan))
         }
     }
 
@@ -167,14 +186,24 @@ extension IDEJavaRunProvider {
             return .success([argument])
         case .profile(let plan):
             let file = plan.recordingDirectory.appendingPathComponent("recording.jfr")
-            let period = IDEPreferences.shared.javaProfileSamplePeriod
-            guard let argument = JavaFlightRecorder.vmArgument(
-                file: file.path, samplePeriodMilliseconds: period > 0 ? period : nil, jdkFeatureVersion: plan.jdkFeatureVersion
+            guard let arguments = JavaFlightRecorder.vmArguments(
+                file: file.path, options: plan.options, jdkFeatureVersion: plan.jdkFeatureVersion
             ) else {
-                return .failure(IDEInstrumentationFailure(message: "The recording path cannot hold a comma: \(file.path)."))
+                return .failure(IDEInstrumentationFailure(
+                    message: "The recording path or settings file cannot hold a comma: \(file.path)."
+                ))
             }
-            return .success([argument])
+            // The marker lets the live view find this JVM among the machine's.
+            return .success(arguments + [JavaLiveCommands.runArgument(runID: plan.run.id)])
         }
+    }
+
+    /// Opens the profiler tab on a profiled run that has just started, with live charts.
+    func beginLiveProfile(_ plan: ProfilePlan, processID: (@MainActor () -> Int32?)?) {
+        host?.beginLiveProfile(
+            title: plan.label, runID: plan.run.id, snapshotDirectory: plan.run.directory,
+            jcmd: plan.jcmd, jps: plan.jps, processID: processID
+        )
     }
 
     /// Hooks the end of a Run-tab session: a plain `main` measured by `plan` was started.
@@ -211,13 +240,14 @@ extension IDEJavaRunProvider {
             case .profile(let plan):
                 let script = plan.run.directory.appendingPathComponent("profile.init.gradle")
                 try JavaProfileGradleScript.source.write(to: script, atomically: true, encoding: .utf8)
-                guard JavaFlightRecorder.isSafe(plan.recordingDirectory.path) else {
-                    return .failure(IDEInstrumentationFailure(message: "The recording folder cannot hold a comma in its path."))
+                guard JavaFlightRecorder.isSafe(plan.recordingDirectory.path), plan.options.isSafe else {
+                    return .failure(IDEInstrumentationFailure(
+                        message: "The recording folder and settings file cannot hold a comma in their paths."
+                    ))
                 }
-                let period = IDEPreferences.shared.javaProfileSamplePeriod
                 return .success(JavaProfileGradleScript.arguments(
                     scriptURL: script, recordingDirectory: plan.recordingDirectory,
-                    samplePeriodMilliseconds: period > 0 ? period : nil, jdkFeatureVersion: plan.jdkFeatureVersion
+                    options: plan.options, jdkFeatureVersion: plan.jdkFeatureVersion, runID: plan.run.id
                 ))
             }
         } catch {
@@ -307,12 +337,23 @@ extension IDEJavaRunProvider {
         let recordings = JavaProfileGradleScript.recordings(in: plan.recordingDirectory)
         guard !recordings.isEmpty else {
             let message = "No recording was written. A program that is killed (SIGKILL) or that exits through Runtime.halt leaves none; Stop sends SIGTERM first."
+            host.endLiveProfile(runID: plan.run.id, failure: message)
             note(message)
             host.notifications.post("Profile of “\(plan.label)”", detail: message, category: .general, severity: .error, action: nil)
             return
         }
+        // Complete the record: when it ended and how much was written.
+        let bytes = recordings.reduce(0) { total, url in
+            total + ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0)
+        }
+        try? JavaProfileRunInfo(
+            label: plan.label, startedAt: plan.startedAt, jdkFeatureVersion: plan.jdkFeatureVersion,
+            settings: plan.options.summary, tasks: plan.tasks, finishedAt: Date(),
+            recordingCount: recordings.count, recordingBytes: bytes
+        ).write(to: plan.run.directory)
         Self.pruneArtifacts(kind: .profile, root: plan.projectRoot, keeping: plan.run.id)
-        if IDEPreferences.shared.javaProfileOpensRecording {
+        // A tab already waiting on this run (the live charts) reads the recording whatever the setting.
+        if IDEPreferences.shared.javaProfileOpensRecording || host.hasLiveProfile(runID: plan.run.id) {
             host.openProfile(
                 recordings: recordings, title: "Profile: \(plan.label)", runID: plan.run.id,
                 project: host.projectRootURL

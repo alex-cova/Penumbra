@@ -289,6 +289,24 @@ private struct IDERunCommands: View {
             .disabled(workspace?.hasOpenProject != true)
         Button("Profile Tests", action: { workspace?.runTestsInstrumented(.profile) })
             .disabled(workspace?.hasOpenProject != true)
+        Toggle("Show Profile Hints in the Editor", isOn: Binding(
+            get: { IDEPreferences.shared.javaProfileLineHints },
+            set: {
+                IDEPreferences.shared.javaProfileLineHints = $0
+                workspace?.profileLineHintsPreferenceChanged()
+            }
+        ))
+        Menu("Recent Profiles") {
+            let recent = workspace?.recentProfiles() ?? []
+            if recent.isEmpty {
+                Text("No Profiles Yet")
+            } else {
+                ForEach(recent) { profile in
+                    Button("\(profile.title) · \(profile.detail)") { workspace?.openRecentProfile(profile) }
+                }
+            }
+        }
+        .disabled(workspace?.hasOpenProject != true)
         Divider()
         Button("Edit Configurations…", action: { workspace?.editRunConfiguration() })
             .disabled(!(workspace?.canEditRunConfiguration ?? false))

@@ -60,6 +60,10 @@ final class IDEBlameController {
         let status: IDEGitFileStatus?
     }
 
+    /// Set by the workspace: a file the profiler's line hints are showing in the annotation column,
+    /// which blame then leaves alone.
+    @ObservationIgnored var yieldsAnnotations: ((URL) -> Bool)?
+
     func isEnabled(for url: URL?) -> Bool {
         guard let path = url?.standardizedFileURL.path else { return false }
         return enabledPaths.contains(path)
@@ -91,6 +95,12 @@ final class IDEBlameController {
         onUnavailable: @escaping @MainActor () -> Void = {}
     ) {
         let key = ObjectIdentifier(textView)
+        if let url, yieldsAnnotations?(url) == true {
+            tasks[key]?.cancel()
+            tasks[key] = nil
+            stamps[key] = nil
+            return
+        }
         guard let url, isEnabled(for: url), git.isRepository else {
             tasks[key]?.cancel()
             tasks[key] = nil

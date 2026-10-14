@@ -221,12 +221,19 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         configuration.instrumentation = .profile
 
         let session = try XCTUnwrap(workspace.startRunSession(configuration))
+        // The profiler tab opens when the program starts, with live charts; the same tab then reads
+        // the recording.
+        let watching = await waitUntil { self.workspace.profileSessions.values.contains { $0.live != nil } }
+        XCTAssertTrue(watching, session.log.plainText)
         let ended = await waitUntil { !session.isActive }
         XCTAssertTrue(ended, session.log.plainText)
         XCTAssertEqual(session.state, .exited(0), session.log.plainText)
 
-        let opened = await waitUntil { self.workspace.workbench.allDocuments().contains { $0.contentKind == .profile } }
+        let opened = await waitUntil {
+            self.workspace.workbench.allDocuments().contains { $0.contentKind == .profile && $0.url != nil }
+        }
         XCTAssertTrue(opened, session.log.plainText)
+        XCTAssertEqual(workspace.workbench.allDocuments().filter { $0.contentKind == .profile }.count, 1, "one tab, not two")
         let document = try XCTUnwrap(workspace.workbench.allDocuments().first { $0.contentKind == .profile })
         XCTAssertEqual(document.displayName, "Profile: Spin")
         XCTAssertTrue(document.url?.path.contains("/Profiles/") == true)
@@ -238,6 +245,17 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         XCTAssertGreaterThan(profiler.profile?.cpuSamples ?? 0, 10)
         let top = try XCTUnwrap(profiler.hotMethods.first)
         XCTAssertEqual(profiler.symbols?.qualifiedName(ofMethod: top.method), "Spin.fib")
+
+        // The run left a record beside its recording, with the stack depth the recorder was asked for,
+        // and the recording has times for the timeline.
+        let recent = try XCTUnwrap(workspace.recentProfiles().first)
+        XCTAssertEqual(recent.title, "Spin")
+        XCTAssertEqual(recent.info?.label, "Spin")
+        XCTAssertNotNil(recent.info?.finishedAt)
+        XCTAssertEqual(recent.info?.recordingCount, 1)
+        XCTAssertTrue(recent.info?.settings.contains("depth 128") == true, recent.info?.settings ?? "")
+        XCTAssertNotNil(profiler.timeline, "the recording's events have times")
+        XCTAssertGreaterThan(profiler.profile?.threads(of: .cpu).count ?? 0, 0)
 
         // A frame opens the project's source.
         profiler.openFrame?("Spin", 2)

@@ -30,6 +30,17 @@ extension IDEWorkspace {
 
     func openProfile(recordings: [URL], title: String, runID: String?, project: URL?) {
         guard let first = recordings.first else { return }
+        // A run that was watched live reads its recording in the tab it already has.
+        if let runID, let live = profileSessions.first(where: { $0.value.runID == runID && $0.value.phase == .live }) {
+            live.value.finishLive(recordings: recordings)
+            for pane in workbench.panes {
+                guard let document = pane.documents.first(where: { $0.id == live.key }) else { continue }
+                // The tab is the recording's from here on: restored with the session, found by its file.
+                document.url = first
+                selectTab(live.key, in: pane.id)
+            }
+            return
+        }
         let standard = first.standardizedFileURL
         for pane in workbench.panes {
             for document in pane.documents where document.contentKind == .profile {
@@ -44,6 +55,38 @@ extension IDEWorkspace {
         document.url = first
         profileSessions[document.id] = makeProfileSession(recordings: recordings, title: title, runID: runID)
         presentDiagramDocument(document)
+    }
+
+    // MARK: - Live
+
+    func beginLiveProfile(
+        title: String, runID: String, snapshotDirectory: URL, jcmd: URL?, jps: URL?,
+        processID: (@MainActor () -> Int32?)?
+    ) {
+        guard IDEPreferences.shared.javaProfileShowsLiveCharts else { return }
+        let session = makeProfileSession(recordings: [], title: "Profile: \(title)", runID: runID)
+        session.stopRun = { [weak self] in self?.stopRunning() }
+        session.openSnapshot = { [weak self] url in
+            self?.openProfile(recordings: [url], title: "Snapshot: \(title)", runID: nil, project: self?.project.rootURL)
+        }
+        let monitor = IDEProfilerLiveMonitor(
+            runID: runID, jcmd: jcmd, jps: jps, snapshotDirectory: snapshotDirectory.appendingPathComponent("snapshots"),
+            knownProcessID: processID
+        )
+        let document = WorkbenchDocument(displayName: "Profile: \(title)")
+        document.contentKind = .profile
+        // Live before the tab shows: showing a session that is still idle reads its recording.
+        session.beginLive(monitor: monitor)
+        profileSessions[document.id] = session
+        presentDiagramDocument(document)
+    }
+
+    func hasLiveProfile(runID: String) -> Bool {
+        profileSessions.values.contains { $0.runID == runID && $0.phase == .live }
+    }
+
+    func endLiveProfile(runID: String, failure: String) {
+        for session in profileSessions.values where session.runID == runID { session.failLive(failure) }
     }
 
     /// File ▸ Open Profiler Recording…
@@ -88,6 +131,33 @@ extension IDEWorkspace {
         session.openFrame = { [weak self] className, line in
             self?.openProfileFrame(className: className, line: line)
         }
+        let roots = IDEProfileSourceRoots()
+        session.classifyClass = { [weak self, roots] className in
+            guard let self else { return .library }
+            let candidates = roots.value ?? self.debugSourceRoots()
+            roots.value = candidates
+            let relative = Self.profileSourcePath(ofClass: className)
+            for root in candidates where FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path) {
+                return .project
+            }
+            return .library
+        }
+        session.onQueryChanged = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.profileSessionQueryChanged(session)
+        }
+        session.makeBaselineSession = { [weak self] recordings, title in
+            guard let self else { return IDEProfilerSession(recordings: recordings, title: title) }
+            return self.makeProfileSession(recordings: recordings, title: title, runID: nil)
+        }
+        session.baselineCandidates = { [weak self, weak session] in
+            guard let self, let session else { return [] }
+            return self.profileBaselineCandidates(excluding: session)
+        }
+        session.chooseBaselineFile = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.chooseBaselineRecording(for: session)
+        }
         session.chooseJDK = { [weak self] in
             self?.requestedSettingsDomain = .java
             self?.showSettings()
@@ -112,6 +182,10 @@ extension IDEWorkspace {
 
     func closeProfileSession(_ documentID: UUID, in pane: EditorPane) {
         guard let session = profileSessions.removeValue(forKey: documentID) else { return }
+        if profileHintsSession === session {
+            profileHintsSession = nil
+            refreshProfileHints()
+        }
         hostCache.peek(pane.id)?.profileViewer.detach(session)
         session.cancel()
     }
@@ -138,6 +212,11 @@ extension IDEWorkspace {
             session = made
         }
         guard let session else { return }
+        // Looking at a recording makes it the one the editors' line hints follow.
+        if session.phase == .ready, profileHintsSession !== session {
+            profileHintsSession = session
+            refreshProfileHints()
+        }
         changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
            previousID != document.id,
@@ -161,16 +240,166 @@ extension IDEWorkspace {
         }
     }
 
+    // MARK: - Line hints in the editor
+
+    /// A tab's query changed or its recording arrived: it is the profile the hints follow.
+    func profileSessionQueryChanged(_ session: IDEProfilerSession) {
+        // A baseline being read for a comparison is in no tab, and must not drive the editor.
+        guard session.phase == .ready, profileSessions.values.contains(where: { $0 === session }) else { return }
+        profileHintsSession = session
+        refreshProfileHints()
+    }
+
+    /// Rebuilds the line costs from the followed tab (off the main actor) and repaints the editors.
+    func refreshProfileHints() {
+        guard IDEPreferences.shared.javaProfileLineHints, let session = profileHintsSession,
+              session.phase == .ready, session.kind != .gc,
+              let tree = session.tree, let symbols = session.symbols else {
+            profileHints.clear()
+            refreshAnnotationColumnsInOpenEditors()
+            return
+        }
+        let ticket = profileHints.beginUpdate()
+        let title = session.title
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let lines = JavaLineProfile.build(from: tree, symbols: symbols)
+            await MainActor.run { [weak self] in
+                guard let self, self.profileHints.finishUpdate(ticket: ticket, profile: lines, title: title) else { return }
+                self.refreshAnnotationColumnsInOpenEditors()
+            }
+        }
+    }
+
+    /// Settings or the Run menu turned the hints on or off.
+    func profileLineHintsPreferenceChanged() {
+        refreshProfileHints()
+    }
+
+    /// Whether the profiler's hints, and not git blame, fill the annotation column of `url`.
+    func profileHintsOwnAnnotations(of url: URL?) -> Bool {
+        guard let url, IDEPreferences.shared.javaProfileLineHints, profileHints.isActive else { return false }
+        return profileHints.lines(forFile: url, roots: debugSourceRoots()) != nil
+    }
+
+    /// Fills the annotation column of `textView` when the hints own it for `url`.
+    func applyProfileLineHints(to textView: TextView, url: URL?) {
+        guard let url, profileHintsOwnAnnotations(of: url),
+              let annotations = profileHints.annotations(
+                forFile: url, roots: debugSourceRoots(), lineCount: textView.lineCount
+              ) else { return }
+        textView.setGutterAnnotations(annotations, edited: nil)
+    }
+
+    /// Hints in the editors that have costs for their file, blame (or nothing) in the others, and the
+    /// hot-line tint repainted.
+    func refreshAnnotationColumnsInOpenEditors() {
+        for pane in workbench.panes {
+            guard let textView = hostCache.peek(pane.id)?.textView,
+                  pane.selectedDocument?.contentKind == .text else { continue }
+            let url = pane.selectedDocument?.url
+            if profileHintsOwnAnnotations(of: url) {
+                applyProfileLineHints(to: textView, url: url)
+            } else {
+                blame.refresh(textView: textView, url: url, git: gitStatus, force: true)
+            }
+        }
+        refreshExecutionLineBackgrounds()
+    }
+
+    /// The hot lines of `url`, tinted where no other band is.
+    func profileHeatBackgrounds(forFile url: URL?, avoiding existing: [LineBackground]) -> [LineBackground] {
+        guard IDEPreferences.shared.javaProfileLineHints, profileHints.isActive, let url else { return [] }
+        let heat = profileHints.heat(forFile: url, roots: debugSourceRoots())
+        guard !heat.isEmpty else { return [] }
+        var taken = Set<Int>()
+        for band in existing {
+            for line in band.line..<(band.line + max(band.lineCount, 1)) { taken.insert(line) }
+        }
+        let base: CGFloat = isDarkEditorTheme ? 0.10 : 0.13
+        return heat.compactMap { entry in
+            guard !taken.contains(entry.line) else { return nil }
+            let alpha = base + 0.22 * CGFloat(entry.intensity)
+            return LineBackground(line: entry.line, lineCount: 1, color: NSColor.systemOrange.withAlphaComponent(alpha).cgColor)
+        }
+    }
+
+    // MARK: - Baselines
+
+    /// What a profile tab can be compared with: the other open profile tabs (already read), then the
+    /// newest recorded runs of this project.
+    func profileBaselineCandidates(excluding session: IDEProfilerSession) -> [IDEProfilerSession.BaselineCandidate] {
+        var result: [IDEProfilerSession.BaselineCandidate] = []
+        var seen = Set(session.recordings.map(\.standardizedFileURL))
+        for other in profileSessions.values where other.id != session.id && other.profile != nil {
+            result.append(IDEProfilerSession.BaselineCandidate(
+                id: "tab-\(other.id)", title: other.title, subtitle: "open", recordings: other.recordings, profile: other.profile
+            ))
+            seen.formUnion(other.recordings.map(\.standardizedFileURL))
+        }
+        for recent in recentProfiles() {
+            guard let first = recent.recordings.first, !seen.contains(first.standardizedFileURL) else { continue }
+            result.append(IDEProfilerSession.BaselineCandidate(
+                id: "run-\(recent.run.id)", title: recent.title, subtitle: recent.detail,
+                recordings: recent.recordings, profile: nil
+            ))
+        }
+        return result
+    }
+
+    // MARK: - Recent profiles
+
+    /// This project's newest profiled runs (Run ▸ Recent Profiles).
+    func recentProfiles(limit: Int = 10) -> [JavaRecentProfile] {
+        guard let root = project.rootURL else { return [] }
+        return JavaRecentProfile.list(
+            artifacts: IDEJavaRunProvider.artifacts, projectHash: JavaRunArtifacts.projectHash(for: root), limit: limit
+        )
+    }
+
+    func openRecentProfile(_ profile: JavaRecentProfile) {
+        openProfile(
+            recordings: profile.recordings, title: "Profile: \(profile.title)", runID: profile.run.id,
+            project: project.rootURL
+        )
+    }
+
+    func deleteRecentProfile(_ profile: JavaRecentProfile) {
+        IDEJavaRunProvider.artifacts.delete(profile.run)
+    }
+
+    func chooseBaselineRecording(for session: IDEProfilerSession) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the recording to compare this one with."
+        if let type = UTType(filenameExtension: "jfr") { panel.allowedContentTypes = [type] }
+        panel.allowsOtherFileTypes = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        session.setBaseline(IDEProfilerSession.BaselineCandidate(
+            id: "file-\(url.path)", title: url.lastPathComponent, subtitle: "file",
+            recordings: Self.recordings(sharingFolderWith: url), profile: nil
+        ))
+    }
+
     // MARK: - A frame's source
+
+    /// `app.Outer$Inner` and `app.Cart$$Lambda/0x…` both live in `app.Outer` / `app.Cart`.
+    static func topLevelClassName(of className: String) -> String {
+        className.split(separator: "$", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? className
+    }
+
+    /// `app/Outer.java` for a class of that file, relative to a source root.
+    static func profileSourcePath(ofClass className: String) -> String {
+        topLevelClassName(of: className).replacingOccurrences(of: ".", with: "/") + ".java"
+    }
 
     /// Opens the source of `className` (a binary name: `app.Spin$Worker`, `app.Cart$$Lambda/0x…`) at
     /// `line`. Project sources are found by the declaring file's name; a class that is only in a
     /// library says so (its decompiled source is Go to Definition's, which needs a place in a file).
     func openProfileFrame(className: String, line: Int) {
-        // `app.Outer$Inner` and `app.Cart$$Lambda/0x…` both live in `app/Outer.java`/`app/Cart.java`.
-        let topLevel = className.split(separator: "$", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)
-            ?? className
-        let relative = topLevel.replacingOccurrences(of: ".", with: "/") + ".java"
+        let topLevel = Self.topLevelClassName(of: className)
+        let relative = Self.profileSourcePath(ofClass: className)
         for root in debugSourceRoots() {
             let candidate = root.appendingPathComponent(relative)
             if FileManager.default.fileExists(atPath: candidate.path) {
@@ -191,5 +420,20 @@ extension IDEWorkspace {
             }
             self?.reportRunProblem("\(topLevel) is not in the project's sources, so there is no file to open.")
         }
+    }
+}
+
+/// The source roots of a window's project, looked up once for a profile tab's colouring.
+private final class IDEProfileSourceRoots {
+    var value: [URL]?
+}
+
+extension JavaRecentProfile {
+    /// `2 hours ago · 14 MB · profile · depth 128`.
+    var detail: String {
+        var parts = [run.modified.formatted(.relative(presentation: .named))]
+        parts.append(ByteCountFormatter.string(fromByteCount: Int64(run.bytes), countStyle: .file))
+        if let settings = info?.settings { parts.append(settings) }
+        return parts.joined(separator: " · ")
     }
 }

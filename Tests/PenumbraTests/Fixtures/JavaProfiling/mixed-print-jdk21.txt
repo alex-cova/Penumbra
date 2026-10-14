@@ -1,0 +1,1509 @@
+jdk.ObjectAllocationSample {
+  startTime = 09:08:51.661 (2026-10-14)
+  objectClass = java.util.HashMap$KeyIterator (classLoader = bootstrap)
+  weight = 20.2 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.util.HashMap$KeySet.iterator() line: 991
+    java.util.HashSet.iterator() line: 182
+    jdk.jfr.internal.Control.findCombine(Set) line: 151
+    jdk.jfr.internal.Control.apply(Set) line: 64
+    jdk.jfr.internal.SettingsManager.setEventControl(EventControl, boolean, long) line: 229
+    jdk.jfr.internal.SettingsManager.setSettings(List, boolean) line: 147
+    jdk.jfr.internal.MetadataRepository.setSettings(List, boolean) line: 220
+    jdk.jfr.internal.PlatformRecorder.updateSettingsButIgnoreRecording(PlatformRecording, boolean) line: 395
+    jdk.jfr.internal.PlatformRecorder.updateSettings(boolean) line: 384
+    jdk.jfr.internal.PlatformRecorder.start(PlatformRecording) line: 254
+    jdk.jfr.internal.PlatformRecording.start() line: 123
+    jdk.jfr.Recording.start() line: 177
+    jdk.jfr.internal.dcmd.DCmdStart.execute(ArgumentParser) line: 211
+    jdk.jfr.internal.dcmd.AbstractDCmd.execute(String, String, char) line: 87
+  ]
+}
+
+jdk.ThreadSleep {
+  startTime = 09:08:51.671 (2026-10-14)
+  duration = 304 ms
+  time = 300 ms
+  eventThread = "socket-server" (javaThreadId = 32)
+  stackTrace = [
+    java.lang.Thread.afterSleep(ThreadSleepEvent) line: 474
+    java.lang.Thread.sleep(long) line: 512
+    app.Mixed.sleep(long) line: 89
+    app.Mixed.serve(ServerSocket) line: 43
+    app.Mixed.lambda$main$0(ServerSocket) line: 21
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.SocketRead {
+  startTime = 09:08:51.671 (2026-10-14)
+  duration = 306 ms
+  host = "localhost"
+  address = "127.0.0.1"
+  port = 50360
+  timeout = 0 s
+  bytesRead = 1 byte
+  endOfStream = false
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.net.Socket$SocketInputStream.read(byte[], int, int) line: 67
+    java.net.Socket$SocketInputStream.read() line: 1093
+    app.Mixed.main(String[]) line: 24
+  ]
+}
+
+jdk.ThreadSleep {
+  startTime = 09:08:51.980 (2026-10-14)
+  duration = 405 ms
+  time = 400 ms
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.lang.Thread.afterSleep(ThreadSleepEvent) line: 474
+    java.lang.Thread.sleep(long) line: 512
+    app.Mixed.sleep(long) line: 89
+    app.Mixed.main(String[]) line: 29
+  ]
+}
+
+jdk.ThreadSleep {
+  startTime = 09:08:52.386 (2026-10-14)
+  duration = 54.8 ms
+  time = 50.0 ms
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.lang.Thread.afterSleep(ThreadSleepEvent) line: 474
+    java.lang.Thread.sleep(long) line: 512
+    app.Mixed.sleep(long) line: 89
+    app.Mixed.contend() line: 58
+    app.Mixed.main(String[]) line: 30
+  ]
+}
+
+jdk.ThreadSleep {
+  startTime = 09:08:52.386 (2026-10-14)
+  duration = 305 ms
+  time = 300 ms
+  eventThread = "lock-holder" (javaThreadId = 33)
+  stackTrace = [
+    java.lang.Thread.afterSleep(ThreadSleepEvent) line: 474
+    java.lang.Thread.sleep(long) line: 512
+    app.Mixed.sleep(long) line: 89
+    app.Mixed.lambda$contend$1() line: 54
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.JavaMonitorEnter {
+  startTime = 09:08:52.442 (2026-10-14)
+  duration = 249 ms
+  monitorClass = java.lang.Object (classLoader = bootstrap)
+  previousOwner = "lock-holder" (javaThreadId = 33)
+  address = 0x6000035801A0
+  eventThread = "lock-waiter" (javaThreadId = 34)
+  stackTrace = [
+    app.Mixed.lambda$contend$2() line: 61
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.JavaMonitorWait {
+  startTime = 09:08:52.441 (2026-10-14)
+  duration = 250 ms
+  monitorClass = java.lang.Thread (classLoader = bootstrap)
+  notifier = "lock-holder" (javaThreadId = 33)
+  timeout = 0 s
+  timedOut = false
+  address = 0x600003588000
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.lang.Object.wait0(long)
+    java.lang.Object.wait(long) line: 366
+    java.lang.Thread.join(long) line: 2078
+    java.lang.Thread.join() line: 2154
+    app.Mixed.contend() line: 65
+    app.Mixed.main(String[]) line: 30
+  ]
+}
+
+jdk.JavaMonitorWait {
+  startTime = 09:08:52.691 (2026-10-14)
+  duration = 155 ms
+  monitorClass = java.lang.Object (classLoader = bootstrap)
+  notifier = N/A
+  timeout = 150 ms
+  timedOut = true
+  address = 0x6000035880D0
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.lang.Object.wait0(long)
+    java.lang.Object.wait(long) line: 366
+    app.Mixed.main(String[]) line: 32
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.847 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.9 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.847 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 256.9 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.847 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.9 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.847 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.847 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.848 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.848 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.848 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.848 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.849 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.849 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 192.2 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.849 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.849 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.849 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.850 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.850 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.850 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.850 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.851 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 993.0 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:52.851 (2026-10-14)
+  gcId = 0
+  when = "Before GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7041000000
+    committedSize = 1.0 GB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 49.0 MB
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:52.855 (2026-10-14)
+  gcId = 0
+  when = "After GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7041000000
+    committedSize = 1.0 GB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 5.7 MB
+}
+
+jdk.GarbageCollection {
+  startTime = 09:08:52.851 (2026-10-14)
+  duration = 3.94 ms
+  gcId = 0
+  name = "G1New"
+  cause = "G1 Evacuation Pause"
+  sumOfPauses = 3.94 ms
+  longestPause = 3.94 ms
+  eventThread = "VM Thread" (osThreadId = 19971)
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.855 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 208.2 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.855 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.855 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.856 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.856 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.856 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.856 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.857 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.858 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.859 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.860 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.861 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.862 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.862 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 736.7 kB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:52.862 (2026-10-14)
+  objectClass = byte[] (classLoader = bootstrap)
+  weight = 1.3 MB
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    app.Mixed.allocate() line: 72
+    app.Mixed.main(String[]) line: 34
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.872 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.882 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.895 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.906 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.919 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.930 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.942 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.954 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.966 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.979 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:52.990 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.003 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.013 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.025 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.036 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.049 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.061 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.073 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.085 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.095 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.108 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.119 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.132 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.142 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.154 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.165 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.178 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.190 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.202 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.214 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.224 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.237 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.248 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.261 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.271 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.283 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.294 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.307 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.320 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.331 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.343 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.353 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.366 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.377 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.390 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.401 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.413 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.425 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.437 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.450 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.ExecutionSample {
+  startTime = 09:08:53.461 (2026-10-14)
+  sampledThread = "main" (javaThreadId = 1)
+  state = "STATE_RUNNABLE"
+  stackTrace = [
+    app.Mixed.spin(long) line: 82
+    app.Mixed.main(String[]) line: 35
+  ]
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:53.462 (2026-10-14)
+  gcId = 1
+  when = "Before GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7041000000
+    committedSize = 1.0 GB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 37.7 MB
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:53.466 (2026-10-14)
+  gcId = 1
+  when = "After GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7004000000
+    committedSize = 56.0 MB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 3.4 MB
+}
+
+jdk.GarbageCollection {
+  startTime = 09:08:53.462 (2026-10-14)
+  duration = 4.52 ms
+  gcId = 1
+  name = "G1Full"
+  cause = "System.gc()"
+  sumOfPauses = 4.52 ms
+  longestPause = 4.52 ms
+  eventThread = "VM Thread" (osThreadId = 19971)
+}
+
+jdk.ObjectAllocationSample {
+  startTime = 09:08:53.653 (2026-10-14)
+  objectClass = java.util.ArrayList$Itr (classLoader = bootstrap)
+  weight = 33.4 kB
+  eventThread = "JFR Periodic Tasks" (javaThreadId = 28)
+  stackTrace = [
+    java.util.ArrayList.iterator() line: 1029
+    jdk.jfr.internal.periodic.PeriodicEvents.doPeriodic() line: 133
+    jdk.jfr.internal.PlatformRecorder.periodicTask() line: 521
+    jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1() line: 446
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.CPULoad {
+  startTime = 09:08:53.653 (2026-10-14)
+  jvmUser = 0.08%
+  jvmSystem = 0.00%
+  machineTotal = 14.21%
+}
+
+jdk.ThreadSleep {
+  startTime = 09:08:53.466 (2026-10-14)
+  duration = 1.10 s
+  time = 1.10 s
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.lang.Thread.afterSleep(ThreadSleepEvent) line: 474
+    java.lang.Thread.sleep(long) line: 512
+    app.Mixed.sleep(long) line: 89
+    app.Mixed.main(String[]) line: 37
+  ]
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:54.571 (2026-10-14)
+  gcId = 2
+  when = "Before GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7004000000
+    committedSize = 56.0 MB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 3.4 MB
+}
+
+jdk.GCHeapSummary {
+  startTime = 09:08:54.587 (2026-10-14)
+  gcId = 2
+  when = "After GC"
+  heapSpace = {
+    start = 0x7000800000
+    committedEnd = 0x7002800000
+    committedSize = 32.0 MB
+    reservedEnd = 0x7400800000
+    reservedSize = 16.0 GB
+  }
+  heapUsed = 3.4 MB
+}
+
+jdk.GarbageCollection {
+  startTime = 09:08:54.571 (2026-10-14)
+  duration = 15.7 ms
+  gcId = 2
+  name = "G1Full"
+  cause = "System.gc()"
+  sumOfPauses = 15.7 ms
+  longestPause = 15.7 ms
+  eventThread = "VM Thread" (osThreadId = 19971)
+}
+

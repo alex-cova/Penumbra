@@ -1,0 +1,4 @@
+# jcmd 70751 GC.heap_info (26.0.1-oracle -XX:+UseG1GC)
+70751:
+garbage-first heap   total reserved 524288K, committed 43008K, used 33313K [0x0000000121000000, 0x0000000141000000)
+ region size 1M, 2 eden (2M), 1 survivor (1M), 31 old (31M), 0 humongous (0M), 8 free (8M)

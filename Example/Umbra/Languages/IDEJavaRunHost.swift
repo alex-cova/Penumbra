@@ -44,5 +44,15 @@ protocol IDEJavaRunHost: AnyObject {
     func reportInstrumentationNote(_ message: String)
     /// Opens `recordings` (Flight Recorder files of one run) in the profiler.
     func openProfile(recordings: [URL], title: String, runID: String?, project: URL?)
+    /// Opens the profiler on a run that has just started, showing live charts until it ends.
+    /// `processID` is the program's pid when the run is a process Umbra started itself.
+    func beginLiveProfile(
+        title: String, runID: String, snapshotDirectory: URL, jcmd: URL?, jps: URL?,
+        processID: (@MainActor () -> Int32?)?
+    )
+    /// Whether the run has a profiler tab waiting for its recording.
+    func hasLiveProfile(runID: String) -> Bool
+    /// The run ended without a recording: that tab says why.
+    func endLiveProfile(runID: String, failure: String)
     func debugTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration?)
 }

@@ -1,0 +1,4 @@
+# jcmd 70764 GC.heap_info (26.0.1-oracle -XX:+UseZGC)
+70764:
+ZHeap            used 40M, capacity 40M, max capacity 512M
+ Cache           0M (0)

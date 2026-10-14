@@ -100,6 +100,86 @@ final class IDEInstrumentationViewsSmokeTests: XCTestCase {
         XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 900, height: 420), name: "profiler-gc")), 0.005)
     }
 
+    func testTheTimelineAndFiltersOfAMixedRecordingRender() throws {
+        let session = IDEProfilerSession(recordings: [URL(fileURLWithPath: "/tmp/mixed.jfr")], title: "mixed.jfr")
+        var parser = JFRTextParser()
+        var profile = JavaProfile(symbols: parser.symbols)
+        let text = try String(contentsOf: InstrumentationFixtures.url("JavaProfiling", "mixed-print.txt"), encoding: .utf8)
+        parser.parse(text) { profile.ingest($0) }
+        session.installForTesting(profile: profile)
+
+        session.mode = .timeline
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 460), name: "timeline")), 0.02)
+        session.kind = .allocations
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 460), name: "timeline-heap")), 0.02)
+
+        session.kind = .locks
+        session.mode = .flame
+        let span = try XCTUnwrap(session.timeline?.span)
+        session.timeRange = span.lowerBound...(span.lowerBound + 800)
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "waits-range")), 0.01)
+        session.timeRange = nil
+        session.kind = .cpu
+        session.mode = .hot
+        session.selectedMethod = session.hotMethods.first?.method
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "methods-detail")), 0.01)
+    }
+
+    func testTheDifferentialViewsRender() throws {
+        func load(_ name: String) throws -> JavaProfile {
+            var parser = JFRTextParser()
+            var profile = JavaProfile(symbols: parser.symbols)
+            let text = try String(contentsOf: InstrumentationFixtures.url("JavaProfiling", name), encoding: .utf8)
+            parser.parse(text) { profile.ingest($0) }
+            return profile
+        }
+        let session = IDEProfilerSession(recordings: [URL(fileURLWithPath: "/tmp/mixed.jfr")], title: "mixed.jfr")
+        session.installForTesting(profile: try load("mixed-print.txt"))
+        session.setBaseline(IDEProfilerSession.BaselineCandidate(
+            id: "b", title: "spin.jfr", subtitle: "", recordings: [], profile: try load("spin-print.txt")
+        ))
+        session.mode = .flame
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "diff-flame")), 0.02)
+        session.mode = .hot
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "diff-methods")), 0.01)
+        // The call tree carries the change per node: its numbers differ from the plain tree's.
+        session.mode = .tree
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "diff-tree")), 0.01)
+        session.percentBase = .parent
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "diff-tree-parent")), 0.01)
+        session.addClassFilter(.jdk)
+        session.classFilters = [.jdk, .libraries]
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 980, height: 420), name: "diff-tree-hidden")), 0.01)
+    }
+
+    func testTheLiveChartsRenderWithReadingsAndWithoutAny() throws {
+        let session = IDEProfilerSession(recordings: [], title: "Spin", runID: "r1")
+        let monitor = IDEProfilerLiveMonitor(
+            runID: "r1", jcmd: nil, jps: nil, snapshotDirectory: base, knownProcessID: nil
+        )
+        session.beginLive(monitor: monitor)
+        monitor.stop()
+        XCTAssertEqual(session.phase, .live)
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 900, height: 600), name: "live-waiting")), 0.001)
+
+        let samples = (0..<90).map { second -> IDEProfilerLiveMonitor.Sample in
+            let wave = sin(Double(second) / 8)
+            return IDEProfilerLiveMonitor.Sample(
+                id: second, seconds: Double(second), cpuPercent: 60 + 40 * wave, residentBytes: 300_000_000,
+                osThreads: 20, heapUsedBytes: Int((120 + 80 * wave) * 1_048_576), heapCommittedBytes: 256 * 1_048_576,
+                heapMaxBytes: 1_024 * 1_048_576, metaspaceUsedBytes: (40 + second / 10) * 1_048_576,
+                liveThreads: 12 + second / 20, daemonThreads: 9
+            )
+        }
+        monitor.installForTesting(samples: samples, status: .attached(pid: 4242), notice: nil)
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 900, height: 600), name: "live-charts")), 0.01)
+        monitor.installForTesting(samples: samples, status: .ended, notice: "The JVM does not accept jcmd, so only CPU and memory are shown.")
+        XCTAssertGreaterThan(ink(try render(IDEProfilerView(session: session), size: NSSize(width: 900, height: 600), name: "live-ended")), 0.01)
+
+        session.failLive("No recording was written.")
+        XCTAssertEqual(session.phase, .failed("No recording was written."))
+    }
+
     func testTheProfilerExplainsEachNonReadyPhase() throws {
         let session = IDEProfilerSession(recordings: [], title: "x")
         for phase: IDEProfilerSession.Phase in [

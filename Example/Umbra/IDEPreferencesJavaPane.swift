@@ -69,8 +69,34 @@ struct IDEPreferencesJavaPane: View {
 
         IDESettingsSection(
             "Profiling",
-            footer: "Profile uses Java Flight Recorder, which comes with the JDK (Java 11 or newer). Nothing is attached to a running program: the recording is made by the JVM Umbra starts."
+            footer: "Profile uses Java Flight Recorder, which comes with the JDK (Java 11 or newer). Nothing is attached to a running program: the recording is made by the JVM Umbra starts. 0 keeps the recording settings' own value; the period, allocation rate and wait threshold need Java 17, and a custom .jfc file carries them on older JDKs."
         ) {
+            IDESettingsPicker("Recording Settings", selection: $preferences.javaProfileSettings) {
+                Text("Profile (about 2% overhead)").tag("profile")
+                Text("Default (about 1%)").tag("default")
+                Text("Custom .jfc file").tag("custom")
+            }
+            if preferences.javaProfileSettings == "custom" {
+                IDESettingsRow("Settings File") {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
+                        Text(preferences.javaProfileSettingsFile.isEmpty
+                            ? "None chosen" : URL(fileURLWithPath: preferences.javaProfileSettingsFile).lastPathComponent)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Choose…") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = true
+                            panel.canChooseDirectories = false
+                            panel.message = "Choose a Java Flight Recorder settings file (.jfc), made in JDK Mission Control."
+                            panel.allowsOtherFileTypes = true
+                            if panel.runModal() == .OK, let url = panel.url { preferences.javaProfileSettingsFile = url.path }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
             IDEPreferencesIntStepper(
                 title: "CPU Sample Period",
                 value: $preferences.javaProfileSamplePeriod,
@@ -78,6 +104,40 @@ struct IDEPreferencesJavaPane: View {
                 valueWidth: 40,
                 valueSuffix: "ms"
             )
+            IDEPreferencesIntStepper(
+                title: "Stack Depth",
+                value: $preferences.javaProfileStackDepth,
+                range: 16...JavaFlightRecorder.maximumStackDepth,
+                step: 16,
+                valueWidth: 40
+            )
+            IDEPreferencesIntStepper(
+                title: "Allocation Samples per Second",
+                value: $preferences.javaProfileAllocationRate,
+                range: 0...5000,
+                step: 50,
+                valueWidth: 48,
+                valueSuffix: "/s"
+            )
+            IDEPreferencesIntStepper(
+                title: "Shortest Wait Recorded",
+                value: $preferences.javaProfileWaitThreshold,
+                range: 0...1000,
+                step: 5,
+                valueWidth: 48,
+                valueSuffix: "ms"
+            )
+            IDESettingsToggle(
+                "Show Live Charts While Running",
+                isOn: $preferences.javaProfileShowsLiveCharts,
+                detail: "Opens the profiler when a run starts, with CPU, heap and thread charts, Capture Snapshot and Perform GC. The report fills in when the program ends."
+            )
+            IDESettingsToggle(
+                "Show Profile Hints in the Editor",
+                isOn: $preferences.javaProfileLineHints,
+                detail: "Each line of an open Java file gets its share of the profile you are looking at, and the hottest lines are tinted. It replaces the Git blame column while it is showing."
+            )
+            .onChange(of: preferences.javaProfileLineHints) { workspace.profileLineHintsPreferenceChanged() }
             IDESettingsToggle("Open the Recording After a Run", isOn: $preferences.javaProfileOpensRecording)
             IDEPreferencesIntStepper(
                 title: "Ask Before Reading Over",

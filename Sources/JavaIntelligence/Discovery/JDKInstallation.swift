@@ -37,6 +37,18 @@ public struct JDKInstallation: Hashable, Sendable {
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
     }
 
+    /// `bin/jcmd`, which talks to a running JVM (heap, counters, Flight Recorder), when this home ships it.
+    public var jcmd: URL? {
+        let url = home.appendingPathComponent("bin/jcmd")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
+    /// `bin/jps`, which lists the JVMs of this user with their options, when this home ships it.
+    public var jps: URL? {
+        let url = home.appendingPathComponent("bin/jps")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
     /// `true` when this home ships a compiler; a JRE-only home can run programs but not analyze them.
     public var isFullJDK: Bool { javac != nil }
 

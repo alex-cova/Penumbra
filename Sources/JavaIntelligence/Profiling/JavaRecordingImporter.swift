@@ -41,13 +41,7 @@ public enum JavaRecordingImporter {
     public static func importProfile(
         jfr: URL,
         recordings: [URL],
-        events: [String] = [
-            JavaFlightRecorder.EventType.executionSample,
-            JavaFlightRecorder.EventType.allocationSample,
-            JavaFlightRecorder.EventType.monitorEnter,
-            JavaFlightRecorder.EventType.threadPark,
-            JavaFlightRecorder.EventType.garbageCollection
-        ],
+        events: [String] = JavaFlightRecorder.EventType.profiled,
         stackDepth: Int = 128,
         progress: (@Sendable (Int) -> Void)? = nil
     ) async throws -> JavaProfile {

@@ -1,0 +1,5 @@
+# jcmd 70742 GC.heap_info (21.0.11-oracle -XX:+UseZGC)
+70742:
+ ZHeap           used 36M, capacity 512M, max capacity 512M
+ Metaspace       used 189K, committed 384K, reserved 1114112K
+  class space    used 7K, committed 128K, reserved 1048576K

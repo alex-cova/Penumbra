@@ -83,10 +83,13 @@ public struct JFRTextEvent: Sendable {
     public var isTruncated: Bool
     /// The captured `key = value` lines (``JFRTextParser/capturedKeys``), values as printed.
     public var attributes: [String: String]
+    /// `startTime` in milliseconds on the printer's wall clock (local time and date as printed, so
+    /// only differences mean anything); `nil` when the event has none or it did not parse.
+    public var timeMillis: Int64?
 
     public init(
         type: String, thread: String? = nil, threadID: Int? = nil, frames: [Int32] = [],
-        isTruncated: Bool = false, attributes: [String: String] = [:]
+        isTruncated: Bool = false, attributes: [String: String] = [:], timeMillis: Int64? = nil
     ) {
         self.type = type
         self.thread = thread
@@ -94,6 +97,13 @@ public struct JFRTextEvent: Sendable {
         self.frames = frames
         self.isTruncated = isTruncated
         self.attributes = attributes
+        self.timeMillis = timeMillis
+    }
+
+    /// A percentage such as `37.5%` as a fraction (`0.375`); a bare number is taken as one already.
+    public func fraction(_ key: String) -> Double? {
+        guard let text = attributes[key] else { return nil }
+        return JFRTextParser.parseFraction(text)
     }
 
     /// A size such as `142.9 kB` or `1.5 MB`, in bytes.
@@ -129,7 +139,8 @@ public struct JFRTextParser {
     public static let capturedKeys: Set<String> = [
         "sampledThread", "eventThread", "thread", "objectClass", "weight", "duration", "name", "cause",
         "sumOfPauses", "longestPause", "state", "monitorClass", "parkedClass", "startTime", "gcId",
-        "machineTotal", "jvmUser", "jvmSystem", "heapUsed"
+        "machineTotal", "jvmUser", "jvmSystem", "heapUsed", "when", "host", "port", "path",
+        "bytesRead", "bytesWritten"
     ]
 
     public let symbols: JavaProfileSymbols
@@ -252,7 +263,10 @@ public struct JFRTextParser {
     private func makeEvent(type: String) -> JFRTextEvent {
         let threadText = attributes["sampledThread"] ?? attributes["eventThread"] ?? attributes["thread"]
         let (name, id) = Self.parseThread(threadText)
-        return JFRTextEvent(type: type, thread: name, threadID: id, frames: frames, isTruncated: truncated, attributes: attributes)
+        return JFRTextEvent(
+            type: type, thread: name, threadID: id, frames: frames, isTruncated: truncated, attributes: attributes,
+            timeMillis: attributes["startTime"].flatMap(Self.parseTimestamp)
+        )
     }
 
     // MARK: - Values
@@ -336,5 +350,75 @@ public struct JFRTextParser {
         default: return nil
         }
         return Int(value * scale)
+    }
+
+    /// `23:59:46.198 (2026-10-13)` (what `jfr print` writes: local time, then the date) or an ISO
+    /// `2026-10-13T23:59:46.198…` form, in milliseconds since 1970 on that clock. A time with no date
+    /// counts from day zero. The zone is ignored: the values of one recording are compared with each
+    /// other, and the printer uses one zone throughout.
+    public static func parseTimestamp(_ text: String) -> Int64? {
+        var numbers: [(value: Int, digits: Int)] = []
+        var value = 0
+        var digits = 0
+        for byte in text.utf8 {
+            if byte >= 0x30, byte <= 0x39 {
+                value = value &* 10 &+ Int(byte - 0x30)
+                digits += 1
+            } else {
+                if digits > 0 { numbers.append((value, digits)) }
+                value = 0
+                digits = 0
+                if numbers.count == 7 { break }
+            }
+        }
+        if digits > 0, numbers.count < 7 { numbers.append((value, digits)) }
+        guard numbers.count >= 3 else { return nil }
+        let isoFirst = numbers[0].digits == 4
+        let year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int
+        var millis = 0
+        if isoFirst {
+            guard numbers.count >= 6 else { return nil }
+            (year, month, day) = (numbers[0].value, numbers[1].value, numbers[2].value)
+            (hour, minute, second) = (numbers[3].value, numbers[4].value, numbers[5].value)
+            if numbers.count > 6 { millis = fractionalMilliseconds(numbers[6]) }
+        } else {
+            (hour, minute, second) = (numbers[0].value, numbers[1].value, numbers[2].value)
+            var next = 3
+            // `.198` is followed by the date; a time without milliseconds goes straight to it.
+            if numbers.count > next, numbers[next].digits <= 3, numbers.count == 4 || numbers.count == 7 {
+                millis = fractionalMilliseconds(numbers[next])
+                next += 1
+            }
+            if numbers.count >= next + 3 {
+                (year, month, day) = (numbers[next].value, numbers[next + 1].value, numbers[next + 2].value)
+            } else {
+                (year, month, day) = (1970, 1, 1)
+            }
+        }
+        guard (1...12).contains(month), (1...31).contains(day), hour < 24, minute < 60, second < 62 else { return nil }
+        // Days from civil (H. Hinnant's algorithm), proleptic Gregorian.
+        let y = month <= 2 ? year - 1 : year
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yearOfEra = y - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        let days = era * 146_097 + dayOfEra - 719_468
+        return Int64(days) * 86_400_000 + Int64(hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
+    }
+
+    /// `.5` is 500 ms and `.198765` is 198 ms: the digits after the point, to three places.
+    private static func fractionalMilliseconds(_ part: (value: Int, digits: Int)) -> Int {
+        var value = part.value
+        var digits = part.digits
+        while digits > 3 { value /= 10; digits -= 1 }
+        while digits < 3 { value *= 10; digits += 1 }
+        return value
+    }
+
+    /// `0.12%` → 0.0012; `37` with no sign is returned as written.
+    public static func parseFraction(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasSuffix("%") { return Double(trimmed.dropLast()).map { $0 / 100 } }
+        return Double(trimmed)
     }
 }

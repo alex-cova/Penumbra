@@ -330,6 +330,7 @@ final class IDEJavaRunProvider: IDERunProvider {
             self.gradle.runGradleTasks([task], extraArguments: base + extra, runsApplication: true) { [weak self] outcome in
                 self?.instrumentedRunDidNotStart(outcome)
             }
+            if case .profile(let profile) = plan { self.beginLiveProfile(profile, processID: nil) }
         }
     }
 

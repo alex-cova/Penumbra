@@ -116,6 +116,7 @@ extension IDEJavaRunProvider {
             case .success(let extra):
                 self.pendingInstrumentation = (plan, taskPaths)
                 self.runTestTasks(taskPaths, arguments: args + extra, debug: false)
+                if case .profile(let profile) = plan { self.beginLiveProfile(profile, processID: nil) }
             }
         }
     }

@@ -101,6 +101,10 @@ public final class IDEWorkspace {
     var diagramSessions: [UUID: IDEDiagramSession] = [:]
     /// One per open Flight Recorder profile tab, by document id.
     var profileSessions: [UUID: IDEProfilerSession] = [:]
+    /// Line costs of the profile being looked at, shown in the Java editors beside the code.
+    let profileHints = IDEProfileLineHints()
+    /// The profile tab that feeds ``profileHints``.
+    weak var profileHintsSession: IDEProfilerSession?
     private let intelligenceServices = IDEIntelligenceServices()
     /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
     let languageServerHost = IDELanguageServerHost()
@@ -664,6 +668,9 @@ public final class IDEWorkspace {
     }
 
     func bootstrap() {
+        // The blame column and the profiler's line hints share the annotation column; a file with
+        // hints is theirs until the user turns them off.
+        blame.yieldsAnnotations = { [weak self] url in self?.profileHintsOwnAnnotations(of: url) ?? false }
         applyLaunchConfiguration()
         configureDiskSync()
         subscribeToProjectWatcher()
@@ -6097,6 +6104,7 @@ public final class IDEWorkspace {
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
         // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
+        applyProfileLineHints(to: host.textView, url: document.url)
         changeMarkers.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true, delay: .zero)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()

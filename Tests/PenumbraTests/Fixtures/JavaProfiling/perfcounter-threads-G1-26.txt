@@ -1,0 +1,9 @@
+# jcmd PerfCounter.print (threads, metaspace)
+java.threads.daemon=6
+java.threads.live=7
+java.threads.livePeak=7
+java.threads.started=7
+sun.gc.metaspace.capacity=393216
+sun.gc.metaspace.maxCapacity=1140850688
+sun.gc.metaspace.minCapacity=0
+sun.gc.metaspace.used=163168

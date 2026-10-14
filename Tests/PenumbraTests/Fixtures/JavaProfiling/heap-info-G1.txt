@@ -1,0 +1,6 @@
+# jcmd 70706 GC.heap_info (21.0.11-oracle -XX:+UseG1GC)
+70706:
+ garbage-first heap   total 524288K, used 37931K [0x000000011d000000, 0x000000013d000000)
+  region size 1024K, 18 young (18432K), 4 survivors (4096K)
+ Metaspace       used 131K, committed 320K, reserved 1114112K
+  class space    used 7K, committed 128K, reserved 1048576K

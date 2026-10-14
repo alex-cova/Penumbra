@@ -92,6 +92,12 @@ final class IDERunSession: Identifiable {
         self.payload = payload
     }
 
+    /// The program's process id while it runs, for what watches it from outside.
+    var processIdentifier: Int32? {
+        guard let pid = handle?.processIdentifier, pid > 0 else { return nil }
+        return pid
+    }
+
     /// Starts the process. A provider builds `launch` once everything that comes before it succeeded.
     func start(_ launch: IDEProcessLaunch) {
         guard state == .preparing else { return }

@@ -1,0 +1,5 @@
+# jcmd PerfCounter.print (threads)
+java.threads.daemon=7
+java.threads.live=8
+java.threads.livePeak=8
+java.threads.started=8

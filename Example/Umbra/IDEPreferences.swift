@@ -68,6 +68,13 @@ public final class IDEPreferences {
         static let javaProfileSamplePeriod = "com.umbra.editor.javaProfileSamplePeriod"
         static let javaProfileOpensRecording = "com.umbra.editor.javaProfileOpensRecording"
         static let javaProfileConfirmMegabytes = "com.umbra.editor.javaProfileConfirmMegabytes"
+        static let javaProfileSettings = "com.umbra.editor.javaProfileSettings"
+        static let javaProfileShowsLiveCharts = "com.umbra.editor.javaProfileShowsLiveCharts"
+        static let javaProfileLineHints = "com.umbra.editor.javaProfileLineHints"
+        static let javaProfileSettingsFile = "com.umbra.editor.javaProfileSettingsFile"
+        static let javaProfileStackDepth = "com.umbra.editor.javaProfileStackDepth"
+        static let javaProfileAllocationRate = "com.umbra.editor.javaProfileAllocationRate"
+        static let javaProfileWaitThreshold = "com.umbra.editor.javaProfileWaitThreshold"
         static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
@@ -466,6 +473,56 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaProfileSamplePeriod, forKey: Keys.javaProfileSamplePeriod) }
     }
 
+    /// Shows each line's share of the profile beside the code, and tints the hottest lines.
+    var javaProfileLineHints: Bool {
+        didSet { UserDefaults.standard.set(javaProfileLineHints, forKey: Keys.javaProfileLineHints) }
+    }
+
+    /// Opens the profiler tab when a profiled run starts, with live CPU and memory charts.
+    var javaProfileShowsLiveCharts: Bool {
+        didSet { UserDefaults.standard.set(javaProfileShowsLiveCharts, forKey: Keys.javaProfileShowsLiveCharts) }
+    }
+
+    /// `profile`, `default` or `custom` (the `.jfc` file below): which JFR settings a profiled run uses.
+    var javaProfileSettings: String {
+        didSet { UserDefaults.standard.set(javaProfileSettings, forKey: Keys.javaProfileSettings) }
+    }
+
+    /// The `.jfc` file the `custom` setting names.
+    var javaProfileSettingsFile: String {
+        didSet { UserDefaults.standard.set(javaProfileSettingsFile, forKey: Keys.javaProfileSettingsFile) }
+    }
+
+    /// Frames kept per stack; JFR's own default is 64, which cuts deep framework stacks.
+    var javaProfileStackDepth: Int {
+        didSet { UserDefaults.standard.set(javaProfileStackDepth, forKey: Keys.javaProfileStackDepth) }
+    }
+
+    /// Allocation samples per second; 0 keeps the setting's 150. Java 17 and later.
+    var javaProfileAllocationRate: Int {
+        didSet { UserDefaults.standard.set(javaProfileAllocationRate, forKey: Keys.javaProfileAllocationRate) }
+    }
+
+    /// The shortest wait (ms) a profile records; 0 keeps the setting's. Java 17 and later.
+    var javaProfileWaitThreshold: Int {
+        didSet { UserDefaults.standard.set(javaProfileWaitThreshold, forKey: Keys.javaProfileWaitThreshold) }
+    }
+
+    /// What a profiled run records, from the settings above.
+    func currentFlightRecorderOptions() -> JavaFlightRecorderOptions {
+        var options = JavaFlightRecorderOptions()
+        switch javaProfileSettings {
+        case "default": options.template = .standard
+        case "custom" where !javaProfileSettingsFile.isEmpty: options.template = .custom(path: javaProfileSettingsFile)
+        default: options.template = .profile
+        }
+        options.samplePeriodMilliseconds = javaProfileSamplePeriod > 0 ? javaProfileSamplePeriod : nil
+        options.stackDepth = javaProfileStackDepth
+        options.allocationSamplesPerSecond = javaProfileAllocationRate > 0 ? javaProfileAllocationRate : nil
+        options.waitThresholdMilliseconds = javaProfileWaitThreshold > 0 ? javaProfileWaitThreshold : nil
+        return options
+    }
+
     /// Opens a profiled run's recording in the profiler when the run ends.
     var javaProfileOpensRecording: Bool {
         didSet { UserDefaults.standard.set(javaProfileOpensRecording, forKey: Keys.javaProfileOpensRecording) }
@@ -770,6 +827,13 @@ public final class IDEPreferences {
         javaProfileSamplePeriod = defaults.object(forKey: Keys.javaProfileSamplePeriod) as? Int ?? 0
         javaProfileOpensRecording = defaults.object(forKey: Keys.javaProfileOpensRecording) as? Bool ?? true
         javaProfileConfirmMegabytes = defaults.object(forKey: Keys.javaProfileConfirmMegabytes) as? Int ?? 500
+        javaProfileSettings = defaults.string(forKey: Keys.javaProfileSettings) ?? "profile"
+        javaProfileShowsLiveCharts = defaults.object(forKey: Keys.javaProfileShowsLiveCharts) as? Bool ?? true
+        javaProfileLineHints = defaults.object(forKey: Keys.javaProfileLineHints) as? Bool ?? true
+        javaProfileSettingsFile = defaults.string(forKey: Keys.javaProfileSettingsFile) ?? ""
+        javaProfileStackDepth = defaults.object(forKey: Keys.javaProfileStackDepth) as? Int ?? JavaFlightRecorder.defaultStackDepth
+        javaProfileAllocationRate = defaults.object(forKey: Keys.javaProfileAllocationRate) as? Int ?? 0
+        javaProfileWaitThreshold = defaults.object(forKey: Keys.javaProfileWaitThreshold) as? Int ?? 0
         javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))

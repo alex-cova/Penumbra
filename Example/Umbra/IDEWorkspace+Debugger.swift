@@ -706,8 +706,11 @@ extension IDEWorkspace {
         let point = executionPoint
         // Coverage first, the execution line over it: both live in `lineBackgrounds`, so the host
         // merges them (a replace would drop one whenever the other refreshes).
-        let bands = coverageLineBackgrounds(forFile: shownFile)
+        var bands = coverageLineBackgrounds(forFile: shownFile)
             + Self.executionLineBackgrounds(stopFile: point?.file, stopLine: point?.line, shownFile: shownFile)
+        // The profiler's hot lines go where nothing else is painted: coverage and the stopped line
+        // matter more, and bands may not overlap.
+        bands = profileHeatBackgrounds(forFile: shownFile, avoiding: bands) + bands
         if textView.lineBackgrounds != bands { textView.lineBackgrounds = bands }
     }
 

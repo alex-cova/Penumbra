@@ -25,13 +25,35 @@ final class IDEFlameGraphNSView: NSView {
     private(set) var rootNode = JavaProfileTree.root
     private(set) var highlightedMethods: Set<Int32> = []
     private(set) var selectedMethod: Int32?
+    /// The session's `treeRevision`: a tree of the same size with other counts still needs a layout.
+    private var revision = 0
+
+    /// The match of the search the user stepped to; drawn with a heavier outline and scrolled to.
+    private(set) var focusedNode: Int?
+    /// Fraction of the root's samples under which a box is faded; 0 is off.
+    private(set) var thresholdFraction: Double = 0
+    /// How a method is coloured; unset, a package hash (previews and tests).
+    var originProvider: ((Int32) -> IDEProfilerSession.FrameOrigin)?
 
     var onSelectMethod: ((Int32?) -> Void)?
     var onZoom: ((Int) -> Void)?
     var onZoomOut: (() -> Void)?
-    var onOpenSource: ((Int32, Int) -> Void)?
+    /// Class (a binary name) and line of the frame to open.
+    var onOpenSource: ((String, Int) -> Void)?
+    /// A fill that replaces the frame's colour (a differential graph's red and green).
+    var nodeTint: ((Int) -> NSColor?)?
+    /// A line added to a box's tooltip.
+    var extraTooltip: ((Int) -> String?)?
+    /// The "what if" items of the context menu, by node.
+    var onFocusSubtree: ((Int) -> Void)?
+    var onFocusCall: ((Int) -> Void)?
+    var onExcludeSubtree: ((Int) -> Void)?
+    var onExcludeCalls: ((Int) -> Void)?
+    /// A class or package name to leave out of the graph (not a node: it works on a differential graph too).
+    var onHideClass: ((String) -> Void)?
 
     private var rows: [[Box]] = []
+    private var pendingReveal: Int?
     private var layoutWidth: CGFloat = 0
     private var hoveredNode: Int?
     private var trackingArea: NSTrackingArea?
@@ -41,16 +63,22 @@ final class IDEFlameGraphNSView: NSView {
 
     func update(
         tree: JavaProfileTree, symbols: JavaProfileSymbols, rootNode: Int,
-        highlighted: Set<Int32>, selected: Int32?
+        highlighted: Set<Int32>, selected: Int32?, revision: Int = 0,
+        focusedNode: Int? = nil, thresholdFraction: Double = 0
     ) {
         let relayout = self.tree.nodeCount != tree.nodeCount || self.tree.totalSamples != tree.totalSamples
-            || self.rootNode != rootNode
+            || self.rootNode != rootNode || self.revision != revision
+        self.revision = revision
         self.tree = tree
         self.symbols = symbols
         self.rootNode = rootNode
         highlightedMethods = highlighted
         selectedMethod = selected
+        let focusChanged = self.focusedNode != focusedNode
+        self.focusedNode = focusedNode
+        self.thresholdFraction = thresholdFraction
         if relayout { rows = []; layoutWidth = 0 }
+        if focusChanged, let focusedNode { pendingReveal = focusedNode }
         invalidateIntrinsicContentSize()
         needsLayout = true
         needsDisplay = true
@@ -59,6 +87,21 @@ final class IDEFlameGraphNSView: NSView {
     override func layout() {
         super.layout()
         if abs(bounds.width - layoutWidth) > 0.5 || rows.isEmpty { rebuildLayout() }
+        if let node = pendingReveal {
+            pendingReveal = nil
+            reveal(node: node)
+        }
+    }
+
+    /// Scrolls so the box of `node` is on screen; a box too thin to have been laid out stays put.
+    func reveal(node: Int) {
+        for row in rows {
+            if let box = row.first(where: { $0.node == node }) {
+                let rect = NSRect(x: box.x, y: CGFloat(box.depth) * Self.rowHeight, width: max(box.width, 1), height: Self.rowHeight)
+                scrollToVisible(rect.insetBy(dx: 0, dy: -Self.rowHeight * 2))
+                return
+            }
+        }
     }
 
     override var intrinsicContentSize: NSSize {
@@ -115,18 +158,28 @@ final class IDEFlameGraphNSView: NSView {
         let font = NSFont.systemFont(ofSize: 10)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black.withAlphaComponent(0.85)]
         let dimmed = !highlightedMethods.isEmpty
+        let rootTotal = max(tree.totalCount(of: rootNode), 1)
+        let thresholdCount = thresholdFraction > 0 ? Int(Double(rootTotal) * thresholdFraction) : 0
         for depth in firstRow...lastRow {
             let y = CGFloat(depth) * Self.rowHeight
             for box in rows[depth] where box.x + box.width >= dirtyRect.minX && box.x <= dirtyRect.maxX {
                 let frame = tree.frame(of: box.node)
                 let method: Int32? = frame >= 0 ? symbols.frame(frame).method : nil
                 let rect = NSRect(x: box.x, y: y, width: max(box.width - 0.5, 0.5), height: Self.rowHeight - 1)
-                var color = Self.color(for: method, symbols: symbols, isOther: frame == JavaProfileTree.otherFrame)
+                var color = nodeTint?(box.node) ?? fill(for: method, frame: frame)
                 let matches = method.map { highlightedMethods.contains($0) } ?? false
                 if dimmed, !matches { color = color.blended(withFraction: 0.65, of: .textBackgroundColor) ?? color }
+                if thresholdCount > 0, tree.totalCount(of: box.node) < thresholdCount {
+                    color = color.blended(withFraction: 0.75, of: .textBackgroundColor) ?? color
+                }
                 color.setFill()
                 rect.fill()
-                if method != nil, method == selectedMethod || box.node == hoveredNode {
+                if box.node == focusedNode {
+                    NSColor.controlAccentColor.setStroke()
+                    let path = NSBezierPath(rect: rect.insetBy(dx: 1, dy: 1))
+                    path.lineWidth = 2.5
+                    path.stroke()
+                } else if method != nil, method == selectedMethod || box.node == hoveredNode {
                     NSColor.controlAccentColor.setStroke()
                     let path = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
                     path.lineWidth = 1.5
@@ -142,6 +195,53 @@ final class IDEFlameGraphNSView: NSView {
                 }
             }
         }
+    }
+
+    /// Red where the target's share grew, green where it shrank (-1...1, by how much of the larger
+    /// side the difference is); neutral grey when it did not move.
+    static func diffColor(change: Double) -> NSColor {
+        let neutral = NSColor(calibratedWhite: 0.58, alpha: 1)
+        let magnitude = abs(change)
+        guard magnitude >= 0.03 else { return neutral }
+        let hot = change > 0
+            ? NSColor(calibratedRed: 0.90, green: 0.27, blue: 0.24, alpha: 1)
+            : NSColor(calibratedRed: 0.22, green: 0.70, blue: 0.36, alpha: 1)
+        return neutral.blended(withFraction: min(1, 0.3 + 0.7 * magnitude), of: hot) ?? hot
+    }
+
+    private func fill(for method: Int32?, frame: Int32) -> NSColor {
+        if frame == JavaProfileTree.otherFrame { return NSColor.systemGray.withAlphaComponent(0.5) }
+        guard let method else { return NSColor.systemGray.withAlphaComponent(0.3) }
+        guard let originProvider else { return Self.color(for: method, symbols: symbols, isOther: false) }
+        return Self.color(for: originProvider(method))
+    }
+
+    /// Project code yellow, libraries purple (grey in the dark theme), the JDK blue-grey, markers
+    /// (allocations, waits) a muted green.
+    static func color(for origin: IDEProfilerSession.FrameOrigin) -> NSColor {
+        switch origin {
+        case .project:
+            return NSColor(calibratedRed: 0.99, green: 0.83, blue: 0.33, alpha: 1)
+        case .library:
+            return NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(calibratedWhite: 0.62, alpha: 1)
+                    : NSColor(calibratedRed: 0.76, green: 0.66, blue: 0.93, alpha: 1)
+            }
+        case .jdk:
+            return NSColor(calibratedRed: 0.62, green: 0.76, blue: 0.95, alpha: 1)
+        case .marker:
+            return NSColor(calibratedRed: 0.62, green: 0.84, blue: 0.70, alpha: 1)
+        }
+    }
+
+    /// The whole graph as a PNG, rows beyond the visible ones included.
+    func pngData() -> Data? {
+        let area = NSRect(x: 0, y: 0, width: bounds.width, height: max(CGFloat(rows.count) * Self.rowHeight + 8, 1))
+        guard let rep = bitmapImageRepForCachingDisplay(in: area) else { return nil }
+        // `draw` only paints the dirty rect, so draw the whole area, not the scrolled window.
+        cacheDisplay(in: area, to: rep)
+        return rep.representation(using: .png, properties: [:])
     }
 
     static func label(frame: Int32, symbols: JavaProfileSymbols) -> String {
@@ -232,6 +332,35 @@ final class IDEFlameGraphNSView: NSView {
         open.target = self
         open.representedObject = node
         menu.addItem(open)
+        menu.addItem(.separator())
+        for (title, selector) in [
+            ("Focus on Subtree", #selector(focusSubtreeFromMenu(_:))),
+            ("Focus on Call", #selector(focusCallFromMenu(_:))),
+            ("Exclude Subtree", #selector(excludeSubtreeFromMenu(_:))),
+            ("Exclude Call", #selector(excludeCallsFromMenu(_:)))
+        ] {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+            item.target = self
+            item.representedObject = node
+            menu.addItem(item)
+        }
+        let className = symbols.method(ofFrame: tree.frame(of: node)).className
+        if onHideClass != nil, !className.isEmpty {
+            menu.addItem(.separator())
+            let simple = className.split(whereSeparator: { $0 == "." || $0 == "$" }).last.map(String.init) ?? className
+            let hide = NSMenuItem(title: "Hide Class \(simple)", action: #selector(hideClassFromMenu(_:)), keyEquivalent: "")
+            hide.target = self
+            hide.representedObject = className
+            menu.addItem(hide)
+            if let dot = className.lastIndex(of: ".") {
+                let package = String(className[..<dot])
+                let hidePackage = NSMenuItem(title: "Hide Package \(package)", action: #selector(hideClassFromMenu(_:)), keyEquivalent: "")
+                hidePackage.target = self
+                hidePackage.representedObject = package
+                menu.addItem(hidePackage)
+            }
+        }
+        menu.addItem(.separator())
         let zoom = NSMenuItem(title: "Zoom Into Frame", action: #selector(zoomFromMenu(_:)), keyEquivalent: "")
         zoom.target = self
         zoom.representedObject = node
@@ -246,7 +375,27 @@ final class IDEFlameGraphNSView: NSView {
 
     @objc private func openSourceFromMenu(_ item: NSMenuItem) {
         guard let node = item.representedObject as? Int, let method = method(of: node) else { return }
-        onOpenSource?(method, Int(symbols.frame(tree.frame(of: node)).line))
+        onOpenSource?(symbols.methods[Int(method)].className, Int(symbols.frame(tree.frame(of: node)).line))
+    }
+
+    @objc private func hideClassFromMenu(_ item: NSMenuItem) {
+        if let name = item.representedObject as? String { onHideClass?(name) }
+    }
+
+    @objc private func focusSubtreeFromMenu(_ item: NSMenuItem) {
+        if let node = item.representedObject as? Int { onFocusSubtree?(node) }
+    }
+
+    @objc private func focusCallFromMenu(_ item: NSMenuItem) {
+        if let node = item.representedObject as? Int { onFocusCall?(node) }
+    }
+
+    @objc private func excludeSubtreeFromMenu(_ item: NSMenuItem) {
+        if let node = item.representedObject as? Int { onExcludeSubtree?(node) }
+    }
+
+    @objc private func excludeCallsFromMenu(_ item: NSMenuItem) {
+        if let node = item.representedObject as? Int { onExcludeCalls?(node) }
     }
 
     @objc private func zoomFromMenu(_ item: NSMenuItem) {
@@ -261,7 +410,7 @@ final class IDEFlameGraphNSView: NSView {
         switch event.keyCode {
         case 53: onZoomOut?()                      // Esc
         case 36, 76:                                // Return
-            if let method = selectedMethod { onOpenSource?(method, 0) }
+            if let method = selectedMethod { onOpenSource?(symbols.methods[Int(method)].className, 0) }
         default: super.keyDown(with: event)
         }
     }
@@ -279,8 +428,14 @@ final class IDEFlameGraphNSView: NSView {
         let line = symbols.frame(frame).line
         var text = (method.className.isEmpty ? "" : method.className + ".") + method.name + "(" + method.parameters + ")"
         if line > 0 { text += " line \(line)" }
-        text += "\ntotal \(total.formatted()) (\(String(format: "%.1f", Double(total) * 100 / Double(rootTotal)))%)"
+        text += "\ntotal \(total.formatted()) (\(String(format: "%.1f", Double(total) * 100 / Double(rootTotal)))% of all"
+        if let parent = tree.parent(of: node), parent != JavaProfileTree.root {
+            let parentTotal = max(tree.totalCount(of: parent), 1)
+            text += ", \(String(format: "%.1f", Double(total) * 100 / Double(parentTotal)))% of its caller"
+        }
+        text += ")"
         text += " · self \(own.formatted()) (\(String(format: "%.1f", Double(own) * 100 / Double(rootTotal)))%)"
+        if let extra = extraTooltip?(node) { text += "\n" + extra }
         return text
     }
 
@@ -315,20 +470,56 @@ struct IDEFlameGraphView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let graph = context.coordinator.graph, let tree = session.tree, let symbols = session.symbols else { return }
-        graph.onSelectMethod = { [weak session] in session?.selectedMethod = $0 }
-        graph.onZoom = { [weak session] in session?.zoom(into: $0) }
-        graph.onZoomOut = { [weak session] in session?.zoomOut() }
-        graph.onOpenSource = { [weak session] method, line in session?.openSource(ofMethod: method, line: line) }
-        let query = session.searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        var matches = Set<Int32>()
-        if !query.isEmpty {
-            for (index, _) in symbols.methods.enumerated() where symbols.qualifiedName(ofMethod: Int32(index)).lowercased().contains(query) {
-                matches.insert(Int32(index))
+        guard let graph = context.coordinator.graph, var tree = session.tree, var symbols = session.symbols else { return }
+        let comparison = session.comparison
+        if let comparison {
+            tree = comparison.tree
+            symbols = comparison.symbols
+        }
+        graph.nodeTint = comparison.map { comparison in
+            { node in IDEFlameGraphNSView.diffColor(change: comparison.change(ofNode: node)) }
+        }
+        graph.extraTooltip = comparison.map { comparison in
+            { node in
+                guard node > 0 else { return nil }
+                let before = comparison.baselineShare(ofNode: node) * 100
+                let after = comparison.targetShare(ofNode: node) * 100
+                return String(
+                    format: "baseline %.1f%% (%@) → now %.1f%% (%@)",
+                    before, comparison.baselineCounts[node].formatted(), after, comparison.targetCounts[node].formatted()
+                )
             }
         }
+        graph.onSelectMethod = { [weak session] in if !(session?.isComparing ?? false) { session?.selectedMethod = $0 } }
+        graph.onZoom = { [weak session] in session?.zoom(into: $0) }
+        graph.onZoomOut = { [weak session] in session?.zoomOut() }
+        graph.onOpenSource = { [weak session] className, line in
+            guard !className.isEmpty else { return }
+            session?.openFrame?(className, line)
+        }
+        // The "what if"s name nodes of the profile's own tree, which a merged tree is not.
+        let whatIf = comparison == nil
+        graph.onFocusSubtree = whatIf ? { [weak session] in session?.focusOnSubtree(node: $0) } : nil
+        graph.onFocusCall = whatIf ? { [weak session] in session?.focusOnCall(node: $0) } : nil
+        graph.onExcludeSubtree = whatIf ? { [weak session] in session?.excludeSubtree(node: $0) } : nil
+        graph.onExcludeCalls = whatIf ? { [weak session] in session?.excludeCalls(node: $0) } : nil
+        graph.onHideClass = { [weak session] name in
+            guard let pattern = JavaClassPattern(name) else { return }
+            session?.addClassFilter(.pattern(pattern))
+        }
+        graph.originProvider = { [weak session] method in
+            comparison != nil ? .library : (session?.origin(ofMethod: method) ?? .library)
+        }
+        session.flameGraphView = graph
+        var matches = Set<Int32>()
+        for node in comparison == nil ? session.searchMatches : [] {
+            let frame = tree.frame(of: node)
+            if frame >= 0 { matches.insert(symbols.frame(frame).method) }
+        }
         let root = session.zoomStack.last ?? JavaProfileTree.root
-        graph.update(tree: tree, symbols: symbols, rootNode: min(root, max(tree.nodeCount - 1, 0)), highlighted: matches, selected: session.selectedMethod)
+        graph.update(tree: tree, symbols: symbols, rootNode: min(root, max(tree.nodeCount - 1, 0)), highlighted: matches, selected: comparison == nil ? session.selectedMethod : nil,
+                     revision: session.treeRevision, focusedNode: comparison == nil ? session.focusedMatch : nil,
+                     thresholdFraction: session.nodeThresholdPercent / 100)
         if abs(graph.frame.width - scroll.contentSize.width) > 0.5 {
             graph.setFrameSize(NSSize(width: scroll.contentSize.width, height: graph.frame.height))
         }

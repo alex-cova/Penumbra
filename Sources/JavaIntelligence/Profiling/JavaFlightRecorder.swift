@@ -14,7 +14,10 @@ public enum JavaFlightRecorder {
         !path.contains(",") && !path.contains("\n") && !path.contains("\"")
     }
 
-    /// `-XX:StartFlightRecording=filename=<file>,settings=profile,dumponexit=true`.
+    /// The name the recording is given, which is how `jcmd <pid> JFR.dump name=umbra` finds it.
+    public static let recordingName = "umbra"
+
+    /// `-XX:StartFlightRecording=name=umbra,filename=<file>,settings=profile,dumponexit=true`.
     ///
     /// `dumponexit` writes the file when the JVM ends normally or on SIGTERM, which is what Stop
     /// sends; a SIGKILL leaves no file. `file` may hold `%p` (the process id) for a task that starts
@@ -26,13 +29,34 @@ public enum JavaFlightRecorder {
         samplePeriodMilliseconds: Int? = nil,
         jdkFeatureVersion: Int? = nil
     ) -> String? {
-        guard isSafe(file), isSafe(settings) else { return nil }
-        var options = ["filename=\(file)", "settings=\(settings)", "dumponexit=true"]
-        if let period = samplePeriodMilliseconds, period > 0,
-           let version = jdkFeatureVersion, version >= periodOptionFeatureVersion {
-            options.append("jdk.ExecutionSample#period=\(period)ms")
-        }
-        return "-XX:StartFlightRecording=" + options.joined(separator: ",")
+        var options = JavaFlightRecorderOptions()
+        options.template = JavaFlightRecorderOptions.Template(settingsValue: settings)
+        options.samplePeriodMilliseconds = samplePeriodMilliseconds
+        return vmArguments(file: file, options: options, jdkFeatureVersion: jdkFeatureVersion)?.first
+    }
+
+    /// The JVM options that record a run as `options` says: the `StartFlightRecording` option, then
+    /// the stack depth (a JVM option of its own). `nil` when a path cannot be carried.
+    public static func vmArguments(
+        file: String, options: JavaFlightRecorderOptions, jdkFeatureVersion: Int?
+    ) -> [String]? {
+        guard isSafe(file), options.isSafe else { return nil }
+        var parts = [
+            "name=\(recordingName)", "filename=\(file)", "settings=\(options.template.settingsValue)", "dumponexit=true"
+        ]
+        parts += options.eventSettings(jdkFeatureVersion: jdkFeatureVersion)
+        return ["-XX:StartFlightRecording=" + parts.joined(separator: ","), stackDepthArgument(options.stackDepth)]
+    }
+
+    /// JFR keeps 64 frames of a stack unless told otherwise, which cuts a deep framework stack
+    /// before its callers; the importer reads 128, so the recorder is asked for as many.
+    public static let defaultStackDepth = 128
+    public static let maximumStackDepth = 2048
+
+    /// `-XX:FlightRecorderOptions=stackdepth=<n>`, a JVM option of its own (not part of
+    /// `StartFlightRecording`); accepted by every JDK that has JFR in the open-source build.
+    public static func stackDepthArgument(_ depth: Int = defaultStackDepth) -> String {
+        "-XX:FlightRecorderOptions=stackdepth=\(min(max(depth, 1), maximumStackDepth))"
     }
 
     /// A sentence when `featureVersion` cannot record, `nil` when it can (or is unknown).
@@ -51,6 +75,20 @@ public enum JavaFlightRecorder {
         public static let garbageCollection = "jdk.GarbageCollection"
         public static let gcPhasePause = "jdk.GCPhasePause"
         public static let cpuLoad = "jdk.CPULoad"
+        public static let gcHeapSummary = "jdk.GCHeapSummary"
+        public static let threadSleep = "jdk.ThreadSleep"
+        public static let monitorWait = "jdk.JavaMonitorWait"
+        public static let socketRead = "jdk.SocketRead"
+        public static let socketWrite = "jdk.SocketWrite"
+        public static let fileRead = "jdk.FileRead"
+        public static let fileWrite = "jdk.FileWrite"
+
+        /// What the profiler reads by default: samples, waits, collections and the two series the
+        /// timeline draws.
+        public static let profiled: [String] = [
+            executionSample, allocationSample, monitorEnter, threadPark, threadSleep, monitorWait,
+            socketRead, socketWrite, fileRead, fileWrite, garbageCollection, gcHeapSummary, cpuLoad
+        ]
     }
 
     /// `jfr print --events … --stack-depth <depth> <file>`. JFR truncates a printed stack at 5
@@ -67,6 +105,97 @@ public enum JavaFlightRecorder {
     /// `jfr summary <file>`: a header read that lists the event counts.
     public static func summaryInvocation(jfr: URL, recording: URL) -> JavaToolInvocation {
         JavaToolInvocation(executable: jfr, arguments: ["summary", recording.path])
+    }
+}
+
+/// What a profiled run records and how much: the settings template, how often the CPU is sampled,
+/// how deep a stack is kept and when a wait is long enough to count.
+public struct JavaFlightRecorderOptions: Codable, Equatable, Sendable {
+    public enum Template: Codable, Equatable, Sendable {
+        /// The JDK's `profile.jfc`: about 2 % overhead, a 10 ms CPU period.
+        case profile
+        /// The JDK's `default.jfc`: about 1 %, 20 ms.
+        case standard
+        /// A `.jfc` file, made in JDK Mission Control or by hand.
+        case custom(path: String)
+
+        /// The value of `settings=`: a name the JDK knows, or the path.
+        public var settingsValue: String {
+            switch self {
+            case .profile: return "profile"
+            case .standard: return "default"
+            case .custom(let path): return path
+            }
+        }
+
+        public init(settingsValue: String) {
+            switch settingsValue {
+            case "profile": self = .profile
+            case "default": self = .standard
+            default: self = .custom(path: settingsValue)
+            }
+        }
+    }
+
+    public var template: Template = .profile
+    /// CPU sampling period; `nil` keeps the template's. Event settings on the command line need Java 17.
+    public var samplePeriodMilliseconds: Int?
+    public var stackDepth: Int = JavaFlightRecorder.defaultStackDepth
+    /// Allocation samples per second (`jdk.ObjectAllocationSample#throttle`); `nil` keeps the template's 150.
+    public var allocationSamplesPerSecond: Int?
+    /// The shortest wait that is recorded, for monitors, parks, sleeps and socket and file operations;
+    /// `nil` keeps the template's (10 ms in `profile`, 20 ms in `default`).
+    public var waitThresholdMilliseconds: Int?
+
+    public init(
+        template: Template = .profile, samplePeriodMilliseconds: Int? = nil,
+        stackDepth: Int = JavaFlightRecorder.defaultStackDepth,
+        allocationSamplesPerSecond: Int? = nil, waitThresholdMilliseconds: Int? = nil
+    ) {
+        self.template = template
+        self.samplePeriodMilliseconds = samplePeriodMilliseconds
+        self.stackDepth = stackDepth
+        self.allocationSamplesPerSecond = allocationSamplesPerSecond
+        self.waitThresholdMilliseconds = waitThresholdMilliseconds
+    }
+
+    /// Whether the settings value can sit in the option (JFR splits options on commas).
+    public var isSafe: Bool { JavaFlightRecorder.isSafe(template.settingsValue) }
+
+    /// Events whose threshold the wait setting changes.
+    static let waitEvents = [
+        "jdk.JavaMonitorEnter", "jdk.JavaMonitorWait", "jdk.ThreadPark", "jdk.ThreadSleep",
+        "jdk.SocketRead", "jdk.SocketWrite", "jdk.FileRead", "jdk.FileWrite"
+    ]
+
+    /// `jdk.Event#key=value` settings for the options that are set, empty before Java 17 (which does
+    /// not take them on the command line; a custom `.jfc` carries them there).
+    public func eventSettings(jdkFeatureVersion: Int?) -> [String] {
+        guard let version = jdkFeatureVersion, version >= JavaFlightRecorder.periodOptionFeatureVersion else { return [] }
+        var result: [String] = []
+        if let period = samplePeriodMilliseconds, period > 0 {
+            result.append("jdk.ExecutionSample#period=\(period)ms")
+        }
+        if let rate = allocationSamplesPerSecond, rate > 0 {
+            result.append("jdk.ObjectAllocationSample#throttle=\(rate)/s")
+        }
+        if let threshold = waitThresholdMilliseconds, threshold >= 0 {
+            result += Self.waitEvents.map { "\($0)#threshold=\(threshold)ms" }
+        }
+        return result
+    }
+
+    /// One line for a run's record: `profile · 5 ms · depth 128`.
+    public var summary: String {
+        var parts: [String] = []
+        switch template {
+        case .profile: parts.append("profile")
+        case .standard: parts.append("default")
+        case .custom(let path): parts.append(URL(fileURLWithPath: path).lastPathComponent)
+        }
+        if let period = samplePeriodMilliseconds, period > 0 { parts.append("\(period) ms") }
+        parts.append("depth \(stackDepth)")
+        return parts.joined(separator: " · ")
     }
 }
 

@@ -8,7 +8,11 @@ import Foundation
 public enum JavaProfileGradleScript {
     public static let directoryProperty = "umbraProfileDir"
     public static let settingsProperty = "umbraProfileSettings"
-    public static let periodProperty = "umbraProfilePeriodMs"
+    public static let stackDepthProperty = "umbraProfileStackDepth"
+    /// Event settings (`jdk.ExecutionSample#period=5ms,…`), already comma-joined.
+    public static let optionsProperty = "umbraProfileOptions"
+    /// The run's id; every forked JVM gets `-Dumbra.profile.run=<id>`, which `jps -v` shows.
+    public static let runProperty = "umbraProfileRun"
 
     public static let source = #"""
     import org.gradle.api.tasks.JavaExec
@@ -20,12 +24,18 @@ public enum JavaProfileGradleScript {
             t.doFirst {
                 String tag = (p.path == ':' ? 'root' : p.path.substring(1).replace(':', '_')) + '-' + t.name
                 String settings = p.hasProperty('umbraProfileSettings') ? p.property('umbraProfileSettings') : 'profile'
-                String options = 'filename=' + new File(p.property('umbraProfileDir').toString(), tag + '-%p.jfr').path +
+                String options = 'name=umbra,filename=' + new File(p.property('umbraProfileDir').toString(), tag + '-%p.jfr').path +
                     ',settings=' + settings + ',dumponexit=true'
-                if (p.hasProperty('umbraProfilePeriodMs')) {
-                    options += ',jdk.ExecutionSample#period=' + p.property('umbraProfilePeriodMs') + 'ms'
+                if (p.hasProperty('umbraProfileOptions')) {
+                    options += ',' + p.property('umbraProfileOptions')
                 }
                 t.jvmArgs('-XX:StartFlightRecording=' + options)
+                if (p.hasProperty('umbraProfileRun')) {
+                    t.jvmArgs('-Dumbra.profile.run=' + p.property('umbraProfileRun'))
+                }
+                if (p.hasProperty('umbraProfileStackDepth')) {
+                    t.jvmArgs('-XX:FlightRecorderOptions=stackdepth=' + p.property('umbraProfileStackDepth'))
+                }
             }
         }
         p.tasks.withType(JavaExec).configureEach { t -> attach(t) }
@@ -40,20 +50,32 @@ public enum JavaProfileGradleScript {
     """#
 
     public static func arguments(
-        scriptURL: URL, recordingDirectory: URL, settings: String = "profile",
-        samplePeriodMilliseconds: Int? = nil, jdkFeatureVersion: Int? = nil
+        scriptURL: URL, recordingDirectory: URL, options: JavaFlightRecorderOptions, jdkFeatureVersion: Int?,
+        runID: String? = nil
     ) -> [String] {
         var result = [
             "--init-script", scriptURL.path,
             "-P\(directoryProperty)=\(recordingDirectory.path)",
-            "-P\(settingsProperty)=\(settings)"
+            "-P\(settingsProperty)=\(options.template.settingsValue)",
+            "-P\(stackDepthProperty)=\(min(max(options.stackDepth, 1), JavaFlightRecorder.maximumStackDepth))"
         ]
-        if let period = samplePeriodMilliseconds, period > 0,
-           let version = jdkFeatureVersion, version >= JavaFlightRecorder.periodOptionFeatureVersion {
-            result.append("-P\(periodProperty)=\(period)")
-        }
+        let events = options.eventSettings(jdkFeatureVersion: jdkFeatureVersion)
+        if !events.isEmpty { result.append("-P\(optionsProperty)=\(events.joined(separator: ","))") }
+        if let runID { result.append("-P\(runProperty)=\(runID)") }
         result += ["--no-configuration-cache", "--no-build-cache"]
         return result
+    }
+
+    public static func arguments(
+        scriptURL: URL, recordingDirectory: URL, settings: String = "profile",
+        samplePeriodMilliseconds: Int? = nil, jdkFeatureVersion: Int? = nil,
+        stackDepth: Int = JavaFlightRecorder.defaultStackDepth
+    ) -> [String] {
+        var options = JavaFlightRecorderOptions(
+            template: .init(settingsValue: settings), samplePeriodMilliseconds: samplePeriodMilliseconds
+        )
+        options.stackDepth = stackDepth
+        return arguments(scriptURL: scriptURL, recordingDirectory: recordingDirectory, options: options, jdkFeatureVersion: jdkFeatureVersion)
     }
 
     /// The recordings in `directory`, largest first (a worker JVM's file beats an empty daemon's).

@@ -105,6 +105,9 @@ extension IDEJavaRunProvider {
         }
         session.appendNote(launch.displayCommand + "\n")
         session.start(IDEProcessLaunch(launch))
+        if case .profile(let plan)? = instrumentation {
+            beginLiveProfile(plan, processID: { [weak session] in session?.processIdentifier })
+        }
     }
 
     // MARK: - Before the program starts
