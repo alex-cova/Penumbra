@@ -3427,7 +3427,7 @@ public final class IDEWorkspace {
         let name = (document.displayName as NSString).deletingPathExtension
 
         // The light diagrams are rendered before the panel opens; cached ones make this immediate.
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
             guard let data = await controller.exportPDFData() else { return }
 
             let panel = NSSavePanel()

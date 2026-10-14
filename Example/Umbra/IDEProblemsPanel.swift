@@ -211,7 +211,7 @@ private struct IDEBuildMessageRowView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .accessibilityLabel("Build \(severity): \(text)")
+        .accessibilityLabel("Build \(IDEProblemStyle.label(for: severity)): \(text)")
     }
 }
 

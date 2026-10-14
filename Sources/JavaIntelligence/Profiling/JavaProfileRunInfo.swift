@@ -35,18 +35,14 @@ public struct JavaProfileRunInfo: Codable, Equatable, Sendable {
     public var duration: TimeInterval? { finishedAt.map { $0.timeIntervalSince(startedAt) } }
 
     /// ISO 8601 with milliseconds, so a short run's duration is not rounded to the second.
-    private static func makeFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }
+    /// A value type, so the coding closures below can capture it (`ISO8601DateFormatter` is not `Sendable`).
+    private static let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
     public func write(to directory: URL) throws {
         let encoder = JSONEncoder()
-        let formatter = Self.makeFormatter()
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(formatter.string(from: date))
+            try container.encode(date.formatted(Self.dateStyle))
         }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         try encoder.encode(self).write(to: directory.appendingPathComponent(Self.fileName), options: .atomic)
@@ -57,10 +53,9 @@ public struct JavaProfileRunInfo: Codable, Equatable, Sendable {
     public static func read(from directory: URL) -> JavaProfileRunInfo? {
         guard let data = try? Data(contentsOf: directory.appendingPathComponent(fileName)) else { return nil }
         let decoder = JSONDecoder()
-        let formatter = makeFormatter()
         decoder.dateDecodingStrategy = .custom { decoder in
             let text = try decoder.singleValueContainer().decode(String.self)
-            guard let date = formatter.date(from: text) else {
+            guard let date = try? dateStyle.parse(text) else {
                 throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "not a date: \(text)"))
             }
             return date
