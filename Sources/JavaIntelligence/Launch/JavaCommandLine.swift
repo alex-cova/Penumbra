@@ -54,6 +54,17 @@ public enum JavaCommandLine {
         return arguments
     }
 
+    /// The inverse of ``split(_:)``: arguments joined with a space, an argument that has whitespace,
+    /// a quote or a backslash in double quotes with `\` and `"` escaped, and an empty one as `""`.
+    public static func join(_ arguments: [String]) -> String {
+        arguments.map { argument in
+            guard argument.isEmpty || argument.contains(where: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "\\" }) else {
+                return argument
+            }
+            return argFileQuoted(argument)
+        }.joined(separator: " ")
+    }
+
     /// One line of a JDK `@argfile`: `value` in double quotes with `\` and `"` escaped, which is how
     /// the launcher reads a path with spaces or backslashes.
     static func argFileQuoted(_ value: String) -> String {

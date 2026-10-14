@@ -108,12 +108,7 @@ struct IDERunConfigurationForm: View {
                 monoField(":app:test", text: testTaskPath)
             }
             field("Test filters", caption: "One --tests pattern per line, such as app.FooTest or app.FooTest.testAdds. Empty runs every test.", problems: []) {
-                TextEditor(text: testFilters)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .frame(height: 56)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(IDEAppearance.ColorToken.workbench, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
+                monoEditor(text: testFilters, height: 56)
             }
         }
     }
@@ -147,7 +142,11 @@ struct IDERunConfigurationForm: View {
         }
         if configuration.supportsVMArguments {
             field("VM options", caption: "For example -Xmx512m -Dkey=value. Quote an option that contains spaces.", problems: []) {
-                monoField("-Xmx512m", text: $configuration.vmArguments)
+                HStack {
+                    monoField("-Xmx512m", text: $configuration.vmArguments)
+                    IDEVMOptionsPicker(text: $configuration.vmArguments, featureVersion: runFeatureVersion)
+                        .labelStyle(.titleAndIcon)
+                }
             }
         } else if case .gradleRun = configuration.target {
             Text("A Gradle run takes JVM options from the build script (applicationDefaultJvmArgs, jvmArgs), not from here.")
@@ -167,13 +166,11 @@ struct IDERunConfigurationForm: View {
                 }
             }
             field("Environment variables", caption: "One NAME=value per line.", problems: []) {
-                TextEditor(text: $environmentText)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .frame(height: 72)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(IDEAppearance.ColorToken.workbench, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
+                monoEditor(text: $environmentText, height: 72)
                     .onChange(of: environmentText) { _, text in
+                        // Loading a configuration sets the text too. Parsing it back would trim a
+                        // value's trailing spaces and mark a configuration edited that was only viewed.
+                        guard text != JavaRunConfiguration.environmentText(configuration.environment) else { return }
                         configuration.environment = JavaRunConfiguration.parseEnvironment(text)
                     }
             }
@@ -229,11 +226,17 @@ struct IDERunConfigurationForm: View {
                                 .font(IDEAppearance.Typography.body)
                             Spacer()
                         }
-                        Button { move(index, by: -1) } label: { Image(systemName: "chevron.up") }
+                        Button("Move Up", systemImage: "chevron.up") { move(index, by: -1) }
                             .disabled(index == 0)
-                        Button { move(index, by: 1) } label: { Image(systemName: "chevron.down") }
+                            .labelStyle(.iconOnly)
+                            .help("Move Up")
+                        Button("Move Down", systemImage: "chevron.down") { move(index, by: 1) }
                             .disabled(index == configuration.beforeLaunch.count - 1)
-                        Button { configuration.beforeLaunch.remove(at: index) } label: { Image(systemName: "minus.circle") }
+                            .labelStyle(.iconOnly)
+                            .help("Move Down")
+                        Button("Remove Step", systemImage: "minus.circle") { configuration.beforeLaunch.remove(at: index) }
+                            .labelStyle(.iconOnly)
+                            .help("Remove Step")
                     }
                     .buttonStyle(.borderless)
                 }
@@ -284,10 +287,28 @@ struct IDERunConfigurationForm: View {
         .frame(maxWidth: 320, alignment: .leading)
     }
 
+    /// The Java release the configuration runs on: the JDK it names, else the project's.
+    private var runFeatureVersion: Int? {
+        let jdk = workspace.javaSupport.jdk
+        if let home = configuration.jdkHome {
+            return jdk.detected.first { $0.home.path == home }?.featureVersion
+        }
+        return jdk.current?.installation.featureVersion
+    }
+
     private func monoField(_ prompt: String, text: Binding<String>) -> some View {
         TextField(prompt, text: text)
             .textFieldStyle(.roundedBorder)
             .font(IDEAppearance.Typography.monoSmall)
+    }
+
+    private func monoEditor(text: Binding<String>, height: Double) -> some View {
+        TextEditor(text: text)
+            .font(IDEAppearance.Typography.monoSmall)
+            .frame(height: height)
+            .scrollContentBackground(.hidden)
+            .padding(4)
+            .background(IDEAppearance.ColorToken.workbench, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
     }
 
     private func field<Control: View>(
