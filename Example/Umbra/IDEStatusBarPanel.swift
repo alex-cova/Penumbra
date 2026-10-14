@@ -217,6 +217,30 @@ private struct IDEStatusBarBreadcrumb: View {
     }
 }
 
+/// Sizes its one child to its natural width, never more than `maximumWidth`, and lets it shrink
+/// below that when the row is tight. Unlike `.frame(maxWidth:)` it does not expand to fill.
+private struct IDECappedWidthLayout: Layout {
+    let maximumWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else {
+            return .zero
+        }
+        return child.sizeThatFits(ProposedViewSize(
+            width: min(proposal.width ?? maximumWidth, maximumWidth),
+            height: proposal.height
+        ))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
+}
+
 private struct IDEStatusBarBreadcrumbSegment: View {
     let item: IDEBreadcrumbItem
     let isLast: Bool
@@ -228,20 +252,22 @@ private struct IDEStatusBarBreadcrumbSegment: View {
     @State private var anchor = IDEMenuAnchor()
 
     var body: some View {
-        Button(action: openMenu) {
-            Text(item.title)
-                .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
-                .foregroundStyle(isLast || isHovering || isMenuOpen ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
-                )
+        // A `.frame(maxWidth:)` would grow every segment to the width the row offers.
+        IDECappedWidthLayout(maximumWidth: 240) {
+            Button(action: openMenu) {
+                Text(item.title)
+                    .font(isLast ? IDEAppearance.Typography.tabLabel.weight(.medium) : IDEAppearance.Typography.tabLabel)
+                    .foregroundStyle(isLast || isHovering || isMenuOpen ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
         }
-        .frame(maxWidth: 240, alignment: .leading)
-        .buttonStyle(.plain)
         .background(IDEMenuAnchorView(anchor: anchor))
         .onHover { isHovering = $0 }
         .help(help)
