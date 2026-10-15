@@ -57,22 +57,23 @@ extension IDEGitStatusModel {
     }
 
     func applyStash(_ stash: GitStash, reinstateIndex: Bool = false, drop: Bool = false) {
-        guard !refuseUnsaved(before: "applying a stash") else { return }
-        runGitAction({ repo in
-            if drop {
-                _ = try await repo.stashPop(stash, reinstateIndex: reinstateIndex)
-                return "Applied and dropped \(stash.ref)"
-            }
-            _ = try await repo.stashApply(stash, reinstateIndex: reinstateIndex)
-            return "Applied \(stash.ref)"
-        }, onSuccess: { [weak self] in
-            self?.onWorkingTreeChanged?()
-            self?.loadStashes()
-        }, onFailure: { [weak self] _ in
-            // A conflicting apply leaves conflict markers in the tree; the stash is kept.
-            self?.onWorkingTreeChanged?()
-            self?.loadStashes()
-        })
+        afterSaving(before: "applying a stash") { [self] in
+            runGitAction({ repo in
+                if drop {
+                    _ = try await repo.stashPop(stash, reinstateIndex: reinstateIndex)
+                    return "Applied and dropped \(stash.ref)"
+                }
+                _ = try await repo.stashApply(stash, reinstateIndex: reinstateIndex)
+                return "Applied \(stash.ref)"
+            }, onSuccess: { [weak self] in
+                self?.onWorkingTreeChanged?()
+                self?.loadStashes()
+            }, onFailure: { [weak self] _ in
+                // A conflicting apply leaves conflict markers in the tree; the stash is kept.
+                self?.onWorkingTreeChanged?()
+                self?.loadStashes()
+            })
+        }
     }
 
     func requestDropStash(_ stash: GitStash) {

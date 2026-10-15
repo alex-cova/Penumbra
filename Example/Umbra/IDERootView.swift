@@ -752,8 +752,22 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
         window.delegate = self
     }
 
+    /// Set once the unsaved editors were saved or confirmed, so the `performClose` that follows
+    /// goes straight through.
+    private var hasConfirmedClose = false
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard workspace?.confirmCloseWindow() == true else { return false }
+        if !hasConfirmedClose, let workspace, workspace.hasUnsavedDocuments {
+            // Saving is asynchronous: refuse now, and close again when the editors are on disk.
+            Task { @MainActor [weak self, weak sender] in
+                guard await workspace.confirmCloseWindow(), let self, let sender else { return }
+                self.hasConfirmedClose = true
+                sender.performClose(nil)
+                self.hasConfirmedClose = false
+            }
+            return false
+        }
+        hasConfirmedClose = false
         if let upstream, upstream.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
             guard upstream.windowShouldClose?(sender) == true else { return false }
         }

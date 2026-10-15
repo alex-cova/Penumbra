@@ -109,23 +109,30 @@ extension IDEWorkspace {
 
     @discardableResult
     func saveHexDocument(_ document: WorkbenchDocument, overwriteChanged: Bool = false) async -> Bool {
-        guard let session = hexSessions[document.id], let url = document.url else { return false }
+        await saveHex(document, interactive: true, overwriteChanged: overwriteChanged) == .saved
+    }
+
+    /// Writes a hex tab's bytes. A save that may not ask (Save All, the agent) reports `.conflict`
+    /// for a file that changed on disk instead of showing the overwrite alert.
+    func saveHex(_ document: WorkbenchDocument, interactive: Bool, overwriteChanged: Bool = false) async -> IDESaveOutcome {
+        guard let session = hexSessions[document.id], let url = document.url else { return .clean }
         do {
             try await session.save(to: url, overwriteChanged: overwriteChanged)
             session.publish(to: document)
             refreshPresentation()
-            return true
+            return .saved
         } catch HexWriteError.changedOnDisk {
+            guard interactive else { return .conflict }
             let alert = NSAlert()
             alert.messageText = "\(document.displayName) changed on disk"
             alert.informativeText = "The file's size or modification time changed since it was opened."
             alert.addButton(withTitle: "Overwrite")
             alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return false }
-            return await saveHexDocument(document, overwriteChanged: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return .clean }
+            return await saveHex(document, interactive: true, overwriteChanged: true)
         } catch {
-            presentError(error)
-            return false
+            if interactive { presentError(error) }
+            return .failed(error.localizedDescription)
         }
     }
 

@@ -19,7 +19,7 @@ struct IDEEditorTabsBar: View {
                     IDEEditorTabItem(tab: tab, paneID: paneID) {
                         workspace.selectTab(tab.id, in: paneID)
                     } onClose: {
-                        workspace.closeTab(tab.id, in: paneID)
+                        workspace.requestCloseTab(tab.id, in: paneID)
                     }
                 }
             }
@@ -58,7 +58,11 @@ private struct IDEEditorTabItem: View {
                 .lineLimit(1)
                 .font(IDEAppearance.Typography.tabLabel.weight(tab.isSelected ? .medium : .regular))
 
-            IDEEditorTabCloseButton(isDirty: tab.isDirty, side: trailingSlotSide, onClose: onClose)
+            IDEEditorTabCloseButton(
+                isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
+                side: trailingSlotSide,
+                onClose: onClose
+            )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -93,12 +97,12 @@ private struct IDEEditorTabItem: View {
                 Button("Show History") { workspace.showLocalHistory(for: url) }
             }
             Divider()
-            Button("Close") { workspace.closeTab(tab.id, in: paneID) }
-            Button("Close Other Tabs") { workspace.closeOtherTabs(tab.id, in: paneID) }
+            Button("Close") { workspace.requestCloseTab(tab.id, in: paneID) }
+            Button("Close Other Tabs") { workspace.requestCloseOtherTabs(tab.id, in: paneID) }
                 .disabled(!hasOtherTabs)
-            Button("Close Tabs to the Right") { workspace.closeTabsToRight(tab.id, in: paneID) }
+            Button("Close Tabs to the Right") { workspace.requestCloseTabsToRight(tab.id, in: paneID) }
                 .disabled(!hasTabsToRight)
-            Button("Close All") { workspace.closeAllTabs(in: paneID) }
+            Button("Close All") { workspace.requestCloseAllTabs(in: paneID) }
             Divider()
             Button("Unsplit") { workspace.unsplit(from: paneID) }
                 .disabled(!hasMultiplePanes)

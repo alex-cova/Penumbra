@@ -13,18 +13,23 @@ public enum TextEditApplicator {
         guard !edits.isEmpty else {
             return
         }
-        let originalSelections = textView.selectedRanges
-        let sorted = edits.sorted {
-            let lhs = nsRange(for: $0.range, in: textView)
-            let rhs = nsRange(for: $1.range, in: textView)
-            return lhs.location > rhs.location
+        apply(replacements: edits.map { (nsRange(for: $0.range, in: textView), $0.replacement) }, in: textView)
+    }
+
+    /// Applies replacements given as UTF-16 ranges of the text as it is now, last to first, as one
+    /// undo step, with the selections following as in ``apply(_:in:)``. The ranges must not overlap.
+    public static func apply(replacements: [(range: NSRange, text: String)], in textView: TextView) {
+        guard !replacements.isEmpty else {
+            return
         }
+        let originalSelections = textView.selectedRanges
+        let sorted = replacements.sorted { $0.range.location > $1.range.location }
         textView.undoManager?.beginUndoGrouping()
         var adjustedSelections = originalSelections
-        for edit in sorted {
-            let range = nsRange(for: edit.range, in: textView)
-            let delta = (edit.replacement as NSString).length - range.length
-            textView.replace(range, withText: edit.replacement)
+        for replacement in sorted {
+            let range = replacement.range
+            let delta = (replacement.text as NSString).length - range.length
+            textView.replace(range, withText: replacement.text)
             adjustedSelections = adjustedSelections.map { selection in
                 if selection.location >= range.upperBound {
                     return NSRange(location: selection.location + delta, length: selection.length)

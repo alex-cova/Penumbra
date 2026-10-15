@@ -41,7 +41,17 @@ final class IDEWindowRegistry {
     /// instead of taking SwiftUI's saved or cascaded position.
     private var centersNextWindow = false
 
-    private init() {}
+    private init() {
+        // Saving when Umbra loses the focus (Settings ▸ Saving). One observer for every window: a
+        // window that has nothing unsaved does nothing.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.workspaces.forEach { $0.autosaveBecauseFocusMoved() }
+            }
+        }
+    }
 
     var workspaces: [IDEWorkspace] {
         entries.removeAll { $0.workspace == nil }
@@ -308,9 +318,16 @@ final class IDEWindowRegistry {
         }
     }
 
-    /// Quitting with unsaved editors in any window asks once for all of them, where closing each
-    /// window would ask per window. Nothing to ask when everything is saved.
-    func confirmQuit() -> Bool {
+    /// Whether any window has an editor with unsaved changes.
+    var hasUnsavedDocuments: Bool { workspaces.contains { $0.hasUnsavedDocuments } }
+
+    /// Quitting saves every window's unsaved editors, then asks once about the ones that could not
+    /// be saved (untitled buffers, files changed on disk), where closing each window would ask per
+    /// window. Nothing to ask when everything is saved.
+    func confirmQuit() async -> Bool {
+        for workspace in workspaces where workspace.hasUnsavedDocuments {
+            _ = await workspace.saveAll(reason: .quitting)
+        }
         let details = workspaces.flatMap { $0.unsavedChangeLines() }.filter { $0.contains("changed bytes") }
         guard let text = Self.quitPromptText(
             unsavedPerWindow: workspaces.map(\.unsavedDocumentCount), details: details

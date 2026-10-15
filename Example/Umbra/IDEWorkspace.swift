@@ -184,6 +184,14 @@ public final class IDEWorkspace {
     let diskSync = IDEOpenDocumentDiskSync()
     /// Asks what to do when a save would write over a newer file. Tests replace it.
     @ObservationIgnored var saveConflictResolver: @MainActor (WorkbenchDocument) -> SaveConflictChoice = IDEWorkspace.askAboutSaveConflict
+    /// Asks what to do with a buffer that closing its tab could not save. Tests replace it.
+    /// Saves the unsaved files once typing pauses (Settings ▸ Saving).
+    @ObservationIgnored let autosave = IDEAutosaveController()
+    /// Files autosave could not write and already said so about, until they save again.
+    @ObservationIgnored var autosaveReportedFailures: Set<String> = []
+    /// A Build Project waiting for the saves of the last second (Settings ▸ Saving).
+    @ObservationIgnored var buildOnSaveTask: Task<Void, Never>?
+    @ObservationIgnored var closePromptResolver: @MainActor (WorkbenchDocument, IDEClosePrompt) -> IDEClosePromptChoice = IDEWorkspace.askAboutClosing
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
     /// Revisions of the project's files: saves, opens, agent writes.
@@ -301,6 +309,9 @@ public final class IDEWorkspace {
             self?.requestedSettingsDomain = .agent
             self?.showSettings()
         }
+        gitStatus.saveUnsavedEditors = { [weak self] in
+            await self?.saveUnsavedEditorsInRepository() ?? []
+        }
         gitStatus.hasUnsavedEditors = { [weak self] in
             self?.hasUnsavedEditorsInRepository() ?? false
         }
@@ -384,6 +395,8 @@ public final class IDEWorkspace {
 
     var windowTitle = "Umbra"
     var headerContext = IDEHeaderContext()
+    /// Standardized paths of the open files with unsaved changes (Mark Modified in the Explorer).
+    var unsavedPaths: Set<String> = []
     var statusLine = 1
     var statusColumn = 1
     var statusLanguage = ""
@@ -704,8 +717,20 @@ public final class IDEWorkspace {
             },
             tasksFinished: { [weak self] report in
                 self?.runProviders.projectTasksDidFinish(report)
+            },
+            prepareToRun: { [weak self] in
+                await self?.saveAllBeforeRun()
             }
         ))
+        runs.beforeLaunch = { [weak self] in
+            await self?.saveAllBeforeRun()
+        }
+        autosave.canSaveNow = { [weak self] in self?.canAutosaveNow ?? false }
+        autosave.save = { [weak self] in await self?.autosaveAll(reason: .autosaveIdle) }
+        autosave.settings = { [weak self] in
+            guard let preferences = self?.preferences else { return .init(isEnabled: false) }
+            return .init(isEnabled: preferences.saveWhenIdle, idleDelay: .seconds(preferences.idleSaveSeconds))
+        }
         // npm ignores `environment.requestTrust`: that closure is worded for Gradle build scripts,
         // and agreeing to Gradle does not agree to npm.
         npm.trustPrompt = { [weak self] url in
@@ -941,6 +966,7 @@ public final class IDEWorkspace {
     }
 
     func registerTerminalHost(_ host: IDETerminalHostView) {
+        host.onFocus = { [weak self] in self?.autosaveBecauseFocusMoved() }
         terminalHosts.removeAll { $0.host == nil }
         terminalHosts.append(WeakTerminalHost(host: host))
     }
@@ -1004,7 +1030,7 @@ public final class IDEWorkspace {
 
     /// Applies syntax highlighting inferred from a file's extension after save (e.g. untitled →
     /// `name.md` switches to markdown). Matches ``loadDocument(from:)`` / ``setLanguage``.
-    private func applyLanguageInferredFromURL(
+    func applyLanguageInferredFromURL(
         _ url: URL,
         document: WorkbenchDocument,
         in pane: EditorPane
@@ -1257,22 +1283,35 @@ public final class IDEWorkspace {
         saveSession()
     }
 
-    /// Returns whether the main window may close. Asks when open editors have unsaved changes.
-    func confirmCloseWindow() -> Bool {
-        confirmDiscardingUnsavedChanges(
+    /// Returns whether the main window may close. Saves what it can first and asks only about
+    /// what is still unsaved (untitled buffers, files that changed on disk, failed writes).
+    func confirmCloseWindow() async -> Bool {
+        if hasUnsavedDocuments { _ = await saveAll(reason: .closingWindow) }
+        return confirmDiscardingUnsavedChanges(
             messageText: "Close this window?",
             confirmButtonTitle: "Close Window"
         )
     }
 
-    /// Closes the open project folder, all editor tabs, and project-scoped panels.
+    /// Closes the open project folder, all editor tabs, and project-scoped panels. Unsaved editors
+    /// are saved first; only the ones that cannot be saved are asked about.
     public func closeFolder() {
         guard project.rootURL != nil else { return }
-        guard confirmDiscardingUnsavedChanges(
-            messageText: "Close the open folder?",
-            confirmButtonTitle: "Close Folder"
-        ) else { return }
+        guard hasUnsavedDocuments else {
+            finishClosingFolder()
+            return
+        }
+        Task { @MainActor [self] in
+            _ = await saveAll(reason: .closingWindow)
+            guard confirmDiscardingUnsavedChanges(
+                messageText: "Close the open folder?",
+                confirmButtonTitle: "Close Folder"
+            ) else { return }
+            finishClosingFolder()
+        }
+    }
 
+    private func finishClosingFolder() {
         closeAllOpenDocuments()
         dismissProjectChrome()
         stopProjectActivity()
@@ -1294,41 +1333,8 @@ public final class IDEWorkspace {
     /// panel was cancelled, or the write failed).
     @discardableResult
     public func saveActiveDocument() async -> Bool {
-        let pane = workbench.activePane
-        guard let document = pane.selectedDocument else { return false }
-        if document.contentKind == .diff {
-            diffSessions[document.id]?.save()
-            return false
-        }
-        if document.contentKind == .diagram || document.contentKind == .profile { return false }
-        if document.contentKind == .binary {
-            return await saveHexDocument(document)
-        }
-        let textView = host(for: pane.id).textView
-        var destination = document.url
-        if destination == nil {
-            let panel = NSSavePanel()
-            panel.canCreateDirectories = true
-            panel.nameFieldStringValue = document.displayName
-            guard panel.runModal() == .OK, let url = panel.url else { return false }
-            destination = url
-        }
-        if destination == document.url, !(await confirmOverwriteIfDiskChanged(document)) { return false }
-        if let destination { await optimizeImportsBeforeSaving(to: destination, pane: pane) }
-        do {
-            _ = try await document.save(from: textView, to: destination)
-            localHistory.recordSaved(destination!)
-            applyLanguageInferredFromURL(destination!, document: document, in: pane)
-            recordRecentFile(destination!)
-            gitStatus.refresh()
-            refreshBlame(in: pane, force: true)
-            refreshPresentation()
-            noteDocumentSaved(destination)
-            return true
-        } catch {
-            presentError(error)
-            return false
-        }
+        guard let document = workbench.activePane.selectedDocument else { return false }
+        return await saveDocument(document, reason: .explicit) == .saved
     }
 
     /// Converts the active document to `encoding` and saves it, asking for a file name first when
@@ -1351,25 +1357,9 @@ public final class IDEWorkspace {
     /// step, since that would rewrite what the agent wrote. Returns whether the file was saved.
     func saveBuffer(at url: URL) async -> Bool {
         guard let (_, document) = paneAndDocument(matching: url), document.isDirty, document.contentKind == .text,
-              case .live(let textView) = await editTarget(for: url)
+              case .live = await editTarget(for: url)
         else { return false }
-        guard await confirmOverwriteIfDiskChanged(document, interactive: false) else { return false }
-        do {
-            _ = try await document.save(from: textView, to: url)
-            localHistory.recordSaved(url)
-            gitStatus.refresh()
-            refreshPresentation()
-            noteDocumentSaved(url)
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    /// Removes unused imports from a Java file about to be saved, when the preference is on.
-    private func optimizeImportsBeforeSaving(to url: URL, pane: EditorPane) async {
-        guard preferences.javaOptimizeImportsOnSave, url.pathExtension.lowercased() == "java" else { return }
-        await host(for: pane.id).intelligenceController?.organizeImports()
+        return await saveDocument(document, reason: .agent) == .saved
     }
 
     /// Shows the quick-fix list at the caret of the active editor (⌥↩).
@@ -1524,25 +1514,12 @@ public final class IDEWorkspace {
     }
 
     public func saveActiveDocumentAs() async {
-        let pane = workbench.activePane
-        guard let document = pane.selectedDocument else { return }
-        let textView = host(for: pane.id).textView
+        guard let document = workbench.activePane.selectedDocument, document.contentKind == .text else { return }
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = document.displayName
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        await optimizeImportsBeforeSaving(to: url, pane: pane)
-        do {
-            _ = try await document.save(from: textView, to: url)
-            localHistory.recordSaved(url)
-            applyLanguageInferredFromURL(url, document: document, in: pane)
-            recordRecentFile(url)
-            gitStatus.refresh()
-            refreshPresentation()
-            noteDocumentSaved(url)
-        } catch {
-            presentError(error)
-        }
+        _ = await write(document, to: url, reason: .explicit)
     }
 
     public func closeActiveTab() {
@@ -2094,11 +2071,30 @@ public final class IDEWorkspace {
         let textView = host.textView
         let fileURL = workbench.activePane.selectedDocument?.url
         showHTTPResponse()
-        httpSupport.send(
-            text: textView.text,
-            caretUTF16Offset: textView.selectedRange.location,
-            fileURL: fileURL
-        )
+        Task { @MainActor [weak self, weak textView] in
+            await self?.saveHTTPFileBeforeSending(at: fileURL)
+            guard let self, let textView else { return }
+            self.httpSupport.send(
+                text: textView.text,
+                caretUTF16Offset: textView.selectedRange.location,
+                fileURL: fileURL
+            )
+        }
+    }
+
+    /// Writes the `.http` file's unsaved edits before a request is sent, so the file on disk is the
+    /// one that was sent. A file with no name yet is left alone: a save panel would interrupt the
+    /// request. The request itself is read from the buffer, so it is sent even when the save is
+    /// cancelled (the overwrite prompt) or fails.
+    private func saveHTTPFileBeforeSending(at url: URL?) async {
+        guard let url, let (_, document) = paneAndDocument(matching: url),
+              document.isDirty, document.contentKind == .text
+        else { return }
+        if document === workbench.activePane.selectedDocument {
+            await saveActiveDocument()
+        } else {
+            _ = await saveBuffer(at: url)
+        }
     }
 
     func showHTTPResponse() {
@@ -2339,7 +2335,7 @@ public final class IDEWorkspace {
     }
 
     /// Re-blames the editor of `pane` after a save, or hides the column after a toggle off.
-    private func refreshBlame(in pane: EditorPane, force: Bool = false) {
+    func refreshBlame(in pane: EditorPane, force: Bool = false) {
         guard pane.selectedDocument?.contentKind == .text else { return }
         let url = pane.selectedDocument?.url
         blame.refresh(textView: host(for: pane.id).textView, url: url, git: gitStatus, force: force) { [weak self] in
@@ -2479,15 +2475,30 @@ public final class IDEWorkspace {
     /// Switch and pull rewrite files on disk. An unsaved editor in the repository would be saved
     /// over that result, or reloaded out from under the user, so those actions wait for a save.
     private func hasUnsavedEditorsInRepository() -> Bool {
-        guard let root = gitStatus.repositoryRootPath else { return false }
-        return workbench.panes.contains { pane in
-            pane.documents.contains { document in
-                guard document.isDirty,
-                      document.contentKind == .text || document.contentKind == .binary,
-                      let path = document.url?.standardizedFileURL.path else { return false }
-                return path == root || path.hasPrefix(root + "/")
+        !unsavedEditorsInRepository().isEmpty
+    }
+
+    private func unsavedEditorsInRepository() -> [WorkbenchDocument] {
+        guard let root = gitStatus.repositoryRootPath else { return [] }
+        return workbench.allDocuments().filter { document in
+            guard document.isDirty,
+                  document.contentKind == .text || document.contentKind == .binary,
+                  let path = document.url?.standardizedFileURL.path else { return false }
+            return path == root || path.hasPrefix(root + "/")
+        }
+    }
+
+    /// Writes the unsaved editors of the repository before a git operation reads or rewrites the
+    /// working tree. Returns the names that could not be saved.
+    private func saveUnsavedEditorsInRepository() async -> [String] {
+        var failed: [String] = []
+        for document in unsavedEditorsInRepository() {
+            switch await saveDocument(document, reason: .beforeGit) {
+            case .saved, .clean: break
+            case .skippedUntitled, .conflict, .failed: failed.append(document.displayName)
             }
         }
+        return failed
     }
 
     /// Reloads clean text tabs from disk after a branch switch or fast-forward pull, and closes
@@ -3085,7 +3096,7 @@ public final class IDEWorkspace {
     }
 
     /// The tab showing `url`, in the active pane first so a jump stays in the pane it started from.
-    private func paneAndDocument(matching url: URL) -> (EditorPane, WorkbenchDocument)? {
+    func paneAndDocument(matching url: URL) -> (EditorPane, WorkbenchDocument)? {
         let path = url.standardizedFileURL.path
         let panes = workbench.panes.sorted { lhs, _ in lhs.id == workbench.activePaneID }
         for pane in panes {
@@ -4462,7 +4473,7 @@ public final class IDEWorkspace {
 
     /// A save drops that file's build-output problems (the in-editor check takes over) and tells
     /// every language service. Java recompiles the open Java files from ``documentsDidSave``.
-    private func noteDocumentSaved(_ url: URL?) {
+    func noteDocumentSaved(_ url: URL?) {
         if let url {
             problems.clearBuildDiagnostics(for: url)
             diskSync.noteSaved(path: url.standardizedFileURL.path)
@@ -4869,6 +4880,12 @@ public final class IDEWorkspace {
         palette.commandRegistry.register([
             EditorCommand(id: "file.newProject", title: "New Project…", group: "File",
                           action: { [weak self] in self?.showNewProject() }),
+            EditorCommand(id: "file.saveAll", title: "Save All", group: "File",
+                          action: { [weak self] in Task { await self?.saveAllDocuments() } }),
+            EditorCommand(id: "file.reloadFromDisk", title: "Reload from Disk", group: "File",
+                          action: { [weak self] in self?.reloadActiveFromDisk() }),
+            EditorCommand(id: "file.reloadAllFromDisk", title: "Reload All from Disk", group: "File",
+                          action: { [weak self] in Task { await self?.reloadAllFromDisk() } }),
             EditorCommand(id: "app.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
             EditorCommand(id: "app.splitDown", title: "Split Editor Down", group: "View",
@@ -5153,6 +5170,7 @@ public final class IDEWorkspace {
             }
         }
         tabsByPane = tabs
+        updateUnsavedMarkers()
         let openPaths = Set(workbench.panes.flatMap(\.documents).compactMap { $0.url?.standardizedFileURL.path })
         if openPaths != openDocumentPaths { openDocumentPaths = openPaths }
         syncOpenFileRegistrations(openPaths: openPaths)
@@ -5201,6 +5219,7 @@ public final class IDEWorkspace {
         if rowChanged {
             rows[index] = IDETabRow(id: row.id, title: row.title, isDirty: document.isDirty, isSelected: row.isSelected, symbolName: row.symbolName)
             tabsByPane[workbench.activePaneID] = rows
+            updateUnsavedMarkers()
         }
         if headerChanged {
             headerContext = IDEHeaderContext(
@@ -5709,12 +5728,20 @@ public final class IDEWorkspace {
 
     /// Parses fresh at click time: the buttons may be one debounce behind an edit.
     private func sendHTTPRequest(atLine line: Int, from textView: TextView, fileURL: URL?) {
-        let text = textView.text
-        guard let location = HTTPRequestParser.requestLocations(in: text).first(where: { $0.startLine == line }) else {
+        guard HTTPRequestParser.requestLocations(in: textView.text).contains(where: { $0.startLine == line }) else {
             return
         }
         showHTTPResponse()
-        httpSupport.send(text: text, caretUTF16Offset: location.utf16Range.lowerBound, fileURL: fileURL)
+        Task { @MainActor [weak self, weak textView] in
+            await self?.saveHTTPFileBeforeSending(at: fileURL)
+            guard let self, let textView else { return }
+            // Parse again: the buffer may have changed while the file was being written.
+            let text = textView.text
+            guard let location = HTTPRequestParser.requestLocations(in: text).first(where: { $0.startLine == line }) else {
+                return
+            }
+            self.httpSupport.send(text: text, caretUTF16Offset: location.utf16Range.lowerBound, fileURL: fileURL)
+        }
     }
 
     private func refreshJavaRunAvailability(from textView: TextView) {
@@ -6422,6 +6449,7 @@ extension IDEWorkspace: TextViewDelegate {
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.
         noteActiveDocumentEdited()
+        autosave.noteEdit()
         changeMarkers.refresh(textView: textView, url: textView.documentURL, git: gitStatus)
     }
 

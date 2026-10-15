@@ -72,6 +72,8 @@ struct IDEProjectEnvironment {
     var syncFinished: @MainActor (IDEProjectSyncOutcome) -> Void = { _ in }
     /// A task run ended.
     var tasksFinished: @MainActor (IDEProjectTaskReport) -> Void = { _ in }
+    /// Awaited by a build or task run before it starts, so unsaved buffers are on disk first.
+    var prepareToRun: @MainActor () async -> Void = {}
 }
 
 /// A short, human-readable line for the status card ("Indexing JDK 24…", "Resolving Gradle

@@ -123,8 +123,12 @@ final class IDEGitStatusModel {
     var isRepository: Bool { repositoryRoot != nil }
     var repositoryRootPath: String? { repositoryRoot }
 
-    /// True when an open editor inside the repository still has unsaved edits. Switch and pull refuse then.
+    /// True when an open editor inside the repository still has unsaved edits. Switch, pull and the
+    /// other operations that read or rewrite the working tree save them first (`saveUnsavedEditors`).
     @ObservationIgnored var hasUnsavedEditors: (@MainActor () -> Bool)?
+    /// Saves those editors and returns the names of the files that could not be written. Without
+    /// it, an operation that needs saved files refuses instead.
+    @ObservationIgnored var saveUnsavedEditors: (@MainActor () async -> [String])?
     /// Reloads clean editor buffers after a switch or pull has changed files on disk.
     @ObservationIgnored var onWorkingTreeChanged: (@MainActor () -> Void)?
     /// Called after every status refresh has been applied (saves, app activation, watcher batches).
@@ -408,8 +412,9 @@ final class IDEGitStatusModel {
 
     func switchBranch(_ name: String) {
         guard name != currentBranch else { return }
-        guard !refuseUnsaved(before: "switching branches") else { return }
-        switchToLocal(name)
+        afterSaving(before: "switching branches") { [self] in
+            switchToLocal(name)
+        }
     }
 
     func createBranch(_ name: String) {
@@ -459,19 +464,21 @@ final class IDEGitStatusModel {
 
     /// Pull (fast-forward only), then push what is left: the "Pull & Push" button of the sync section.
     func pullAndPush() {
-        guard !refuseUnsaved(before: "pulling") else { return }
-        runGitAction({
-            _ = try await $0.pull()
-            return try await $0.push()
-        }) { [weak self] in
-            self?.onWorkingTreeChanged?()
+        afterSaving(before: "pulling") { [self] in
+            runGitAction({
+                _ = try await $0.pull()
+                return try await $0.push()
+            }) { [weak self] in
+                self?.onWorkingTreeChanged?()
+            }
         }
     }
 
     func pull() {
-        guard !refuseUnsaved(before: "pulling") else { return }
-        runGitAction({ try await $0.pull() }) { [weak self] in
-            self?.onWorkingTreeChanged?()
+        afterSaving(before: "pulling") { [self] in
+            runGitAction({ try await $0.pull() }) { [weak self] in
+                self?.onWorkingTreeChanged?()
+            }
         }
     }
 
@@ -506,10 +513,26 @@ final class IDEGitStatusModel {
         if snapshot.state != repositoryState { repositoryState = snapshot.state }
     }
 
-    func refuseUnsaved(before action: String) -> Bool {
-        guard hasUnsavedEditors?() == true else { return false }
-        fail("Save unsaved changes before \(action).")
-        return true
+    /// Runs `proceed` once the unsaved editors of the repository are on disk: at once when there are
+    /// none. A file that cannot be written stops the operation, since it would act on stale bytes.
+    func afterSaving(before action: String, _ proceed: @escaping @MainActor () -> Void) {
+        guard hasUnsavedEditors?() == true else {
+            proceed()
+            return
+        }
+        guard let save = saveUnsavedEditors else {
+            fail("Save unsaved changes before \(action).")
+            return
+        }
+        Task { [weak self] in
+            let failed = await save()
+            guard let self else { return }
+            guard failed.isEmpty else {
+                self.fail("Couldn't save \(failed.joined(separator: ", ")) before \(action).")
+                return
+            }
+            proceed()
+        }
     }
 
     private func loadDiff(for path: String?) {

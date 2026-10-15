@@ -69,29 +69,31 @@ extension IDEGitStatusModel {
     /// Update Project: asks merge or rebase unless the user chose not to be asked.
     func requestUpdate() {
         guard isRepository else { return }
-        guard !refuseUnsaved(before: "updating") else { return }
-        guard sync != nil || currentBranch != nil else { return }
-        Task { [weak self] in
-            guard let self, let rootURL = self.rootURL else { return }
-            let repo = try? await IDEGitSupport.repository(for: rootURL, existing: self.repository)
-            let configured = await repo?.config("pull.rebase")
-            let strategy = IDEGitPreferences.initialUpdateStrategy(repositoryPullRebase: configured)
-            if IDEGitPreferences.asksBeforeUpdate {
-                self.sheets.present(.update(IDEGitUpdateRequest(
-                    branch: self.currentBranch, upstream: self.sync?.upstream, strategy: strategy)))
-            } else {
-                self.update(strategy: strategy, autostash: true)
+        afterSaving(before: "updating") { [self] in
+            guard sync != nil || currentBranch != nil else { return }
+            Task { [weak self] in
+                guard let self, let rootURL = self.rootURL else { return }
+                let repo = try? await IDEGitSupport.repository(for: rootURL, existing: self.repository)
+                let configured = await repo?.config("pull.rebase")
+                let strategy = IDEGitPreferences.initialUpdateStrategy(repositoryPullRebase: configured)
+                if IDEGitPreferences.asksBeforeUpdate {
+                    self.sheets.present(.update(IDEGitUpdateRequest(
+                        branch: self.currentBranch, upstream: self.sync?.upstream, strategy: strategy)))
+                } else {
+                    self.update(strategy: strategy, autostash: true)
+                }
             }
         }
     }
 
     func update(strategy: GitPullStrategy, autostash: Bool) {
-        guard !refuseUnsaved(before: "updating") else { return }
-        runGitAction({ repo in
-            try await repo.pull(strategy: strategy, autostash: autostash)
-        }, network: true, onSuccess: { [weak self] in
-            self?.onWorkingTreeChanged?()
-        })
+        afterSaving(before: "updating") { [self] in
+            runGitAction({ repo in
+                try await repo.pull(strategy: strategy, autostash: autostash)
+            }, network: true, onSuccess: { [weak self] in
+                self?.onWorkingTreeChanged?()
+            })
+        }
     }
 
     func requestPush() {
@@ -140,22 +142,23 @@ extension IDEGitStatusModel {
     // MARK: - Checkout
 
     func checkout(_ branch: GitBranch) {
-        guard !refuseUnsaved(before: "switching branches") else { return }
-        switch branch.kind {
-        case .local:
-            guard !branch.isCurrent else { return }
-            switchToLocal(branch.name)
-        case .remote:
-            if let local = branchInfos.first(where: { $0.kind == .local && $0.name == branch.shortName }) {
-                guard !local.isCurrent else { return }
-                switchToLocal(local.name)
-            } else {
-                let name = branch.name
-                runGitAction({ try await $0.checkoutRemoteBranch(name) }, onSuccess: { [weak self] in
-                    self?.onWorkingTreeChanged?()
-                }, onFailure: { [weak self] message in
-                    self?.offerSmartCheckout(branch: name, isRemote: true, message: message)
-                })
+        afterSaving(before: "switching branches") { [self] in
+            switch branch.kind {
+            case .local:
+                guard !branch.isCurrent else { return }
+                switchToLocal(branch.name)
+            case .remote:
+                if let local = branchInfos.first(where: { $0.kind == .local && $0.name == branch.shortName }) {
+                    guard !local.isCurrent else { return }
+                    switchToLocal(local.name)
+                } else {
+                    let name = branch.name
+                    runGitAction({ try await $0.checkoutRemoteBranch(name) }, onSuccess: { [weak self] in
+                        self?.onWorkingTreeChanged?()
+                    }, onFailure: { [weak self] message in
+                        self?.offerSmartCheckout(branch: name, isRemote: true, message: message)
+                    })
+                }
             }
         }
     }
@@ -202,10 +205,11 @@ extension IDEGitStatusModel {
     }
 
     func checkoutRevision(_ revision: String) {
-        guard !refuseUnsaved(before: "switching") else { return }
-        runGitAction({ try await $0.checkout(revision: revision) }, onSuccess: { [weak self] in
-            self?.onWorkingTreeChanged?()
-        })
+        afterSaving(before: "switching") { [self] in
+            runGitAction({ try await $0.checkout(revision: revision) }, onSuccess: { [weak self] in
+                self?.onWorkingTreeChanged?()
+            })
+        }
     }
 
     // MARK: - Branches and tags

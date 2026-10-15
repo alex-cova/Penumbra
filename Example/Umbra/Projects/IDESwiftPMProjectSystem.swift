@@ -278,6 +278,8 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
                 }
                 if generation == self.runGeneration, self.projectGeneration == projectToken { completion?(outcomes) }
             }
+            await self.environment.prepareToRun()
+            guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
             if !self.trustStore.isTrusted(root) {
                 let answer = await prompt?(root) ?? false
                 guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }

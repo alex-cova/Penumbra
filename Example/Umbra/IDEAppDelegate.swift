@@ -73,9 +73,16 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         IDEWindowRegistry.shared.openNewTab()
     }
 
-    /// One prompt for unsaved editors in every window.
+    /// Saves the unsaved editors of every window, then one prompt for what could not be saved.
+    /// Saving is asynchronous, so a quit with unsaved editors waits (`terminateLater`) for it.
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        IDEWindowRegistry.shared.confirmQuit() ? .terminateNow : .terminateCancel
+        let registry = IDEWindowRegistry.shared
+        guard registry.hasUnsavedDocuments else { return .terminateNow }
+        Task { @MainActor in
+            let proceed = await registry.confirmQuit()
+            NSApp.reply(toApplicationShouldTerminate: proceed)
+        }
+        return .terminateLater
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

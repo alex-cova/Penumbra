@@ -18,13 +18,14 @@ extension IDEGitStatusModel {
     // MARK: - Start
 
     func merge(_ branch: String, noFastForward: Bool = false) {
-        guard !refuseUnsaved(before: "merging") else { return }
-        runIntegration("Merge", failureHint: { [weak self] message in
-            self?.offerStashAndRepeat(message: message, what: "merge \(branch)") {
-                self?.mergeKeepingChanges(branch, noFastForward: noFastForward)
+        afterSaving(before: "merging") { [self] in
+            runIntegration("Merge", failureHint: { [weak self] message in
+                self?.offerStashAndRepeat(message: message, what: "merge \(branch)") {
+                    self?.mergeKeepingChanges(branch, noFastForward: noFastForward)
+                }
+            }) { repo in
+                try await repo.merge(branch, noFastForward: noFastForward)
             }
-        }) { repo in
-            try await repo.merge(branch, noFastForward: noFastForward)
         }
     }
 
@@ -46,9 +47,10 @@ extension IDEGitStatusModel {
 
     /// Rebases the current branch onto `upstream`, saving uncommitted changes around it (`--autostash`).
     func rebase(onto upstream: String) {
-        guard !refuseUnsaved(before: "rebasing") else { return }
-        runIntegration("Rebase", failureHint: nil) { repo in
-            try await repo.rebase(onto: upstream)
+        afterSaving(before: "rebasing") { [self] in
+            runIntegration("Rebase", failureHint: nil) { repo in
+                try await repo.rebase(onto: upstream)
+            }
         }
     }
 

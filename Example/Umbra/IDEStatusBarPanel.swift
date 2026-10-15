@@ -9,6 +9,7 @@ struct IDEStatusBarPanel: View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             IDEStatusBarBreadcrumb(
                 headerContext: workspace.headerContext,
+                marksModified: workspace.preferences.markModifiedTabs,
                 makeMenu: workspace.breadcrumbMenu,
                 onSelect: workspace.selectBreadcrumb
             )
@@ -181,6 +182,7 @@ struct IDEStatusBarPanel: View {
 
 private struct IDEStatusBarBreadcrumb: View {
     let headerContext: IDEHeaderContext
+    let marksModified: Bool
     let makeMenu: (IDEBreadcrumbItem) async -> NSMenu?
     let onSelect: (IDEBreadcrumbItem) -> Void
 
@@ -202,7 +204,7 @@ private struct IDEStatusBarBreadcrumb: View {
                         onSelect: onSelect
                     )
                 }
-                if headerContext.isDirty {
+                if headerContext.isDirty && marksModified {
                     Circle()
                         .fill(IDEAppearance.ColorToken.accent)
                         .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)

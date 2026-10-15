@@ -71,14 +71,18 @@ extension IDEGitStatusModel {
     }
 
     func cherryPick(_ hashes: [String]) {
-        guard !hashes.isEmpty, !refuseUnsaved(before: "cherry-picking") else { return }
-        runIntegrationAction("Cherry-pick") { try await $0.cherryPick(hashes) }
+        guard !hashes.isEmpty else { return }
+        afterSaving(before: "cherry-picking") { [self] in
+            runIntegrationAction("Cherry-pick") { try await $0.cherryPick(hashes) }
+        }
     }
 
     func revertCommits(_ hashes: [String]) {
-        guard !hashes.isEmpty, !refuseUnsaved(before: "reverting") else { return }
-        // Newest first: each revert applies on top of the one before it.
-        runIntegrationAction("Revert") { try await $0.revertCommits(hashes.reversed()) }
+        guard !hashes.isEmpty else { return }
+        afterSaving(before: "reverting") { [self] in
+            // Newest first: each revert applies on top of the one before it.
+            runIntegrationAction("Revert") { try await $0.revertCommits(hashes.reversed()) }
+        }
     }
 
     func requestNewBranch(from commit: IDEGitCommit) {
@@ -123,11 +127,12 @@ extension IDEGitStatusModel {
     }
 
     func reset(to hash: String, mode: GitResetMode) {
-        guard !refuseUnsaved(before: "resetting") else { return }
-        runGitAction({ repo in
-            _ = try await repo.reset(to: hash, mode: mode)
-            return "Reset to \(hash.prefix(7)) (\(mode.rawValue))"
-        }, onSuccess: { [weak self] in self?.onWorkingTreeChanged?() })
+        afterSaving(before: "resetting") { [self] in
+            runGitAction({ repo in
+                _ = try await repo.reset(to: hash, mode: mode)
+                return "Reset to \(hash.prefix(7)) (\(mode.rawValue))"
+            }, onSuccess: { [weak self] in self?.onWorkingTreeChanged?() })
+        }
     }
 
     func undoLastCommit() {
@@ -229,16 +234,18 @@ extension IDEGitStatusModel {
 
     /// Runs a plan built on the commits from `oldest` up to HEAD.
     private func runPlan(startingAt oldest: String, label: String, build: @escaping @Sendable (GitRebasePlan) -> GitRebasePlan) {
-        guard !refuseUnsaved(before: "rewriting history") else { return }
-        runIntegrationAction(label) { repo in
-            let (base, plan) = try await repo.rebasePlan(startingAt: oldest)
-            return try await repo.interactiveRebase(onto: base, plan: build(plan))
+        afterSaving(before: "rewriting history") { [self] in
+            runIntegrationAction(label) { repo in
+                let (base, plan) = try await repo.rebasePlan(startingAt: oldest)
+                return try await repo.interactiveRebase(onto: base, plan: build(plan))
+            }
         }
     }
 
     func startInteractiveRebase(base: String, plan: GitRebasePlan) {
-        guard !refuseUnsaved(before: "rewriting history") else { return }
-        runIntegrationAction("Rebase") { try await $0.interactiveRebase(onto: base, plan: plan) }
+        afterSaving(before: "rewriting history") { [self] in
+            runIntegrationAction("Rebase") { try await $0.interactiveRebase(onto: base, plan: plan) }
+        }
     }
 
     // MARK: - Push, navigation

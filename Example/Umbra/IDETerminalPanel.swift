@@ -39,6 +39,21 @@ private enum IDETerminalShell {
 @MainActor
 final class IDETerminalHostView: NSView {
     private let terminalView = LocalProcessTerminalView(frame: .zero)
+    /// The terminal got the keyboard: IntelliJ saves files "when switching to … a built-in terminal".
+    /// SwiftTerm's `becomeFirstResponder` is not open to override, so the window's first responder
+    /// is watched instead.
+    var onFocus: (() -> Void)?
+    private var firstResponderObservation: NSKeyValueObservation?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        firstResponderObservation = window?.observe(\.firstResponder, options: [.new]) { [weak self] _, change in
+            guard let self, let responder = change.newValue ?? nil else { return }
+            MainActor.assumeIsolated {
+                if responder === self.terminalView { self.onFocus?() }
+            }
+        }
+    }
     private let coordinator = TerminalCoordinator()
     private var isActive = false
     /// Set once `terminateProcess()` ran. The window is closing, but SwiftUI can still update this view

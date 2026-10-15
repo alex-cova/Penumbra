@@ -30,6 +30,8 @@ struct IDEFileTreeView: View {
     var nameFilter = ""
     var gitStatus: IDEGitStatusModel?
     var openPaths: Set<String> = []
+    /// Files whose open buffer has unsaved changes, dotted like their tab (Mark Modified).
+    var unsavedPaths: Set<String> = []
     var actions: IDEFileTreeActions?
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
@@ -57,6 +59,7 @@ struct IDEFileTreeView: View {
                                     canDisclose: item.canDisclose,
                                     isSelected: project.selectedPath == item.node.id,
                                     isOpen: openPaths.contains(item.node.id),
+                                    isUnsaved: unsavedPaths.contains(item.node.id),
                                     isRoot: item.depth == 0,
                                     isExcluded: item.isExcluded,
                                     isRenaming: project.renamingPath == item.node.id,
@@ -352,6 +355,7 @@ private struct IDEFileTreeRow: View {
     var canDisclose = false
     var isSelected = false
     var isOpen = false
+    var isUnsaved = false
     var isRoot = false
     var isExcluded = false
     var isRenaming = false
@@ -397,6 +401,13 @@ private struct IDEFileTreeRow: View {
             }
 
             Spacer(minLength: 0)
+
+            if isUnsaved {
+                Circle()
+                    .fill(IDEAppearance.ColorToken.accent)
+                    .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)
+                    .accessibilityLabel("Unsaved changes")
+            }
         }
         .padding(.leading, CGFloat(depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)

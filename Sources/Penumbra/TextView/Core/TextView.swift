@@ -2247,6 +2247,12 @@ public struct DocumentTextExport: Sendable {
         textInputView.insertSnippet(expansion, replacing: range, extraIndentPerNewline: extraIndentPerNewline)
     }
 
+    /// True while an input method holds uncommitted (marked) text, such as a CJK composition. A host
+    /// that rewrites or saves the buffer on its own waits until this is false.
+    public var isComposingText: Bool {
+        textInputView.hasMarkedText()
+    }
+
     /// True while Tab / Shift-Tab cycle snippet placeholders.
     public var hasActiveSnippetSession: Bool {
         textInputView.hasActiveSnippetSession

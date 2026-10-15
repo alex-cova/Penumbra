@@ -51,6 +51,17 @@ public final class IDEPreferences {
         static let insertClosingBraceOnEnter = "com.umbra.editor.insertClosingBraceOnEnter"
         static let insertClosingTagOnTagCompletion = "com.umbra.editor.insertClosingTagOnTagCompletion"
         static let autoCloseTagOnSlash = "com.umbra.editor.autoCloseTagOnSlash"
+        static let markModifiedTabs = "com.umbra.editor.markModifiedTabs"
+        static let saveOnFocusLoss = "com.umbra.editor.saveOnFocusLoss"
+        static let saveWhenIdle = "com.umbra.editor.saveWhenIdle"
+        static let idleSaveSeconds = "com.umbra.editor.idleSaveSeconds"
+        static let reformatOnSave = "com.umbra.editor.reformatOnSave"
+        static let reformatsWholeFileOnSave = "com.umbra.editor.reformatsWholeFileOnSave"
+        static let codeCleanupOnSave = "com.umbra.editor.codeCleanupOnSave"
+        static let keepsTrailingWhitespaceOnCaretLine = "com.umbra.editor.keepsTrailingWhitespaceOnCaretLine"
+        static let ensureNewlineAtEndOfFile = "com.umbra.editor.ensureNewlineAtEndOfFile"
+        static let buildProjectOnSave = "com.umbra.editor.buildProjectOnSave"
+        static let stripTrailingWhitespaceOnSave = "com.umbra.editor.stripTrailingWhitespaceOnSave"
         static let showInvisibleCharacters = "com.umbra.editor.showInvisibleCharacters"
         static let showPageGuide = "com.umbra.editor.showPageGuide"
         static let pageGuideColumn = "com.umbra.editor.pageGuideColumn"
@@ -319,6 +330,69 @@ public final class IDEPreferences {
     var autoCloseTagOnSlash: Bool {
         didSet { UserDefaults.standard.set(autoCloseTagOnSlash, forKey: Keys.autoCloseTagOnSlash) }
     }
+
+    /// Marks a tab, the Explorer row and the window's close button while the file has unsaved
+    /// changes (IntelliJ's Editor Tabs ▸ Mark modified).
+    var markModifiedTabs: Bool {
+        didSet { UserDefaults.standard.set(markModifiedTabs, forKey: Keys.markModifiedTabs) }
+    }
+
+    /// Saves every unsaved file when Umbra stops being the active app or the terminal gets focus.
+    var saveOnFocusLoss: Bool {
+        didSet { UserDefaults.standard.set(saveOnFocusLoss, forKey: Keys.saveOnFocusLoss) }
+    }
+
+    /// Saves every unsaved file once typing has paused for `idleSaveSeconds`.
+    var saveWhenIdle: Bool {
+        didSet { UserDefaults.standard.set(saveWhenIdle, forKey: Keys.saveWhenIdle) }
+    }
+
+    var idleSaveSeconds: Int {
+        didSet {
+            let clamped = min(max(idleSaveSeconds, Self.idleSaveSecondsRange.lowerBound), Self.idleSaveSecondsRange.upperBound)
+            if clamped != idleSaveSeconds { idleSaveSeconds = clamped; return }
+            UserDefaults.standard.set(idleSaveSeconds, forKey: Keys.idleSaveSeconds)
+        }
+    }
+
+
+    /// Reformat code (the language's formatter) on every save.
+    var reformatOnSave: Bool {
+        didSet { UserDefaults.standard.set(reformatOnSave, forKey: Keys.reformatOnSave) }
+    }
+
+    /// Reformat the whole file instead of only the lines changed since the last commit.
+    var reformatsWholeFileOnSave: Bool {
+        didSet { UserDefaults.standard.set(reformatsWholeFileOnSave, forKey: Keys.reformatsWholeFileOnSave) }
+    }
+
+    /// Apply the active inspection profile's quick fixes (Java) on every save.
+    var codeCleanupOnSave: Bool {
+        didSet { UserDefaults.standard.set(codeCleanupOnSave, forKey: Keys.codeCleanupOnSave) }
+    }
+
+    /// Leave trailing spaces on the caret's line, where the user is still typing.
+    var keepsTrailingWhitespaceOnCaretLine: Bool {
+        didSet { UserDefaults.standard.set(keepsTrailingWhitespaceOnCaretLine, forKey: Keys.keepsTrailingWhitespaceOnCaretLine) }
+    }
+
+    /// End every saved file with a line break.
+    var ensureNewlineAtEndOfFile: Bool {
+        didSet { UserDefaults.standard.set(ensureNewlineAtEndOfFile, forKey: Keys.ensureNewlineAtEndOfFile) }
+    }
+
+    /// Run Build Project after the user saves.
+    var buildProjectOnSave: Bool {
+        didSet { UserDefaults.standard.set(buildProjectOnSave, forKey: Keys.buildProjectOnSave) }
+    }
+
+    /// Which lines lose their trailing spaces and tabs on save.
+    var stripTrailingWhitespaceOnSave: IDEStripWhitespaceScope {
+        didSet { UserDefaults.standard.set(stripTrailingWhitespaceOnSave.rawValue, forKey: Keys.stripTrailingWhitespaceOnSave) }
+    }
+
+    static let idleSaveSecondsRange = 1...300
+    static let defaultIdleSaveSeconds = 15
 
     // MARK: Code insight (IntelliJ's Editor > General)
     // Kept on this Mac, not in the preferences snapshot, like the Java settings.
@@ -825,6 +899,19 @@ public final class IDEPreferences {
         insertClosingBraceOnEnter = defaults.object(forKey: Keys.insertClosingBraceOnEnter) as? Bool ?? true
         insertClosingTagOnTagCompletion = defaults.object(forKey: Keys.insertClosingTagOnTagCompletion) as? Bool ?? true
         autoCloseTagOnSlash = defaults.object(forKey: Keys.autoCloseTagOnSlash) as? Bool ?? true
+        markModifiedTabs = defaults.object(forKey: Keys.markModifiedTabs) as? Bool ?? true
+        saveOnFocusLoss = defaults.object(forKey: Keys.saveOnFocusLoss) as? Bool ?? true
+        saveWhenIdle = defaults.object(forKey: Keys.saveWhenIdle) as? Bool ?? true
+        reformatOnSave = defaults.object(forKey: Keys.reformatOnSave) as? Bool ?? false
+        reformatsWholeFileOnSave = defaults.object(forKey: Keys.reformatsWholeFileOnSave) as? Bool ?? false
+        codeCleanupOnSave = defaults.object(forKey: Keys.codeCleanupOnSave) as? Bool ?? false
+        keepsTrailingWhitespaceOnCaretLine = defaults.object(forKey: Keys.keepsTrailingWhitespaceOnCaretLine) as? Bool ?? true
+        ensureNewlineAtEndOfFile = defaults.object(forKey: Keys.ensureNewlineAtEndOfFile) as? Bool ?? false
+        buildProjectOnSave = defaults.object(forKey: Keys.buildProjectOnSave) as? Bool ?? false
+        stripTrailingWhitespaceOnSave = defaults.string(forKey: Keys.stripTrailingWhitespaceOnSave).flatMap(IDEStripWhitespaceScope.init(rawValue:)) ?? .modifiedLines
+        idleSaveSeconds = min(max(
+            defaults.object(forKey: Keys.idleSaveSeconds) as? Int ?? Self.defaultIdleSaveSeconds,
+            Self.idleSaveSecondsRange.lowerBound), Self.idleSaveSecondsRange.upperBound)
         showInvisibleCharacters = defaults.object(forKey: Keys.showInvisibleCharacters) as? Bool ?? false
         showsErrorStripe = defaults.object(forKey: Keys.showsErrorStripe) as? Bool ?? true
         errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
@@ -1070,6 +1157,17 @@ public final class IDEPreferences {
             insertClosingBraceOnEnter: insertClosingBraceOnEnter,
             insertClosingTagOnTagCompletion: insertClosingTagOnTagCompletion,
             autoCloseTagOnSlash: autoCloseTagOnSlash,
+            markModifiedTabs: markModifiedTabs,
+            saveOnFocusLoss: saveOnFocusLoss,
+            saveWhenIdle: saveWhenIdle,
+            idleSaveSeconds: idleSaveSeconds,
+            reformatOnSave: reformatOnSave,
+            reformatsWholeFileOnSave: reformatsWholeFileOnSave,
+            codeCleanupOnSave: codeCleanupOnSave,
+            keepsTrailingWhitespaceOnCaretLine: keepsTrailingWhitespaceOnCaretLine,
+            ensureNewlineAtEndOfFile: ensureNewlineAtEndOfFile,
+            buildProjectOnSave: buildProjectOnSave,
+            stripTrailingWhitespaceOnSave: stripTrailingWhitespaceOnSave,
             showInvisibleCharacters: showInvisibleCharacters,
             showPageGuide: showPageGuide,
             pageGuideColumn: pageGuideColumn,
@@ -1113,6 +1211,17 @@ public final class IDEPreferences {
         insertClosingBraceOnEnter = snapshot.insertClosingBraceOnEnter
         insertClosingTagOnTagCompletion = snapshot.insertClosingTagOnTagCompletion
         autoCloseTagOnSlash = snapshot.autoCloseTagOnSlash
+        markModifiedTabs = snapshot.markModifiedTabs
+        saveOnFocusLoss = snapshot.saveOnFocusLoss
+        saveWhenIdle = snapshot.saveWhenIdle
+        idleSaveSeconds = snapshot.idleSaveSeconds
+        reformatOnSave = snapshot.reformatOnSave
+        reformatsWholeFileOnSave = snapshot.reformatsWholeFileOnSave
+        codeCleanupOnSave = snapshot.codeCleanupOnSave
+        keepsTrailingWhitespaceOnCaretLine = snapshot.keepsTrailingWhitespaceOnCaretLine
+        ensureNewlineAtEndOfFile = snapshot.ensureNewlineAtEndOfFile
+        buildProjectOnSave = snapshot.buildProjectOnSave
+        stripTrailingWhitespaceOnSave = snapshot.stripTrailingWhitespaceOnSave
         showInvisibleCharacters = snapshot.showInvisibleCharacters
         showPageGuide = snapshot.showPageGuide
         pageGuideColumn = snapshot.pageGuideColumn
@@ -1154,6 +1263,17 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var insertClosingBraceOnEnter: Bool
     var insertClosingTagOnTagCompletion: Bool
     var autoCloseTagOnSlash: Bool
+    var markModifiedTabs: Bool
+    var saveOnFocusLoss: Bool
+    var saveWhenIdle: Bool
+    var idleSaveSeconds: Int
+    var reformatOnSave: Bool
+    var reformatsWholeFileOnSave: Bool
+    var codeCleanupOnSave: Bool
+    var keepsTrailingWhitespaceOnCaretLine: Bool
+    var ensureNewlineAtEndOfFile: Bool
+    var buildProjectOnSave: Bool
+    var stripTrailingWhitespaceOnSave: IDEStripWhitespaceScope
     var showInvisibleCharacters: Bool
     var showPageGuide: Bool
     var pageGuideColumn: Int
@@ -1193,6 +1313,17 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         insertClosingBraceOnEnter: Bool = true,
         insertClosingTagOnTagCompletion: Bool = true,
         autoCloseTagOnSlash: Bool = true,
+        markModifiedTabs: Bool = true,
+        saveOnFocusLoss: Bool = true,
+        saveWhenIdle: Bool = true,
+        idleSaveSeconds: Int = 15,
+        reformatOnSave: Bool = false,
+        reformatsWholeFileOnSave: Bool = false,
+        codeCleanupOnSave: Bool = false,
+        keepsTrailingWhitespaceOnCaretLine: Bool = true,
+        ensureNewlineAtEndOfFile: Bool = false,
+        buildProjectOnSave: Bool = false,
+        stripTrailingWhitespaceOnSave: IDEStripWhitespaceScope = .modifiedLines,
         showInvisibleCharacters: Bool = false,
         showPageGuide: Bool = false,
         pageGuideColumn: Int = 120,
@@ -1231,6 +1362,17 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.insertClosingBraceOnEnter = insertClosingBraceOnEnter
         self.insertClosingTagOnTagCompletion = insertClosingTagOnTagCompletion
         self.autoCloseTagOnSlash = autoCloseTagOnSlash
+        self.markModifiedTabs = markModifiedTabs
+        self.saveOnFocusLoss = saveOnFocusLoss
+        self.saveWhenIdle = saveWhenIdle
+        self.idleSaveSeconds = idleSaveSeconds
+        self.reformatOnSave = reformatOnSave
+        self.reformatsWholeFileOnSave = reformatsWholeFileOnSave
+        self.codeCleanupOnSave = codeCleanupOnSave
+        self.keepsTrailingWhitespaceOnCaretLine = keepsTrailingWhitespaceOnCaretLine
+        self.ensureNewlineAtEndOfFile = ensureNewlineAtEndOfFile
+        self.buildProjectOnSave = buildProjectOnSave
+        self.stripTrailingWhitespaceOnSave = stripTrailingWhitespaceOnSave
         self.showInvisibleCharacters = showInvisibleCharacters
         self.showPageGuide = showPageGuide
         self.pageGuideColumn = pageGuideColumn
@@ -1276,6 +1418,17 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         insertClosingBraceOnEnter = try container.decodeIfPresent(Bool.self, forKey: .insertClosingBraceOnEnter) ?? true
         insertClosingTagOnTagCompletion = try container.decodeIfPresent(Bool.self, forKey: .insertClosingTagOnTagCompletion) ?? true
         autoCloseTagOnSlash = try container.decodeIfPresent(Bool.self, forKey: .autoCloseTagOnSlash) ?? true
+        markModifiedTabs = try container.decodeIfPresent(Bool.self, forKey: .markModifiedTabs) ?? true
+        saveOnFocusLoss = try container.decodeIfPresent(Bool.self, forKey: .saveOnFocusLoss) ?? true
+        saveWhenIdle = try container.decodeIfPresent(Bool.self, forKey: .saveWhenIdle) ?? true
+        idleSaveSeconds = try container.decodeIfPresent(Int.self, forKey: .idleSaveSeconds) ?? 15
+        reformatOnSave = try container.decodeIfPresent(Bool.self, forKey: .reformatOnSave) ?? false
+        reformatsWholeFileOnSave = try container.decodeIfPresent(Bool.self, forKey: .reformatsWholeFileOnSave) ?? false
+        codeCleanupOnSave = try container.decodeIfPresent(Bool.self, forKey: .codeCleanupOnSave) ?? false
+        keepsTrailingWhitespaceOnCaretLine = try container.decodeIfPresent(Bool.self, forKey: .keepsTrailingWhitespaceOnCaretLine) ?? true
+        ensureNewlineAtEndOfFile = try container.decodeIfPresent(Bool.self, forKey: .ensureNewlineAtEndOfFile) ?? false
+        buildProjectOnSave = try container.decodeIfPresent(Bool.self, forKey: .buildProjectOnSave) ?? false
+        stripTrailingWhitespaceOnSave = try container.decodeIfPresent(IDEStripWhitespaceScope.self, forKey: .stripTrailingWhitespaceOnSave) ?? .modifiedLines
         showInvisibleCharacters = try container.decodeIfPresent(Bool.self, forKey: .showInvisibleCharacters) ?? false
         showPageGuide = try container.decodeIfPresent(Bool.self, forKey: .showPageGuide) ?? false
         pageGuideColumn = try container.decodeIfPresent(Int.self, forKey: .pageGuideColumn) ?? 120

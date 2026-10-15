@@ -1132,19 +1132,115 @@ public final class EditorIntelligenceController {
     /// current document. Returns `false` when there is no provider or nothing to organize.
     @discardableResult
     public func organizeImports() async -> Bool {
+        await applyCodeAction(ofKind: CodeAction.organizeImportsKind)
+    }
+
+    /// Applies the edits of the first code action of `kind` offered at the caret to the live
+    /// document, as one undo step. Returns `false` when there is no provider or no such action.
+    ///
+    /// The awaitable form of a code action, for a host that has to run it before something else
+    /// (Umbra's actions on save): the buffer is left alone when it changed while the provider
+    /// worked, so a result computed for old text is never applied to new text.
+    @discardableResult
+    public func applyCodeAction(ofKind kind: String, timeout: Duration? = nil) async -> Bool {
         guard let codeActionProvider, let textView, let document = liveDocument() else {
             return false
         }
-        let actions = await codeActionProvider.codeActions(
-            for: document,
-            at: document.cursor.position,
-            diagnostics: latestDiagnostics
-        )
-        guard let action = actions.first(where: { $0.kind == CodeAction.organizeImportsKind }) else {
+        let generation = textView.contentGeneration
+        let diagnostics = latestDiagnostics
+        let actions: [CodeAction]?
+        if let timeout {
+            actions = await Self.within(timeout) {
+                await codeActionProvider.codeActions(for: document, at: document.cursor.position, diagnostics: diagnostics)
+            }
+        } else {
+            actions = await codeActionProvider.codeActions(for: document, at: document.cursor.position, diagnostics: diagnostics)
+        }
+        guard let actions, textView.contentGeneration == generation,
+              let action = actions.first(where: { $0.kind == kind }), !action.edits.isEmpty
+        else {
             return false
         }
         TextEditApplicator.apply(action.edits, in: textView)
         return true
+    }
+
+    /// Formats the whole document with the configured formatter and waits for it. Returns whether
+    /// the text changed. Nothing is applied when the buffer changed meanwhile or the formatter takes
+    /// longer than `timeout`.
+    @discardableResult
+    public func formatDocumentForSave(timeout: Duration = .seconds(2)) async -> Bool {
+        guard let document = liveDocument(), let formattingProvider, let textView else {
+            return false
+        }
+        let generation = textView.contentGeneration
+        guard let edits = await Self.within(timeout, { await formattingProvider.formatDocument(document) }),
+              !edits.isEmpty, textView.contentGeneration == generation
+        else {
+            return false
+        }
+        TextEditApplicator.apply(edits, in: textView)
+        return true
+    }
+
+    /// Formats only `ranges` (UTF-16 ranges of the live text, such as the lines a change touched),
+    /// each as a selection, and waits for it. Same guarantees as ``formatDocumentForSave(timeout:)``.
+    @discardableResult
+    public func formatRangesForSave(_ ranges: [NSRange], timeout: Duration = .seconds(2)) async -> Bool {
+        guard !ranges.isEmpty, let document = liveDocument(), let formattingProvider, let textView else {
+            return false
+        }
+        let generation = textView.contentGeneration
+        let text = textView.text as NSString
+        let selections = ranges.map { range -> EditorIntelligence.TextRange in
+            EditorIntelligence.TextRange(
+                start: Self.position(at: range.location, in: text),
+                end: Self.position(at: NSMaxRange(range), in: text)
+            )
+        }
+        guard let edits = await Self.within(timeout, {
+            var all: [EditorIntelligence.TextEdit] = []
+            for selection in selections {
+                all.append(contentsOf: await formattingProvider.formatSelection(in: document, range: selection))
+            }
+            return all
+        }), !edits.isEmpty, textView.contentGeneration == generation else {
+            return false
+        }
+        TextEditApplicator.apply(edits, in: textView)
+        return true
+    }
+
+    private static func position(at offset: Int, in text: NSString) -> TextPosition {
+        let clamped = min(max(0, offset), text.length)
+        var line = 0
+        var lineStart = 0
+        var index = 0
+        while index < clamped {
+            if text.character(at: index) == 0x0A {
+                line += 1
+                lineStart = index + 1
+            }
+            index += 1
+        }
+        return TextPosition(line: line, column: clamped - lineStart, utf16Offset: clamped)
+    }
+
+    /// Runs `work`, giving up (and cancelling it) after `limit`. `nil` means it gave up.
+    private static func within<T: Sendable>(
+        _ limit: Duration,
+        _ work: @escaping @Sendable () async -> T
+    ) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await work() }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
     }
 
     /// The document as it is on screen: the adapter's snapshot lags the live buffer, so code

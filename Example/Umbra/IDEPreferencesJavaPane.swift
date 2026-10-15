@@ -226,14 +226,6 @@ struct IDEPreferencesJavaPane: View {
                 .toggleStyle(.checkbox)
             }
         }
-
-        IDESettingsSection("Editing") {
-            IDESettingsToggle(
-                "Optimize Imports on Save",
-                isOn: $preferences.javaOptimizeImportsOnSave,
-                detail: "Removes unused imports each time you save a Java file. Java > Optimize Imports does the same on demand."
-            )
-        }
     }
 
     private func gutterIconBinding(_ kind: JavaLineMarkerKind) -> Binding<Bool> {

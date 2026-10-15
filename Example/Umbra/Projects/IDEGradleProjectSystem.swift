@@ -582,6 +582,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         runTask = Task { [runner] in
             isRunningTasks = true
             runningTasks = taskPaths
+            await environment.prepareToRun()
             console.reset()
             console.appendNote("Project: \(url.path)")
             console.appendNote("Tasks: \(taskPaths.joined(separator: " "))")

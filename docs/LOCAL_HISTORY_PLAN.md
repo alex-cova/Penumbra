@@ -1,7 +1,7 @@
 # Local History: automatic labels, history-dialog extras, working-day retention
 
 ## Context
-Local History already ships (commit `4616679`, `Example/Umbra/LocalHistory/`, documented at `Example/Umbra/CLAUDE.md:59`). It records saves, baselines, agent writes, refactorings, reverts and external changes per file, and has a History sidebar tab. Measured against IntelliJ's Local History page, the user picked three gaps to close (not whole-project snapshotting):
+Local History already ships (commit `4616679`, `Example/Umbra/LocalHistory/`, documented at `Example/Umbra/LocalHistory/CLAUDE.md`). It records saves, baselines, agent writes, refactorings, reverts and external changes per file, and has a History sidebar tab. Measured against IntelliJ's Local History page, the user picked three gaps to close (not whole-project snapshotting):
 1. **Automatic labels.** Project-wide labels for IDE events: Gradle sync, build, test runs, run, and git commit, pull and branch switch. A project-wide **Put Label**, plus revert or diff of the whole project back to a label.
 2. **History dialog extras.** Search revisions by content, **Create Patch**, **Show History for Selection**.
 3. **Retention like IntelliJ.** Keep N *working days* per file (days the file changed), not N calendar days.
@@ -125,7 +125,7 @@ All of this is Umbra-only (`Example/Umbra`), so the Penumbra and EditorIntellige
 - A file revision's context menu gains **Create Patch…**.
 
 ## 6. Docs
-Update the Local History bullet in `Example/Umbra/CLAUDE.md:59` with the new sources and milestones, the working-day retention (default 5), the project Put Label versus Put Label on This File, the label actions, search, Create Patch and History for Selection.
+Update the Local History bullet in `Example/Umbra/LocalHistory/CLAUDE.md` with the new sources and milestones, the working-day retention (default 5), the project Put Label versus Put Label on This File, the label actions, search, Create Patch and History for Selection.
 
 ## Files
 - Modified:
@@ -140,7 +140,7 @@ Update the Local History bullet in `Example/Umbra/CLAUDE.md:59` with the new sou
   - `Example/Umbra/IDEAppCommands.swift`
   - `Example/Umbra/IDEPreferences.swift`
   - `Example/Umbra/IDEPreferencesView.swift`
-  - `Example/Umbra/CLAUDE.md`
+  - `Example/Umbra/LocalHistory/CLAUDE.md`
 - New: `Example/Umbra/LocalHistory/IDELocalHistorySelection.swift`
 
 ## Verification

@@ -150,6 +150,8 @@ public struct IDEPreferencesView: View {
             IDEPreferencesGeneralPane(preferences: preferences)
         case .editor:
             IDEPreferencesEditorPane(preferences: preferences)
+        case .saving:
+            IDEPreferencesSavingPane(preferences: preferences)
         case .appearance:
             IDEPreferencesAppearancePane(preferences: preferences)
         case .focus:

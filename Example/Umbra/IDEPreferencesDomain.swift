@@ -32,6 +32,10 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts"],
         showsTypePreview: true
     )
+    static let saving = IDEPreferencesDomain(
+        id: "saving", title: "Saving", symbol: "square.and.arrow.down",
+        searchTerms: ["save", "autosave", "idle", "focus", "terminal", "seconds", "actions on save", "reformat", "format", "optimize imports", "imports", "code cleanup", "trailing spaces", "whitespace", "newline", "end of file", "build", "mark modified", "unsaved", "tabs", "modified"]
+    )
     static let appearance = IDEPreferencesDomain(
         id: "appearance", title: "Appearance", symbol: "paintbrush",
         searchTerms: ["ui theme", "color scheme", "appearance", "visual studio", "resharper", "umbra light", "interface", "ui font", "ui font size", "interface font", "sf compact", "welcome", "background", "starfield", "deep space", "stars", "animation"]
@@ -49,7 +53,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
 
     /// The pages before the language modules' and the one after them.
-    static let leading: [IDEPreferencesDomain] = [.general, .editor, .appearance, .focus, .project]
+    static let leading: [IDEPreferencesDomain] = [.general, .editor, .saving, .appearance, .focus, .project]
 
     /// Built-in pages with `modules`' in the middle, in the order they have always had.
     static func ordered(with modules: [IDEPreferencesDomain]) -> [IDEPreferencesDomain] {

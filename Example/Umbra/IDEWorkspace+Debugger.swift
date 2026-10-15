@@ -865,6 +865,13 @@ extension IDEWorkspace {
 
 extension IDEWorkspace {
     func debugLaunch(_ configuration: JavaRunConfiguration, skippingBeforeLaunch: Bool = false) {
+        // The program starts from what is on disk, so unsaved buffers go first (at once when there are none).
+        afterSavingUnsaved { [self] in
+            startDebugLaunch(configuration, skippingBeforeLaunch: skippingBeforeLaunch)
+        }
+    }
+
+    private func startDebugLaunch(_ configuration: JavaRunConfiguration, skippingBeforeLaunch: Bool) {
         guard configuration.supportsDebugLaunch else {
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")
             return

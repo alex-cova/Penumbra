@@ -154,13 +154,26 @@ private struct IDEFileCommands: View {
         }
         .menuShortcut(.save, in: preset)
         .disabled(workspace == nil)
+        Button("Save All", systemImage: "square.and.arrow.down.on.square.fill") {
+            Task { await workspace?.saveAllDocuments() }
+        }
+        .menuShortcut(.saveAll, in: preset)
+        .disabled(workspace == nil)
         Button("Save As…", systemImage: "square.and.arrow.down.on.square") {
             Task { await workspace?.saveActiveDocumentAs() }
         }
         .menuShortcut(.saveAs, in: preset)
         .disabled(workspace == nil)
         Divider()
-        Button("Close Tab", systemImage: "xmark") { workspace?.closeActiveTab() }
+        Button("Reload from Disk", systemImage: "arrow.clockwise") { workspace?.reloadActiveFromDisk() }
+            .disabled(workspace == nil)
+        Button("Reload All from Disk", systemImage: "arrow.triangle.2.circlepath") {
+            Task { await workspace?.reloadAllFromDisk() }
+        }
+        .menuShortcut(.reloadAllFromDisk, in: preset)
+        .disabled(workspace == nil)
+        Divider()
+        Button("Close Tab", systemImage: "xmark") { workspace?.requestCloseActiveTab() }
             .menuShortcut(.closeTab, in: preset)
             .disabled(workspace == nil)
         IDEOpenRecentMenu(origin: origin)

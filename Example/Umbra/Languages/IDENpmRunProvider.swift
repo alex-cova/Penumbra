@@ -85,6 +85,7 @@ final class IDENpmRunProvider: IDERunProvider {
         }
         let lines = workspace.enabledLineBreakpointsByPath()
         Task {
+            await workspace.saveAllBeforeRun()
             await workspace.dapDebugSession.launchJavaScript(
                 node: node,
                 serverScript: URL(fileURLWithPath: script),

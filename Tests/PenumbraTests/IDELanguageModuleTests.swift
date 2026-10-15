@@ -97,9 +97,9 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertEqual(modulePages.map(\.id), ["java", "inspections", "typescript", "swift", "swiftUIPreview", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "swiftUIPreview", "hex", "agent"]
+            ["general", "editor", "saving", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "swiftUIPreview", "hex", "agent"]
         )
-        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "appearance", "focus", "project", "agent"])
+        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "saving", "appearance", "focus", "project", "agent"])
     }
 
     func testSettingsSearchStillFindsTheJavaPages() {

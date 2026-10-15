@@ -62,6 +62,17 @@ final class IDEMenuShortcutsTests: XCTestCase {
         }
     }
 
+    func testSaveAllIsOptionCommandSExceptInIntelliJWhereCommandSIsSaveAll() {
+        for preset in [KeymapPreset.sublime, .default_] {
+            XCTAssertEqual(shortcut(.save, preset), KeyboardShortcut("s"))
+            XCTAssertEqual(shortcut(.saveAll, preset), KeyboardShortcut("s", modifiers: [.command, .option]))
+            XCTAssertNil(shortcut(.reloadAllFromDisk, preset))
+        }
+        XCTAssertNil(shortcut(.save, .intelliJ), "⌘S saves everything in IntelliJ")
+        XCTAssertEqual(shortcut(.saveAll, .intelliJ), KeyboardShortcut("s"))
+        XCTAssertEqual(shortcut(.reloadAllFromDisk, .intelliJ), KeyboardShortcut("y", modifiers: [.command, .option]))
+    }
+
     func testEveryPresetSwitchesTabsWithTheMacStandardKeys() {
         for preset in KeymapPreset.allCases {
             XCTAssertEqual(shortcut(.nextTab, preset), KeyboardShortcut("]", modifiers: [.command, .shift]), "\(preset)")

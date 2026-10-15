@@ -147,11 +147,14 @@ final class IDEOpenDocumentDiskSync {
 
     /// Whether the file differs from what the buffer was loaded from, ignoring bytes the user
     /// already kept their buffer over. A missing file is not a conflict: saving recreates it.
-    func diskChangedSinceLoad(path: String) async -> Bool {
+    ///
+    /// `honoringKeepMine: false` also counts bytes the user already kept their buffer over: an
+    /// explicit Reload All from Disk answers to the disk, not to an earlier dismissal.
+    func diskChangedSinceLoad(path: String, honoringKeepMine: Bool = true) async -> Bool {
         guard let entry = entries[path] else { return false }
         let baseline = await entry.pendingBaseline?.value ?? entry.baseline
         guard let current = await DiskSnapshot.capture(url: URL(fileURLWithPath: path)) else { return false }
-        if let dismissed = await dismissedSnapshot(path), dismissed.sameContent(as: current) { return false }
+        if honoringKeepMine, let dismissed = await dismissedSnapshot(path), dismissed.sameContent(as: current) { return false }
         guard let baseline else { return true }
         return !baseline.sameContent(as: current)
     }

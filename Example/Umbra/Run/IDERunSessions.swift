@@ -10,6 +10,10 @@ final class IDERunSessions {
     private(set) var sessions: [IDERunSession] = []
     var selectedID: UUID?
 
+    /// Awaited before a session's `prepare` begins: the window saves its unsaved buffers here, so
+    /// the program starts from what is on screen.
+    @ObservationIgnored var beforeLaunch: (@MainActor () async -> Void)?
+
     var hasContent: Bool { !sessions.isEmpty }
     var selected: IDERunSession? { sessions.first { $0.id == selectedID } ?? sessions.last }
     var activeSessions: [IDERunSession] { sessions.filter(\.isActive) }
@@ -59,6 +63,8 @@ final class IDERunSessions {
         Task { @MainActor [weak session] in
             if let toStop { await toStop.waitUntilFinished() }
             guard let session, session.isActive else { return }
+            await beforeLaunch?()
+            guard session.isActive else { return }
             await prepare(session)
         }
         return session

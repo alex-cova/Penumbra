@@ -93,6 +93,7 @@ struct IDESidebarPanel: View {
                 nameFilter: searchQuery,
                 gitStatus: workspace.gitStatus,
                 openPaths: workspace.openDocumentPaths,
+                unsavedPaths: workspace.preferences.markModifiedTabs ? workspace.unsavedPaths : [],
                 actions: IDEFileTreeActions(
                     newItem: { workspace.createExplorerItem(in: $0, isDirectory: $1) },
                     beginRename: { workspace.beginExplorerRename($0) },

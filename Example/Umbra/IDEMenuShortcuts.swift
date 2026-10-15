@@ -10,7 +10,7 @@ import SwiftUI
 /// they live in `Keymap` and are dispatched by the text view.
 enum IDEMenuCommand: CaseIterable, Hashable {
     // File
-    case newFile, openFile, openFolder, save, saveAs, closeTab
+    case newFile, openFile, openFolder, save, saveAll, saveAs, reloadAllFromDisk, closeTab
     // Edit
     case find, replace, findInFiles, replaceInFiles
     // Go
@@ -75,6 +75,8 @@ enum IDEMenuShortcuts {
         .openFile: KeyboardShortcut("o"),
         .openFolder: KeyboardShortcut("o", modifiers: [.command, .shift]),
         .save: KeyboardShortcut("s"),
+        .saveAll: KeyboardShortcut("s", modifiers: [.command, .option]),
+        .reloadAllFromDisk: nil,
         .saveAs: KeyboardShortcut("s", modifiers: [.command, .shift]),
         .closeTab: KeyboardShortcut("w"),
         .find: KeyboardShortcut("f"),
@@ -162,6 +164,11 @@ enum IDEMenuShortcuts {
     /// Terminal). ⌃↵ runs the HTTP request at the caret, which frees ⇧⌘R for Replace in Files.
     private static let intelliJOverrides: [IDEMenuCommand: KeyboardShortcut?] = [
         .openFolder: nil,
+        // ⌘S is Save All in IntelliJ, which saves every file whenever it saves one.
+        .save: nil,
+        .saveAll: KeyboardShortcut("s"),
+        // Synchronize.
+        .reloadAllFromDisk: KeyboardShortcut("y", modifiers: [.command, .option]),
         .goToFile: KeyboardShortcut("o", modifiers: [.command, .shift]),
         .goToSymbol: KeyboardShortcut("o", modifiers: [.command, .option]),
         .parameterInfo: KeyboardShortcut("p"),
