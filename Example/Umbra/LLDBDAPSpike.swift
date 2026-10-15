@@ -525,12 +525,12 @@ private final class CallbackBox: @unchecked Sendable {
     }
 
     func accept(_ data: Data, source: SubprocessOutputSource) {
-        let handler: (@Sendable (Data, SubprocessOutputSource) -> Void)? = lock.withLock {
-            if let handler { return handler }
+        let current: (@Sendable (Data, SubprocessOutputSource) -> Void)? = lock.withLock {
+            if let handler = self.handler { return handler }
             pending.append((data, source))
             return nil
         }
-        handler?(data, source)
+        current?(data, source)
     }
 }
 
