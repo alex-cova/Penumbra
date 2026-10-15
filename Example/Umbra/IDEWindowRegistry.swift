@@ -40,6 +40,9 @@ final class IDEWindowRegistry {
     /// Set by a Dock reopen with no window left: the next window to appear is centered on screen
     /// instead of taking SwiftUI's saved or cascaded position.
     private var centersNextWindow = false
+    /// Quitting is going ahead. A closing window must not write its open folder over the session
+    /// `saveSessionsForTermination` stores, and a remaining window must not take over that file.
+    private(set) var isTerminating = false
 
     private init() {
         // Saving when Umbra loses the focus (Settings ▸ Saving). One observer for every window: a
@@ -97,13 +100,27 @@ final class IDEWindowRegistry {
     /// Called when the workspace's window closes. When it was the session window and another
     /// window with content remains, that one takes over and saves its layout right away, so "the
     /// last window" stays a window that is still open. With none left the closed window's own
-    /// save (made as it closed) stands.
+    /// save (made as it closed) stands. While quitting, no window takes over: each session window
+    /// already wrote the session with its folder closed.
     func unregister(_ workspace: IDEWorkspace) {
         let successor = IDESessionWindowPolicy.successor(afterClosing: workspace.windowID, in: policyWindows)
         entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
-        if let successor {
+        if let successor, !isTerminating {
             self.workspace(withID: successor)?.saveSession()
         }
+    }
+
+    /// Quitting has been confirmed. Call before windows close, so their saves do not put a folder
+    /// back into `last-window.json`.
+    func noteTermination() {
+        isTerminating = true
+    }
+
+    /// True when this window's save is the one the next launch restores, and no other window with
+    /// content will replace it. That save must forget the open folder.
+    func forgetsFolderWhenClosing(_ workspace: IDEWorkspace) -> Bool {
+        guard isSessionWindow(workspace) else { return false }
+        return IDESessionWindowPolicy.successor(afterClosing: workspace.windowID, in: policyWindows) == nil
     }
 
     /// Moves a registered window to the front. A window that has not registered yet (it becomes key
@@ -364,10 +381,11 @@ final class IDEWindowRegistry {
         }
     }
 
-    /// On quit: the shared lists, and the layout of the window that was active last.
+    /// On quit: the shared lists, and the last window with its folder closed. The next launch opens
+    /// on the Welcome screen, the way a Dock click does after the last window was closed.
     func saveSessionsForTermination() {
         IDEAppState.shared.save()
-        sessionWindow?.saveSession()
+        sessionWindow?.saveSessionForgettingFolder()
     }
 }
 

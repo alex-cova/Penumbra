@@ -771,7 +771,8 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
         if let upstream, upstream.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
             guard upstream.windowShouldClose?(sender) == true else { return false }
         }
-        workspace?.saveSession()
+        // The last window forgets its folder, so a Dock click opens the Welcome screen.
+        workspace?.saveSessionForWindowClose()
         return true
     }
 

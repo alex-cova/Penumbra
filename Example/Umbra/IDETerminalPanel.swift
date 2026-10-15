@@ -176,9 +176,16 @@ final class IDETerminalHostView: NSView {
     }
 
     func restartProcess() {
-        guard !mirrorsOutput else { return }
+        guard !mirrorsOutput, !isShutDown else { return }
+        // `terminate()` sends SIGTERM, which an interactive shell ignores. SIGHUP is what actually
+        // ends it, so the next start uses the working directory just set (closing a folder retargets
+        // the shell at the home directory).
         if terminalView.process.running {
+            let pid = terminalView.process.shellPid
             terminalView.terminate()
+            if pid > 0 {
+                kill(pid, SIGHUP)
+            }
         }
         startProcessIfNeeded()
     }

@@ -17,6 +17,15 @@ enum IDEClosePromptChoice: Equatable {
     case cancel
 }
 
+/// File ▸ Close Folder, when an editor still has unsaved changes.
+enum IDEFolderCloseChoice: Equatable {
+    /// Save what can be saved, then close. A file that cannot be saved asks on its own.
+    case save
+    /// Close the folder and drop the unsaved changes.
+    case discard
+    case cancel
+}
+
 /// Closing a tab saves what it holds first, as IntelliJ does. Only the user-facing closes (the tab's
 /// ×, its context menu, ⌘W) go through here: closing a tab because its file was deleted, or a merge
 /// tab applying itself, must never write a file, and `closeTab` still does not.
@@ -125,6 +134,22 @@ extension IDEWorkspace {
             alert.addButton(withTitle: "Close Anyway")
             alert.buttons[1].hasDestructiveAction = true
             return alert.runModal() == .alertSecondButtonReturn ? .discard : .cancel
+        }
+    }
+
+    static func askAboutClosingFolder(_ informativeText: String) -> IDEFolderCloseChoice {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Close the open folder?"
+        alert.informativeText = informativeText
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
         }
     }
 }

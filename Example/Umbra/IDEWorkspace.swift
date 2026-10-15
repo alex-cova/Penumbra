@@ -192,6 +192,8 @@ public final class IDEWorkspace {
     /// A Build Project waiting for the saves of the last second (Settings ▸ Saving).
     @ObservationIgnored var buildOnSaveTask: Task<Void, Never>?
     @ObservationIgnored var closePromptResolver: @MainActor (WorkbenchDocument, IDEClosePrompt) -> IDEClosePromptChoice = IDEWorkspace.askAboutClosing
+    /// Asks before File ▸ Close Folder throws away unsaved editors. Tests replace it.
+    @ObservationIgnored var folderCloseResolver: @MainActor (String) -> IDEFolderCloseChoice = IDEWorkspace.askAboutClosingFolder
     @ObservationIgnored
     private let fileIndexer = IDEPaletteFileIndexer()
     /// Revisions of the project's files: saves, opens, agent writes.
@@ -1293,21 +1295,31 @@ public final class IDEWorkspace {
         )
     }
 
-    /// Closes the open project folder, all editor tabs, and project-scoped panels. Unsaved editors
-    /// are saved first; only the ones that cannot be saved are asked about.
+    /// Closes the open project folder, all editor tabs, and project-scoped panels. An editor with
+    /// unsaved changes asks first (Save, Don't Save, Cancel). Terminals leave the folder and start
+    /// in the home directory, which is what a later reopen restores.
     public func closeFolder() {
         guard project.rootURL != nil else { return }
         guard hasUnsavedDocuments else {
             finishClosingFolder()
             return
         }
-        Task { @MainActor [self] in
-            _ = await saveAll(reason: .closingWindow)
-            guard confirmDiscardingUnsavedChanges(
-                messageText: "Close the open folder?",
-                confirmButtonTitle: "Close Folder"
-            ) else { return }
-            finishClosingFolder()
+        Task { @MainActor [weak self] in
+            guard let self, await self.confirmClosingFolder(), self.project.rootURL != nil else { return }
+            self.finishClosingFolder()
+        }
+    }
+
+    /// Save writes what it can (and asks again when a file cannot be saved). Don't Save drops the
+    /// edits. Cancel leaves the folder open.
+    private func confirmClosingFolder() async -> Bool {
+        switch folderCloseResolver(unsavedPromptText()) {
+        case .cancel:
+            return false
+        case .discard:
+            return true
+        case .save:
+            return await saveForClosing(workbench.allDocuments().filter(\.isDirty))
         }
     }
 
@@ -1316,9 +1328,26 @@ public final class IDEWorkspace {
         dismissProjectChrome()
         stopProjectActivity()
         applyProjectRoot(nil)
+        resetTerminalsToDefaultDirectory()
         showsWelcome = true
         refreshPresentation()
         saveSession()
+    }
+
+    /// Points every shell at the directory a new tab would use (the home directory once the folder
+    /// is closed) and restarts a shell that was somewhere else.
+    private func resetTerminalsToDefaultDirectory() {
+        let directory = defaultTerminalDirectory()
+        let title = IDETerminalTab.defaultTitle(for: directory)
+        let home = directory.standardizedFileURL.path
+        for index in terminalTabs.indices where terminalTabs[index].agentCommandID == nil {
+            let same = terminalTabs[index].workingDirectory.standardizedFileURL.path == home
+            terminalTabs[index].workingDirectory = directory
+            terminalTabs[index].title = title
+            if !same {
+                terminalTabs[index].restartRequestID += 1
+            }
+        }
     }
 
     public var recentFileURLs: [URL] {
@@ -3874,6 +3903,37 @@ public final class IDEWorkspace {
             projectSidebarWidth: projectSidebarWidth,
             terminalHeight: terminalHeight
         ))
+    }
+
+    /// The window is closing. The last window that would be restored forgets its folder, so a Dock
+    /// click opens the Welcome screen. While quitting, the session window writes that same session
+    /// here, because it may already be gone by `applicationWillTerminate`.
+    func saveSessionForWindowClose() {
+        guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
+        let registry = IDEWindowRegistry.shared
+        // Quit writes the closed-folder session from here too: the windows can finish closing
+        // before `applicationWillTerminate`, and by then nothing is left to save.
+        if registry.isTerminating {
+            if registry.isSessionWindow(self) {
+                saveSessionForgettingFolder()
+            }
+            return
+        }
+        if registry.forgetsFolderWhenClosing(self) {
+            saveSessionForgettingFolder()
+        } else {
+            saveSession()
+        }
+    }
+
+    /// Writes this window's layout with the folder closed. Used when the last window closes and when
+    /// the app quits, so the next open does not bring the folder or its terminal directory back.
+    func saveSessionForgettingFolder() {
+        guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
+        appState.save()
+        IDEWindowSessionStore.save(
+            makeSession().closingFolder(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        )
     }
 
     // MARK: - Private

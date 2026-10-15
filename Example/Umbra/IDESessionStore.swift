@@ -265,6 +265,27 @@ struct IDEWindowSession: Codable {
         agentChats = try? container.decodeIfPresent([UUID].self, forKey: .agentChats)
         agentSelectedChat = try? container.decodeIfPresent(UUID.self, forKey: .agentSelectedChat)
     }
+
+    /// The session written when this window's folder is going away: no project, no editor tabs, and
+    /// every terminal in `homeDirectory`. Panel sizes stay. A Dock click then opens the Welcome screen
+    /// instead of the folder that was open when the window closed.
+    func closingFolder(homeDirectory: URL) -> IDEWindowSession {
+        var session = self
+        session.restoration = nil
+        session.projectRootBookmark = nil
+        session.isSidebarVisible = false
+        session.isAgentPanelVisible = false
+        session.agentChats = nil
+        session.agentSelectedChat = nil
+        let title = IDETerminalTab.defaultTitle(for: homeDirectory)
+        session.terminalTabs = session.terminalTabs?.map { tab in
+            var tab = tab
+            tab.workingDirectory = homeDirectory
+            tab.title = title
+            return tab
+        }
+        return session
+    }
 }
 
 /// Where the session files live and how they are read and written. A directory is passed in so the
