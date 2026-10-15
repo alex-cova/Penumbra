@@ -1022,6 +1022,7 @@ public final class IDEWorkspace {
         }
         let host = host(for: pane.id)
         host.textView.languageIdentifier = identifier
+        preferences.applySmartKeys(to: host.textView)
         host.textView.setLanguageMode(languageMode)
         host.markdownPreviewController.documentBaseURL = url
         host.markdownPreviewController.closeIfNotMarkdown()
@@ -1055,7 +1056,10 @@ public final class IDEWorkspace {
         } else {
             languageMode = PlainTextLanguageMode()
         }
-        host(for: targetPane.id).textView.setLanguageMode(languageMode)
+        let languageTextView = host(for: targetPane.id).textView
+        languageTextView.languageIdentifier = identifier
+        preferences.applySmartKeys(to: languageTextView)
+        languageTextView.setLanguageMode(languageMode)
         host(for: targetPane.id).textView.reservedLineMarkerSlots = reservedLineMarkerSlots(
             languageIdentifier: identifier, hasMarkerProvider: languages.lineMarkers(for: identifier) != nil
         )

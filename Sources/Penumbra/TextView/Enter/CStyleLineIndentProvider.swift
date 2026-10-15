@@ -170,13 +170,13 @@ struct CStyleLineIndentProvider {
                         index += 1
                     }
                 } else {
-                    index = Self.skipQuoted(units, from: index, quote: unit)
+                    index = CodeTextScanner.skipQuoted(units, from: index, quote: unit)
                 }
                 stack[stack.count - 1].tokens.append(.literal)
                 continue
             }
             if unit == UInt16(ascii: "'") {
-                index = Self.skipQuoted(units, from: index, quote: unit)
+                index = CodeTextScanner.skipQuoted(units, from: index, quote: unit)
                 stack[stack.count - 1].tokens.append(.literal)
                 continue
             }
@@ -273,25 +273,6 @@ struct CStyleLineIndentProvider {
     }
 
     // MARK: - Helpers
-
-    private static func skipQuoted(_ units: [UInt16], from start: Int, quote: UInt16) -> Int {
-        var index = start + 1
-        while index < units.count {
-            let unit = units[index]
-            if unit == UInt16(ascii: "\\") {
-                index += 2
-                continue
-            }
-            if unit == quote {
-                return index + 1
-            }
-            if unit == 10 || unit == 13 {
-                return index
-            }
-            index += 1
-        }
-        return units.count
-    }
 
     private static func isIdentifierUnit(_ unit: UInt16) -> Bool {
         (unit >= 0x30 && unit <= 0x39)

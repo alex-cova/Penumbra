@@ -46,6 +46,11 @@ public final class IDEPreferences {
         static let openFoldersIn = "com.umbra.editor.openFoldersIn"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
         static let highlightsOccurrencesOfSelection = "com.umbra.editor.highlightsOccurrencesOfSelection"
+        static let insertPairedBrackets = "com.umbra.editor.insertPairedBrackets"
+        static let insertPairedQuotes = "com.umbra.editor.insertPairedQuotes"
+        static let insertClosingBraceOnEnter = "com.umbra.editor.insertClosingBraceOnEnter"
+        static let insertClosingTagOnTagCompletion = "com.umbra.editor.insertClosingTagOnTagCompletion"
+        static let autoCloseTagOnSlash = "com.umbra.editor.autoCloseTagOnSlash"
         static let showInvisibleCharacters = "com.umbra.editor.showInvisibleCharacters"
         static let showPageGuide = "com.umbra.editor.showPageGuide"
         static let pageGuideColumn = "com.umbra.editor.pageGuideColumn"
@@ -287,6 +292,32 @@ public final class IDEPreferences {
         didSet {
             UserDefaults.standard.set(highlightsOccurrencesOfSelection, forKey: Keys.highlightsOccurrencesOfSelection)
         }
+    }
+
+    // MARK: Smart keys (IntelliJ's Editor > General > Smart Keys)
+
+    /// `()`, `[]`, `{}` as you type, and `<>` after a generic type name.
+    var insertPairedBrackets: Bool {
+        didSet { UserDefaults.standard.set(insertPairedBrackets, forKey: Keys.insertPairedBrackets) }
+    }
+
+    var insertPairedQuotes: Bool {
+        didSet { UserDefaults.standard.set(insertPairedQuotes, forKey: Keys.insertPairedQuotes) }
+    }
+
+    /// Enter after a `{` that nothing closes adds the `}`.
+    var insertClosingBraceOnEnter: Bool {
+        didSet { UserDefaults.standard.set(insertClosingBraceOnEnter, forKey: Keys.insertClosingBraceOnEnter) }
+    }
+
+    /// HTML and XML: typing the `>` of a start tag adds the end tag.
+    var insertClosingTagOnTagCompletion: Bool {
+        didSet { UserDefaults.standard.set(insertClosingTagOnTagCompletion, forKey: Keys.insertClosingTagOnTagCompletion) }
+    }
+
+    /// HTML and XML: typing `</` completes the innermost open tag.
+    var autoCloseTagOnSlash: Bool {
+        didSet { UserDefaults.standard.set(autoCloseTagOnSlash, forKey: Keys.autoCloseTagOnSlash) }
     }
 
     // MARK: Code insight (IntelliJ's Editor > General)
@@ -789,6 +820,11 @@ public final class IDEPreferences {
         openFoldersIn = defaults.string(forKey: Keys.openFoldersIn).flatMap(IDEOpenFoldersIn.init(rawValue:)) ?? .ask
         showMethodSeparators = defaults.object(forKey: Keys.showMethodSeparators) as? Bool ?? true
         highlightsOccurrencesOfSelection = defaults.object(forKey: Keys.highlightsOccurrencesOfSelection) as? Bool ?? true
+        insertPairedBrackets = defaults.object(forKey: Keys.insertPairedBrackets) as? Bool ?? true
+        insertPairedQuotes = defaults.object(forKey: Keys.insertPairedQuotes) as? Bool ?? true
+        insertClosingBraceOnEnter = defaults.object(forKey: Keys.insertClosingBraceOnEnter) as? Bool ?? true
+        insertClosingTagOnTagCompletion = defaults.object(forKey: Keys.insertClosingTagOnTagCompletion) as? Bool ?? true
+        autoCloseTagOnSlash = defaults.object(forKey: Keys.autoCloseTagOnSlash) as? Bool ?? true
         showInvisibleCharacters = defaults.object(forKey: Keys.showInvisibleCharacters) as? Bool ?? false
         showsErrorStripe = defaults.object(forKey: Keys.showsErrorStripe) as? Bool ?? true
         errorStripeMarkMinHeight = defaults.object(forKey: Keys.errorStripeMarkMinHeight) as? Int ?? 2
@@ -877,6 +913,7 @@ public final class IDEPreferences {
         textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         textView.showMethodSeparators = showMethodSeparators
         textView.highlightsOccurrencesOfSelection = highlightsOccurrencesOfSelection
+        applySmartKeys(to: textView)
         textView.showsErrorStripe = showsErrorStripe
         textView.errorStripeMinimumMarkHeight = CGFloat(errorStripeMarkMinHeight)
         textView.highlightsCurrentScope = highlightsCurrentScope
@@ -911,6 +948,29 @@ public final class IDEPreferences {
             textView.redisplayVisibleLines()
             textView.refreshGutterChrome()
         }
+    }
+
+    /// Pushes the Smart Keys switches onto `textView` for its language. Call again when the
+    /// language changes; `apply(to:)` does it for every preference change and document load.
+    func applySmartKeys(to textView: TextView) {
+        let configuration = IDESmartKeysConfiguration.make(
+            language: textView.languageIdentifier,
+            switches: IDESmartKeysConfiguration.Switches(
+                insertPairedBrackets: insertPairedBrackets,
+                insertPairedQuotes: insertPairedQuotes,
+                insertClosingBraceOnEnter: insertClosingBraceOnEnter,
+                insertClosingTagOnTagCompletion: insertClosingTagOnTagCompletion,
+                autoCloseTagOnSlash: autoCloseTagOnSlash
+            )
+        )
+        if textView.characterPairs.count != configuration.characterPairs.count
+            || (textView.characterPairs as? [BasicCharacterPair]) != configuration.characterPairs {
+            textView.characterPairs = configuration.characterPairs
+        }
+        textView.characterPairTrailingComponentDeletionMode = .immediatelyFollowingLeadingComponent
+        textView.insertsClosingBraceOnEnter = configuration.insertsClosingBraceOnEnter
+        textView.tagAutoClosing = configuration.tagAutoClosing
+        textView.voidTagNames = configuration.voidTagNames
     }
 
     /// Switches sticky lines on for `textView` unless they are off for its language, and wires the
@@ -1005,6 +1065,11 @@ public final class IDEPreferences {
             keymapPreset: keymapPreset,
             showMethodSeparators: showMethodSeparators,
             highlightsOccurrencesOfSelection: highlightsOccurrencesOfSelection,
+            insertPairedBrackets: insertPairedBrackets,
+            insertPairedQuotes: insertPairedQuotes,
+            insertClosingBraceOnEnter: insertClosingBraceOnEnter,
+            insertClosingTagOnTagCompletion: insertClosingTagOnTagCompletion,
+            autoCloseTagOnSlash: autoCloseTagOnSlash,
             showInvisibleCharacters: showInvisibleCharacters,
             showPageGuide: showPageGuide,
             pageGuideColumn: pageGuideColumn,
@@ -1043,6 +1108,11 @@ public final class IDEPreferences {
         keymapPreset = snapshot.keymapPreset
         showMethodSeparators = snapshot.showMethodSeparators
         highlightsOccurrencesOfSelection = snapshot.highlightsOccurrencesOfSelection
+        insertPairedBrackets = snapshot.insertPairedBrackets
+        insertPairedQuotes = snapshot.insertPairedQuotes
+        insertClosingBraceOnEnter = snapshot.insertClosingBraceOnEnter
+        insertClosingTagOnTagCompletion = snapshot.insertClosingTagOnTagCompletion
+        autoCloseTagOnSlash = snapshot.autoCloseTagOnSlash
         showInvisibleCharacters = snapshot.showInvisibleCharacters
         showPageGuide = snapshot.showPageGuide
         pageGuideColumn = snapshot.pageGuideColumn
@@ -1079,6 +1149,11 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var keymapPreset: KeymapPreset
     var showMethodSeparators: Bool
     var highlightsOccurrencesOfSelection: Bool
+    var insertPairedBrackets: Bool
+    var insertPairedQuotes: Bool
+    var insertClosingBraceOnEnter: Bool
+    var insertClosingTagOnTagCompletion: Bool
+    var autoCloseTagOnSlash: Bool
     var showInvisibleCharacters: Bool
     var showPageGuide: Bool
     var pageGuideColumn: Int
@@ -1113,6 +1188,11 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         keymapPreset: KeymapPreset,
         showMethodSeparators: Bool = true,
         highlightsOccurrencesOfSelection: Bool = true,
+        insertPairedBrackets: Bool = true,
+        insertPairedQuotes: Bool = true,
+        insertClosingBraceOnEnter: Bool = true,
+        insertClosingTagOnTagCompletion: Bool = true,
+        autoCloseTagOnSlash: Bool = true,
         showInvisibleCharacters: Bool = false,
         showPageGuide: Bool = false,
         pageGuideColumn: Int = 120,
@@ -1146,6 +1226,11 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.keymapPreset = keymapPreset
         self.showMethodSeparators = showMethodSeparators
         self.highlightsOccurrencesOfSelection = highlightsOccurrencesOfSelection
+        self.insertPairedBrackets = insertPairedBrackets
+        self.insertPairedQuotes = insertPairedQuotes
+        self.insertClosingBraceOnEnter = insertClosingBraceOnEnter
+        self.insertClosingTagOnTagCompletion = insertClosingTagOnTagCompletion
+        self.autoCloseTagOnSlash = autoCloseTagOnSlash
         self.showInvisibleCharacters = showInvisibleCharacters
         self.showPageGuide = showPageGuide
         self.pageGuideColumn = pageGuideColumn
@@ -1186,6 +1271,11 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         keymapPreset = try container.decode(KeymapPreset.self, forKey: .keymapPreset)
         showMethodSeparators = try container.decodeIfPresent(Bool.self, forKey: .showMethodSeparators) ?? true
         highlightsOccurrencesOfSelection = try container.decodeIfPresent(Bool.self, forKey: .highlightsOccurrencesOfSelection) ?? true
+        insertPairedBrackets = try container.decodeIfPresent(Bool.self, forKey: .insertPairedBrackets) ?? true
+        insertPairedQuotes = try container.decodeIfPresent(Bool.self, forKey: .insertPairedQuotes) ?? true
+        insertClosingBraceOnEnter = try container.decodeIfPresent(Bool.self, forKey: .insertClosingBraceOnEnter) ?? true
+        insertClosingTagOnTagCompletion = try container.decodeIfPresent(Bool.self, forKey: .insertClosingTagOnTagCompletion) ?? true
+        autoCloseTagOnSlash = try container.decodeIfPresent(Bool.self, forKey: .autoCloseTagOnSlash) ?? true
         showInvisibleCharacters = try container.decodeIfPresent(Bool.self, forKey: .showInvisibleCharacters) ?? false
         showPageGuide = try container.decodeIfPresent(Bool.self, forKey: .showPageGuide) ?? false
         pageGuideColumn = try container.decodeIfPresent(Int.self, forKey: .pageGuideColumn) ?? 120

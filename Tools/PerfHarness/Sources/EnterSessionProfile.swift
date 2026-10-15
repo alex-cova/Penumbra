@@ -236,6 +236,8 @@ enum EnterSessionProfile {
         // Umbra pins the enclosing class and method; PENUMBRA_NO_STICKY=1 measures without them.
         textView.showsStickyLines = ProcessInfo.processInfo.environment["PENUMBRA_NO_STICKY"] == nil
         textView.isMetalRenderingEnabled = true
+        // Umbra's Smart Keys default to on; PENUMBRA_NO_SMART_KEYS=1 measures Enter without them.
+        textView.insertsClosingBraceOnEnter = ProcessInfo.processInfo.environment["PENUMBRA_NO_SMART_KEYS"] == nil
         // Umbra sets this; it selects the Java declaration rules (method separators).
         textView.languageIdentifier = "java"
         window.contentView = textView

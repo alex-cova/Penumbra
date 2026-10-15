@@ -12,6 +12,8 @@ struct EnterController {
     let languageMode: InternalLanguageMode
     let indentStrategy: IndentStrategy
     let hostDelegates: [EnterHandlerDelegate]
+    /// Adds a `}` when Enter follows a `{` that nothing closes.
+    var insertsClosingBrace = false
 
     /// Returns the edit for pressing Enter with `range` selected, or `nil` if the position is invalid.
     func makeEdit(in range: NSRange, lineEnding: LineEnding) -> EnterEdit? {
@@ -30,6 +32,19 @@ struct EnterController {
         }
         if let edit = StringLiteralEnterHandler.edit(for: context) {
             return edit
+        }
+        if insertsClosingBrace {
+            let stringView = self.stringView
+            let caret = range.upperBound
+            let edit = EnterAfterUnmatchedBraceHandler.edit(for: context) { length in
+                let available = max(0, stringView.length - caret)
+                let count = min(length, available)
+                let text = stringView.substring(in: NSRange(location: caret, length: count)) ?? ""
+                return (text, count == available)
+            }
+            if let edit {
+                return edit
+            }
         }
         if !languageMode.hasIndentationScopes || context.usesSmartIndent,
            let edit = EnterBetweenBracesHandler.edit(for: context) {

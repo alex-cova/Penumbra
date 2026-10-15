@@ -128,6 +128,25 @@ struct IDEPreferencesEditorPane: View {
         }
 
         IDESettingsSection(
+            "Smart Keys",
+            footer: "Pairs are completed where it makes sense: not in front of a word, and not after one for quotes. Closing tags apply to HTML and XML."
+        ) {
+            IDESettingsToggle(
+                "Insert Paired Brackets",
+                isOn: $preferences.insertPairedBrackets,
+                detail: "Completes (), [] and {} as you type, and <> after a generic type name such as List."
+            )
+            IDESettingsToggle("Insert Paired Quotes", isOn: $preferences.insertPairedQuotes)
+            IDESettingsToggle(
+                "Insert Closing Brace on Enter",
+                isOn: $preferences.insertClosingBraceOnEnter,
+                detail: "Adds the } when Enter follows a { that nothing closes."
+            )
+            IDESettingsToggle("Insert Closing Tag on Tag Completion", isOn: $preferences.insertClosingTagOnTagCompletion)
+            IDESettingsToggle("Auto-Close Tag on Typing \"</\"", isOn: $preferences.autoCloseTagOnSlash)
+        }
+
+        IDESettingsSection(
             "Layout",
             footer: "The vertical scrollbar appears when the minimap is off."
         ) {

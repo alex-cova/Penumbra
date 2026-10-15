@@ -13,6 +13,8 @@ final class IndentController {
     weak var delegate: IndentControllerDelegate?
     /// Host handlers consulted before the built-in Enter handlers.
     var enterHandlerDelegates: [EnterHandlerDelegate] = []
+    /// Whether Enter after an unmatched `{` also inserts the `}`.
+    var insertsClosingBraceOnEnter = false
     var stringView: StringView
     var lineManager: LineManager
     var languageMode: InternalLanguageMode
@@ -116,11 +118,12 @@ final class IndentController {
     }
 
     func insertLineBreak(in range: NSRange, using lineEnding: LineEnding) {
-        let controller = EnterController(stringView: stringView,
+        var controller = EnterController(stringView: stringView,
                                          lineManager: lineManager,
                                          languageMode: languageMode,
                                          indentStrategy: indentStrategy,
                                          hostDelegates: enterHandlerDelegates)
+        controller.insertsClosingBrace = insertsClosingBraceOnEnter
         guard let edit = controller.makeEdit(in: range, lineEnding: lineEnding) else {
             delegate?.indentController(self, shouldInsert: lineEnding.symbol, in: range)
             return

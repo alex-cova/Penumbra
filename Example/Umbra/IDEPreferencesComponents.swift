@@ -141,7 +141,16 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
 
     // Split into groups: one 22-modifier chain exceeds the type checker's time limit.
     func body(content: Content) -> some View {
-        codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content)))))
+        smartKeyChanges(codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content))))))
+    }
+
+    private func smartKeyChanges(_ view: some View) -> some View {
+        view
+            .onChange(of: preferences.insertPairedBrackets) { applyLivePreferences() }
+            .onChange(of: preferences.insertPairedQuotes) { applyLivePreferences() }
+            .onChange(of: preferences.insertClosingBraceOnEnter) { applyLivePreferences() }
+            .onChange(of: preferences.insertClosingTagOnTagCompletion) { applyLivePreferences() }
+            .onChange(of: preferences.autoCloseTagOnSlash) { applyLivePreferences() }
     }
 
     private func appearanceChanges(_ view: some View) -> some View {
