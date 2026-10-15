@@ -51,7 +51,6 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
-        .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
         .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
         .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.0.0"),
@@ -117,8 +116,7 @@ let package = Package(
         .target(name: "Penumbra", dependencies: [
             "EditorIntelligence",
             "PenumbraBeautifulMermaid",
-            "TreeSitter",
-            .product(name: "TextFormation", package: "TextFormation")
+            "TreeSitter"
         ], exclude: [
             "CLAUDE.md",
             "Documentation.docc",

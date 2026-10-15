@@ -167,7 +167,7 @@ Deeper internals: [CLAUDE.md](CLAUDE.md), [Sources/Penumbra/CLAUDE.md](Sources/P
 
 * **macOS:** 14.0 (Sonoma) or later for libraries; Umbra release line follows macOS 26 where required by DiagramKit
 * **Swift:** 6.2+ / Xcode 26+ for the root package (Swift 6 language mode)
-* **Dependencies:** vendored [Tree-sitter](https://github.com/tree-sitter/tree-sitter), [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient), [TextFormation](https://github.com/ChimeHQ/TextFormation), and related ChimeHQ packages (see `Package.swift`)
+* **Dependencies:** vendored [Tree-sitter](https://github.com/tree-sitter/tree-sitter), [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient), and related ChimeHQ packages (see `Package.swift`)
 
 ### Installation
 

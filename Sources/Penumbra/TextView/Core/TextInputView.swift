@@ -576,6 +576,10 @@ final class TextInputView: EditorView {
         get { indentController.enterHandlerDelegates }
         set { indentController.enterHandlerDelegates = newValue }
     }
+    var insertsClosingBraceOnEnter: Bool {
+        get { indentController.insertsClosingBraceOnEnter }
+        set { indentController.insertsClosingBraceOnEnter = newValue }
+    }
     var showPageGuide = false {
         didSet {
             if showPageGuide != oldValue {
@@ -869,7 +873,11 @@ final class TextInputView: EditorView {
                 layoutManager.setNeedsLayoutLineSelection()
                 selectionOverlayController.selectionDidChange()
                 if let location = _selectedRange?.location {
-                    bracketMatchingController.characterPairs = characterPairs
+                    // `<`/`>` are comparison operators as often as generics; matching them would
+                    // emphasize unrelated characters.
+                    bracketMatchingController.characterPairs = characterPairs.filter {
+                        ($0 as? BasicCharacterPair)?.kind != .genericAngle
+                    }
                     bracketMatchingController.emphasisStyle = bracketPairEmphasis
                     bracketMatchingController.emphasizePairs(at: location)
                 } else {

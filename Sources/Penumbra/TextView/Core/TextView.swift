@@ -467,6 +467,25 @@ public struct DocumentTextExport: Sendable {
             textInputView.enterHandlerDelegates = newValue
         }
     }
+    /// Enter after a `{` that nothing closes inserts the `}` on its own line, with the caret on
+    /// the indented line between them (IntelliJ's "Insert pair '}'"). Defaults to `false`.
+    ///
+    /// Whether a `{` is closed is a bounded textual scan that skips comments and literals, so it
+    /// works on code that does not parse.
+    public var insertsClosingBraceOnEnter: Bool {
+        get {
+            textInputView.insertsClosingBraceOnEnter
+        }
+        set {
+            textInputView.insertsClosingBraceOnEnter = newValue
+        }
+    }
+    /// Tag-closing conveniences for markup: completing a start tag inserts its end tag, and `</`
+    /// completes the innermost open element. Defaults to none. Set it for markup languages only.
+    public var tagAutoClosing: TagAutoClosingOptions = []
+    /// Lowercase names of elements that take no end tag, such as ``TagAutoClosingOptions/htmlVoidTagNames``
+    /// for HTML. `nil` applies XML rules: names are case-sensitive and only `/>` ends an element.
+    public var voidTagNames: Set<String>?
     /// Determines what should happen to the trailing component of a character pair when deleting the leading component. Defaults to `disabled` meaning that nothing will happen.
     public var characterPairTrailingComponentDeletionMode: CharacterPairTrailingComponentDeletionMode {
         get {
@@ -2670,6 +2689,10 @@ private extension TextView {
             return false
         }
         if selectedRange.length == 0 {
+            if let basicPair = characterPair as? BasicCharacterPair,
+               !shouldCompleteCharacterPair(basicPair, at: range.location) {
+                return false
+            }
             textInputView.insertText(characterPair.leading + characterPair.trailing)
             textInputView.selection = NSRange(location: range.location + characterPair.leading.count, length: 0)
             return true
@@ -2682,6 +2705,42 @@ private extension TextView {
         } else {
             return false
         }
+    }
+
+    /// Closes the tag being typed, reading at most ``TagAutoCloser/maximumLookBehind`` units back.
+    private func applyTagAutoClosing(typed: String, at location: Int) -> Bool {
+        guard !isMultiCursorActive else {
+            return false
+        }
+        let start = max(0, location - TagAutoCloser.maximumLookBehind)
+        var before = textInputView.text(in: NSRange(location: start, length: location - start)) ?? ""
+        if start > 0, let lineBreak = before.firstIndex(where: \.isNewline) {
+            // A window that begins mid-line could begin inside a tag or comment.
+            before = String(before[before.index(after: lineBreak)...])
+        }
+        let afterLength = min(TagAutoCloser.lookAheadLength, max(0, textInputView.stringView.length - location))
+        let after = textInputView.text(in: NSRange(location: location, length: afterLength)) ?? ""
+        guard let edit = TagAutoCloser.edit(typed: typed,
+                                            textBefore: before,
+                                            textAfter: after,
+                                            options: tagAutoClosing,
+                                            voidTags: voidTagNames) else {
+            return false
+        }
+        textInputView.insertText(edit.text)
+        textInputView.selection = NSRange(location: location + edit.caretOffset, length: 0)
+        return true
+    }
+
+    /// Reads a bounded window around `location`, so the cost per keystroke does not depend on the
+    /// document's size.
+    private func shouldCompleteCharacterPair(_ pair: BasicCharacterPair, at location: Int) -> Bool {
+        let length = textInputView.stringView.length
+        let beforeLength = min(CharacterPairContext.lookBehindLength, location)
+        let afterLength = min(CharacterPairContext.lookAheadLength, max(0, length - location))
+        let before = textInputView.text(in: NSRange(location: location - beforeLength, length: beforeLength)) ?? ""
+        let after = textInputView.text(in: NSRange(location: location, length: afterLength)) ?? ""
+        return CharacterPairContext.shouldAutoInsert(kind: pair.kind, textBefore: before, textAfter: after)
     }
 
     private func skipInsertingTrailingComponent(of characterPair: CharacterPair, in range: NSRange) -> Bool {
@@ -3072,6 +3131,9 @@ extension TextView: TextInputViewDelegate {
         if textInputView.isRestoringPreviouslyDeletedText {
             // UIKit is inserting text to combine characters, for example to combine two Korean characters into one, and we do not want to interfere with that.
             return editorDelegate?.textView(self, shouldChangeTextIn: range, replacementText: text) ?? true
+        } else if !tagAutoClosing.isEmpty, range.length == 0, text == ">" || text == "/",
+                  applyTagAutoClosing(typed: text, at: range.location) {
+            return false
         } else if let characterPair = characterPairs.first(where: { $0.trailing == text }),
                     skipInsertingTrailingComponent(of: characterPair, in: range) {
             return false

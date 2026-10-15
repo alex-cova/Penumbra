@@ -4,6 +4,31 @@ private func isBlank(_ character: Character) -> Bool {
     character == " " || character == "\t"
 }
 
+/// Indentation shared by the handlers that split a pair of braces over three lines.
+@MainActor
+enum BraceSplit {
+    /// The indentation of the caret's new line and of the closing brace.
+    static func indents(for context: EnterContext, closer: Character) -> (middle: String, closing: String) {
+        if context.usesSmartIndent {
+            return (context.indentString(textAfterCaret: ""), context.indentString(textAfterCaret: String(closer)))
+        }
+        let closing = context.leadingWhitespace
+        return (closing + context.normalIndent, closing)
+    }
+
+    /// Line break, indented caret line, line break, closing indentation, then `suffix` (the
+    /// closing brace itself when it is not in the text yet). The caret lands on the middle line.
+    static func edit(for context: EnterContext, closer: Character, suffix: String) -> EnterEdit {
+        let indents = indents(for: context, closer: closer)
+        let first = context.lineBreak + indents.middle
+        let range = NSRange(location: context.selectedRange.location,
+                            length: context.selectedRange.length + context.leadingWhitespaceLengthAfterCaret)
+        return EnterEdit(replacementRange: range,
+                         text: first + context.lineBreak + indents.closing + suffix,
+                         caretOffset: first.utf16.count)
+    }
+}
+
 /// Enter between matching brackets: `{|}` → the closing bracket moves to its own line and the caret
 /// lands on an indented blank line between them.
 @MainActor
@@ -14,21 +39,47 @@ enum EnterBetweenBracesHandler {
               (opener == "{" && closer == "}") || (opener == "[" && closer == "]") else {
             return nil
         }
-        let closing: String
-        let middle: String
-        if context.usesSmartIndent {
-            middle = context.indentString(textAfterCaret: "")
-            closing = context.indentString(textAfterCaret: String(closer))
-        } else {
-            closing = context.leadingWhitespace
-            middle = closing + context.normalIndent
+        return BraceSplit.edit(for: context, closer: closer, suffix: "")
+    }
+}
+
+/// Enter after a `{` that has no `}`: adds the closing brace, IntelliJ's "Insert pair '}'".
+///
+/// A `{` counts as unmatched when scanning forward finds the end of the document, or a `}` that
+/// is indented less than the line holding the `{` (it closes an enclosing block). The scan looks
+/// at a growing window, so a typical method costs a few kilobytes and only a `{` that stays open
+/// across a huge file reads the whole bound.
+@MainActor
+enum EnterAfterUnmatchedBraceHandler {
+    /// Window lengths, in UTF-16 units, tried in turn. The last is the most that is ever read.
+    static let windowLengths = [4_096, 32_768, 262_144]
+
+    /// `documentTail(length)` returns up to `length` units after the caret and whether that
+    /// reaches the end of the document.
+    static func edit(for context: EnterContext,
+                     documentTail: (Int) -> (text: String, reachesEnd: Bool)) -> EnterEdit? {
+        guard context.selectedRange.length == 0,
+              context.textBeforeCaret.last(where: { !isBlank($0) }) == "{",
+              context.textAfterCaret.allSatisfy(isBlank),
+              !CodeTextScanner.endsInsideLiteralOrLineComment(context.textBeforeCaret),
+              !context.enclosingSyntaxNodes.contains(where: { $0.type.contains("comment") || $0.type.contains("string") }) else {
+            return nil
         }
-        let first = context.lineBreak + middle
-        let range = NSRange(location: context.selectedRange.location,
-                            length: context.selectedRange.length + context.leadingWhitespaceLengthAfterCaret)
-        return EnterEdit(replacementRange: range,
-                         text: first + context.lineBreak + closing,
-                         caretOffset: first.utf16.count)
+        let closingIndent = context.usesSmartIndent
+            ? context.indentString(textAfterCaret: "}")
+            : context.leadingWhitespace
+        for length in windowLengths {
+            let tail = documentTail(length)
+            switch UnmatchedBraceScanner.scan(text: tail.text, openerIndent: closingIndent, isEndOfDocument: tail.reachesEnd) {
+            case .matched:
+                return nil
+            case .unmatched:
+                return BraceSplit.edit(for: context, closer: "}", suffix: "}")
+            case .needsMoreText:
+                continue
+            }
+        }
+        return nil
     }
 }
 
