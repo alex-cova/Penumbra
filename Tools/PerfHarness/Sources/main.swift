@@ -39,7 +39,8 @@ func printUsageAndExit() -> Never {
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inspections <path|synthetic> [--lines N] [--samples N]
-      java-diagnostics survival <path|synthetic> [--lines N]
+      java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
+      java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
       swift-index <path|synthetic> [--files N]
@@ -130,6 +131,17 @@ do {
         switch mode {
         case "survival":
             try JavaDiagnosticsProfile.runSurvival(
+                pathOrSynthetic: target,
+                lines: Int(flagValue("--lines", in: modeRest) ?? "") ?? 2_000
+            )
+        case "latency":
+            try JavaDiagnosticsProfile.runLatency(
+                pathOrSynthetic: target,
+                lines: Int(flagValue("--lines", in: modeRest) ?? "") ?? 2_000,
+                samples: Int(flagValue("--samples", in: modeRest) ?? "") ?? 5
+            )
+        case "typing":
+            try JavaDiagnosticsProfile.runTyping(
                 pathOrSynthetic: target,
                 lines: Int(flagValue("--lines", in: modeRest) ?? "") ?? 2_000
             )

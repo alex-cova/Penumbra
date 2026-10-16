@@ -931,7 +931,7 @@ public final class IDEPreferences {
         let storedTooltipDelay = defaults.object(forKey: Keys.tooltipDelayMilliseconds) as? Int ?? 500
         tooltipDelayMilliseconds = storedTooltipDelay
         defaults.set(storedTooltipDelay, forKey: Keys.nativeTooltipDelay)
-        autoreparseDelayMilliseconds = defaults.object(forKey: Keys.autoreparseDelayMilliseconds) as? Int ?? 200
+        autoreparseDelayMilliseconds = defaults.object(forKey: Keys.autoreparseDelayMilliseconds) as? Int ?? 300
         nextErrorScope = defaults.string(forKey: Keys.nextErrorScope).flatMap(ProblemNavigationScope.init(rawValue:)) ?? .all
         inPlaceRefactoring = defaults.object(forKey: Keys.inPlaceRefactoring) as? Bool ?? true
         preselectsRenamedName = defaults.object(forKey: Keys.preselectsRenamedName) as? Bool ?? true

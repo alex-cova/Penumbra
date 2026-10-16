@@ -170,6 +170,37 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertTrue(box.value.contains { $0.code == "optional-is-empty" })
     }
 
+    func testRepeatedIdleRefreshStartsExactlyOnePass() async throws {
+        // With a zero idle delay every refresh would otherwise cancel and restart the running
+        // pass; same-text refreshes must join it instead, while a new text still supersedes it.
+        let service = JavaInspectionService(index: JavaIndex(), enabledRules: [.unusedImport], idleDelay: .zero)
+        let calls = PassCounter()
+        await service.setResultHandler { _, _ in calls.increment() }
+        let source = """
+        import java.util.List;
+        class T {
+            void f() {}
+        }
+        """
+        _ = await service.diagnostics(for: document(source))
+        _ = await service.diagnostics(for: document(source))
+        _ = await service.diagnostics(for: document(source))
+        let deadline = Date().addingTimeInterval(5)
+        while calls.count == 0, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        // Let a restarted duplicate land if the skip failed.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(calls.count, 1, "same-text refreshes join the running pass instead of restarting it")
+
+        _ = await service.diagnostics(for: document(source + "\n// typed\n"))
+        let secondDeadline = Date().addingTimeInterval(5)
+        while calls.count < 2, Date() < secondDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(calls.count, 2, "a changed text still supersedes the pass")
+    }
+
     func testImportWarningsSurviveASyntaxErrorElsewhereInTheFile() async {
         // Half-typed statement while typing: the tree has an ERROR node, but the import
         // list is unaffected, so the unused imports must still be reported.
@@ -215,4 +246,12 @@ private final class DiagnosticBox: @unchecked Sendable {
     private var stored: [Diagnostic] = []
     func set(_ diagnostics: [Diagnostic]) { lock.lock(); stored = diagnostics; lock.unlock() }
     var value: [Diagnostic] { lock.lock(); defer { lock.unlock() }; return stored }
+}
+
+/// Counts result-handler deliveries, so a test can tell one pass from a restarted duplicate.
+private final class PassCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+    func increment() { lock.lock(); stored += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return stored }
 }

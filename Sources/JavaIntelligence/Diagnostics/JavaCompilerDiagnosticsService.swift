@@ -32,7 +32,11 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
     public nonisolated let name = "javac"
 
     private let launcher: GradleProcessLaunching
-    private let idleDelay: Duration
+    /// How long a file rests before a recheck. The host sets it from the Autoreparse Delay
+    /// (a cold `javac` costs seconds, so transient states don't start one); the content
+    /// debounce above it already paces refreshes. A warm-server backend, when one lands,
+    /// will split this per backend with a zero server wait.
+    private var idleDelay: Duration
     private let timeout: Duration
     private let maxConcurrentCompiles: Int
 
@@ -69,6 +73,10 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         self.maxConcurrentCompiles = max(1, maxConcurrentCompiles)
     }
 
+    /// How long a file rests before a recheck. The init default covers other hosts; Umbra
+    /// sets it from the Autoreparse Delay next to the inspection delay.
+    public func setIdleDelay(_ delay: Duration) { idleDelay = delay }
+
     // MARK: - Configuration
 
     /// Points the service at a project, or turns it off with `nil`. Drops every cached result and
@@ -101,7 +109,7 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         guard let url = compilableURL(for: document) else { return [] }
         let hash = document.text.hashValue
         if let cached = cache[url], cached.textHash == hash { return cached.diagnostics }
-        schedule(url: url, text: document.text, textHash: hash, delay: idleDelay)
+        schedule(url: url, text: document.text, textHash: hash, delay: idleDelay, force: false)
         return cache[url]?.diagnostics ?? []
     }
 
@@ -112,7 +120,7 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         guard let url = compilableURL(for: document) else { return }
         let hash = document.text.hashValue
         if !force, let cached = cache[url], cached.textHash == hash { return }
-        schedule(url: url, text: document.text, textHash: hash, delay: .zero)
+        schedule(url: url, text: document.text, textHash: hash, delay: .zero, force: force)
     }
 
     /// The compiler's result for exactly this text, awaited: the cached one when the text is
@@ -141,12 +149,13 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
 
     // MARK: - Scheduling
 
-    private func schedule(url: URL, text: String, textHash: Int, delay: Duration) {
+    private func schedule(url: URL, text: String, textHash: Int, delay: Duration, force: Bool) {
         if let existing = pending[url] {
             // Same text already waiting (or compiling): leave it alone, so a refresh that changed
-            // nothing doesn't push the idle deadline back. A different text supersedes it, and
-            // cancelling kills the running `javac`.
-            if existing.textHash == textHash && delay != .zero { return }
+            // nothing neither restarts the compile nor pushes the idle deadline back. A different
+            // text supersedes it, a forced request restarts it, and cancelling kills the
+            // running `javac`.
+            if !force, existing.textHash == textHash { return }
             existing.task.cancel()
         }
         let currentGeneration = generation

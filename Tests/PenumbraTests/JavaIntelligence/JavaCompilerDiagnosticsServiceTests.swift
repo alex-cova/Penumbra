@@ -30,6 +30,25 @@ private final class ResultBox: @unchecked Sendable {
     var results: [(URL, [Diagnostic])] { lock.lock(); defer { lock.unlock() }; return stored }
 }
 
+/// Holds the first compile inside the launcher until the test releases it, so a same-text
+/// refresh lands while the compile is still running.
+private actor CompileGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let pending = waiters
+        waiters = []
+        for waiter in pending { waiter.resume() }
+    }
+}
+
 final class JavaCompilerDiagnosticsServiceTests: XCTestCase {
     private var directories: [URL] = []
 
@@ -252,6 +271,35 @@ final class JavaCompilerDiagnosticsServiceTests: XCTestCase {
 
         XCTAssertEqual(box.results.count, 1)
         XCTAssertEqual(box.results[0].1.map(\.message), ["fresh"])
+    }
+
+    func testSameHashIdleRefreshDoesNotRestartARunningCompile() async throws {
+        let gate = CompileGate()
+        let launcher = FakeJavacLauncher { path, _, call in
+            if call == 1 { await gate.wait() }
+            return .init(exitCode: 1, stdout: "", stderr: "\(path):1: error: boom\nx\n^\n1 error\n")
+        }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher, idleDelay: .zero)
+        let box = ResultBox()
+        await service.setResultHandler { box.append($0, $1) }
+        await service.configure(try makeConfiguration())
+        let document = makeDocument(text: "class Foo {}")
+
+        _ = await service.diagnostics(for: document)
+        try await waitUntil { await launcher.launchCount == 1 }
+        // Same text while the compile runs: the idle refresh and the unforced compile join
+        // it instead of restarting it.
+        _ = await service.diagnostics(for: document)
+        await service.compileNow(document)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let launches = await launcher.launchCount
+        XCTAssertEqual(launches, 1)
+
+        await gate.release()
+        try await waitUntil { box.results.count == 1 }
+        // A forced compile restarts even for unchanged text.
+        await service.compileNow(document, force: true)
+        try await waitUntil { await launcher.launchCount == 2 }
     }
 
     func testResetDropsInFlightResults() async throws {

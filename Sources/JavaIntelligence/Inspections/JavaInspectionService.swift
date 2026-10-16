@@ -73,6 +73,9 @@ public actor JavaInspectionService: DiagnosticProvider {
     private var idleDelay: Duration
     private var cache: [URL: CachedResult] = [:]
     private var pending: [URL: Task<Void, Never>] = [:]
+    /// The text each pending task was scheduled for: a refresh for the same text skips
+    /// scheduling whether the pass is still waiting or already running.
+    private var pendingHash: [URL: Int] = [:]
     private var resultHandler: (@Sendable (URL, [Diagnostic]) -> Void)?
 
     private struct CachedResult {
@@ -202,12 +205,21 @@ public actor JavaInspectionService: DiagnosticProvider {
         let text = JavaNavigationText.fullText(of: document)
         let hash = text.hashValue
         if !force, cache[url]?.textHash == hash { return }
+        // A pass for this exact text is already waiting or running: joining it beats
+        // cancelling and restarting it.
+        if !force, pendingHash[url] == hash { return }
         pending[url]?.cancel()
+        pendingHash[url] = nil
         await runAnalysis(url: url, text: text, hash: hash, document: document)
     }
 
     private func scheduleAnalysis(url: URL, text: String, hash: Int, document: Document?) {
+        // The same text is already waiting or running: leave it alone, so a refresh that
+        // changed nothing neither restarts the pass nor pushes the idle deadline back.
+        // A different text supersedes it.
+        if pendingHash[url] == hash { return }
         pending[url]?.cancel()
+        pendingHash[url] = hash
         pending[url] = Task {
             try? await Task.sleep(for: idleDelay)
             guard !Task.isCancelled else { return }
@@ -240,6 +252,7 @@ public actor JavaInspectionService: DiagnosticProvider {
         let diagnostics = outcome.visible.map { $0.asDiagnostic() }
         cache[url] = CachedResult(textHash: hash, diagnostics: diagnostics, quiet: outcome.quiet.map { $0.asDiagnostic() })
         pending[url] = nil
+        if pendingHash[url] == hash { pendingHash[url] = nil }
         resultHandler?(url, diagnostics)
     }
 

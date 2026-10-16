@@ -243,10 +243,13 @@ final class IDEJavaSupport {
             .appendingPathComponent("javac", isDirectory: true)
     }
 
-    /// Applies the code-insight settings the Java services own: how long a file rests before its
-    /// inspections run again, which inspection profile applies (with the project root and test
-    /// source directories its per-scope exceptions are judged against), and what a Suppress quick
-    /// fix writes.
+    /// Applies the code-insight settings the Java services own: which inspection profile applies
+    /// (with the project root and test source directories its per-scope exceptions are judged
+    /// against), the `javac` idle wait, and what a Suppress quick fix writes. Inspections run
+    /// on every refreshed document with no extra wait: the adapter's content debounce
+    /// (`autoreparseDelay`, applied to `contentRefreshDebounce` by the workspace) is the only
+    /// Autoreparse Delay. The cold CLI `javac` keeps `autoreparseDelay` as its wait because a
+    /// cold compile costs seconds.
     func applyCodeInsightPreferences(
         autoreparseDelay: Duration,
         suppressionStyle: JavaSuppressionStyle,
@@ -258,8 +261,9 @@ final class IDEJavaSupport {
         let previous = appliedInspectionConfiguration
         appliedInspectionConfiguration = configuration
         let changed = previous != configuration
-        Task { [inspectionService, codeActionProvider] in
-            await inspectionService.setIdleDelay(autoreparseDelay)
+        Task { [inspectionService, compilerDiagnostics, codeActionProvider] in
+            await inspectionService.setIdleDelay(.zero)
+            await compilerDiagnostics.setIdleDelay(autoreparseDelay)
             await codeActionProvider.setSuppressionStyle(suppressionStyle)
             await codeActionProvider.setQuietFindingsSource { url in await inspectionService.quietFindings(for: url) }
             guard changed else { return }
