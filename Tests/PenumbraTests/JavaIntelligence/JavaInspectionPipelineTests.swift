@@ -170,6 +170,36 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertTrue(box.value.contains { $0.code == "optional-is-empty" })
     }
 
+    func testImportWarningsSurviveASyntaxErrorElsewhereInTheFile() async {
+        // Half-typed statement while typing: the tree has an ERROR node, but the import
+        // list is unaffected, so the unused imports must still be reported.
+        let source = """
+        import java.util.List;
+        import java.util.ArrayList;
+        class T {
+            void f() {
+                foo(
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertEqual(diagnostics.map(\.code), ["unused-import", "unused-import"])
+    }
+
+    func testDuplicateImportSurvivesASyntaxErrorElsewhereInTheFile() async {
+        let source = """
+        import java.util.List;
+        import java.util.List;
+        class T {
+            void f() {
+                foo(
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertTrue(diagnostics.contains { $0.code == "duplicate-import" })
+    }
+
     func testNoFixIsOfferedAwayFromTheDiagnostic() async throws {
         let diagnostics = await analyze(comparing)
         let provider = JavaCodeActionProvider(index: JavaIndex())

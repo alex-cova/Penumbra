@@ -40,6 +40,14 @@ enum JavaUnusedImports {
 
     static func analyze(source: String, tree: JavaSyntaxTree) -> Analysis? {
         guard !tree.rootNode.hasError else { return nil }
+        return analyzeToleratingErrors(source: source, tree: tree)
+    }
+
+    /// Error-tolerant variant, for diagnostics only. `JavaImportList` reads only well-formed
+    /// top-level `import_declaration` nodes, so a syntax error elsewhere in the file cannot
+    /// corrupt the import list; names used inside `ERROR` regions still count as used, which
+    /// fails silent rather than misreporting. Never use this for edits.
+    static func analyzeToleratingErrors(source: String, tree: JavaSyntaxTree) -> Analysis {
         let list = JavaImportList(tree: tree)
         return Analysis(tree: tree, list: list, removable: removableImports(in: list, used: usedNames(in: tree)))
     }

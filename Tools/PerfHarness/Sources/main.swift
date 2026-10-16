@@ -39,6 +39,7 @@ func printUsageAndExit() -> Never {
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inspections <path|synthetic> [--lines N] [--samples N]
+      java-diagnostics survival <path|synthetic> [--lines N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
       swift-index <path|synthetic> [--files N]
@@ -95,7 +96,7 @@ let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-met
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
-guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
+guard usesSynthetic || command == "java-diagnostics" || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
     exit(1)
 }
@@ -120,6 +121,23 @@ do {
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
         )
+    case "java-diagnostics":
+        // Mode-first shape: `java-diagnostics survival synthetic --lines 2000`.
+        // `latency` and `typing` land with Phase 2.
+        let mode = path
+        let target = rest.first ?? "synthetic"
+        let modeRest = Array(rest.dropFirst())
+        switch mode {
+        case "survival":
+            try JavaDiagnosticsProfile.runSurvival(
+                pathOrSynthetic: target,
+                lines: Int(flagValue("--lines", in: modeRest) ?? "") ?? 2_000
+            )
+        default:
+            FileHandle.standardError.write(
+                "java-diagnostics modes: survival (latency and typing land in Phase 2)\n".data(using: .utf8)!)
+            exit(1)
+        }
     case "java-profile-import":
         JavaInstrumentationProfile.runProfileImport(
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 60_000,

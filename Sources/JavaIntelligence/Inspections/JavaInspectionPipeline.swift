@@ -19,7 +19,18 @@ enum JavaInspectionPipeline {
         guard let context = JavaInspectionContext(
             source: text, tree: tree, url: url, index: index, thresholds: thresholds, languageLevel: languageLevel
         ) else {
-            return []
+            // Error isolation while typing: the tree has a syntax error somewhere, which
+            // fails the semantic context, but the import list only reflects well-formed
+            // declarations — so unused and duplicate imports stay trustworthy and are still
+            // reported. Everything semantic stays gated on a clean tree.
+            var isolated: [JavaInspection] = []
+            if enabled.contains(.unusedImport) {
+                isolated.append(contentsOf: JavaUnusedImportInspection.inspect(source: text, tree: tree, toleratingErrors: true))
+            }
+            if enabled.contains(.duplicateImport) {
+                isolated.append(contentsOf: JavaDuplicateImportInspection.inspect(source: text, tree: tree))
+            }
+            return isolated
         }
         var found: [JavaInspection] = []
         if enabled.contains(.unusedImport) {

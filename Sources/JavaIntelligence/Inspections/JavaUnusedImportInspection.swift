@@ -2,9 +2,14 @@ import EditorIntelligence
 import Foundation
 
 enum JavaUnusedImportInspection {
-    static func inspect(source: String, tree: JavaSyntaxTree? = nil) -> [JavaInspection] {
+    /// With `toleratingErrors`, a broken tree still reports the imports that are unused: the
+    /// import list only reflects well-formed declarations. The pipeline uses this while the
+    /// user is typing; every other caller keeps the strict default.
+    static func inspect(source: String, tree: JavaSyntaxTree? = nil, toleratingErrors: Bool = false) -> [JavaInspection] {
         let analysis: JavaUnusedImports.Analysis?
-        if let tree {
+        if let tree, toleratingErrors {
+            analysis = JavaUnusedImports.analyzeToleratingErrors(source: source, tree: tree)
+        } else if let tree {
             analysis = JavaUnusedImports.analyze(source: source, tree: tree)
         } else {
             analysis = JavaUnusedImports.analyze(source)
