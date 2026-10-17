@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import JavaIntelligence
 
@@ -23,6 +24,10 @@ protocol IDEJavaRunHost: AnyObject {
 
     /// The text of `url` if it is open, unsaved edits included.
     func openBufferText(for url: URL) -> String?
+    /// A build finished: adopts its per-file diagnostics for the open editors (squiggles and the
+    /// error stripe, not just the Problems list) and repaints the panes showing them. `texts` is
+    /// the text each file's diagnostics were mapped against, keyed by file.
+    func noteBuildDiagnostics(_ diagnostics: [URL: [Diagnostic]], source: String, texts: [URL: String])
     /// Re-reads the project's configurations and the last one into the picker.
     func refreshLastRunConfiguration()
     func showRunTab()

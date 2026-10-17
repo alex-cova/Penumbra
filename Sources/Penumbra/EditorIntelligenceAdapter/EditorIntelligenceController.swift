@@ -1188,8 +1188,27 @@ public final class EditorIntelligenceController {
 
     /// Refresh diagnostics and apply squiggles to the text view.
     public func refreshDiagnostics() {
-        guard let document = adapter.currentDocument, let textView else {
+        guard let base = adapter.currentDocument, let textView else {
             return
+        }
+        // Diagnostics need the whole file, but file-backed snapshots bridge elided
+        // (`text == nil`) so opening a file never pays its size: providers fed from the
+        // snapshot alone all see an empty file and stay silent. Materialize once here, per
+        // debounced refresh, keeping the snapshot's id, url and language.
+        let document: Document
+        if base.contentSnapshot.isElided {
+            document = Document(
+                id: base.id,
+                url: base.url,
+                displayName: base.displayName,
+                contentSnapshot: TextSnapshot(version: base.version, text: textView.text),
+                selection: base.selection,
+                cursor: base.cursor,
+                viewport: base.viewport,
+                languageIdentifier: base.languageIdentifier
+            )
+        } else {
+            document = base
         }
         let generation = textView.contentGeneration
         diagnosticsTask?.cancel()

@@ -4480,6 +4480,21 @@ public final class IDEWorkspace {
         }
     }
 
+    /// A build finished: list its problems and adopt them for the open editors, so a compile
+    /// paints squiggles and the error stripe where the code is, not just rows in the Problems
+    /// tab. Panes showing those files repaint once the rows are adopted.
+    func noteBuildDiagnostics(_ diagnostics: [URL: [Diagnostic]], source: String, texts: [URL: String]) {
+        problems.setBuildDiagnostics(diagnostics, source: source)
+        Task {
+            await javaSupport.buildDiagnostics.publish(texts: texts, diagnostics: diagnostics, source: source)
+            let keys = Set(diagnostics.keys.map { $0.standardizedFileURL })
+            for pane in workbench.panes {
+                guard let url = pane.selectedDocument?.url?.standardizedFileURL, keys.contains(url) else { continue }
+                host(for: pane.id).intelligenceController?.refreshDiagnostics()
+            }
+        }
+    }
+
     /// A finished compile: list its problems, and redraw the squiggles if that file is showing.
     private func applyCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         problems.publish(DiagnosticPublication(source: .javac, url: url, diagnostics: diagnostics))
@@ -4624,6 +4639,7 @@ public final class IDEWorkspace {
     private func compilerDidReconfigure() {
         problems.clearCompilerDiagnostics()
         problems.clearBuildDiagnostics()
+        Task { await javaSupport.buildDiagnostics.clearAll() }
         host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
         javaSupport.compileNow(openJavaDocuments())
     }
@@ -4641,6 +4657,7 @@ public final class IDEWorkspace {
     func noteDocumentSaved(_ url: URL?) {
         if let url {
             problems.clearBuildDiagnostics(for: url)
+            Task { await javaSupport.buildDiagnostics.clear(url: url) }
             diskSync.noteSaved(path: url.standardizedFileURL.path)
         }
         languages.documentsDidSave(url.map { [$0] } ?? [])
@@ -4882,6 +4899,7 @@ public final class IDEWorkspace {
         closeTestResults()
         problems.clearCompilerDiagnostics()
         problems.clearBuildDiagnostics()
+        Task { await javaSupport.buildDiagnostics.clearAll() }
     }
 
     private func rebuildLayoutHosts() {

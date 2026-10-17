@@ -34,6 +34,7 @@ public struct JavaLanguageService: LanguageService {
         hover: JavaHoverProvider,
         compilerDiagnostics: JavaCompilerDiagnosticsService,
         inspections: JavaInspectionService,
+        buildDiagnostics: JavaBuildDiagnosticsService? = nil,
         navigation: JavaGoToDefinitionProvider,
         findUsages: JavaFindUsagesProvider,
         formatting: JavaFormattingProvider,
@@ -62,10 +63,16 @@ public struct JavaLanguageService: LanguageService {
         self.typeHierarchy = typeHierarchy
         self.callHierarchy = callHierarchy
         let syntax = JavaSyntaxDiagnostics.provider(cache: inspections.documentParseCache)
+        var diagnosticsProviders: [any DiagnosticProvider] = [
+            JavaSyntaxAwareDiagnostics(syntax: syntax, compiler: compilerDiagnostics, inspections: inspections),
+        ]
+        // Last-build rows for open files, so a compile also paints squiggles and the error
+        // stripe -- not just the Problems list. The engine deduplicates rows live checks restate.
+        if let buildDiagnostics { diagnosticsProviders.append(buildDiagnostics) }
         providers = LanguageProviders(
             completion: [completion],
             hover: [hover],
-            diagnostics: [JavaSyntaxAwareDiagnostics(syntax: syntax, compiler: compilerDiagnostics, inspections: inspections)],
+            diagnostics: diagnosticsProviders,
             navigation: [navigation, findUsages],
             formatting: formatting,
             // `JavaCompletionProvider` doubles as parameter info.

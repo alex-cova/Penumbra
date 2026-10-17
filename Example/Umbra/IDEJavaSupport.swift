@@ -3,6 +3,18 @@ import Foundation
 import JavaIntelligence
 import Observation
 
+/// Why open files get live `javac` errors right now, or nothing when they do not.
+enum JavaCompilerState: Sendable {
+    /// The compiler service is pointed at the project and checks open files.
+    case ready
+    /// The user turned compiler diagnostics off in Settings.
+    case disabled
+    /// A Gradle or Maven project with no model yet: the first sync has not finished.
+    case waitingForModel
+    /// No installed JDK ships a `javac`.
+    case noJDK
+}
+
 /// Owns Java code intelligence for the workspace: the shared `JavaIndex` (JDK + open project's
 /// source tree + Gradle-resolved dependencies), the `JavaOverlayService` keeping it in sync with
 /// open/edited documents, and the background indexing that populates it.
@@ -63,6 +75,14 @@ final class IDEJavaSupport {
     /// `javac`-backed diagnostics for open Java files. Idle until ``refreshCompilerDiagnostics()``
     /// finds a project state it may check: a plain folder, or a Gradle project that has synced.
     let compilerDiagnostics = JavaCompilerDiagnosticsService()
+    /// Last-build diagnostics for open Java files. A finished Gradle or Maven run publishes here
+    /// (the same rows it lists in Problems), so a compile also paints squiggles and the error
+    /// stripe instead of leaving the editor clean.
+    let buildDiagnostics = JavaBuildDiagnosticsService()
+    /// Why open files get live `javac` errors right now, or nothing when they do not. The
+    /// inspection widget reads this instead of showing a clean check mark for a file `javac`
+    /// never checked.
+    var compilerState: JavaCompilerState = .waitingForModel
 
     /// Which JDK the project uses (its own choice, the default, or Automatic) and the list to choose
     /// from. Everything that needs a JDK asks it.
@@ -221,6 +241,7 @@ final class IDEJavaSupport {
                 hover: hoverProvider,
                 compilerDiagnostics: compilerDiagnostics,
                 inspections: inspectionService,
+                buildDiagnostics: buildDiagnostics,
                 navigation: navigationProvider,
                 findUsages: findUsagesProvider,
                 formatting: formattingProvider,
@@ -408,10 +429,19 @@ final class IDEJavaSupport {
                     }, uniquingKeysWith: { first, _ in first })
                 }
             }
-            guard enabled, !waitingOnGradle else {
+            guard enabled else {
                 await compilerDiagnostics.configure(nil)
                 await compilerDiagnostics.setServerBackend(nil)
                 guard isCurrent(generation), !Task.isCancelled else { return }
+                compilerState = .disabled
+                onCompilerConfigured?()
+                return
+            }
+            guard !waitingOnGradle else {
+                await compilerDiagnostics.configure(nil)
+                await compilerDiagnostics.setServerBackend(nil)
+                guard isCurrent(generation), !Task.isCancelled else { return }
+                compilerState = .waitingForModel
                 onCompilerConfigured?()
                 return
             }
@@ -420,6 +450,7 @@ final class IDEJavaSupport {
             guard let jdk, jdk.javac != nil else {
                 await compilerDiagnostics.configure(nil)
                 await compilerDiagnostics.setServerBackend(nil)
+                compilerState = .noJDK
                 return
             }
             await compilerDiagnostics.configure(.init(
@@ -437,6 +468,7 @@ final class IDEJavaSupport {
                 await compilerDiagnostics.setServerBackend(nil)
             }
             guard isCurrent(generation), !Task.isCancelled else { return }
+            compilerState = .ready
             onCompilerConfigured?()
         }
     }

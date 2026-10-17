@@ -307,6 +307,18 @@ extension IDEJavaRunProvider {
         }
     }
 
+    /// The text each built file's diagnostics were mapped against (the open buffer, else the
+    /// file on disk), so the editors can tell current build rows from stale ones.
+    private func buildTexts(for diagnostics: [URL: [Diagnostic]]) -> [URL: String] {
+        var texts: [URL: String] = [:]
+        for url in diagnostics.keys {
+            if let text = host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8)) {
+                texts[url] = text
+            }
+        }
+        return texts
+    }
+
     private func applyBuildOutput(_ result: IDEProjectTaskReport) {
         guard let host else { return }
         let projectRoot = result.root
@@ -319,7 +331,7 @@ extension IDEJavaRunProvider {
             ) { [weak host] url in
                 host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
             }
-            host.problems.setBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.mavenBuildSource)
+            host.noteBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.mavenBuildSource, texts: buildTexts(for: matches.diagnostics))
             host.problems.setBuildMessages(matches.problems)
             if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
                 || matches.problems.contains(where: { $0.severity == .error }) {
@@ -334,7 +346,7 @@ extension IDEJavaRunProvider {
         ) { [weak host] url in
             host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
         }
-        host.problems.setBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.gradleBuildSource)
+        host.noteBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.gradleBuildSource, texts: buildTexts(for: matches.diagnostics))
         host.problems.setBuildMessages(matches.problems)
         if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
             || matches.problems.contains(where: { $0.severity == .error }) {
