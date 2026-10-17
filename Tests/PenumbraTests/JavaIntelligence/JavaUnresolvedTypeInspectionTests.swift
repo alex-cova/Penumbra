@@ -98,4 +98,49 @@ final class JavaUnresolvedTypeInspectionTests: XCTestCase {
         let found = try await findings("class T { unknown.Known value; }")
         XCTAssertEqual(found.map(\.message), ["Cannot resolve type 'Known'"])
     }
+
+    // MARK: - `var`
+
+    func testVarLocalIsSilent() async throws {
+        let found = try await findings("class T { void m() { var x = 1; } }")
+        XCTAssertTrue(found.isEmpty, "\(found)")
+    }
+
+    func testVarEnhancedForIsSilent() async throws {
+        let found = try await findings("class T { void m(int[] xs) { for (var s : xs) { } } }")
+        XCTAssertTrue(found.isEmpty, "\(found)")
+    }
+
+    func testVarTryWithResourcesIsSilent() async throws {
+        let found = try await findings(
+            "class T { static class R { } R open() { return null; } void m() { try (var r = open()) { } } }"
+        )
+        XCTAssertTrue(found.isEmpty, "\(found)")
+    }
+
+    func testVarLambdaParameterIsSilent() async throws {
+        let found = try await findings(
+            "class T { void m() { Runnable x = (var a) -> { }; } }",
+            libraries: ["package java.lang; public interface Runnable { void run(); }"]
+        )
+        XCTAssertTrue(found.isEmpty, "\(found)")
+    }
+
+    func testVarLocalOfKnownTypeIsSilent() async throws {
+        let found = try await findings(
+            "import java.text.DecimalFormat; class T { void m() { var df = new DecimalFormat(\"#,##0\"); } }",
+            libraries: ["package java.text; public class DecimalFormat { public DecimalFormat(String pattern) { } }"]
+        )
+        XCTAssertTrue(found.isEmpty, "\(found)")
+    }
+
+    func testVarFieldTypeStillReports() async throws {
+        let found = try await findings("class T { var x; }")
+        XCTAssertEqual(found.map(\.message), ["Cannot resolve type 'var'"])
+    }
+
+    func testVarMethodParameterStillReports() async throws {
+        let found = try await findings("class T { void m(var x) { } }")
+        XCTAssertEqual(found.map(\.message), ["Cannot resolve type 'var'"])
+    }
 }

@@ -17,6 +17,7 @@ enum JavaSyntaxDiagnostics {
             languageIdentifiers: ["java"],
             severity: .error,
             tokenName: SyntaxProblem.javacTokenName,
+            adjustProblem: JavaMissingSemicolon.adjust,
             cache: cache,
             language: tree_sitter_java()
         )

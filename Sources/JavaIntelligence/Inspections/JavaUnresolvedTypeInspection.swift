@@ -28,10 +28,13 @@ enum JavaUnresolvedTypeInspection {
     /// of qualified names; qualifier segments (`io` and `java` in `java.io.OutputStream`) are
     /// packages, not types, so a name that only ever qualifies never reports. Resolving the
     /// qualifier itself (`unknown` in `unknown.Known`) is name resolution's job, not this rule's.
+    /// `var` in one of its legal positions (see `isLegalVarPosition`) is local type inference,
+    /// not a missing type, so those references never report.
     private static func firstTypeReference(to name: String, in tree: JavaSyntaxTree) -> Range<Int>? {
         var stack = [tree.rootNode]
         while let node = stack.popLast() {
-            if node.type == "type_identifier", node.text == name, !isQualifierSegment(node) {
+            if node.type == "type_identifier", node.text == name, !isQualifierSegment(node),
+               !(name == "var" && isLegalVarPosition(node)) {
                 return node.byteRange
             }
             for index in (0..<node.namedChildCount).reversed() {
@@ -39,6 +42,28 @@ enum JavaUnresolvedTypeInspection {
             }
         }
         return nil
+    }
+
+    /// Whether a `var` reference is local type inference (Java 10+) rather than a type name:
+    /// a local variable's type, an enhanced-`for` variable's type, a try-with-resources
+    /// variable's type, or a lambda parameter's type (`(var x) -> ...`, Java 11+). Anywhere
+    /// else (`var` as a field type, a `List<var>` argument) is a real error and still reports.
+    private static func isLegalVarPosition(_ node: SyntaxNode) -> Bool {
+        guard let parent = node.parent else { return false }
+        switch parent.type {
+        case "local_variable_declaration", "enhanced_for_statement", "resource":
+            return true
+        case "formal_parameter":
+            // `void m(var x)` is illegal; only a lambda's parameters may use `var`.
+            var current = parent.parent
+            while let ancestor = current {
+                if ancestor.type == "lambda_expression" { return true }
+                current = ancestor.parent
+            }
+            return false
+        default:
+            return false
+        }
     }
 
     /// Whether `node` sits on the scope (left-hand) side of a qualified name: the scope is

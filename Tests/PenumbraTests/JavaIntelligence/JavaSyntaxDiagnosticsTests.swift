@@ -77,6 +77,77 @@ final class JavaSyntaxDiagnosticsTests: XCTestCase {
         XCTAssertEqual(diagnostics, [])
     }
 
+    // MARK: - Missing `;` spilling onto the next line
+
+    func testSpilledMissingSemicolonLandsOnItsOwnLine() async throws {
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    void m() {\n        system.out.println(\"kekw\")\n        System.out.println(\"---\");\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertEqual(diagnostics.map(\.message), ["';' expected"])
+        let row = try XCTUnwrap(diagnostics.first)
+        XCTAssertEqual(row.range.start.line, 2, "the `system...` line, not the `System...` line")
+        XCTAssertEqual(row.severity, .error)
+    }
+
+    func testSameLineRecoveryKeepsGenericRow() async {
+        // `int x = 5` followed by another line: the recovery errors at `5` itself, on the
+        // statement's own line. No spillover, so the generic row stands as is.
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    void m() {\n        int x = 5\n        foo();\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertFalse(diagnostics.isEmpty)
+        for diagnostic in diagnostics {
+            XCTAssertEqual(diagnostic.range.start.line, 2)
+            XCTAssertNotEqual(diagnostic.message, "';' expected")
+        }
+    }
+
+    func testSameLineRecoveryAfterReturnKeepsGenericRow() async {
+        // Same boundary after `return`: the error is already on the statement's line.
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    int m() {\n        return foo()\n        bar();\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertFalse(diagnostics.isEmpty)
+        for diagnostic in diagnostics {
+            XCTAssertEqual(diagnostic.range.start.line, 2)
+            XCTAssertNotEqual(diagnostic.message, "';' expected")
+        }
+    }
+
+    func testSameLineJuxtapositionKeepsGenericRow() async {
+        // No spillover: the generic row stands, on the statement's own line.
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    void m() {\n        foo() bar();\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertFalse(diagnostics.isEmpty)
+        for diagnostic in diagnostics {
+            XCTAssertEqual(diagnostic.range.start.line, 2)
+            XCTAssertNotEqual(diagnostic.message, "';' expected")
+        }
+    }
+
+    func testUnclosedParenIsNotASemicolon() async {
+        // A missing `)` is a different breakage: never rewritten to `';' expected`.
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    void m() {\n        foo(\"x\"\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertFalse(diagnostics.isEmpty)
+        XCTAssertFalse(diagnostics.contains { $0.message == "';' expected" }, "\(diagnostics.map(\.message))")
+    }
+
+    func testMultilineCallStaysSilent() async {
+        let cache = JavaDocumentParseCache()
+        let provider = JavaSyntaxDiagnostics.provider(cache: cache)
+        let text = "class Foo {\n    void m() {\n        foo(\n            1,\n            2);\n    }\n}\n"
+        let diagnostics = await provider.diagnostics(for: makeDocument(text: text))
+        XCTAssertEqual(diagnostics, [])
+    }
+
     func testOverlapDropsRestatedParserErrors() {
         let syntax = [makeDiagnostic(line: 1, message: "';' expected", source: "java-syntax")]
         let javac = [

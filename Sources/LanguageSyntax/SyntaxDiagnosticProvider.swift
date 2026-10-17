@@ -14,6 +14,9 @@ public struct SyntaxDiagnosticProvider: DiagnosticProvider {
     private let severity: DiagnosticSeverity
     private let limit: Int
     private let tokenName: @Sendable (String) -> String
+    /// Language-specific reinterpretation of a collected problem with the tree and source
+    /// in hand (e.g. Java's missing-`;` spilling onto the next line). Defaults to identity.
+    private let adjustProblem: @Sendable (SyntaxProblem, SyntaxTree, String) -> SyntaxProblem
     private let tree: @Sendable (Document) async -> SyntaxTree?
 
     public init(
@@ -22,6 +25,7 @@ public struct SyntaxDiagnosticProvider: DiagnosticProvider {
         severity: DiagnosticSeverity = .error,
         limit: Int = 100,
         tokenName: @Sendable @escaping (String) -> String = SyntaxProblem.defaultTokenName,
+        adjustProblem: @Sendable @escaping (SyntaxProblem, SyntaxTree, String) -> SyntaxProblem = { problem, _, _ in problem },
         tree: @Sendable @escaping (Document) async -> SyntaxTree?
     ) {
         self.name = name
@@ -29,6 +33,7 @@ public struct SyntaxDiagnosticProvider: DiagnosticProvider {
         self.severity = severity
         self.limit = limit
         self.tokenName = tokenName
+        self.adjustProblem = adjustProblem
         self.tree = tree
     }
 
@@ -40,13 +45,14 @@ public struct SyntaxDiagnosticProvider: DiagnosticProvider {
         severity: DiagnosticSeverity = .error,
         limit: Int = 100,
         tokenName: @Sendable @escaping (String) -> String = SyntaxProblem.defaultTokenName,
+        adjustProblem: @Sendable @escaping (SyntaxProblem, SyntaxTree, String) -> SyntaxProblem = { problem, _, _ in problem },
         cache: DocumentParseCache,
         language: OpaquePointer
     ) {
         // `OpaquePointer` is not `Sendable`; the grammar pointer stays valid for the
         // provider's lifetime, so it crosses the boundary as its address.
         let address = UInt(bitPattern: language)
-        self.init(name: name, languageIdentifiers: languageIdentifiers, severity: severity, limit: limit, tokenName: tokenName) { document in
+        self.init(name: name, languageIdentifiers: languageIdentifiers, severity: severity, limit: limit, tokenName: tokenName, adjustProblem: adjustProblem) { document in
             if document.url != nil {
                 return await cache.tree(for: document)
             }
@@ -63,8 +69,10 @@ public struct SyntaxDiagnosticProvider: DiagnosticProvider {
         let problems = SyntaxErrorCollector.problems(in: tree, limit: limit)
         guard !problems.isEmpty else { return [] }
         // Built only when there are problems, and from the parsed bytes.
-        let map = SourceTextMap(String(decoding: tree.sourceBytes, as: UTF8.self))
+        let source = String(decoding: tree.sourceBytes, as: UTF8.self)
+        let map = SourceTextMap(source)
         return problems.map { problem in
+            let problem = adjustProblem(problem, tree, source)
             var range = map.range(bytes: problem.bytes)
             if range.start.utf16Offset == range.end.utf16Offset {
                 // A missing token is zero-width: widen one UTF-16 unit, backwards first so
