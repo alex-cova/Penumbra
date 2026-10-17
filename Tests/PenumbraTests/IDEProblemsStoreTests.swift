@@ -38,6 +38,44 @@ final class IDEProblemsStoreTests: XCTestCase {
         XCTAssertEqual(store.errorCount, 1)
     }
 
+    func testStaleSourcesSuperposeWithoutTouchingRows() {
+        let store = IDEProblemsStore()
+        store.setEditorDiagnostics([diagnostic("editor problem", source: "editor")], for: other)
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: [diagnostic("old error", source: "javac")]))
+        XCTAssertEqual(store.staleSources(for: other), [])
+
+        // A stale javac report flags the source; the rows and the badge counts don't move.
+        store.setStaleSources(["javac"], for: other)
+        XCTAssertEqual(store.staleSources(for: other), ["javac"])
+        XCTAssertEqual(store.compilerDiagnostics[other.standardizedFileURL]?.map(\.message), ["old error"])
+        XCTAssertEqual(store.errorCount, 2)
+
+        // Fresh results clear the flag without touching the rows.
+        store.setStaleSources([], for: other)
+        XCTAssertEqual(store.staleSources(for: other), [])
+        XCTAssertEqual(store.compilerDiagnostics[other.standardizedFileURL]?.count, 1)
+    }
+
+    func testStaleFlagsSurviveUnrelatedWritesAndClearWithTheFile() {
+        let store = IDEProblemsStore()
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: [diagnostic("old error", source: "javac")]))
+        store.setStaleSources(["javac"], for: other)
+
+        // An unrelated bucket write leaves the flags alone.
+        store.publish(DiagnosticPublication(source: .swiftPM, url: file, diagnostics: [diagnostic("swift", source: "swiftpm")]))
+        XCTAssertEqual(store.staleSources(for: other), ["javac"])
+
+        // Closing the file clears its flags; flags alone keep the store non-empty
+        // without contributing to the badge counts.
+        store.clearEditorDiagnostics(for: other)
+        XCTAssertEqual(store.staleSources(for: other), [])
+
+        let pending = IDEProblemsStore()
+        pending.setStaleSources(["javac"], for: other)
+        XCTAssertFalse(pending.isEmpty)
+        XCTAssertEqual(pending.errorCount, 0)
+    }
+
     func testClearingAFileDropsItFromEverySource() {
         let store = IDEProblemsStore()
         store.setBuildDiagnostics([file: [diagnostic("a", source: "gradle")]], source: IDEProblemsStore.gradleBuildSource)

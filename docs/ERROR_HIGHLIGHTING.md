@@ -119,3 +119,25 @@ superseded-pass test, engine/duplicate-symbol/registry (32), LSP published +
 language service, grouping — all green. Each provider keeps its behavior when
 fresh (the default freshness path is bit-for-bit the old collection), and a
 provider clearing by `[]` still clears, covered by test.
+
+## Phase 4: freshness in the field
+
+`IDEProblemsStore` records per-file stale sources as a superposition over the
+unchanged diagnostic buckets: `setStaleSources(_:for:)` (empty clears),
+`staleSources(for:)`, cleared with the file, counted in `isEmpty` but never in
+badge counts. The workspace feeds it from both paths: the merged editor report
+(`applyEditorDiagnostics` passes `report.staleSources` through) and each
+service result (`applyCompilerDiagnostics` / `applyInspectionDiagnostics` move
+only their own source's flag, measured with `isFresh` against the open
+document; a file that is not open leaves the flags alone). The pending-state
+panel, the editor widget variant, and the `java-analysis-server` round-trip
+need the unlanded analysis-server and Problems-panel work, so they stay
+unmeasured here; the store contract they will consume is locked by
+`IDEProblemsStoreTests` (5 tests: superposition without touching rows or
+counts, survival across unrelated writes, clear-with-file, flags-only
+non-emptiness).
+
+No harness numbers change in this phase (no pass, schedule, or render path
+moves): survival, latency, typing, anchoring, and churn were re-run against
+the Phase 3 parent while landing and are identical; `enter-session` is
+untouched.

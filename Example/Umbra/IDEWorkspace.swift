@@ -4417,6 +4417,9 @@ public final class IDEWorkspace {
 
     private func applyInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         problems.publish(DiagnosticPublication(source: .javaInspection, url: url, diagnostics: diagnostics))
+        noteServiceResultFreshness(url: url, source: IDEProblemsStore.inspectionSource) { [service = javaSupport.inspectionService] document in
+            await service.isFresh(document)
+        }
         if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
             host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
         }
@@ -4425,8 +4428,37 @@ public final class IDEWorkspace {
     /// A finished compile: list its problems, and redraw the squiggles if that file is showing.
     private func applyCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         problems.publish(DiagnosticPublication(source: .javac, url: url, diagnostics: diagnostics))
+        noteServiceResultFreshness(url: url, source: IDEProblemsStore.compilerSource) { [service = javaSupport.compilerDiagnostics] document in
+            await service.isFresh(document)
+        }
         if workbench.activePane.selectedDocument?.url?.standardizedFileURL == url.standardizedFileURL {
             host(for: workbench.activePaneID).intelligenceController?.refreshDiagnostics()
+        }
+    }
+
+    /// Records whether a just-published service result is already stale for the open file:
+    /// a file edited mid-pass gets fresh diagnostics eventually, so the panel shows the
+    /// published rows as pending rather than current. Only that source's flag moves; the
+    /// other sources keep whatever the editor refresh last reported. A file that is not
+    /// open leaves the flags alone.
+    private func noteServiceResultFreshness(
+        url: URL,
+        source: String,
+        isFresh: @escaping @Sendable (EditorIntelligence.Document) async -> Bool
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self,
+                  let document = self.openJavaDocuments().first(where: {
+                      $0.url?.standardizedFileURL == url.standardizedFileURL
+                  })
+            else { return }
+            var stale = self.problems.staleSources(for: url)
+            if await isFresh(document) {
+                stale.remove(source)
+            } else {
+                stale.insert(source)
+            }
+            self.problems.setStaleSources(stale, for: url)
         }
     }
 
@@ -4711,6 +4743,7 @@ public final class IDEWorkspace {
     private func applyEditorDiagnostics(_ report: DiagnosticReport) {
         guard let url = workbench.allDocuments().first(where: { $0.documentID == report.documentID })?.url else { return }
         problems.setEditorDiagnostics(report.diagnostics, for: url)
+        problems.setStaleSources(report.staleSources, for: url)
     }
 
     private func closeDocument(_ documentID: UUID, in pane: EditorPane) {

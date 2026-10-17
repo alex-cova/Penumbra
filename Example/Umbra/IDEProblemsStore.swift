@@ -18,6 +18,7 @@ final class IDEProblemsStore {
     /// `swiftpm`, …). An editor report rewrites only that file's `javac` entry. A build source
     /// never replaces another source.
     private var bySource: [String: [URL: [Diagnostic]]] = [:]
+    private var staleByFile: [URL: Set<String>] = [:]
     private static let editorSource = "editor"
 
     var editorDiagnostics: [URL: [Diagnostic]] { bySource[Self.editorSource] ?? [:] }
@@ -87,7 +88,7 @@ final class IDEProblemsStore {
     var warningCount: Int {
         DiagnosticGrouping.counts(in: allFiles).warnings + buildMessages.filter { $0.severity == .warning }.count
     }
-    var isEmpty: Bool { bySource.isEmpty && buildMessages.isEmpty }
+    var isEmpty: Bool { bySource.isEmpty && staleByFile.isEmpty && buildMessages.isEmpty }
 
     var visibleBuildMessages: [GradleProblem] {
         buildMessages.filter { message in
@@ -115,6 +116,7 @@ final class IDEProblemsStore {
 
     func clearEditorDiagnostics(for url: URL) {
         replace([], for: url.standardizedFileURL, source: Self.editorSource)
+        staleByFile.removeValue(forKey: url.standardizedFileURL)
     }
 
     func setCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
@@ -123,6 +125,24 @@ final class IDEProblemsStore {
 
     func setInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         replace(diagnostics, for: url.standardizedFileURL, source: Self.inspectionSource)
+    }
+
+    /// Sources whose listed rows belong to older text, per file: the provider had no fresh
+    /// result when the report landed, so the panel shows the previous text's rows as pending
+    /// instead of treating them as current. A file with only stale flags and no diagnostics
+    /// still counts as non-empty; badge counts use diagnostics only, so pending rows never
+    /// inflate them. An empty set clears the file's flags.
+    func setStaleSources(_ sources: Set<String>, for url: URL) {
+        let key = url.standardizedFileURL
+        if sources.isEmpty {
+            staleByFile.removeValue(forKey: key)
+        } else {
+            staleByFile[key] = sources
+        }
+    }
+
+    func staleSources(for url: URL) -> Set<String> {
+        staleByFile[url.standardizedFileURL] ?? []
     }
 
     /// One source's diagnostics for one file. An empty list clears that source for the file.
