@@ -144,6 +144,8 @@ public final class EditorIntelligenceController {
     /// Called when a code action that carries a ``CodeActionCommand`` is chosen, after its edits (if
     /// any) were applied: the host does what the command names (Run, Debug…).
     public var onCodeActionCommand: ((CodeActionCommand) -> Void)?
+    /// Called when a hover window's action button is pressed: the host does what the action names.
+    public var onHoverAction: ((HoverAction) -> Void)?
     /// Turns a diagnostic's `(source, code)` into a readable name the hover shows before the
     /// source (an inspection's title for its rule code). `nil` result shows the source alone.
     public var diagnosticTitleProvider: ((_ source: String, _ code: String) -> String?)?
@@ -405,6 +407,9 @@ public final class EditorIntelligenceController {
 
         completionPanelView.onSelectRow = { [weak self] index in
             self?.selectCompletionRow(index)
+        }
+        hoverWindowView.onAction = { [weak self] action in
+            self?.onHoverAction?(action)
         }
         completionPanelView.onAcceptRow = { [weak self] index in
             self?.acceptCompletionRow(index)
@@ -2521,17 +2526,26 @@ public final class EditorIntelligenceController {
     }
 
     private func showHover(_ result: HoverResult, document: Document) {
-        presentHover(markdown: result.contents, anchorRange: result.range ?? document.selection.range)
+        presentHover(
+            markdown: result.contents,
+            anchorRange: result.range ?? document.selection.range,
+            actions: result.actions
+        )
     }
 
-    private func presentHover(markdown: String, anchorRange: EditorIntelligence.TextRange) {
+    private func presentHover(
+        markdown: String,
+        anchorRange: EditorIntelligence.TextRange,
+        actions: [HoverAction] = []
+    ) {
         guard let textView else {
             return
         }
         let model = HoverWindowModel(
             contents: markdown,
             anchorRange: anchorRange,
-            isMarkdown: true
+            isMarkdown: true,
+            actions: actions
         )
         hoverWindowView.update(model: model)
         positionPanel(
@@ -2681,7 +2695,7 @@ public final class EditorIntelligenceController {
         )
         guard let result = await hoverEngine.hover(context: context),
               !Task.isCancelled, mouseHoverTarget == expectedRange else { return }
-        presentHover(markdown: result.contents, anchorRange: result.range ?? anchorRange)
+        presentHover(markdown: result.contents, anchorRange: result.range ?? anchorRange, actions: result.actions)
         isMouseHoverVisible = true
     }
 

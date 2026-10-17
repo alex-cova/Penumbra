@@ -1047,8 +1047,12 @@ public final class IDEWorkspace {
         openUntitled(displayName: "Untitled", text: "")
     }
 
-    /// An unsaved editor tab with this text.
-    func openUntitled(displayName: String, text: String) {
+    /// An unsaved editor tab with this text. `languageIdentifier` highlights it from the start
+    /// (e.g. the GraphQL schema preview); `nil` keeps the plain-text default of `newFile()`.
+    func openUntitled(displayName: String, text: String, inRightSplit: Bool = false, languageIdentifier: String? = nil) {
+        if inRightSplit {
+            activatePaneToTheRight()
+        }
         let document = WorkbenchDocument(
             displayName: displayName,
             text: text,
@@ -1064,6 +1068,9 @@ public final class IDEWorkspace {
         // sibling split panes from empty `document.text`, blanking both editors.
         let pane = workbench.activePane
         showDocument(in: pane, host: host(for: pane.id))
+        if let languageIdentifier {
+            setLanguage(identifier: languageIdentifier, in: pane)
+        }
         activatePane(workbench.activePaneID)
         layoutEpoch += 1
         refreshPresentation()
@@ -2178,6 +2185,65 @@ public final class IDEWorkspace {
 
     func showHTTPResponse() {
         showBottomTab(.http)
+    }
+
+    /// A hover window's action button. `###@scheme:` hovers offer opening the schema beside
+    /// the `.http` file; anything else is ignored.
+    func handleHoverAction(_ action: HoverAction) {
+        guard action.id == HTTPSchemaHoverProvider.openActionID,
+              let raw = action.arguments.first,
+              let url = URL(string: raw)
+        else { return }
+        openGraphQLSchema(url)
+    }
+
+    /// Opens a `###@scheme:` schema in the editor to the right: a schema file opens as-is, a
+    /// remote endpoint opens as a preview tab with the fetched schema's types.
+    func openGraphQLSchema(_ url: URL) {
+        if url.isFileURL {
+            Task { await openDocument(from: url, inRightSplit: true) }
+            return
+        }
+        let request = GraphQLSchemaRequest(url: url, headers: schemaHeaders(for: url))
+        let title = "Schema — \(url.host ?? url.lastPathComponent)"
+        let store = httpSupport.graphQLSchemas
+        Task {
+            if let schema = await store.schema(for: request) {
+                openUntitled(
+                    displayName: title,
+                    text: GraphQLSchemaText.fullText(for: schema, source: url.absoluteString),
+                    inRightSplit: true,
+                    languageIdentifier: "graphql"
+                )
+                return
+            }
+            let text: String
+            do {
+                let schema = try await store.refresh(request)
+                text = GraphQLSchemaText.fullText(for: schema, source: url.absoluteString)
+            } catch {
+                text = "# Could not load the schema from \(url.absoluteString).\n# \(error.localizedDescription)"
+            }
+            openUntitled(displayName: title, text: text, inRightSplit: true, languageIdentifier: "graphql")
+        }
+    }
+
+    /// The headers of the first request below the `###@scheme:` line naming `url`, so an
+    /// authenticated endpoint's preview sends what the endpoint expects. Empty when the caret
+    /// is not under a matching directive.
+    private func schemaHeaders(for url: URL) -> [String: String] {
+        let textView = host(for: workbench.activePaneID).textView
+        let text = textView.text
+        guard let directive = HTTPGraphQLDirective.directive(in: text, caretUTF16: textView.selectedRange.location),
+              case .success(let request) = GraphQLSchemaResolver.resolve(
+                  directive,
+                  in: text,
+                  fileURL: workbench.activePane.selectedDocument?.url,
+                  globals: httpSupport.globals.snapshot()
+              ),
+              request.url == url
+        else { return [:] }
+        return request.headers
     }
 
     /// HTTP: Refresh GraphQL Schema.
@@ -4098,6 +4164,9 @@ public final class IDEWorkspace {
         }
         host.intelligenceController?.onPresentNavigationChoices = { [weak self] kind, locations in
             self?.presentNavigationChoices(locations, kind: kind)
+        }
+        host.intelligenceController?.onHoverAction = { [weak self] action in
+            self?.handleHoverAction(action)
         }
         host.intelligenceController?.onNavigationSearchStarted = { [weak self] kind, cancel in
             guard kind == .references, let self else { return }

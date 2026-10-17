@@ -1,8 +1,12 @@
 import EditorIntelligence
 import Foundation
 
-/// Hovering a `###@scheme:` line says whether its schema is loaded, loading, or why it is not.
+/// Hovering a `###@scheme:` line shows its schema (when loaded) with a button that opens
+/// the full schema in the editor to the right.
 final class HTTPSchemaHoverProvider: HoverProvider, @unchecked Sendable {
+    /// Action id the workspace agrees to handle: `arguments` carries the schema URL.
+    static let openActionID = "umbra.openGraphQLSchema"
+
     typealias GlobalsSource = @Sendable () -> [String: String]
 
     let name = "HTTP schema"
@@ -43,12 +47,22 @@ final class HTTPSchemaHoverProvider: HoverProvider, @unchecked Sendable {
         }
         await store.prefetch(request)
         let address = "`\(request.url.isFileURL ? request.url.path : request.url.absoluteString)`"
+        let open = HoverAction(
+            id: Self.openActionID,
+            title: "Open schema in right split",
+            arguments: [request.url.absoluteString]
+        )
         let contents: String
         switch await store.state(for: request.url) {
         case .loaded(let types, let date)?:
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .full
-            contents = "**GraphQL schema** · \(types) types · loaded \(formatter.localizedString(for: date, relativeTo: Date()))\n\n\(address)"
+            contents = """
+                **GraphQL schema** · \(types) types · loaded \
+                \(formatter.localizedString(for: date, relativeTo: Date()))
+
+                \(address)\(await schemaExcerpt(request, store: store))
+                """
         case .loading?:
             contents = "**GraphQL schema** · loading…\n\n\(address)"
         case .failed(let message, _)?:
@@ -56,6 +70,15 @@ final class HTTPSchemaHoverProvider: HoverProvider, @unchecked Sendable {
         case nil:
             contents = "**GraphQL schema** · not loaded\n\n\(address)\n\nRun **HTTP: Refresh GraphQL Schema** to fetch it. Addresses other than `https` and this Mac are only read on request."
         }
-        return HoverResult(contents: contents, source: name)
+        return HoverResult(contents: contents, source: name, actions: [open])
+    }
+
+    /// The loaded schema as a fenced excerpt, or nothing when it is not loaded yet. Fenced so
+    /// SDL punctuation (`#`, `*`, `|`) is never read as Markdown.
+    private func schemaExcerpt(_ request: GraphQLSchemaRequest, store: GraphQLSchemaStore) async -> String {
+        guard let schema = await store.schema(for: request) else { return "" }
+        let excerpt = GraphQLSchemaText.excerpt(for: schema)
+        guard !excerpt.isEmpty else { return "" }
+        return "\n\n```graphql\n\(excerpt)\n```"
     }
 }
