@@ -367,6 +367,32 @@ file size (see Fix 2's verification).
   adapter-global, `FileMapping.remapPages` double-failure, overlapping multi-cursor completion,
   invalid-UTF-8-on-disk host behavior) — unchanged by this pass, see those documents for detail.
 
+## Enter indent scan — 2026-10-17
+
+**Problem:** mid-file Enter on a 20k-line Java file cost ~20.7 ms (budget < 2 ms, flat with file
+size) while top-of-file Enter cost ~1.7 ms. Every Enter with a C-style language
+(`EnterBehavior.cStyleIndent`, e.g. Java) ran `CStyleLineIndentProvider` over up to 256K UTF-16
+units before the caret (`EnterController.maximumScanLength = 262_144`), allocating one `String`
+per identifier/operator plus one per scanned line — O(caret position) work per keystroke.
+
+**Fix** (`EnterController.swift`, `CStyleLineIndentProvider.swift`): the scan window is now 8K
+units with a hard clamp (scan start never more than one window behind the caret, even on a
+minified single-line file); past the window the provider reports truncation and Enter falls back
+to the caret line's indent, which is exactly right for straight-line code. Within the window the
+lexer no longer allocates per token: identifiers longer than any inspected keyword and operators
+outside `unfinishedOperators` are stored as placeholders (all token inspections are equality
+checks against those literals, so behavior is identical), and each line's indent string is
+materialized only when a bracket opens on it. All Enter paths (single/multi-caret, brace split,
+complete-statement) funnel through this one controller.
+
+**Verified:** `enter-session` 20k, before → after on the same machine: `fresh_middle`
+20.661 ms → 1.918 ms; `walked_middle` 20.966 ms → 2.017 ms; top-of-file unchanged (~1.5 ms).
+120k-line run is flat with size (`fresh_middle` 2.023 ms, scroll page 4.3 ms, malloc 135 MB,
+573 live handles). New tests in `JavaEnterHandlingTests` cover truncation fallback,
+continuation indent inside the window in a large file, and a bound on the window constant
+(33 tests in the file, plus 190 across the Enter/indent/comment/statement suites, all green;
+6 `MultiSelectionEditingTests` clipboard failures reproduce identically on the untouched base).
+
 ## Metal roadmap completion — 2026-09-15
 
 The follow-up Metal pass completed the outstanding renderer roadmap:

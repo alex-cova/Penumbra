@@ -224,4 +224,37 @@ final class JavaEnterHandlingTests: XCTestCase {
         let result = pressEnter("    foo| bar", language: nil)
         XCTAssertEqual(result, "    foo\n    |bar")
     }
+
+    // MARK: - Large-file scan window
+
+    /// Straight-line statements extending past `EnterController.maximumScanLength`: the structure
+    /// scan truncates and Enter falls back to the caret line's indent instead of lexing the file.
+    func testEnterPastScanWindowKeepsCurrentIndent() {
+        var input = "class A {\n    void f() {\n"
+        for i in 0 ..< 2_500 {
+            input += "        g\(i)();\n"
+        }
+        input += "        h();|"
+        XCTAssertGreaterThan((input as NSString).length, EnterController.maximumScanLength)
+        let result = pressEnter(input)
+        XCTAssertTrue(result.hasSuffix("h();\n        |"), "Enter past the scan window should keep the line's indent, got: \(result.suffix(40))")
+    }
+
+    /// An unclosed paren near the caret still yields continuation indent in a large file: only
+    /// distant structure is truncated, never the current statement.
+    func testEnterContinuationIndentAppliesInsideScanWindow() {
+        var input = "class A {\n    void f() {\n"
+        for i in 0 ..< 2_500 {
+            input += "        g\(i)();\n"
+        }
+        input += "        foo(a,|"
+        let result = pressEnter(input)
+        XCTAssertTrue(result.hasSuffix("foo(a,\n                |"), "Continuation indent should apply near the caret, got: \(result.suffix(40))")
+    }
+
+    /// Guards the Enter latency budget: the structure scan must stay bounded no matter how far
+    /// into the file the caret is (`enter-session` mid-file Enter regresses past ~2 ms otherwise).
+    func testEnterScanWindowStaysBounded() {
+        XCTAssertLessThanOrEqual(EnterController.maximumScanLength, 65_536)
+    }
 }

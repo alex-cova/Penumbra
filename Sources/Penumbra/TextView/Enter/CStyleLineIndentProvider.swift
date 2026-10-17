@@ -39,6 +39,10 @@ struct CStyleLineIndentProvider {
         "->", "::", "++", "--", "&&", "||", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=",
         "&=", "|=", "^=", "<<", ">>"
     ]
+    /// The operator tables as UTF-16 units, for allocation-free greedy matching.
+    private static let threeUnitOperators: [[UInt16]] = threeCharOperators.map { Array($0.utf16) }
+    private static let twoUnitOperators: [[UInt16]] = twoCharOperators.map { Array($0.utf16) }
+    private static let unfinishedOperatorUnits: [[UInt16]] = unfinishedOperators.map { Array($0.utf16) }
 
     /// - Parameters:
     ///   - textBefore: Document text before the caret. Should start at a line start.
@@ -47,7 +51,10 @@ struct CStyleLineIndentProvider {
     ///     structure is unknown.
     /// - Returns: The indentation, or `nil` when it can't be determined.
     func indent(textBefore: String, textAfter: String, isTruncated: Bool) -> String? {
-        let stack = scan(Array(textBefore.utf16))
+        // Only these literals are ever inspected (`controlHeaders`, `isEnumBody`, `case` handling):
+        // anything longer can never match, so it is stored as a placeholder without allocating.
+        let maxKeywordLength = max(7, behavior.controlKeywords.reduce(0) { max($0, $1.utf16.count) })
+        let stack = scan(Array(textBefore.utf16), maxKeywordLength: maxKeywordLength)
         guard let top = stack.last else {
             return nil
         }
@@ -115,11 +122,14 @@ struct CStyleLineIndentProvider {
 
     // MARK: - Lexing
 
-    private func scan(_ units: [UInt16]) -> [Frame] {
+    private func scan(_ units: [UInt16], maxKeywordLength: Int) -> [Frame] {
         var stack = [Frame(opener: 0, openerLineIndent: "")]
         let count = units.count
         var index = 0
-        var lineIndent = Self.leadingWhitespace(in: units, from: 0)
+        // Start of the current line. The line's indent string is only materialized when a bracket
+        // opens on it (`handlePunctuation`); computing it for every line allocates one `String`
+        // per line scanned, which dominated Enter latency in large files.
+        var lineStart = 0
 
         func isNewline(_ unit: UInt16) -> Bool { unit == 10 || unit == 13 }
 
@@ -127,7 +137,7 @@ struct CStyleLineIndentProvider {
             let unit = units[index]
             if isNewline(unit) {
                 index += 1
-                lineIndent = Self.leadingWhitespace(in: units, from: index)
+                lineStart = index
                 continue
             }
             if unit == 0x20 || unit == 0x09 {
@@ -143,7 +153,7 @@ struct CStyleLineIndentProvider {
                     index += 2
                     while index < count, !(units[index] == UInt16(ascii: "*") && index + 1 < count && units[index + 1] == UInt16(ascii: "/")) {
                         if isNewline(units[index]) {
-                            lineIndent = Self.leadingWhitespace(in: units, from: index + 1)
+                            lineStart = index + 1
                         }
                         index += 1
                     }
@@ -165,7 +175,7 @@ struct CStyleLineIndentProvider {
                             break
                         }
                         if isNewline(units[index]) {
-                            lineIndent = Self.leadingWhitespace(in: units, from: index + 1)
+                            lineStart = index + 1
                         }
                         index += 1
                     }
@@ -187,26 +197,36 @@ struct CStyleLineIndentProvider {
                 while index < count, Self.isIdentifierUnit(units[index]) || (isNumber && units[index] == UInt16(ascii: ".")) {
                     index += 1
                 }
+                if isNumber {
+                    stack[stack.count - 1].tokens.append(.literal)
+                    continue
+                }
+                // Identifiers longer than any inspected keyword can never match one: skip the copy.
+                // `""` matches nothing inspected (`controlKeywords`, `enum`, `case`, `default`).
+                if index - start > maxKeywordLength {
+                    stack[stack.count - 1].tokens.append(.word(""))
+                    continue
+                }
                 let word = String(decoding: units[start ..< index], as: UTF16.self)
-                stack[stack.count - 1].tokens.append(isNumber ? .literal : .word(word))
+                stack[stack.count - 1].tokens.append(.word(word))
                 continue
             }
-            handlePunctuation(units, index: &index, stack: &stack, lineIndent: lineIndent)
+            handlePunctuation(units, index: &index, stack: &stack, lineStart: lineStart)
         }
         return stack
     }
 
-    private func handlePunctuation(_ units: [UInt16], index: inout Int, stack: inout [Frame], lineIndent: String) {
+    private func handlePunctuation(_ units: [UInt16], index: inout Int, stack: inout [Frame], lineStart: Int) {
         let unit = units[index]
         let topIndex = stack.count - 1
         switch unit {
         case UInt16(ascii: "("), UInt16(ascii: "["):
-            stack.append(Frame(opener: unit, openerLineIndent: lineIndent))
+            stack.append(Frame(opener: unit, openerLineIndent: Self.leadingWhitespace(in: units, from: lineStart)))
             index += 1
         case UInt16(ascii: "{"):
             let top = stack[topIndex]
             let previous = top.tokens.last
-            var frame = Frame(opener: unit, openerLineIndent: lineIndent)
+            var frame = Frame(opener: unit, openerLineIndent: Self.leadingWhitespace(in: units, from: lineStart))
             if top.opener == UInt16(ascii: "(") || top.opener == UInt16(ascii: "[") {
                 frame.isArrayInit = previous == nil || previous == .punct(",") || previous == .punct("=")
             } else if top.isArrayInit {
@@ -256,20 +276,54 @@ struct CStyleLineIndentProvider {
     }
 
     private func appendOperator(_ units: [UInt16], index: inout Int, to stack: inout [Frame]) {
-        func string(_ length: Int) -> String? {
-            guard index + length <= units.count else { return nil }
-            return String(decoding: units[index ..< index + length], as: UTF16.self)
-        }
-        let symbol: String
-        if let three = string(3), Self.threeCharOperators.contains(three) {
-            symbol = three
-        } else if let two = string(2), Self.twoCharOperators.contains(two) {
-            symbol = two
+        // Greedy match length, identical to the old longest-operator-first decoding: 3 when the
+        // next three units form a known operator, else 2, else a single unit.
+        let length: Int
+        if index + 3 <= units.count, Self.matches(any: Self.threeUnitOperators, in: units, at: index) {
+            length = 3
+        } else if index + 2 <= units.count, Self.matches(any: Self.twoUnitOperators, in: units, at: index) {
+            length = 2
         } else {
-            symbol = string(1) ?? ""
+            length = 1
         }
-        index += max(symbol.utf16.count, 1)
-        stack[stack.count - 1].tokens.append(.punct(symbol))
+        // Only unfinished operators are ever inspected (`isUnfinished`, and `","`/`"="` are both
+        // members); anything else is stored as a placeholder without allocating. `""` matches
+        // nothing inspected.
+        if length <= 2, Self.matches(any: Self.unfinishedOperatorUnits, length: length, in: units, at: index) {
+            let symbol = String(decoding: units[index ..< index + length], as: UTF16.self)
+            stack[stack.count - 1].tokens.append(.punct(symbol))
+        } else {
+            stack[stack.count - 1].tokens.append(.punct(""))
+        }
+        index += length
+    }
+
+    private static func matches(any operators: [[UInt16]], in units: [UInt16], at index: Int) -> Bool {
+        for op in operators {
+            var match = true
+            for offset in op.indices where units[index + offset] != op[offset] {
+                match = false
+                break
+            }
+            if match {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func matches(any operators: [[UInt16]], length: Int, in units: [UInt16], at index: Int) -> Bool {
+        for op in operators where op.count == length {
+            var match = true
+            for offset in op.indices where units[index + offset] != op[offset] {
+                match = false
+                break
+            }
+            if match {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Helpers

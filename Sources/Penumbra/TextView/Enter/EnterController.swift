@@ -4,8 +4,13 @@ import Foundation
 /// falls back to computing the new line's indentation.
 @MainActor
 struct EnterController {
-    /// Upper bound on how far back structure-aware indentation scans.
-    private static let maximumScanLength = 262_144
+    /// Upper bound on how far back structure-aware indentation scans, in UTF-16 units. Only the
+    /// innermost unclosed bracket and the current statement affect the result, so a window of 8K
+    /// units (a hundred-plus lines) covers every realistic case while keeping Enter latency flat
+    /// with file size: mid-file Enter on a 20k-line file regressed to ~20 ms with a 256K window.
+    /// Past the window the provider reports truncation and Enter falls back to the current line's
+    /// indent, which is exactly right for straight-line code (the common truncated case).
+    static let maximumScanLength = 8_192
 
     let stringView: StringView
     let lineManager: LineManager
@@ -134,6 +139,8 @@ struct EnterController {
               let position = lineManager.linePosition(at: caret - Self.maximumScanLength) else {
             return 0
         }
-        return lineManager.line(atRow: position.row).location
+        // Snap to the containing line's start, but never read more than one window even for a
+        // pathological single-line (e.g. minified) file.
+        return max(lineManager.line(atRow: position.row).location, caret - Self.maximumScanLength)
     }
 }
