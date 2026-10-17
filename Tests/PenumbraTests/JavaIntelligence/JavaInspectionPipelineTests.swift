@@ -248,6 +248,109 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertTrue(diagnostics.contains { $0.code == "duplicate-import" })
     }
 
+    func testAllowedNodeRuleSurvivesASyntaxError() async {
+        // The `==` sits in a complete statement above the half-typed call, so the
+        // broken-tree allowlist must still report it.
+        let source = """
+        class T {
+            boolean f(String a, String b) {
+                boolean same = a == b;
+                foo(
+                return same;
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertTrue(diagnostics.contains { $0.code == "string-comparison-identity" })
+    }
+
+    func testClassFileNameMismatchSurvivesASyntaxError() async {
+        let source = """
+        public class Wrong {
+            void f() {
+                foo(
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertTrue(diagnostics.contains { $0.code == "class-file-name-mismatch" })
+    }
+
+    func testExcludedRulesStaySilentOnABrokenTree() async {
+        // Every excluded rule fires on the valid text, so the broken run below is
+        // non-vacuous: silence there comes from the exclusion, not from no finding.
+        let valid = """
+        class T implements java.io.Serializable {
+            private int unused = 0;
+            private void f(int p) {
+                int q = 0;
+            }
+        }
+        """
+        let validCodes = Set(await analyze(valid).compactMap(\.code))
+        for code in [
+            "missing-serial-version-uid", "unused-private-member", "unused-local-variable", "unused-parameter",
+        ] {
+            XCTAssertTrue(validCodes.contains(code), "\(code) must fire on the valid text")
+        }
+        let broken = """
+        class T implements java.io.Serializable {
+            private int unused = 0;
+            private void f(int p) {
+                int q = 0;
+                foo(
+            }
+        }
+        """
+        let brokenCodes = Set(await analyze(broken).compactMap(\.code))
+        for code in [
+            "missing-serial-version-uid", "unused-private-member", "unused-local-variable", "unused-parameter",
+        ] {
+            XCTAssertFalse(brokenCodes.contains(code), "\(code) must stay silent on a broken tree")
+        }
+    }
+
+    func testClassLengthStaysSilentOnABrokenTree() async {
+        // `class-length` embeds its count in the message, so any edit reinvents it.
+        var valid = "class T {\n"
+        for index in 0..<1600 { valid += "    int f\(index) = 0;\n" }
+        valid += "    void f() {}\n}\n"
+        let validDiagnostics = await analyze(valid)
+        XCTAssertTrue(validDiagnostics.contains { $0.code == "class-length" })
+        let broken = valid.replacingOccurrences(of: "    void f() {}\n", with: "    void f() {\n        foo(\n    }\n")
+        let brokenDiagnostics = await analyze(broken)
+        XCTAssertFalse(brokenDiagnostics.contains { $0.code == "class-length" })
+    }
+
+    func testFindingInsideTheBrokenRegionIsDropped() async {
+        // The `==` sits inside the unclosed call's ERROR range: it describes
+        // half-written text, so the error filter must drop it.
+        let source = """
+        class T {
+            void f() {
+                foo(a == b;
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertFalse(diagnostics.contains { $0.code == "string-comparison-identity" })
+    }
+
+    func testSuppressWarningsSilencesAnAllowedRuleOnABrokenTree() async {
+        let source = """
+        class T {
+            @SuppressWarnings("string-comparison-identity")
+            boolean f(String a, String b) {
+                boolean same = a == b;
+                foo(
+                return same;
+            }
+        }
+        """
+        let diagnostics = await analyze(source)
+        XCTAssertFalse(diagnostics.contains { $0.code == "string-comparison-identity" })
+    }
+
     func testNoFixIsOfferedAwayFromTheDiagnostic() async throws {
         let diagnostics = await analyze(comparing)
         let provider = JavaCodeActionProvider(index: JavaIndex())

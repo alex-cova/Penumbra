@@ -38,12 +38,26 @@ enum JavaDiagnosticsProfile {
         var totalSurvived = 0
         var totalImportsOutside = 0
         var totalImportsSurvived = 0
+        var skipped = 0
+        var byCode: [String: (outside: Int, survived: Int, invented: Int)] = [:]
         for source in sources {
             let result = try SurvivalResult(sourceName: source.name, text: source.text)
+            guard !result.skipped else {
+                skipped += 1
+                continue
+            }
             totalOutside += result.outside
             totalSurvived += result.survived
             totalImportsOutside += result.importsOutside
             totalImportsSurvived += result.importsSurvived
+            for stat in result.ruleStats {
+                let accumulated = byCode[stat.code] ?? (0, 0, 0)
+                byCode[stat.code] = (
+                    accumulated.outside + stat.outside,
+                    accumulated.survived + stat.survived,
+                    accumulated.invented + stat.invented
+                )
+            }
             print(
                 "stage java_diagnostics_survival file=\(source.name) baseline=\(result.baseline) "
                     + "outside=\(result.outside) survived=\(result.survived) "
@@ -52,10 +66,18 @@ enum JavaDiagnosticsProfile {
             )
         }
         print(
-            "stage java_diagnostics_survival_total files=\(sources.count) outside=\(totalOutside) "
+            "stage java_diagnostics_survival_total files=\(sources.count - skipped) skipped=\(skipped) outside=\(totalOutside) "
                 + "survived=\(totalSurvived) rate=\(formatRate(totalSurvived, of: totalOutside)) "
                 + "imports=\(totalImportsSurvived)/\(totalImportsOutside)"
         )
+        for code in byCode.keys.sorted() {
+            let stat = byCode[code]!
+            guard stat.outside > 0 || stat.invented > 0 else { continue }
+            print(
+                "stage java_diagnostics_survival_rule code=\(code) outside=\(stat.outside) "
+                    + "survived=\(stat.survived) invented=\(stat.invented)"
+            )
+        }
     }
 
     /// The `java-inspections` synthetic fixture plus two unused imports, so the valid text
@@ -266,17 +288,25 @@ enum JavaDiagnosticsProfile {
         return zip(snapshots, snapshots.dropFirst()).map { $0.symmetricDifference($1).count }.reduce(0, +)
     }
 
+    /// Stride-sampled corpus files: even coverage across projects instead of the first
+    /// directory's files filling the cap. Files that do not decode are skipped silently.
     private static func javaSources(under directory: String, lines: Int) throws -> [(name: String, text: String)] {
         let root = URL(fileURLWithPath: directory)
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
             throw DiagnosticsProfileFailure(message: "cannot enumerate \(directory)")
         }
-        var sources: [(name: String, text: String)] = []
+        var paths: [URL] = []
         for case let url as URL in enumerator {
             guard url.pathExtension == "java" else { continue }
+            paths.append(url)
+        }
+        paths.sort { $0.path < $1.path }
+        let cap = 500
+        let stride = max(1, paths.count / cap)
+        var sources: [(name: String, text: String)] = []
+        for url in paths.enumerated().filter({ $0.offset % stride == 0 }).map(\.element) {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             sources.append((name: url.path, text: text))
-            if sources.count >= 200 { break }
         }
         return sources
     }
@@ -368,38 +398,83 @@ private enum DiagnosticsProbe {
 }
 
 /// One file's survival run: baseline findings, then findings after injecting `foo(` into
-/// the first method body, compared by identity outside the edited member.
+/// the first method body, compared by identity outside the edited member. Files whose
+/// baseline text already has errors, or has no method to break, are skipped: the screen
+/// measures valid text turning half-typed, nothing else.
 private struct SurvivalResult {
+    struct RuleStat: Sendable {
+        let code: String
+        let outside: Int
+        let survived: Int
+        let invented: Int
+    }
+
     let baseline: Int
     let outside: Int
     let survived: Int
     let importsOutside: Int
     let importsSurvived: Int
+    let ruleStats: [RuleStat]
+    let skipped: Bool
 
     init(sourceName: String, text: String) throws {
         let url = DiagnosticsProbe.url(for: sourceName)
         let baselineDiagnostics = try DiagnosticsProbe.analyzeInspections(text: text, url: url)
         baseline = baselineDiagnostics.count
         guard let tree = JavaSyntaxParser().parse(text),
+            !tree.rootNode.hasError,
             let member = DiagnosticsProbe.firstEditableMember(in: tree)
         else {
             outside = 0
             survived = 0
             importsOutside = 0
             importsSurvived = 0
+            ruleStats = []
+            skipped = true
             return
         }
+        skipped = false
         let bytes = Array(text.utf8)
         let memberLines = Self.lineRange(of: member.memberBytes, in: bytes)
         let outsideBaseline = baselineDiagnostics.filter { !memberLines.contains($0.range.start.line) }
         let brokenBytes = bytes[..<member.insertionByte] + Array("\n                foo(".utf8) + bytes[member.insertionByte...]
         let broken = String(decoding: brokenBytes, as: UTF8.self)
-        let brokenIdentities = Set(try DiagnosticsProbe.analyzeInspections(text: broken, url: url).map(DiagnosticsProbe.identity))
+        let brokenDiagnostics = try DiagnosticsProbe.analyzeInspections(text: broken, url: url)
+        // The injection shifts lines below it, so the edited member is re-located in the
+        // broken text; findings inside it are the user's half-typed code, not inventions.
+        let brokenUTF8 = Array(broken.utf8)
+        let brokenMemberLines = JavaSyntaxParser().parse(broken).flatMap { DiagnosticsProbe.firstEditableMember(in: $0) }.map {
+            Self.lineRange(of: $0.memberBytes, in: brokenUTF8)
+        } ?? memberLines
+        let brokenOutside = brokenDiagnostics.filter { !brokenMemberLines.contains($0.range.start.line) }
+        let baselineIdentities = Set(outsideBaseline.map(DiagnosticsProbe.identity))
+        let brokenIdentities = Set(brokenOutside.map(DiagnosticsProbe.identity))
         outside = outsideBaseline.count
         survived = outsideBaseline.filter { brokenIdentities.contains(DiagnosticsProbe.identity($0)) }.count
         let importBaseline = outsideBaseline.filter { $0.code == "unused-import" || $0.code == "duplicate-import" }
         importsOutside = importBaseline.count
         importsSurvived = importBaseline.filter { brokenIdentities.contains(DiagnosticsProbe.identity($0)) }.count
+        if getenv("JAVA_DIAG_SCREEN_DEBUG") != nil {
+            for diagnostic in brokenOutside
+                where !baselineIdentities.contains(DiagnosticsProbe.identity(diagnostic))
+            {
+                print(
+                    "stage java_diagnostics_invented file=\(sourceName) code=\(diagnostic.code ?? "") "
+                        + "range=\(diagnostic.range) message=\(diagnostic.message)"
+                )
+            }
+        }
+        let codes = Set(outsideBaseline.compactMap(\.code)).union(brokenOutside.compactMap(\.code))
+        ruleStats = codes.sorted().map { code in
+            let base = outsideBaseline.filter { $0.code == code }
+            let broke = brokenOutside.filter { $0.code == code }
+            return RuleStat(
+                code: code,
+                outside: base.count,
+                survived: base.filter { brokenIdentities.contains(DiagnosticsProbe.identity($0)) }.count,
+                invented: broke.filter { !baselineIdentities.contains(DiagnosticsProbe.identity($0)) }.count
+            )
+        }
     }
 
     private static func lineRange(of bytes: Range<Int>, in utf8: [UInt8]) -> Range<Int> {
