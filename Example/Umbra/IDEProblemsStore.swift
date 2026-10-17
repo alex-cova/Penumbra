@@ -19,6 +19,7 @@ final class IDEProblemsStore {
     /// never replaces another source.
     private var bySource: [String: [URL: [Diagnostic]]] = [:]
     private var staleByFile: [URL: Set<String>] = [:]
+    private var reportedFiles: Set<URL> = []
     private static let editorSource = "editor"
 
     var editorDiagnostics: [URL: [Diagnostic]] { bySource[Self.editorSource] ?? [:] }
@@ -27,6 +28,7 @@ final class IDEProblemsStore {
     /// Build-system sources `setBuildDiagnostics(_:source:)` is called with. Each project system
     /// owns its own bucket, so a SwiftPM build never replaces Gradle's results or the reverse.
     static let gradleBuildSource = "gradle"
+    static let mavenBuildSource = "maven"
     static let swiftPMBuildSource = "swiftpm"
     static let xcodeBuildSource = "xcode"
     /// The builds a SwiftUI preview runs: their own bucket, so a preview never replaces a package build's problems.
@@ -107,16 +109,27 @@ final class IDEProblemsStore {
     /// Takes an active editor's report. Compiler results in it are the service's cached ones for
     /// that file (which is how a re-opened file gets its problems back); the rest are the editor's.
     /// Inspection diagnostics in the same report are left in their own bucket.
+    /// An empty report still counts as a report: the file was analysed and is clean, which
+    /// the widget must tell apart from "no report yet".
     func setEditorDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         let key = url.standardizedFileURL
         let own = diagnostics.filter { $0.source != Self.compilerSource && $0.source != Self.inspectionSource }
         replace(own, for: key, source: Self.editorSource)
         replace(diagnostics.filter { $0.source == Self.compilerSource }, for: key, source: Self.compilerSource)
+        reportedFiles.insert(key)
+    }
+
+    /// Whether an editor report has landed for the file, even an empty one. Service
+    /// publications alone don't count: only the editor refresh says the file's current
+    /// text has been analysed.
+    func hasEditorReport(for url: URL) -> Bool {
+        reportedFiles.contains(url.standardizedFileURL)
     }
 
     func clearEditorDiagnostics(for url: URL) {
         replace([], for: url.standardizedFileURL, source: Self.editorSource)
         staleByFile.removeValue(forKey: url.standardizedFileURL)
+        reportedFiles.remove(url.standardizedFileURL)
     }
 
     func setCompilerDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {

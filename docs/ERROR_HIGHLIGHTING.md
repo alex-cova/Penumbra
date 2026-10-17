@@ -210,3 +210,34 @@ meets autoreparse + pass + 50 ms. Anchor volume grows (16 → 7706 checked)
 because broken trees now carry findings; the single unanchored case is a
 finding spanning the caret, whose covered text the keystroke genuinely
 changed.
+
+## Phase 6: status affordances audit
+
+Each plan gap checked against the landed code; one fixed, two closed, one filed:
+
+- **Two writers to the `javac` bucket: closed, no change.** `setEditorDiagnostics`
+  rewrites the compiler bucket from the report and `applyCompilerDiagnostics`
+  publishes fresh rows, but both draw from the same service cache, so the
+  content is equivalent — the suspected stale/fresh oscillation can't happen.
+  Currency is already marked: Phase 4's `staleSources` flags the rows as
+  pending until the compile for the current text lands.
+- **Unmerged inspection bucket: filed, no change.** The editor's merged set and
+  the raw service publish to Problems can only diverge through
+  `JavaDiagnosticsMerger.filter`, which needs `javac:`-coded diagnostics —
+  and nothing on `main` produces those (the warm-server path is unlanded), so
+  the merger is a no-op in every configuration today. The routing fix must land
+  with the warm server, not before it.
+- **Widget ✓ while pending: fixed.** `IDEProblemsStore` tracks editor reports
+  (`hasEditorReport`: set by `setEditorDiagnostics` even when empty, cleared
+  with the file; service publications don't count) and `IDEInspectionWidget`
+  shows a spinner instead of the check mark while no report has landed or a
+  source is stale. Locked by `IDEProblemsStoreTests`
+  (`testEditorReportTrackingDistinguishesCleanFromNotYetAnalyzed`).
+- **Stripe and gutter: closed, no change.** Severity ordering holds twice
+  (over-`maxMarks` truncation keeps the most severe; errors paint over
+  warnings), positions read the live shifted markers, and click-through is a
+  documented tradeoff: the 6 pt strip overlays the minimap and scrollers, so
+  taking mouse events would swallow their clicks.
+
+No harness numbers change in this phase (store flag plus a SwiftUI badge;
+no pass, schedule, or render path moves).

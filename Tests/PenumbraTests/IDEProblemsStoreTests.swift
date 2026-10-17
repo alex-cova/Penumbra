@@ -76,6 +76,26 @@ final class IDEProblemsStoreTests: XCTestCase {
         XCTAssertEqual(pending.errorCount, 0)
     }
 
+    func testEditorReportTrackingDistinguishesCleanFromNotYetAnalyzed() {
+        let store = IDEProblemsStore()
+        XCTAssertFalse(store.hasEditorReport(for: other))
+        XCTAssertFalse(store.hasEditorReport(for: file))
+
+        // Service publications alone don't count: only the editor refresh says the
+        // file's current text has been analysed.
+        store.publish(DiagnosticPublication(source: .javac, url: other, diagnostics: [diagnostic("old error", source: "javac")]))
+        XCTAssertFalse(store.hasEditorReport(for: other))
+
+        // An empty report still counts: the file was analysed and is clean.
+        store.setEditorDiagnostics([], for: other)
+        XCTAssertTrue(store.hasEditorReport(for: other))
+        XCTAssertFalse(store.hasEditorReport(for: file))
+
+        // Closing the file forgets the report.
+        store.clearEditorDiagnostics(for: other)
+        XCTAssertFalse(store.hasEditorReport(for: other))
+    }
+
     func testClearingAFileDropsItFromEverySource() {
         let store = IDEProblemsStore()
         store.setBuildDiagnostics([file: [diagnostic("a", source: "gradle")]], source: IDEProblemsStore.gradleBuildSource)
