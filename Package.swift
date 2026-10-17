@@ -151,7 +151,8 @@ let package = Package(
             exclude: [
                 "CLAUDE.md",
                 "Inspections/CLAUDE.md",
-                "Profiling/CLAUDE.md"
+                "Profiling/CLAUDE.md",
+                "Semantics/CLAUDE.md"
             ],
             swiftSettings: swift6
         ),
@@ -528,6 +529,6 @@ let package = Package(
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus")], swiftSettings: swift6)
     ]
 )
